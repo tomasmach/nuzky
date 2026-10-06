@@ -248,6 +248,14 @@ fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_u
     state.session.lock().unwrap().session.set_ui_context(selection, playhead_us);
 }
 
+/// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step.
+#[tauri::command]
+fn stop_run(state: State<'_, AppState>) -> CmdResult<Snapshot> {
+    let current = state.session.lock().unwrap();
+    current.session.stop_run().map_err(err)?;
+    current.snapshot(Vec::new())
+}
+
 #[tauri::command]
 fn resolve_recovery(state: State<'_, AppState>, action: String) -> CmdResult<Snapshot> {
     let action = match action.as_str() {
@@ -478,6 +486,7 @@ pub fn run() {
             boot,
             set_ui_context,
             resolve_recovery,
+            stop_run,
             apply_edit,
             apply_edits,
             undo,

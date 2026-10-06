@@ -4,6 +4,7 @@ import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, FontFamilie
 export const api = {
   setUiContext: (selection: string[], playheadUs: number) => invoke<void>("set_ui_context", { selection, playheadUs: Math.round(playheadUs) }),
   resolveRecovery: (action: "keep" | "restore") => invoke<Snapshot>("resolve_recovery", { action }),
+  stopRun: () => invoke<Snapshot>("stop_run"),
   boot: () => invoke<Boot>("boot"),
   applyEdit: (cmd: EditCmd, coalesce?: string, expectRevision?: number, expectSpeechKey?: string) => invoke<Snapshot>("apply_edit", { cmd, coalesce: coalesce ?? null, expectRevision, expectSpeechKey }),
   /** All or nothing, as one undo step. */
