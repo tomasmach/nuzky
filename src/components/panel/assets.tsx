@@ -40,6 +40,7 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
     if (place && currentEpoch() === epoch) {
       let startUs = place.startUs;
       for (const id of res.added) {
+        if (currentEpoch() !== epoch) break;
         const snap = await edit({ type: "addClip", assetId: id, startUs, trackId: place.trackId });
         const added = snap && findClip(snap.project, snap.select[0]);
         if (added) startUs = added.clip.startUs + added.clip.durationUs;
