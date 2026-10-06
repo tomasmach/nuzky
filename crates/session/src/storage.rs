@@ -11,7 +11,7 @@ pub(crate) fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-pub(crate) fn save(path: &Path, value: &impl Serialize) -> Result<()> {
+pub fn save(path: &Path, value: &impl Serialize) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value).context("Serializing project state")?;
     let tmp = sidecar(path, &format!(".{}.tmp", capopen_engine::edit::new_id()));
     let result = (|| {

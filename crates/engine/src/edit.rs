@@ -10,10 +10,36 @@ pub const MAIN_TRACK: &str = "main";
 const IMAGE_DURATION_US: i64 = 3_000_000;
 const TEXT_DURATION_US: i64 = 3_000_000;
 const UNDO_LIMIT: usize = 200;
-const MIN_SPEED: f32 = 0.1;
-const MAX_SPEED: f32 = 10.0;
-const MAX_TRANSITION_US: i64 = 2_000_000;
-const CAPTION_Y: f32 = 0.15;
+pub const MIN_SPEED: f32 = 0.1;
+pub const MAX_SPEED: f32 = 10.0;
+pub const MAX_TRANSITION_US: i64 = 2_000_000;
+pub const CAPTION_Y: f32 = 0.15;
+
+#[derive(Deserialize)]
+pub struct CaptionPreset {
+    pub name: String,
+    pub style: TextStyle,
+}
+
+pub fn caption_presets() -> &'static [CaptionPreset] {
+    static PRESETS: std::sync::LazyLock<Vec<CaptionPreset>> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../../assets/presets/captions.json")).expect("valid caption presets")
+    });
+    &PRESETS
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Limits {
+    pub min_speed: f32,
+    pub max_speed: f32,
+    pub max_transition_us: i64,
+    pub caption_y: f32,
+}
+
+pub const LIMITS: Limits = Limits {
+    min_speed: MIN_SPEED, max_speed: MAX_SPEED, max_transition_us: MAX_TRANSITION_US, caption_y: CAPTION_Y,
+};
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]

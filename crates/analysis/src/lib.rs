@@ -23,3 +23,6 @@ pub struct Range {
 pub fn models_dir() -> std::path::PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen").join("models")
 }
+
+/// Silero voice detector shared by desktop, MCP and the analysis CLI.
+pub const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";

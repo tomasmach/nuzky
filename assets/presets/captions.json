@@ -1,0 +1,57 @@
+[
+  {
+    "name": "Reel",
+    "style": {
+      "fontSize": 95,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 7.5,
+      "strokeColor": "#000000",
+      "background": null
+    }
+  },
+  {
+    "name": "Outline",
+    "style": {
+      "fontSize": 70,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 7,
+      "strokeColor": "#000000",
+      "background": null
+    }
+  },
+  {
+    "name": "Yellow",
+    "style": {
+      "fontSize": 74,
+      "color": "#ffe14d",
+      "bold": true,
+      "strokeWidth": 7,
+      "strokeColor": "#000000",
+      "background": null
+    }
+  },
+  {
+    "name": "Box",
+    "style": {
+      "fontSize": 62,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 0,
+      "strokeColor": "#000000",
+      "background": "#000000b3"
+    }
+  },
+  {
+    "name": "Clean",
+    "style": {
+      "fontSize": 60,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 3,
+      "strokeColor": "#00000099",
+      "background": null
+    }
+  }
+]

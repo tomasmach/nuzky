@@ -9,21 +9,43 @@ use cosmic_text::{Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shap
 use crate::gpu::Image;
 use crate::model::{TextStyle, parse_color};
 
-pub const BUNDLED_FONT_FAMILIES: &[&str] = &[
-    "Anton", "Bebas Neue", "Inter", "Lexend", "Montserrat", "Oswald", "Poppins", "Roboto",
+#[derive(serde::Deserialize)]
+pub struct FontFace {
+    pub family: String,
+    pub file: String,
+    pub weight: String,
+}
+
+pub static FONT_MANIFEST: std::sync::LazyLock<Vec<FontFace>> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../../assets/fonts/manifest.json")).expect("valid bundled font manifest")
+});
+
+pub static BUNDLED_FONT_FAMILIES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+    FONT_MANIFEST.iter().map(|face| face.family.as_str()).collect::<BTreeSet<_>>().into_iter().collect()
+});
+
+macro_rules! embed_fonts {
+    ($($file:literal),* $(,)?) => {
+        &[$(($file, include_bytes!(concat!("../../../assets/fonts/", $file)) as &[u8])),*]
+    };
+}
+const FONT_DATA: &[(&str, &[u8])] = embed_fonts![
+    "anton/Anton-Regular.ttf",
+    "bebasneue/BebasNeue-Regular.ttf",
+    "inter/Inter[opsz,wght].ttf",
+    "lexend/Lexend[wght].ttf",
+    "montserrat/Montserrat[wght].ttf",
+    "oswald/Oswald[wght].ttf",
+    "poppins/Poppins-Regular.ttf",
+    "poppins/Poppins-Bold.ttf",
+    "roboto/Roboto[wdth,wght].ttf",
 ];
 
-const BUNDLED_FONTS: &[&[u8]] = &[
-    include_bytes!("../../../assets/fonts/anton/Anton-Regular.ttf"),
-    include_bytes!("../../../assets/fonts/bebasneue/BebasNeue-Regular.ttf"),
-    include_bytes!("../../../assets/fonts/inter/Inter[opsz,wght].ttf"),
-    include_bytes!("../../../assets/fonts/lexend/Lexend[wght].ttf"),
-    include_bytes!("../../../assets/fonts/montserrat/Montserrat[wght].ttf"),
-    include_bytes!("../../../assets/fonts/oswald/Oswald[wght].ttf"),
-    include_bytes!("../../../assets/fonts/poppins/Poppins-Regular.ttf"),
-    include_bytes!("../../../assets/fonts/poppins/Poppins-Bold.ttf"),
-    include_bytes!("../../../assets/fonts/roboto/Roboto[wdth,wght].ttf"),
-];
+static BUNDLED_FONTS: std::sync::LazyLock<Vec<&'static [u8]>> = std::sync::LazyLock::new(|| {
+    FONT_MANIFEST.iter().map(|face| {
+        FONT_DATA.iter().find(|(file, _)| *file == face.file).expect("manifest font is embedded").1
+    }).collect()
+});
 
 /// Text without a chosen font uses this bundled family, so a project looks the same on every machine.
 const DEFAULT_FAMILY: &str = "Inter";
@@ -46,7 +68,7 @@ impl Default for TextRenderer {
 impl TextRenderer {
     pub fn new() -> Self {
         let mut fonts = FontSystem::new();
-        for data in BUNDLED_FONTS {
+        for data in BUNDLED_FONTS.iter() {
             fonts.db_mut().load_font_data(data.to_vec());
         }
         fonts.db_mut().set_sans_serif_family(DEFAULT_FAMILY);
@@ -244,9 +266,17 @@ mod tests {
             bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None, max_width: None }
     }
 
+    #[test]
+    fn manifest_matches_embedded_fonts() {
+        let files: BTreeSet<_> = FONT_MANIFEST.iter().map(|face| face.file.as_str()).collect();
+        assert_eq!(files.len(), FONT_MANIFEST.len());
+        assert_eq!(files, FONT_DATA.iter().map(|(file, _)| *file).collect());
+        assert!(FONT_MANIFEST.iter().all(|face| !face.weight.is_empty()));
+    }
+
     fn bundled_renderer() -> TextRenderer {
         let mut db = cosmic_text::fontdb::Database::new();
-        for data in BUNDLED_FONTS {
+        for data in BUNDLED_FONTS.iter() {
             db.load_font_data(data.to_vec());
         }
         db.set_sans_serif_family("Inter");
@@ -266,7 +296,7 @@ mod tests {
             });
             assert_eq!(covered, Some(true), "Missing Czech glyphs in {:?}", face.families);
         }
-        for family in BUNDLED_FONT_FAMILIES {
+        for family in BUNDLED_FONT_FAMILIES.iter().copied() {
             let image = renderer.render("Příliš žluťoučký kůň", &style(family), 1.0, 1080.0);
             assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] != 0), "Empty {family}");
             let mut buffer = Buffer::new(&mut renderer.fonts, Metrics::new(95.0, 114.0));
@@ -313,7 +343,7 @@ mod tests {
     fn family_selection_cache_fallback_and_listing() {
         let mut renderer = TextRenderer::new();
         let families = renderer.font_families();
-        assert_eq!(&families[..BUNDLED_FONT_FAMILIES.len()], BUNDLED_FONT_FAMILIES);
+        assert_eq!(&families[..BUNDLED_FONT_FAMILIES.len()], BUNDLED_FONT_FAMILIES.as_slice());
         assert_eq!(families.iter().collect::<BTreeSet<_>>().len(), families.len());
         assert!(families[BUNDLED_FONT_FAMILIES.len()..].windows(2).all(|pair| pair[0] < pair[1]));
         for family in &families {

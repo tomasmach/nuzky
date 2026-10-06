@@ -42,6 +42,7 @@ pub struct AppState {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    #[serde(serialize_with = "snapshot_project")]
     project: Project,
     revision: u64,
     session_epoch: String,
@@ -53,9 +54,16 @@ pub struct Snapshot {
     select: Vec<String>,
 }
 
+fn snapshot_project<S: serde::Serializer>(project: &Project, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut value = serde_json::to_value(project).map_err(serde::ser::Error::custom)?;
+    value["canvas"]["safeArea"] = serde_json::to_value(project.canvas.safe_area()).map_err(serde::ser::Error::custom)?;
+    value.serialize(serializer)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Boot {
+    limits: capopen_engine::edit::Limits,
     snapshot: Snapshot,
     preview_url: String,
     transport: Transport,
@@ -246,6 +254,7 @@ impl AppState {
 #[tauri::command]
 fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
     Ok(Boot {
+        limits: capopen_engine::edit::LIMITS,
         snapshot: state.session.lock().unwrap().snapshot(Vec::new())?,
         preview_url: state.preview_url.clone(),
         transport: *state.engine.transport.lock().unwrap(),
@@ -575,6 +584,32 @@ pub fn run() {
 
 #[cfg(test)]
 mod ipc_lifecycle_tests {
+    #[test]
+    fn snapshot_canvas_exposes_safe_area_without_changing_saved_project() {
+        #[derive(serde::Serialize)]
+        struct View<'a> {
+            #[serde(serialize_with = "super::snapshot_project")]
+            project: &'a capopen_engine::Project,
+        }
+        let mut project = capopen_engine::Project::new("test");
+        project.canvas.width = 1080;
+        project.canvas.height = 1920;
+        let snapshot = serde_json::to_value(View { project: &project }).unwrap();
+        assert_eq!(snapshot["project"]["canvas"]["safeArea"], serde_json::json!({"left":60.0,"top":250.0,"right":900.0,"bottom":1420.0}));
+        assert!(serde_json::to_value(&project).unwrap()["canvas"].get("safeArea").is_none());
+        project.canvas.height = 1080;
+        assert!(serde_json::to_value(View { project: &project }).unwrap()["project"]["canvas"]["safeArea"].is_null());
+        let limits = serde_json::to_value(capopen_engine::edit::LIMITS).unwrap();
+        assert_eq!(limits["maxTransitionUs"], 2_000_000);
+        assert_eq!(limits["maxSpeed"], 10.0);
+    }
+
+    #[test]
+    fn command_error_preserves_anyhow_causes() {
+        let error = anyhow::anyhow!("root cause").context("operation failed");
+        assert_eq!(super::err(error), "operation failed: root cause");
+    }
+
     use super::*;
     use std::time::{Duration, Instant};
 

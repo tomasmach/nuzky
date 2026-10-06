@@ -363,7 +363,7 @@ fn recognise(
     Ok(())
 }
 
-const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";
+use capopen_analysis::VAD_MODEL;
 
 fn download_model(id: &str, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathBuf> {
     let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{id}.bin");

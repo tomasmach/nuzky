@@ -88,7 +88,7 @@ fn main() -> Result<()> {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["mcp", rest @ ..] => serve_mcp(rest)?,
+        ["mcp", ..] => capopen_mcp::bridge::run_args(&args[1..], cache_dir())?,
         ["probe", media] => {
             println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
         }
@@ -168,19 +168,3 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn serve_mcp(args: &[&str]) -> Result<()> {
-    let mut project = None;
-    let mut cache = cache_dir();
-    let mut allow_write = false;
-    let mut args = args.iter();
-    while let Some(arg) = args.next() {
-        match *arg {
-            "--project" => project = Some(PathBuf::from(args.next().context("--project requires a path")?)),
-            "--cache" => cache = PathBuf::from(args.next().context("--cache requires a directory")?),
-            "--allow-write" => allow_write = true,
-            _ => bail!("Unknown MCP argument: {arg}\n{USAGE}"),
-        }
-    }
-    let project = project.context("mcp requires --project <path>")?;
-    capopen_mcp::bridge::run(&project, allow_write, cache)
-}

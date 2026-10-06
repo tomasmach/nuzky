@@ -165,17 +165,8 @@ impl Captions {
     }
 }
 
-pub fn reel_style() -> TextStyle {
-    TextStyle {
-        font_family: None,
-        font_size: 95.0,
-        color: "#ffffff".into(),
-        bold: false,
-        stroke_width: 7.5,
-        stroke_color: "#000000".into(),
-        background: None,
-        max_width: None,
-    }
+pub fn reel_style() -> capopen_engine::model::TextStyle {
+    capopen_engine::edit::caption_presets()[0].style.clone()
 }
 
 #[cfg(test)]

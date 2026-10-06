@@ -62,10 +62,10 @@ fn main() -> Result<()> {
                 .or_else(|| {
                     model
                         .parent()
-                        .map(|p| p.join("ggml-silero-v5.1.2.bin"))
+                        .map(|p| p.join(capopen_analysis::VAD_MODEL))
                         .filter(|p| p.is_file())
                 })
-                .or_else(|| find_model("ggml-silero-v5.1.2.bin"))
+                .or_else(|| find_model(capopen_analysis::VAD_MODEL))
                 .context("Pass --vad-model with a local Silero model path")?;
             let transcript = transcribe_words(
                 AudioSource::Asset {

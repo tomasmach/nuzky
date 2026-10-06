@@ -56,10 +56,7 @@ pub fn save(path: &Path, project: &Project) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(project)?)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    capopen_session::write_json_atomic(path, project)
 }
 
 pub fn new_project_path() -> PathBuf {

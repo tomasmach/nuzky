@@ -15,7 +15,7 @@ use capopen_session::{jobs::check_cancel, transcripts::{Record, Segment, Transcr
 use serde::Serialize;
 use serde_json::{Value, json};
 
-const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";
+use capopen_analysis::VAD_MODEL;
 pub const BEFORE_WORD_US: i64 = 80_000;
 pub const AFTER_WORD_US: i64 = 120_000;
 const SENTENCE_GAP_US: i64 = 600_000;

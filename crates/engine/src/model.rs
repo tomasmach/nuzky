@@ -42,7 +42,7 @@ const VERTICAL_MIN_RATIO: f32 = 1.7;
 /// Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of
 /// the top bar, the like and comment rail on the right and the caption and buttons at the bottom.
 /// Conservative values that suit both apps, from 250 / 180 / 500 / 60 px of 1080×1920.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct SafeArea {
     pub left: f32,
     pub top: f32,
