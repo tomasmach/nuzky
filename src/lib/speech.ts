@@ -200,23 +200,49 @@ export async function cutFromTranscript(ranges: TimeRange[], what: string): Prom
 
 export type Token =
   | { kind: "word"; startUs: number; endUs: number; text: string; probability: number }
-  /** The part of a pause longer than the threshold; half the threshold stays on each side. */
+  /** The part of a pause longer than the threshold; half the threshold stays next to each word. */
   | { kind: "pause"; startUs: number; endUs: number; gapUs: number };
 
-/** Words plus a pause token wherever the silence is longer than `pauseUs`, up to `endUs`. */
-export function tokenize(words: TranscriptWord[], pauseUs: number, endUs: number): Token[] {
+/**
+ * Where pauses may be cut: clips recognition hears (the rule of `speechSig`) that hold at least one
+ * word. B-roll without words, even with ambient sound, is never part of a pause.
+ */
+export function speechRanges(project: Project, words: TranscriptWord[]): TimeRange[] {
+  const heard = project.tracks
+    .filter((t) => t.kind === "video" && !t.muted)
+    .flatMap((t) => t.clips)
+    .filter((c) => {
+      const m = c.content;
+      if (m.type !== "media" || m.volume <= 0) return false;
+      const asset = project.assets.find((a) => a.id === m.assetId);
+      return asset?.kind === "video" && asset.hasAudio;
+    })
+    .map((c) => ({ startUs: c.startUs, endUs: c.startUs + c.durationUs }));
+  const mids = words.map((w) => (w.startUs + w.endUs) / 2);
+  return mergeRanges(heard.filter((r) => mids.some((t) => t >= r.startUs && t < r.endUs)));
+}
+
+/** Words plus a pause token wherever the silence inside `speech` is longer than `pauseUs`. */
+export function tokenize(words: TranscriptWord[], pauseUs: number, speech: TimeRange[]): Token[] {
   const pad = pauseUs / 2;
   const out: Token[] = [];
-  const pause = (from: number, to: number, startUs: number, stopUs: number) => {
-    if (to - from > pauseUs && stopUs > startUs) out.push({ kind: "pause", startUs, endUs: stopUs, gapUs: to - from });
+  // The silence between `from` and `to` (null: the timeline's edge), split where it leaves speech.
+  // Only the sides next to a word keep half the threshold.
+  const pauses = (from: number | null, to: number | null) => {
+    for (const r of speech) {
+      const start = Math.max(r.startUs, from ?? -Infinity);
+      const end = Math.min(r.endUs, to ?? Infinity);
+      const startUs = start === from ? start + pad : start;
+      const endUs = end === to ? end - pad : end;
+      if (end - start > pauseUs && endUs > startUs) out.push({ kind: "pause", startUs, endUs, gapUs: end - start });
+    }
   };
   words.forEach((w, i) => {
-    const prevEnd = i === 0 ? 0 : words[i - 1].endUs;
-    pause(prevEnd, w.startUs, i === 0 ? 0 : prevEnd + pad, w.startUs - pad);
+    pauses(i === 0 ? null : words[i - 1].endUs, w.startUs);
     out.push({ kind: "word", startUs: w.startUs, endUs: w.endUs, text: w.text, probability: w.probability });
   });
   const last = words[words.length - 1];
-  if (last) pause(last.endUs, endUs, last.endUs + pad, endUs);
+  if (last) pauses(last.endUs, null);
   return out;
 }
 
