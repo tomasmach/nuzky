@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use memmap2::Mmap;
 
-use crate::media::{extract_pcm, pcm_path};
+use crate::media::extract_pcm;
 use crate::effects::transition_window;
 use crate::model::{Asset, AssetKind, CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
@@ -45,6 +45,23 @@ impl Pcm {
 
 pub fn has_audio(asset: &Asset) -> bool {
     asset.has_audio && asset.kind != AssetKind::Image
+}
+
+/// All consumers use the same source revision, including desktop waveform extraction.
+pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
+    let revision = match std::fs::metadata(&asset.path) {
+        Ok(metadata) => {
+            let modified = metadata.modified().ok().map(|time| {
+                time.duration_since(std::time::UNIX_EPOCH).map_or_else(
+                    |before| format!("pre{}", before.duration().as_nanos()),
+                    |since| since.as_nanos().to_string(),
+                )
+            }).unwrap_or_else(|| "unknown".into());
+            format!("{}-{modified}", metadata.len())
+        }
+        Err(_) => "missing".into(),
+    };
+    cache_dir.join("pcm").join(format!("{}.{revision}.v3.f32", asset.id))
 }
 
 /// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
@@ -168,6 +185,52 @@ fn gain_at(i: i64, start: i64, end: i64, incoming: Option<(i64, i64)>, outgoing:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_test_wav(path: &Path, sample: i16, frames: u32) {
+        let data_bytes = frames * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        for field in [1u16, 1] { bytes.extend_from_slice(&field.to_le_bytes()); }
+        for field in [48_000u32, 96_000] { bytes.extend_from_slice(&field.to_le_bytes()); }
+        for field in [2u16, 16] { bytes.extend_from_slice(&field.to_le_bytes()); }
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_bytes.to_le_bytes());
+        for _ in 0..frames { bytes.extend_from_slice(&sample.to_le_bytes()); }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn replaced_source_reextracts_pcm_under_the_same_asset_id() {
+        let cache = std::env::temp_dir().join(format!("pcm-replaced-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let source = cache.join("source.wav");
+        write_test_wav(&source, 8_192, 4_800);
+        let asset = Asset { id: "same-id".into(), name: "source".into(), path: source.to_string_lossy().into(),
+            kind: AssetKind::Audio, duration_us: 100_000, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 };
+        let legacy = cache.join("pcm/same-id.v2.f32");
+        std::fs::write(&legacy, b"old cache").unwrap();
+        let first = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+        assert_ne!(first, legacy);
+        assert_eq!(first, crate::media::pcm_path(&cache, &asset));
+        let old_audio = std::fs::read(&first).unwrap();
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
+        write_test_wav(&source, 16_384, 4_800);
+        File::options().write(true).open(&source).unwrap().set_modified(modified).unwrap();
+        let second = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+        assert_ne!(first, second);
+        assert_ne!(std::fs::read(&second).unwrap(), old_audio);
+        assert_eq!(std::fs::read(&first).unwrap(), old_audio);
+        assert_eq!(ensure_pcm(&cache, &asset, |_| panic!("unchanged source extracted again")).unwrap(), second);
+        write_test_wav(&source, 16_384, 9_600);
+        File::options().write(true).open(&source).unwrap().set_modified(modified).unwrap();
+        let third = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+        assert_ne!(second, third);
+        assert_eq!(std::fs::metadata(&third).unwrap().len(), std::fs::metadata(&second).unwrap().len() * 2);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
 
     #[test]
     fn transition_without_source_handles_has_no_sample_step() {

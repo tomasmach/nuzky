@@ -5,7 +5,7 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Once};
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -456,10 +456,7 @@ fn bytemuck_slice(bytes: &[u8]) -> &[f32] {
     bytemuck::cast_slice(&bytes[..bytes.len() / 4 * 4])
 }
 
-pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
-    // The version suffix invalidates caches written before the resampler fix.
-    cache_dir.join("pcm").join(format!("{}.v2.f32", asset.id))
-}
+pub use crate::audio::pcm_path;
 
 #[cfg(test)]
 mod tests {
