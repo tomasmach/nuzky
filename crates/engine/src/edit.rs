@@ -598,7 +598,7 @@ fn clip_changes(before: &Project, after: &Project) -> (Vec<String>, Vec<String>)
 }
 
 /// Sorted, non-empty, non-overlapping ranges.
-fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
+pub fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
     ranges.retain(|r| r.end_us > r.start_us.max(0));
     ranges.sort_by_key(|r| r.start_us);
     let mut out: Vec<TimeRange> = Vec::with_capacity(ranges.len());

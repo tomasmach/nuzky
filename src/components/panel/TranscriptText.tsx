@@ -61,9 +61,10 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
 
 /**
  * The transcript as text. Click a word to jump there, drag or Shift-click to select a range,
- * Delete cuts it from the timeline. ←/→ move word by word (Shift extends), Esc clears.
+ * Delete cuts it from the timeline unless `blocker` says why it cannot. ←/→ move word by word
+ * (Shift extends), Esc clears.
  */
-export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]; disabled: boolean; onDelete: (lo: number, hi: number) => Promise<boolean> }) {
+export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[]; blocker: string | null; onDelete: (lo: number, hi: number) => Promise<boolean> }) {
   const [sel, setSel] = useState<Selection | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -71,14 +72,14 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
   const timeUs = useEditor((s) => s.timeUs);
   const playing = useEditor((s) => s.playing);
   const paras = useMemo(() => paragraphs(tokens), [tokens]);
-  const active = disabled ? -1 : tokenAt(tokens, timeUs);
+  const active = tokenAt(tokens, timeUs);
   // Fewer tokens can arrive before the effect below clears the selection.
   const live = sel && sel.anchor < tokens.length && sel.focus < tokens.length ? sel : null;
   const lo = live ? Math.min(live.anchor, live.focus) : -1;
   const hi = live ? Math.max(live.anchor, live.focus) : -1;
 
   // Indices change with the words or the pause length.
-  useEffect(() => setSel(null), [tokens, disabled]);
+  useEffect(() => setSel(null), [tokens]);
 
   // Toasts move above the Delete bar while it shows, so an Undo toast never covers Delete.
   const barShown = lo >= 0;
@@ -105,7 +106,7 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
   const seekTo = (i: number) => useEditor.getState().seek(tokens[i].startUs);
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || disabled) return;
+    if (e.button !== 0) return;
     box.current?.focus();
     const i = indexAt(e.target);
     if (i === null) return;
@@ -133,14 +134,15 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
     if (e.key !== "Delete" && e.key !== "Backspace") return false;
     e.preventDefault();
     e.stopPropagation();
-    if (!disabled) remove();
+    if (blocker) useEditor.getState().toast({ kind: "info", text: `${blocker}.` });
+    else remove();
     return true;
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (onDeleteKey(e)) return;
     const key = e.key;
-    if (disabled || tokens.length === 0) return;
+    if (tokens.length === 0) return;
     if (key === "ArrowRight" || key === "ArrowLeft" || key === "Home" || key === "End") {
       // Word by word here; the playhead's frame keys apply elsewhere.
       e.preventDefault();
@@ -177,13 +179,12 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
         role="listbox"
         aria-label="Transcript"
         aria-multiselectable
-        aria-disabled={disabled || undefined}
         aria-activedescendant={live ? optionId(live.focus) : undefined}
-        tabIndex={disabled ? -1 : 0}
+        tabIndex={0}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onKeyDown={onKeyDown}
-        className={`min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-3 focus-visible:-outline-offset-2 ${disabled ? "opacity-40" : ""}`}
+        className="min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-3 focus-visible:-outline-offset-2"
       >
         {paras.map(([from, to]) => (
           <Paragraph
@@ -202,9 +203,11 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatSeconds(lengthUs)}
           </span>
-          <Button variant="danger" className="h-7" title="Cut from the timeline (Delete)" onClick={remove}>
-            <Trash2 size={14} /> Delete
-          </Button>
+          <span title={blocker ?? "Cut from the timeline (Delete)"}>
+            <Button variant="danger" className="h-7" disabled={!!blocker} onClick={remove}>
+              <Trash2 size={14} /> Delete
+            </Button>
+          </span>
         </div>
       )}
     </>

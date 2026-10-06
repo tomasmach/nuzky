@@ -6,7 +6,7 @@ mod media;
 mod limits;
 mod params;
 mod tools;
-mod transcript;
+pub mod transcript;
 
 use std::sync::Arc;
 

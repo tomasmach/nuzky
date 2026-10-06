@@ -1,16 +1,18 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, ensure};
-use capopen_analysis::{CaptionGrouping, group_words};
+use capopen_analysis::{AudioSource, CaptionGrouping, group_words};
 use capopen_engine::{
     Project,
-    edit::{EditCmd, TimeRange},
-    model::{ClipContent, TextStyle, TrackKind},
+    edit::{EditCmd, TimeRange, merge_ranges},
+    model::{Asset, ClipContent, TextStyle, TrackKind},
     speech::{TimelineWord, Word, is_heard, map_words},
 };
-use capopen_session::transcripts::TranscriptStore;
+use capopen_session::{jobs::check_cancel, transcripts::{Record, Segment, TranscriptStore, VERSION}};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";
@@ -55,6 +57,23 @@ pub fn best_model() -> &'static str {
     } else {
         "small"
     }
+}
+
+/// Recognises the whole file in its own time and stores its words, replacing an older record.
+pub fn recognise(
+    store: &TranscriptStore, asset: &Asset, cache: &Path, model: &str,
+    (model_path, vad): &(PathBuf, PathBuf), language: &str, cancel: &AtomicBool,
+) -> Result<Record> {
+    let fingerprint = store.fingerprint(asset)?;
+    let result = capopen_analysis::transcribe_words_cancellable(
+        AudioSource::Asset { asset, cache }, model_path, vad, language, || cancel.load(Ordering::Relaxed),
+    )?;
+    check_cancel(cancel)?;
+    let record = Record { version: VERSION, fingerprint, duration_us: asset.duration_us, model: model.into(),
+        language: result.language, words: result.words, segments: result.segments.into_iter()
+            .map(|s| Segment { start_us: s.start_us, end_us: s.end_us, text: s.text }).collect() };
+    store.put(asset, &record)?;
+    Ok(record)
 }
 
 pub fn heard_assets(project: &Project) -> HashSet<String> {
@@ -131,9 +150,12 @@ struct WordFragment {
 }
 
 /// Midpoint ownership numbers a word once; editing must also preserve its other audible pieces.
-fn editing_bounds(project: &Project, derived: &Derived) -> (Vec<TimelineWord>, Vec<TimeRange>) {
+/// Also returns where speech is: the clips playing part of a word. Cuts stay inside it, so
+/// B-roll and other clips without words are never cut.
+fn editing_bounds(project: &Project, derived: &Derived) -> (Vec<TimelineWord>, Vec<TimeRange>, Vec<TimeRange>) {
     let mut bounds = derived.words.clone();
     let mut unnumbered = Vec::new();
+    let mut speech = Vec::new();
     let owners: HashMap<_, _> = derived.words.iter().enumerate()
         .map(|(i, w)| ((w.clip_id.as_str(), w.source_start_us, w.text.as_str()), i)).collect();
     for (asset, words) in &derived.sources {
@@ -153,6 +175,7 @@ fn editing_bounds(project: &Project, derived: &Derived) -> (Vec<TimelineWord>, V
                         source_start, source_end,
                         owner: owners.get(&(clip.id.as_str(), word.start_us, word.text.as_str())).copied(),
                     });
+                    speech.push(TimeRange { start_us: clip.start_us, end_us: clip.end_us() });
                 }
             }
             fragments.sort_by_key(|f| (f.timeline.start_us, f.timeline.end_us));
@@ -175,15 +198,25 @@ fn editing_bounds(project: &Project, derived: &Derived) -> (Vec<TimelineWord>, V
             }
         }
     }
-    (bounds, unnumbered)
+    (bounds, unnumbered, merge_ranges(speech))
 }
 
+/// Timeline ranges that delete or keep the inclusive word ranges and, with `pause`, shorten
+/// longer pauses to it and trim the silence before the first and after the last word.
 pub fn edit_ranges(
     project: &Project, derived: &Derived, delete: Option<&[[usize; 2]]>,
-    keep: Option<&[[usize; 2]]>, pause: i64,
+    keep: Option<&[[usize; 2]]>, pause: Option<i64>,
 ) -> Result<Vec<TimeRange>> {
-    let (bounds, unnumbered) = editing_bounds(project, derived);
-    let mut ranges = deletion_ranges(&bounds, project.duration_us(), delete, keep, pause)?;
+    Ok(speech_cut(project, derived, delete, keep, pause)?.0)
+}
+
+/// The ranges of `edit_ranges` and where speech is.
+fn speech_cut(
+    project: &Project, derived: &Derived, delete: Option<&[[usize; 2]]>,
+    keep: Option<&[[usize; 2]]>, pause: Option<i64>,
+) -> Result<(Vec<TimeRange>, Vec<TimeRange>)> {
+    let (bounds, unnumbered, speech) = editing_bounds(project, derived);
+    let mut ranges = deletion_ranges(&bounds, &speech, delete, keep, pause)?;
     // A surviving fragment whose midpoint was cut away has no selectable index. Keep it audible.
     for protected in unnumbered {
         ranges = ranges.into_iter().flat_map(|range| {
@@ -194,16 +227,41 @@ pub fn edit_ranges(
             pieces
         }).collect();
     }
-    Ok(ranges)
+    Ok((ranges, speech))
+}
+
+/// A silence in speech longer than the pause length; shortening it cuts `start_us..end_us`
+/// out of the whole `gap_us`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pause {
+    pub start_us: i64,
+    pub end_us: i64,
+    pub gap_us: i64,
+}
+
+/// What shortening every pause to `pause_us` cuts, in timeline order.
+pub fn pauses(project: &Project, derived: &Derived, pause_us: i64) -> Result<Vec<Pause>> {
+    let (ranges, speech) = speech_cut(project, derived, None, None, Some(pause_us))?;
+    Ok(ranges.into_iter().map(|r| {
+        let span = speech.iter().find(|s| s.start_us <= r.start_us && r.end_us <= s.end_us).copied().unwrap_or(r);
+        let from = derived.words.iter().map(|w| w.end_us).filter(|&t| t <= r.start_us).fold(span.start_us, i64::max);
+        let to = derived.words.iter().map(|w| w.start_us).filter(|&t| t >= r.end_us).fold(span.end_us, i64::min);
+        Pause { start_us: r.start_us, end_us: r.end_us, gap_us: to - from }
+    }).collect())
 }
 
 pub fn deletion_ranges(
-    words: &[TimelineWord], duration: i64, delete: Option<&[[usize; 2]]>,
-    keep: Option<&[[usize; 2]]>, pause: i64,
+    words: &[TimelineWord], speech: &[TimeRange], delete: Option<&[[usize; 2]]>,
+    keep: Option<&[[usize; 2]]>, pause: Option<i64>,
 ) -> Result<Vec<TimeRange>> {
     ensure!(delete.is_none() || keep.is_none(), "INVALID_SELECTION: use delete OR keep");
-    ensure!(pause >= 0, "INVALID_PAUSE: shorten_pauses_us must be nonnegative");
+    ensure!(pause.is_none_or(|p| p >= 0), "INVALID_PAUSE: shorten_pauses_us must be nonnegative");
+    let (Some(first_span), Some(last_span)) = (speech.first(), speech.last()) else {
+        anyhow::bail!("NO_WORDS: transcribe heard assets before editing");
+    };
     ensure!(!words.is_empty(), "NO_WORDS: transcribe heard assets before editing");
+    let (start, end) = (first_span.start_us, last_span.end_us);
     let mut kept = vec![keep.is_none(); words.len()];
     for &[from, to] in delete.or(keep).unwrap_or(&[]) {
         ensure!(from <= to && to < words.len(), "INVALID_WORD_RANGE: inclusive word indices out of bounds");
@@ -214,32 +272,34 @@ pub fn deletion_ranges(
         if end_us > start_us { ranges.push(TimeRange { start_us, end_us }); }
     };
     let retained: Vec<_> = kept.iter().enumerate().filter_map(|(i, keep)| keep.then_some(i)).collect();
-    let Some(&first) = retained.first() else {
-        return Ok(vec![TimeRange { start_us: 0, end_us: duration }]);
+    let (Some(&first), Some(&last)) = (retained.first(), retained.last()) else {
+        return Ok(speech.to_vec());
     };
-    let leading = if first == 0 { BEFORE_WORD_US.min(pause) } else {
-        BEFORE_WORD_US.min((words[first].start_us - words[first - 1].end_us).max(0) / 2)
-    };
-    add(0, words[first].start_us - leading);
+    if first > 0 {
+        add(start, words[first].start_us - BEFORE_WORD_US.min((words[first].start_us - words[first - 1].end_us).max(0) / 2));
+    } else if let Some(pause) = pause && words[0].start_us - start > pause {
+        add(start, words[0].start_us - BEFORE_WORD_US.min(pause));
+    }
     for pair in retained.windows(2) {
         let (a, b) = (pair[0], pair[1]);
-        let (end, start) = (words[a].end_us, words[b].start_us);
-        if b == a + 1 {
-            if start - end > pause {
-                add(end + pause / 2, start - (pause - pause / 2));
-            }
-        } else {
-            let after = AFTER_WORD_US.min((words[a + 1].start_us - end).max(0) / 2);
-            let before = BEFORE_WORD_US.min((start - words[b - 1].end_us).max(0) / 2);
-            add(end + after, start - before);
+        let (gap_start, gap_end) = (words[a].end_us, words[b].start_us);
+        if b > a + 1 {
+            let after = AFTER_WORD_US.min((words[a + 1].start_us - gap_start).max(0) / 2);
+            let before = BEFORE_WORD_US.min((gap_end - words[b - 1].end_us).max(0) / 2);
+            add(gap_start + after, gap_end - before);
+        } else if let Some(pause) = pause && gap_end - gap_start > pause {
+            add(gap_start + pause / 2, gap_end - (pause - pause / 2));
         }
     }
-    if let Some(&last) = retained.last() {
-        let trailing = if last + 1 == words.len() { AFTER_WORD_US.min(pause) } else {
-            AFTER_WORD_US.min((words[last + 1].start_us - words[last].end_us).max(0) / 2)
-        };
-        add(words[last].end_us + trailing, duration);
+    if last + 1 < words.len() {
+        add(words[last].end_us + AFTER_WORD_US.min((words[last + 1].start_us - words[last].end_us).max(0) / 2), end);
+    } else if let Some(pause) = pause && end - words[last].end_us > pause {
+        add(words[last].end_us + AFTER_WORD_US.min(pause), end);
     }
+    let ranges: Vec<_> = ranges.into_iter().flat_map(|r| speech.iter().filter_map(move |s| {
+        let (start_us, end_us) = (r.start_us.max(s.start_us), r.end_us.min(s.end_us));
+        (end_us > start_us).then_some(TimeRange { start_us, end_us })
+    })).collect();
     // Simultaneous speakers cannot always be cut independently by a global ripple edit.
     for range in &ranges {
         ensure!(words.iter().all(|w| ![range.start_us, range.end_us].iter()
@@ -253,6 +313,41 @@ pub fn deletion_ranges(
             "OVERLAPPING_SPEECH: removed word overlaps retained speech");
     }
     Ok(ranges)
+}
+
+/// A cut planned from `key` must still match what is heard, with every heard file recognised.
+pub fn check_key(project: &Project, derived: &Derived, key: &str) -> Result<()> {
+    ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
+    ensure!(key == word_key(project, &derived.words),
+        "SPEECH_CHANGED: speech changed or wrong key; use get_transcript's speech_key (get_state's key is for apply_edits)");
+    Ok(())
+}
+
+pub struct Cut {
+    pub edit: EditCmd,
+    pub ranges: Vec<TimeRange>,
+    /// The project once cut, and where its words are then.
+    pub preview: Project,
+    pub words: Vec<TimelineWord>,
+}
+
+/// One ripple edit removing `ranges`, checked to remove exactly the words they cover.
+pub fn plan_cut(project: &Project, derived: &Derived, ranges: Vec<TimeRange>) -> Result<Cut> {
+    let edit = EditCmd::RippleDeleteRanges { ranges: ranges.clone(), keep_track_ids: None };
+    let mut preview = project.clone();
+    preview.apply(edit.clone()).context("EDIT_REJECTED: preview failed")?;
+    capopen_session::validate(&preview)?;
+    let words = map_words(&preview, &derived.sources);
+    let identities = |words: &[TimelineWord]| {
+        let mut ids: Vec<_> = words.iter().map(|w| (w.asset_id.clone(), w.source_start_us, w.text.clone())).collect();
+        ids.sort();
+        ids
+    };
+    let retained: Vec<_> = derived.words.iter().filter(|w| !ranges.iter()
+        .any(|r| r.start_us <= w.start_us && r.end_us >= w.end_us && w.start_us < r.end_us)).cloned().collect();
+    ensure!(identities(&words) == identities(&retained),
+        "UNSAFE_CUT: kept tracks or sub-frame fragments would change the selected words");
+    Ok(Cut { edit, ranges, preview, words })
 }
 
 pub fn caption_edit(
@@ -308,6 +403,70 @@ pub(crate) mod tests {
         (project, HashMap::from([("talk".into(), words)]))
     }
 
+    fn whole(project: &Project) -> [TimeRange; 1] {
+        [TimeRange { start_us: 0, end_us: project.duration_us() }]
+    }
+
+    #[test]
+    fn cutting_words_alone_keeps_the_other_pauses_and_the_edges() {
+        let (project, sources) = fixture();
+        let words = map_words(&project, &sources);
+        let ranges = deletion_ranges(&words, &whole(&project), Some(&[[3, 4]]), None, None).unwrap();
+        assert_eq!(ranges, vec![TimeRange { start_us: words[2].end_us + AFTER_WORD_US, end_us: words[5].start_us - BEFORE_WORD_US }]);
+        assert!(deletion_ranges(&words, &whole(&project), None, None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pauses_report_the_whole_silence_they_shorten() {
+        let (project, sources) = fixture();
+        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        let found = pauses(&project, &derived, 300_000).unwrap();
+        // Before the first word, the seven gaps between words and after the last one.
+        assert_eq!(found.len(), 9);
+        assert_eq!(found[0], Pause { start_us: 0, end_us: 500_000 - BEFORE_WORD_US, gap_us: 500_000 });
+        assert_eq!(found[1], Pause { start_us: 1_050_000, end_us: 1_350_000, gap_us: 600_000 });
+        assert_eq!(found[8].gap_us, 10_000_000 - 7_900_000);
+        // Silence no longer than the pause stays, at the edges too.
+        assert_eq!(pauses(&project, &derived, 600_000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pauses_and_cuts_never_touch_clips_without_words() {
+        let (mut project, mut sources) = fixture();
+        project.apply(EditCmd::AddAssets { assets: vec![Asset {
+            id: "broll".into(), name: "broll".into(), path: "broll.mov".into(), kind: AssetKind::Video,
+            duration_us: 6_000_000, width: 1080, height: 1920, fps: 30.0, has_audio: true, rotation: 0,
+        }] }).unwrap();
+        // B-roll with ambient sound between two takes, and again on an overlay over the end.
+        let take = project.tracks[0].clips[0].id.clone();
+        project.apply(EditCmd::SplitClip { clip_id: take, at_us: 5_000_000 }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "broll".into(), start_us: Some(5_000_000), track_id: None }).unwrap();
+        let mut overlay = project.tracks[0].clips[1].clone();
+        (overlay.id, overlay.start_us) = ("overlay".into(), 14_000_000);
+        project.tracks.push(capopen_engine::model::Track { id: "over".into(), kind: TrackKind::Video, name: "Overlay".into(),
+            muted: false, hidden: false, keep_in_place: false, clips: vec![overlay] });
+        sources.insert("broll".into(), vec![]);
+        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        let main = |p: &Project| p.tracks[0].clips.iter().map(|c| (c.start_us, c.end_us())).collect::<Vec<_>>();
+        assert_eq!(main(&project), [(0, 5_000_000), (5_000_000, 11_000_000), (11_000_000, 16_000_000)]);
+        let found = pauses(&project, &derived, 300_000).unwrap();
+        assert!(found.iter().all(|p| p.end_us <= 5_000_000 || p.start_us >= 11_000_000 && p.end_us <= 16_000_000), "{found:?}");
+        // The take after the B-roll starts with 0.5 s of silence, not the 6.6 s since the last word.
+        assert!(found.contains(&Pause { start_us: 11_000_000, end_us: 11_350_000, gap_us: 500_000 }));
+        for ranges in [
+            found.iter().map(|p| TimeRange { start_us: p.start_us, end_us: p.end_us }).collect(),
+            edit_ranges(&project, &derived, Some(&[[4, 5]]), None, None).unwrap(),
+        ] {
+            let cut = plan_cut(&project, &derived, ranges).unwrap();
+            let main = &cut.preview.tracks[0].clips;
+            let broll: Vec<_> = main.iter().filter(|c| matches!(&c.content, ClipContent::Media { asset_id, .. } if asset_id == "broll"))
+                .map(|c| c.duration_us).collect();
+            assert_eq!(broll, [6_000_000]);
+            let over = cut.preview.tracks[1].clips.last().unwrap();
+            assert_eq!(over.end_us() - main.last().unwrap().end_us(), 4_000_000);
+        }
+    }
+
     #[test]
     fn every_selection_preserves_whole_words_and_keep_equals_delete() {
         let (project, sources) = fixture();
@@ -315,8 +474,8 @@ pub(crate) mod tests {
         for mask in 0..256 {
             let keep: Vec<_> = (0..8).filter(|i| mask & (1 << i) != 0).map(|i| [i,i]).collect();
             let delete: Vec<_> = (0..8).filter(|i| mask & (1 << i) == 0).map(|i| [i,i]).collect();
-            let ranges = deletion_ranges(&words, project.duration_us(), None, Some(&keep), 300_000).unwrap();
-            let other = deletion_ranges(&words, project.duration_us(), Some(&delete), None, 300_000).unwrap();
+            let ranges = deletion_ranges(&words, &whole(&project), None, Some(&keep), Some(300_000)).unwrap();
+            let other = deletion_ranges(&words, &whole(&project), Some(&delete), None, Some(300_000)).unwrap();
             assert_eq!(serde_json::to_value(&ranges).unwrap(), serde_json::to_value(other).unwrap());
             for range in &ranges {
                 for boundary in [range.start_us, range.end_us] {
@@ -335,7 +494,7 @@ pub(crate) mod tests {
     fn shorten_pauses_and_trim_edges() {
         let (mut project, sources) = fixture();
         let words = map_words(&project, &sources);
-        let ranges = deletion_ranges(&words, project.duration_us(), None, None, 300_000).unwrap();
+        let ranges = deletion_ranges(&words, &whole(&project), None, None, Some(300_000)).unwrap();
         project.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
         let words = map_words(&project, &sources);
         assert_eq!(words[0].start_us, BEFORE_WORD_US);
@@ -384,7 +543,7 @@ pub(crate) mod tests {
                 if word_start == 4_800_000 {
                     assert_eq!(derived.words.last().unwrap().start_us, (5_000_000.0 / speed) as i64);
                 }
-                let ranges = edit_ranges(&project, &derived, None, None, DEFAULT_PAUSE_US).unwrap();
+                let ranges = edit_ranges(&project, &derived, None, None, Some(DEFAULT_PAUSE_US)).unwrap();
                 let protected = TimeRange { start_us: (word_start as f64 / speed) as i64, end_us: (word_end as f64 / speed) as i64 };
                 assert!(ranges.iter().all(|r| r.end_us <= protected.start_us || r.start_us >= protected.end_us), "{speed} {edge}: {ranges:?}");
                 project.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
@@ -445,6 +604,6 @@ pub(crate) mod tests {
         let (project, sources) = fixture();
         let mut words = map_words(&project, &sources);
         words[0].end_us = words[1].start_us + 1;
-        assert!(deletion_ranges(&words, project.duration_us(), Some(&[[1,1]]), None, 300_000).unwrap_err().to_string().contains("OVERLAPPING_SPEECH"));
+        assert!(deletion_ranges(&words, &whole(&project), Some(&[[1,1]]), None, Some(300_000)).unwrap_err().to_string().contains("OVERLAPPING_SPEECH"));
     }
 }

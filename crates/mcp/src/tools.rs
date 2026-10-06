@@ -11,7 +11,7 @@ use capopen_engine::{
     export::{ExportOptions, export},
     media::probe,
 };
-use capopen_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel, transcripts::{Record, Segment, VERSION}};
+use capopen_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -321,16 +321,8 @@ impl Backend {
                     recognised.push(json!({"asset_id":asset.id,"reused":true}));
                     continue;
                 }
-                let (model, vad) = model_paths.as_ref().context("MODEL_MISSING: transcription model")?;
-                let result = capopen_analysis::transcribe_words_cancellable(
-                    capopen_analysis::AudioSource::Asset { asset: &asset, cache: &cache }, model, vad, &language, || cancel.load(Ordering::Relaxed),
-                )?;
-                check_cancel(&cancel)?;
-                let record = Record { version: VERSION, fingerprint, duration_us: asset.duration_us, model: name.clone(), language: result.language,
-                    words: result.words, segments: result.segments.into_iter().map(|s| Segment {
-                        start_us: s.start_us, end_us: s.end_us, text: s.text,
-                    }).collect() };
-                store.put(&asset, &record)?;
+                let models = model_paths.as_ref().context("MODEL_MISSING: transcription model")?;
+                let record = transcript::recognise(&store, &asset, &cache, &name, models, &language, &cancel)?;
                 recognised.push(json!({"asset_id":asset.id,"words":record.words.len(),"language":record.language}));
             }
             Ok(json!({"assets":recognised}))
@@ -373,34 +365,20 @@ impl Backend {
 
     fn prepare_transcript_edit(&self, args: &EditTranscript, state: &SessionState) -> Result<PreparedTranscriptEdit> {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
-        ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
-        ensure!(args.speech_key == transcript::word_key(&state.project, &derived.words),
-            "SPEECH_CHANGED: speech changed or wrong key; use get_transcript's speech_key (get_state's key is for apply_edits)");
+        transcript::check_key(&state.project, &derived, &args.speech_key)?;
         let before = state.project.duration_us();
         let ranges = transcript::edit_ranges(&state.project, &derived, args.delete.as_deref(),
-            args.keep.as_deref(), args.shorten_pauses_us.unwrap_or(transcript::DEFAULT_PAUSE_US))?;
-        let edit = EditCmd::RippleDeleteRanges { ranges: ranges.clone(), keep_track_ids: None };
-        let mut preview = state.project.clone();
-        preview.apply(edit.clone()).context("EDIT_REJECTED: preview failed")?;
-        capopen_session::validate(&preview)?;
-        let words = capopen_engine::speech::map_words(&preview, &derived.sources);
-        let identities = |words: &[capopen_engine::speech::TimelineWord]| {
-            let mut ids: Vec<_> = words.iter().map(|w| (w.asset_id.clone(), w.source_start_us, w.text.clone())).collect();
-            ids.sort();
-            ids
-        };
-        let retained: Vec<_> = derived.words.iter().filter(|w| !ranges.iter()
-            .any(|r| r.start_us <= w.start_us && r.end_us >= w.end_us && w.start_us < r.end_us)).cloned().collect();
-        ensure!(identities(&words) == identities(&retained),
-            "UNSAFE_CUT: kept tracks or sub-frame fragments would change the selected words");
-        let preview_text: String = words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(PREVIEW_CHARS).collect();
+            args.keep.as_deref(), Some(args.shorten_pauses_us.unwrap_or(transcript::DEFAULT_PAUSE_US)))?;
+        let cut = transcript::plan_cut(&state.project, &derived, ranges)?;
+        let after = cut.preview.duration_us();
+        let preview_text: String = cut.words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(PREVIEW_CHARS).collect();
         Ok(PreparedTranscriptEdit {
             arguments: serde_json::to_value(args)?,
-            edit,
             expect: Expect { revision: Some(state.stamp.revision), speech_key: Some(state.speech_key.clone()) },
-            response: json!({"duration_us":{"before":before,"after":preview.duration_us()},
-                "removed_us":before-preview.duration_us(),"ranges":ranges,"preview_text":preview_text,
-                "speech_key":transcript::word_key(&preview, &words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
+            response: json!({"duration_us":{"before":before,"after":after},
+                "removed_us":before-after,"ranges":cut.ranges,"preview_text":preview_text,
+                "speech_key":transcript::word_key(&cut.preview, &cut.words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
+            edit: cut.edit,
         })
     }
 
@@ -582,6 +560,7 @@ mod tests {
 #[cfg(test)]
 mod transcript_tests {
     use super::*;
+    use capopen_session::transcripts::{Record, VERSION};
 
     fn fixture() -> (PathBuf, Backend, Project) {
         let dir = std::env::temp_dir().join(format!("transcript-tools-{}", new_id()));

@@ -200,19 +200,37 @@ export interface FontFamilies {
   system: string[];
 }
 
-/** A recognised word in timeline time. */
+/** A word where it is heard on the timeline; `i` numbers it for cuts. */
 export interface TranscriptWord {
+  i: number;
   startUs: number;
   endUs: number;
   text: string;
-  probability: number;
+  p: number;
 }
 
-/** Words of the whole timeline, valid for the project `revision` it was made from. */
-export interface TimelineTranscript {
-  revision: number;
-  language: string;
+/** Silence in speech longer than the pause length; removing it cuts `startUs`–`endUs` out of the whole `gapUs`. */
+export interface TranscriptPause {
+  startUs: number;
+  endUs: number;
+  gapUs: number;
+}
+
+/** The timeline's speech as it is now, from the transcripts of its media files. */
+export interface TranscriptView {
+  /** Sent back with a cut, which is refused once the speech moved or was recognised again. */
+  key: string;
   words: TranscriptWord[];
+  pauses: TranscriptPause[];
+  /** Heard media without a transcript yet. */
+  untranscribed: string[];
+}
+
+export interface TranscriptCut {
+  snapshot: Snapshot;
+  /** Where the first cut starts, which is now where what followed it plays. */
+  startUs: number;
+  removedUs: number;
 }
 
 /** Timeline range [startUs, endUs). */

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TimelineTranscript } from "./types";
+import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
 export const api = {
   setUiContext: (selection: string[], playheadUs: number) => invoke<void>("set_ui_context", { selection, playheadUs: Math.round(playheadUs) }),
@@ -30,9 +30,13 @@ export const api = {
   /** `maxWords`/`maxChars` null keep whole phrases. */
   startCaptions: (model: string, language: string, style: TextStyle, maxWords: number | null, maxChars: number | null) =>
     invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars } }),
-  startTranscript: (model: string, language: string) => invoke<string>("start_transcript", { model, language }),
-  /** Null unless the stored transcript belongs to the current project revision. */
-  getTranscript: () => invoke<TimelineTranscript | null>("get_transcript"),
+  /** Recognises the heard media without a transcript, or all of it with `refresh`. */
+  startTranscript: (model: string, language: string, refresh: boolean) => invoke<string>("start_transcript", { model, language, refresh }),
+  transcriptView: (pauseUs: number) => invoke<TranscriptView>("transcript_view", { pauseUs: Math.round(pauseUs) }),
+  /** Inclusive word index ranges, as one undo step. */
+  cutWords: (key: string, ranges: [number, number][]) => invoke<TranscriptCut>("cut_words", { key, delete: ranges }),
+  /** The view's pauses at `pauseUs`, by index, or all of them. */
+  removePauses: (key: string, pauseUs: number, only: number[] | null) => invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only }),
   listFonts: () => invoke<FontFamilies>("list_fonts"),
 };
 
