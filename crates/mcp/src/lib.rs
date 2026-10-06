@@ -1,48 +1,28 @@
-//! Headless stdio MCP. No app IPC or network listener is started here.
+//! Stdio MCP catalog with local and app-connected backends.
+pub mod bridge;
+#[cfg(unix)]
+pub mod ipc;
 mod media;
 mod params;
 mod tools;
 mod transcript;
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
+use rmcp::{ErrorData, RoleServer, ServerHandler, model::*, service::RequestContext};
 use schemars::{JsonSchema, schema_for};
 use serde_json::Value;
 
-use tools::Backend;
+use bridge::Target;
+pub use bridge::run as serve;
 
 const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
 
 #[derive(Clone)]
 struct Server {
-    backend: Arc<Backend>,
+    target: Arc<Target>,
     tools: Arc<Vec<Tool>>,
-}
-
-pub fn serve(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
-    let backend = Arc::new(Backend::open(project, allow_write, cache)?);
-    let server = Server {
-        backend: backend.clone(),
-        tools: Arc::new(catalog()?),
-    };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("Starting MCP runtime")?;
-    let result = runtime.block_on(async {
-        let service = server
-            .serve(rmcp::transport::stdio())
-            .await
-            .context("MCP initialization")?;
-        service.waiting().await.context("MCP transport")?;
-        Ok(())
-    });
-    let finish = backend.host.session.disconnect();
-    backend.host.jobs.shutdown();
-    result.and(finish)
 }
 
 fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<Tool> {
@@ -161,8 +141,7 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        Ok(tools::call(
-            self.backend.clone(),
+        Ok(self.target.clone().call(
             request.name.to_string(),
             Value::Object(request.arguments.unwrap_or_default()),
         )

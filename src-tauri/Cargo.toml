@@ -19,6 +19,7 @@ tauri-build = { version = "2.7.1", features = [] }
 [dependencies]
 capopen-engine.workspace = true
 capopen-session.workspace = true
+capopen-mcp.workspace = true
 capopen-analysis.workspace = true
 anyhow.workspace = true
 serde.workspace = true

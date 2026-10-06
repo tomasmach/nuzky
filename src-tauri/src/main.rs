@@ -6,5 +6,14 @@ fn main() {
     if std::env::var_os("GGML_VK_DISABLE_F16").is_none() {
         unsafe { std::env::set_var("GGML_VK_DISABLE_F16", "1") };
     }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "mcp") {
+        let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen");
+        if let Err(error) = capopen_mcp::bridge::run_args(&args[1..], cache) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     capopen_app::run();
 }

@@ -291,7 +291,7 @@ struct TranscriptReady {
 #[tauri::command]
 pub fn get_transcript(state: tauri::State<'_, AppState>) -> Option<TimelineTranscript> {
     let current = state.session.lock().unwrap();
-    let view = current.session.state().ok()?;
+    let view = current.host.session.state().ok()?;
     let stored = state.transcript.lock().unwrap();
     let cached = stored.as_ref()?;
     if cached.source.path != current.path || cached.source.revision != view.stamp.revision
@@ -321,7 +321,7 @@ fn start_speech(app: AppHandle, model: String, language: String, captions: Optio
     let state = app.state::<AppState>();
     let source = {
         let current = state.session.lock().unwrap();
-        let view = current.session.state().map_err(crate::err)?;
+        let view = current.host.session.state().map_err(crate::err)?;
         SpeechSnapshot { project: view.project, revision: view.stamp.revision, path: current.path.clone() }
     };
     if speech_clips(&source.project).next().is_none() {
@@ -376,7 +376,7 @@ fn run_speech_job(
     anyhow::ensure!(!transcript.words.is_empty(), "No speech was recognised.");
     let cached = CachedTranscript { source: source.clone(), model: model.into(), requested_language: language.into(), transcript };
     let current = state.session.lock().unwrap();
-    let view = current.session.state()?;
+    let view = current.host.session.state()?;
     anyhow::ensure!(current.path == source.path,
         "Another project was opened, so the speech recognition result was not applied.");
     check_cancelled(cancel)?;
@@ -385,7 +385,7 @@ fn run_speech_job(
         let segments = group_words(&cached.transcript.words, request.grouping());
         let count = segments.len();
         let cmd = caption_edit(&view.project, segments, request.style.clone());
-        current.session.edit(vec![cmd], None, capopen_session::Expect {
+        current.host.session.edit(vec![cmd], None, capopen_session::Expect {
             revision: Some(view.stamp.revision),
             speech_key: Some(capopen_engine::speech::speech_key(&source.project)),
         }).context("Applying captions")?;

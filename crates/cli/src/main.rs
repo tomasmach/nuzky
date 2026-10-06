@@ -133,5 +133,5 @@ fn serve_mcp(args: &[&str]) -> Result<()> {
         }
     }
     let project = project.context("mcp requires --project <path>")?;
-    capopen_mcp::serve(&project, allow_write, cache)
+    capopen_mcp::bridge::run(&project, allow_write, cache)
 }

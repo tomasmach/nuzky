@@ -13,6 +13,12 @@ pub struct Host {
 }
 
 impl Host {
+    pub fn stop_run(&self) -> Result<crate::RunResult> {
+        let run = self.session.stop_run()?;
+        self.jobs.cancel_owner(&run.run_id);
+        Ok(run)
+    }
+
     pub fn new(session: ProjectSession, cache_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             session,

@@ -141,9 +141,12 @@ function useBackendEvents() {
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
+    let lastRun: string | null = useEditor.getState().aiRun;
     offs.push(
       listen<string | null>("run-changed", (e) => {
-        const { aiRun, toast, undo } = useEditor.getState();
+        const { toast, undo } = useEditor.getState();
+        const aiRun = lastRun;
+        lastRun = e.payload;
         useEditor.setState({ aiRun: e.payload });
         if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: { label: "Undo", run: () => void undo() } });
       }),

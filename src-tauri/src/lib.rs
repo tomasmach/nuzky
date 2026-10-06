@@ -14,7 +14,7 @@ use std::sync::mpsc::{self, Receiver};
 use capopen_engine::edit::{EditCmd, new_id};
 use capopen_engine::media::probe;
 use capopen_engine::Project;
-use capopen_session::{Expect, Origin, ProjectSession, RecoveryAction, SessionEvent};
+use capopen_session::{Expect, Origin, host::Host, RecoveryAction, SessionEvent};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -83,7 +83,9 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 struct OpenSession {
-    session: Arc<ProjectSession>,
+    host: Arc<Host>,
+    #[cfg(unix)]
+    listener: Option<capopen_mcp::ipc::Listener>,
     path: PathBuf,
     stopped: Arc<AtomicBool>,
 }
@@ -91,12 +93,19 @@ struct OpenSession {
 impl OpenSession {
     fn open(path: PathBuf) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
         let (tx, rx) = mpsc::channel();
-        let session = Arc::new(store::open(&path, tx)?);
-        Ok((Self { session, path, stopped: Arc::new(AtomicBool::new(false)) }, rx))
+        let host = Arc::new(Host::new(store::open(&path, tx)?, store::cache_dir())?);
+        #[cfg(unix)]
+        let listener = Some(capopen_mcp::ipc::Listener::start(host.clone())?);
+        Ok((Self { host, #[cfg(unix)] listener, path, stopped: Arc::new(AtomicBool::new(false)) }, rx))
+    }
+
+    fn close_ipc(&mut self) {
+        #[cfg(unix)]
+        self.listener.take();
     }
 
     fn snapshot(&self, select: Vec<String>) -> CmdResult<Snapshot> {
-        let (state, can_undo, can_redo) = self.session.view().map_err(err)?;
+        let (state, can_undo, can_redo) = self.host.session.view().map_err(err)?;
         Ok(Snapshot {
             project: state.project,
             revision: state.stamp.revision,
@@ -112,7 +121,7 @@ impl OpenSession {
 
     fn start_pump(&self, app: AppHandle, rx: Receiver<SessionEvent>) {
         let stopped = self.stopped.clone();
-        let session = Arc::downgrade(&self.session);
+        let session = Arc::downgrade(&self.host);
         std::thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 let event = match rx.recv_timeout(std::time::Duration::from_millis(100)) {
@@ -122,19 +131,22 @@ impl OpenSession {
                 };
                 let state = app.state::<AppState>();
                 let current = state.session.lock().unwrap();
-                if stopped.load(Ordering::Acquire) || !session.ptr_eq(&Arc::downgrade(&current.session)) { break; }
+                if stopped.load(Ordering::Acquire) || !session.ptr_eq(&Arc::downgrade(&current.host)) { break; }
                 match event {
                     SessionEvent::Changed { origin, .. } => {
                         if let Ok(snap) = current.snapshot(Vec::new()) {
                             state.publish_project(&snap.project);
-                            // The frontend's own edits, undo and redo already return this snapshot.
-                            if !matches!(origin, Origin::User | Origin::Undo | Origin::Redo) {
+                            // User edits already return this snapshot; agent undo also reaches the UI.
+                            if !matches!(origin, Origin::User) {
                                 app.emit("project-changed", snap).ok();
                             }
                         }
                     }
                     SessionEvent::Saved { revision, error } => { app.emit("saved", store::SavedEvent { revision, error }).ok(); }
-                    SessionEvent::Run(run) => { app.emit("run-changed", run.map(|run| run.label)).ok(); }
+                    SessionEvent::Run(run) => {
+                        app.emit("run-changed", run.map(|run| run.label)).ok();
+                        if let Ok(snap) = current.snapshot(Vec::new()) { app.emit("project-changed", snap).ok(); }
+                    }
                 }
             }
         });
@@ -144,12 +156,13 @@ impl OpenSession {
 impl Drop for OpenSession {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
+        self.close_ipc();
     }
 }
 
 impl AppState {
     fn project(&self) -> CmdResult<Project> {
-        self.session.lock().unwrap().session.state().map(|state| state.project).map_err(err)
+        self.session.lock().unwrap().host.session.state().map(|state| state.project).map_err(err)
     }
 
     fn publish_project(&self, project: &Project) {
@@ -161,7 +174,7 @@ impl AppState {
 
     fn apply_batch(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect) -> CmdResult<Snapshot> {
         let current = self.session.lock().unwrap();
-        let result = current.session.edit(cmds, coalesce, expect).map_err(err)?;
+        let result = current.host.session.edit(cmds, coalesce, expect).map_err(err)?;
         current.snapshot(result.outcome.select)
     }
 
@@ -172,7 +185,7 @@ impl AppState {
     fn asset_preview<T: Clone>(&self, asset_id: &str, cache: &Mutex<HashMap<String, T>>, decode: impl FnOnce(&capopen_engine::model::Asset) -> anyhow::Result<Option<T>>) -> CmdResult<Option<T>> {
         let (asset, lock) = {
             let current = self.session.lock().unwrap();
-            let Some(asset) = current.session.state().map_err(err)?.project.asset(asset_id).cloned() else { return Ok(None) };
+            let Some(asset) = current.host.session.state().map_err(err)?.project.asset(asset_id).cloned() else { return Ok(None) };
             let lock = self.preview_locks.lock().unwrap().entry(asset_id.into()).or_default().clone();
             (asset, lock)
         };
@@ -193,10 +206,11 @@ impl AppState {
     fn replace_project(&self, current: &mut OpenSession, path: PathBuf) -> CmdResult<Snapshot> {
         let (next, rx) = OpenSession::open(path).map_err(err)?;
         let snap = next.snapshot(Vec::new())?;
-        current.session.disconnect().map_err(err)?;
+        current.close_ipc();
+        current.host.session.disconnect().map_err(err)?;
         *current = next;
         // The startup picker uses modification time, including projects opened without edits.
-        if let Err(error) = current.session.disconnect() {
+        if let Err(error) = current.host.session.disconnect() {
             log::error!("Cannot save opened project: {error:#}");
         }
         self.thumbs.lock().unwrap().clear();
@@ -232,27 +246,27 @@ fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<
 #[tauri::command]
 fn undo(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     let current = state.session.lock().unwrap();
-    current.session.undo().map_err(err)?;
+    current.host.session.undo().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
 fn redo(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     let current = state.session.lock().unwrap();
-    current.session.redo().map_err(err)?;
+    current.host.session.redo().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
 fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_us: i64) {
-    state.session.lock().unwrap().session.set_ui_context(selection, playhead_us);
+    state.session.lock().unwrap().host.session.set_ui_context(selection, playhead_us);
 }
 
 /// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step.
 #[tauri::command]
 fn stop_run(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     let current = state.session.lock().unwrap();
-    current.session.stop_run().map_err(err)?;
+    current.host.stop_run().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
@@ -264,7 +278,7 @@ fn resolve_recovery(state: State<'_, AppState>, action: String) -> CmdResult<Sna
         _ => return Err("Unknown recovery action".into()),
     };
     let current = state.session.lock().unwrap();
-    current.session.resolve_recovery(action).map_err(err)?;
+    current.host.session.resolve_recovery(action).map_err(err)?;
     current.snapshot(Vec::new())
 }
 
@@ -457,7 +471,7 @@ pub fn run() {
         .setup(|app| {
             let server = Arc::new(PreviewServer::start()?);
             let (session, events) = initial_project()?;
-            let project = session.session.state()?.project;
+            let project = session.host.session.state()?.project;
             let cache_dir = store::cache_dir();
             let engine = Engine::start(app.handle().clone(), server.clone(), Arc::new(project.clone()), cache_dir.clone());
             let state = AppState {
@@ -516,7 +530,7 @@ pub fn run() {
         .run(|app, event| match event {
             tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
                 let state = app.state::<AppState>();
-                let saved = state.session.lock().unwrap().session.disconnect();
+                let saved = state.session.lock().unwrap().host.session.disconnect();
                 // A second close after a failed save quits anyway; the user has been told what is lost.
                 if let Err(error) = saved
                     && !state.close_failed.swap(true, Ordering::AcqRel)
@@ -527,9 +541,10 @@ pub fn run() {
             }
             tauri::RunEvent::Exit => {
                 let state = app.state::<AppState>();
-                let current = state.session.lock().unwrap();
+                let mut current = state.session.lock().unwrap();
+                current.close_ipc();
                 current.stopped.store(true, Ordering::Release);
-                if let Err(error) = current.session.disconnect() {
+                if let Err(error) = current.host.session.disconnect() {
                     log::error!("Cannot save project on exit: {error:#}");
                 }
             }

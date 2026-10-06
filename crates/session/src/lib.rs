@@ -189,6 +189,13 @@ impl ProjectSession {
         Ok(inner.stamp())
     }
 
+    /// IPC listeners may remove stale endpoints only while this session owns the project lock.
+    pub fn locked_path(&self) -> Result<PathBuf> {
+        let inner = self.inner.lock().unwrap();
+        ensure!(inner._lock.is_some(), "READ_ONLY: IPC listener requires project ownership");
+        Ok(inner.path.clone())
+    }
+
     /// A clean transport disconnect keeps edits as one undoable run and drains autosave.
     pub fn disconnect(&self) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();

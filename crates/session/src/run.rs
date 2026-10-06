@@ -22,6 +22,10 @@ fn run_key(id: &str) -> String {
 }
 
 impl ProjectSession {
+    pub fn check_run(&self, run_id: &str) -> Result<()> {
+        self.inner.lock().unwrap().owns_run(run_id)
+    }
+
     pub fn begin_run(&self, label: String) -> Result<RunResult> {
         let mut inner = self.inner.lock().unwrap();
         inner.touch()?;

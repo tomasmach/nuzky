@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -31,9 +31,19 @@ struct PreparedTranscriptEdit {
     response: Value,
 }
 
+#[derive(Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Access { #[serde(rename = "read")] ReadOnly, Write }
+
+pub struct Client {
+    pub id: String,
+    pub access: Access,
+}
+
 pub struct Backend {
-    pub host: Host,
-    client_id: String,
+    pub host: Arc<Host>,
+    client: Client,
+    runs: Mutex<HashSet<String>>,
     project_dir: PathBuf,
     project_path: PathBuf,
     export_queue: Arc<Mutex<()>>,
@@ -42,11 +52,6 @@ pub struct Backend {
 
 impl Backend {
     pub fn open(project: &Path, allow_write: bool, cache: PathBuf) -> Result<Self> {
-        let project_path = std::fs::canonicalize(project).context("Resolving project")?;
-        let project_dir = project_path
-            .parent()
-            .context("Project has no directory")?
-            .to_path_buf();
         let session = ProjectSession::open(
             project,
             if allow_write {
@@ -56,19 +61,41 @@ impl Backend {
             },
             None,
         )?;
-        std::fs::create_dir_all(&cache).context("Creating media cache")?;
-        Ok(Self {
-            host: Host::new(session, cache)?,
-            client_id: new_id(),
-            project_dir,
-            project_path,
-            export_queue: Arc::new(Mutex::new(())),
-            transcript_requests: Mutex::default(),
+        Self::shared(Arc::new(Host::new(session, cache)?), project, Client {
+            id: new_id(), access: if allow_write { Access::Write } else { Access::ReadOnly },
         })
     }
 
+    pub fn shared(host: Arc<Host>, project: &Path, client: Client) -> Result<Self> {
+        let project_path = std::fs::canonicalize(project).context("PROJECT_MISSING: resolving project")?;
+        let project_dir = project_path.parent().context("INVALID_PROJECT: no directory")?.to_path_buf();
+        std::fs::create_dir_all(&host.cache_dir).context("CACHE_UNAVAILABLE: creating media cache")?;
+        Ok(Self { host, client, runs: Mutex::default(), project_dir, project_path,
+            export_queue: Arc::default(), transcript_requests: Mutex::default() })
+    }
+
+    pub fn disconnect(&self) -> Result<()> {
+        let runs = self.runs.lock().unwrap();
+        if let Some(run) = self.host.session.state()?.open_run
+            && runs.contains(&run.run_id)
+        {
+            self.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep)?;
+        }
+        self.host.jobs.cancel_owner(&self.client.id);
+        Ok(())
+    }
+
     pub fn call(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
-        let state = self.host.session.state()?;
+        let read = matches!(name, "get_state" | "get_transcript" | "inspect_frames")
+            || (name == "job" && arguments["action"] == "get");
+        let mut runs = (!read).then(|| self.runs.lock().unwrap());
+        let mut state = self.host.session.state()?;
+        ensure!(read || self.client.access == Access::Write, "READ_ONLY: this client cannot mutate");
+        if let Some(run) = arguments.get("run_id").and_then(Value::as_str) {
+            ensure!(runs.as_ref().is_some_and(|runs| runs.contains(run)), "INVALID_RUN: run belongs to another client");
+            if name != "undo_run" { self.host.session.check_run(run)?; }
+        }
+        state.read_only |= self.client.access == Access::ReadOnly;
         if name == "inspect_frames" {
             let args: Inspect = parse(arguments)?;
             let bytes = media::contact_sheet(
@@ -80,6 +107,9 @@ impl Backend {
             return Ok(CallToolResult::success(vec![ContentBlock::text(json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch, "times_us": args.times_us, "labels": "seconds.microseconds"}).to_string()), ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png")]));
         }
         let mut value = self.dispatch(name, arguments, &state)?;
+        if name == "begin_run" && let Some(id) = value["run_id"].as_str() {
+            if let Some(runs) = &mut runs { runs.insert(id.to_owned()); }
+        }
         let object = value
             .as_object_mut()
             .context("Tool produced a non-object result")?;
@@ -228,7 +258,7 @@ impl Backend {
             None
         };
         let cache = self.host.cache_dir.clone();
-        self.host.jobs.start(&self.client_id, "analysis", state.stamp.clone(), move |cancel, progress| {
+        self.host.jobs.start(state.open_run.as_ref().map(|run| run.run_id.as_str()).unwrap_or(&self.client.id), "analysis", state.stamp.clone(), move |cancel, progress| {
             check_cancel(&cancel)?;
             progress.set("analyzing", None);
             let p = args.params;
@@ -264,7 +294,7 @@ impl Backend {
         let language = args.language.unwrap_or_else(|| "auto".into());
         let store = self.host.transcripts.clone();
         let cache = self.host.cache_dir.clone();
-        self.host.jobs.start(&self.client_id, "transcription", state.stamp.clone(), move |cancel, progress| {
+        self.host.jobs.start(state.open_run.as_ref().map(|run| run.run_id.as_str()).unwrap_or(&self.client.id), "transcription", state.stamp.clone(), move |cancel, progress| {
             let mut recognised = Vec::new();
             let count = assets.len();
             let mut recognised_files = std::collections::HashSet::new();
@@ -411,7 +441,7 @@ impl Backend {
         };
         let queue = self.export_queue.clone();
         self.host.jobs
-            .start(&self.client_id, "export", state.stamp.clone(), move |cancel, progress| {
+            .start(state.open_run.as_ref().map(|run| run.run_id.as_str()).unwrap_or(&self.client.id), "export", state.stamp.clone(), move |cancel, progress| {
                 progress.set("waiting_for_export", None);
                 let _export = queue.lock().unwrap();
                 check_cancel(&cancel)?;
@@ -465,7 +495,7 @@ pub async fn call(backend: Arc<Backend>, name: String, arguments: Value) -> Call
     }
 }
 
-fn tool_error(backend: &Backend, message: String) -> CallToolResult {
+pub(crate) fn tool_error(backend: &Backend, message: String) -> CallToolResult {
     match backend.host.session.state() {
         Ok(state) => CallToolResult::structured_error(json!({
             "error": message, "revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
@@ -555,9 +585,9 @@ mod transcript_tests {
             words: sources["talk"].clone(), segments: vec![],
         }).unwrap();
         let backend = Backend {
-            host: Host { session: ProjectSession::open(&path, Mode::Write, None).unwrap(),
-                jobs: Default::default(), transcripts: store, cache_dir: dir.join("cache") },
-            client_id: "test".into(), project_dir: dir.clone(), project_path: path,
+            host: Arc::new(Host { session: ProjectSession::open(&path, Mode::Write, None).unwrap(),
+                jobs: Default::default(), transcripts: store, cache_dir: dir.join("cache") }),
+            client: Client { id: "test".into(), access: Access::Write }, runs: Mutex::default(), project_dir: dir.clone(), project_path: path,
             export_queue: Arc::default(), transcript_requests: Mutex::default(),
         };
         (dir, backend, project)
