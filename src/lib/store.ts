@@ -32,6 +32,8 @@ interface EditorState {
   zoom: number;
   jobs: Record<string, JobEvent>;
   toasts: Toast[];
+  /** Extra space under the toasts, e.g. for the transcript's Delete bar while it shows. */
+  toastLift: number;
   saveState: "saved" | "saving" | "error";
   engineError: string | null;
   thumbs: Record<string, string | null>;
@@ -134,6 +136,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   zoom: 60,
   jobs: {},
   toasts: [],
+  toastLift: 0,
   saveState: "saved",
   engineError: null,
   thumbs: {},

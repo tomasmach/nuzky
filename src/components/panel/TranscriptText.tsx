@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { formatSeconds, paragraphs, tokenAt, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
@@ -58,6 +58,7 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
 export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]; disabled: boolean; onDelete: (lo: number, hi: number) => Promise<boolean> }) {
   const [sel, setSel] = useState<Selection | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const timeUs = useEditor((s) => s.timeUs);
   const playing = useEditor((s) => s.playing);
@@ -70,6 +71,14 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
 
   // Indices change with the words or the pause length.
   useEffect(() => setSel(null), [tokens, disabled]);
+
+  // Toasts move above the Delete bar while it shows, so an Undo toast never covers Delete.
+  const barShown = lo >= 0;
+  useLayoutEffect(() => {
+    if (!barShown) return;
+    useEditor.setState({ toastLift: bar.current?.offsetHeight ?? 0 });
+    return () => useEditor.setState({ toastLift: 0 });
+  }, [barShown]);
 
   useEffect(() => {
     if (playing && active >= 0) box.current?.querySelector(`[data-t="${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -181,7 +190,7 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
         ))}
       </div>
       {lo >= 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
+        <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatSeconds(lengthUs)}
           </span>
