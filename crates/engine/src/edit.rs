@@ -635,15 +635,14 @@ impl Editor {
         self.apply_batch(vec![cmd], coalesce)
     }
 
-    /// Applies every command or none of them, as one undo step. The outcome selects what
-    /// the last command selected.
+    /// Applies every command or none of them, as one undo step. The outcome selects
+    /// everything the commands selected, e.g. every second half of a multi-clip split.
     pub fn apply_batch(&mut self, cmds: Vec<EditCmd>, coalesce: Option<String>) -> Result<EditOutcome> {
         let before = self.project.clone();
         let mut outcome = EditOutcome::default();
         for cmd in cmds {
             match self.project.apply(cmd) {
-                Ok(o) if o.select.is_empty() => {}
-                Ok(o) => outcome = o,
+                Ok(o) => outcome.select.extend(o.select),
                 Err(e) => {
                     // A rejected edit may have changed the project halfway.
                     self.project = before;

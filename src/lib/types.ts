@@ -214,6 +214,7 @@ export type EditCmd =
   | { type: "duplicateClip"; clipId: string }
   | { type: "detachAudio"; clipId: string }
   | { type: "updateTrack"; trackId: string; muted?: boolean | null; hidden?: boolean | null }
+  | { type: "addCaptions"; segments: CaptionSegment[]; style: TextStyle }
   | { type: "replaceCaptions"; trackId: string; segments: CaptionSegment[]; style: TextStyle }
   | { type: "rippleDeleteRanges"; ranges: { startUs: number; endUs: number }[]; keepTrackIds: string[] }
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
