@@ -1,0 +1,95 @@
+import type { Adjust, AnimationKind, TextStyle, Transform, TransitionKind } from "./types";
+
+export const FORMATS = [
+  { label: "9:16", hint: "Reels, TikTok, Shorts", width: 1080, height: 1920 },
+  { label: "16:9", hint: "YouTube", width: 1920, height: 1080 },
+  { label: "1:1", hint: "Square", width: 1080, height: 1080 },
+  { label: "4:5", hint: "Instagram feed", width: 1080, height: 1350 },
+];
+
+export function formatLabel(width: number, height: number) {
+  return FORMATS.find((f) => f.width === width && f.height === height)?.label ?? `${width}×${height}`;
+}
+
+export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+export const NO_ADJUST: Adjust = { brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
+
+export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = [
+  { name: "Classic", text: "Your text", style: { fontSize: 84, color: "#ffffff", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
+  { name: "Title", text: "BIG TITLE", style: { fontSize: 130, color: "#ffffff", bold: true, strokeWidth: 0, strokeColor: "#000000", background: null } },
+  { name: "Label", text: "Label", style: { fontSize: 72, color: "#111111", bold: true, strokeWidth: 0, strokeColor: "#000000", background: "#ffffffee" } },
+  { name: "Highlight", text: "Highlight", style: { fontSize: 84, color: "#111111", bold: true, strokeWidth: 0, strokeColor: "#000000", background: "#ffd400ee" } },
+  { name: "Neon", text: "Neon", style: { fontSize: 96, color: "#9cffd9", bold: true, strokeWidth: 5, strokeColor: "#0b6b4f", background: null } },
+  { name: "Plain", text: "Plain text", style: { fontSize: 64, color: "#ffffff", bold: false, strokeWidth: 0, strokeColor: "#000000", background: null } },
+];
+
+export const CAPTION_STYLES: { name: string; style: TextStyle }[] = [
+  { name: "Outline", style: { fontSize: 70, color: "#ffffff", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
+  { name: "Yellow", style: { fontSize: 74, color: "#ffe14d", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
+  { name: "Box", style: { fontSize: 62, color: "#ffffff", bold: true, strokeWidth: 0, strokeColor: "#000000", background: "#000000b3" } },
+  { name: "Clean", style: { fontSize: 60, color: "#ffffff", bold: false, strokeWidth: 3, strokeColor: "#00000099", background: null } },
+];
+
+export function sameStyle(a: TextStyle, b: TextStyle) {
+  return (
+    a.fontSize === b.fontSize &&
+    a.color.toLowerCase() === b.color.toLowerCase() &&
+    a.bold === b.bold &&
+    a.strokeWidth === b.strokeWidth &&
+    a.strokeColor.toLowerCase() === b.strokeColor.toLowerCase() &&
+    (a.background ?? "").toLowerCase() === (b.background ?? "").toLowerCase()
+  );
+}
+
+/** Typewriter only makes sense for text; the engine treats it as Fade on media. */
+export const ANIMATIONS: { kind: AnimationKind; label: string; textOnly?: boolean }[] = [
+  { kind: "fade", label: "Fade" },
+  { kind: "zoomIn", label: "Zoom in" },
+  { kind: "zoomOut", label: "Zoom out" },
+  { kind: "slideUp", label: "Slide up" },
+  { kind: "slideDown", label: "Slide down" },
+  { kind: "slideLeft", label: "Slide left" },
+  { kind: "slideRight", label: "Slide right" },
+  { kind: "pop", label: "Pop" },
+  { kind: "typewriter", label: "Typewriter", textOnly: true },
+];
+
+export const TRANSITIONS: { kind: TransitionKind; label: string }[] = [
+  { kind: "dissolve", label: "Dissolve" },
+  { kind: "fadeBlack", label: "Fade to black" },
+  { kind: "fadeWhite", label: "Flash white" },
+  { kind: "slideLeft", label: "Slide left" },
+  { kind: "slideUp", label: "Slide up" },
+  { kind: "zoomIn", label: "Zoom in" },
+  { kind: "wipeLeft", label: "Wipe left" },
+  { kind: "blur", label: "Blur" },
+];
+
+export const DEFAULT_TRANSITION_US = 500_000;
+export const MAX_TRANSITION_US = 2_000_000;
+
+export const FILTERS: { id: string; label: string; adjust: Adjust }[] = [
+  { id: "none", label: "None", adjust: NO_ADJUST },
+  { id: "vivid", label: "Vivid", adjust: { ...NO_ADJUST, brightness: 0.03, contrast: 0.15, saturation: 0.35 } },
+  { id: "warm", label: "Warm", adjust: { ...NO_ADJUST, saturation: 0.1, temperature: 0.35 } },
+  { id: "cool", label: "Cool", adjust: { ...NO_ADJUST, brightness: 0.02, temperature: -0.35 } },
+  { id: "mono", label: "Mono", adjust: { ...NO_ADJUST, contrast: 0.15, saturation: -1 } },
+  { id: "fade", label: "Fade", adjust: { ...NO_ADJUST, brightness: 0.08, contrast: -0.3, saturation: -0.2 } },
+  { id: "moody", label: "Moody", adjust: { brightness: -0.12, contrast: 0.2, saturation: -0.25, temperature: -0.1, vignette: 0.45 } },
+  { id: "punch", label: "Punch", adjust: { ...NO_ADJUST, contrast: 0.35, saturation: 0.25, vignette: 0.25 } },
+];
+
+export function sameAdjust(a: Adjust, b: Adjust) {
+  return (Object.keys(NO_ADJUST) as (keyof Adjust)[]).every((k) => Math.abs(a[k] - b[k]) < 0.005);
+}
+
+/** Rough CSS approximation of an Adjust, for preset tiles only. The engine does the real grading. */
+export function adjustCss(a: Adjust): { filter: string; tint: string | null; vignette: number } {
+  const filter = `brightness(${1 + a.brightness}) contrast(${1 + a.contrast}) saturate(${1 + a.saturation})`;
+  const tint = a.temperature === 0 ? null : a.temperature > 0 ? `rgba(255,150,40,${a.temperature * 0.9})` : `rgba(40,130,255,${-a.temperature * 0.9})`;
+  return { filter, tint, vignette: a.vignette };
+}
+
+export const SPEED_PRESETS = [0.5, 1, 1.5, 2, 3];
+export const MIN_SPEED = 0.1;
+export const MAX_SPEED = 10;

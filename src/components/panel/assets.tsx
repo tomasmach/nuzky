@@ -1,0 +1,103 @@
+import { open } from "@tauri-apps/plugin-dialog";
+import { AudioLines, Film, Image as ImageIcon } from "lucide-react";
+import { api, errorText } from "../../lib/api";
+import { MAIN_TRACK, findClip, useEditor } from "../../lib/store";
+import type { Asset } from "../../lib/types";
+import { Button } from "../ui";
+
+export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
+export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif", "bmp"];
+
+/** Imports files; optionally places them on the timeline one after another. */
+export async function importPaths(paths: string[], place?: { trackId: string | null; startUs: number | null }) {
+  const { setSnap, toast, edit } = useEditor.getState();
+  if (paths.length === 0) return;
+  try {
+    const res = await api.importMedia(paths);
+    setSnap(res.snapshot);
+    if (res.failed.length > 0) {
+      const names = res.failed.map((f) => f.path.split(/[\\/]/).pop()).join(", ");
+      toast({ kind: "error", text: `Could not import ${names}: ${res.failed[0].error}` });
+    }
+    if (place) {
+      for (const id of res.added) await edit({ type: "addClip", assetId: id, startUs: place.startUs, trackId: place.trackId });
+    }
+  } catch (e) {
+    toast({ kind: "error", text: errorText(e) });
+  }
+}
+
+export async function pickAndImport(audioOnly = false) {
+  const picked = await open({
+    multiple: true,
+    filters: [audioOnly ? { name: "Audio", extensions: AUDIO_EXTENSIONS } : { name: "Video, audio and images", extensions: MEDIA_EXTENSIONS }],
+  });
+  if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
+}
+
+export async function addAtPlayhead(assetId: string) {
+  const { edit, seek } = useEditor.getState();
+  const snap = await edit({ type: "addClip", assetId, startUs: useEditor.getState().timeUs, trackId: null });
+  // Like CapCut, the playhead jumps past a clip added to the main track, so repeated adds append in order.
+  const added = snap && findClip(snap.project, snap.select[0]);
+  if (added && added.track.id === MAIN_TRACK) seek(added.clip.startUs + added.clip.durationUs);
+}
+
+export let dropResolver: ((x: number, y: number) => { trackId: string | null; startUs: number } | null) | null = null;
+export function setDropResolver(fn: typeof dropResolver) {
+  dropResolver = fn;
+}
+
+/** Pointer handler that drags an asset from the panel onto a timeline track. */
+export function assetDragHandler(assetId: string) {
+  return (e: React.PointerEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+    const start = { x: e.clientX, y: e.clientY };
+    let dragging = false;
+    const move = (ev: PointerEvent) => {
+      if (!dragging && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > 4) dragging = true;
+      if (dragging) useEditor.setState({ assetDrag: { assetId, x: ev.clientX, y: ev.clientY } });
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const drag = useEditor.getState().assetDrag;
+      useEditor.setState({ assetDrag: null });
+      if (!dragging || !drag) return;
+      const target = dropResolver?.(ev.clientX, ev.clientY);
+      if (target) useEditor.getState().edit({ type: "addClip", assetId, startUs: target.startUs, trackId: target.trackId });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+}
+
+export function KindIcon({ kind, size = 14 }: { kind: Asset["kind"]; size?: number }) {
+  if (kind === "audio") return <AudioLines size={size} />;
+  if (kind === "image") return <ImageIcon size={size} />;
+  return <Film size={size} />;
+}
+
+/** Confirmation overlay for removing an asset and its clips. */
+export function RemoveConfirm({ asset, onKeep }: { asset: Asset; onKeep: () => void }) {
+  const edit = useEditor((s) => s.edit);
+  return (
+    <div
+      className="absolute inset-0 z-10 flex cursor-default flex-col items-center justify-center gap-2 rounded-md bg-panel/95 p-2 text-center text-[12px]"
+      role="alertdialog"
+      aria-label={`Remove ${asset.name}?`}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <span>Remove from project? Its clips are removed too.</span>
+      <span className="flex gap-1">
+        <Button variant="danger" className="h-7" onClick={() => edit({ type: "removeAsset", assetId: asset.id })}>
+          Remove
+        </Button>
+        <Button className="h-7" autoFocus onClick={onKeep}>
+          Keep
+        </Button>
+      </span>
+    </div>
+  );
+}

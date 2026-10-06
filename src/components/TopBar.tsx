@@ -1,21 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Download, FilePlus2, FolderOpen, Loader2, Redo2, Undo2 } from "lucide-react";
+import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Redo2, Undo2 } from "lucide-react";
 import { api, errorText } from "../lib/api";
-import { projectDuration, useEditor } from "../lib/store";
+import { FORMATS } from "../lib/presets";
+import { openExport, projectDuration, useEditor } from "../lib/store";
 import { formatDuration } from "../lib/time";
-import type { ProjectSummary } from "../lib/types";
-import { Button, IconButton } from "./ui";
-
-export const FORMATS = [
-  { label: "9:16", hint: "Reels, TikTok, Shorts", width: 1080, height: 1920 },
-  { label: "16:9", hint: "YouTube", width: 1920, height: 1080 },
-  { label: "1:1", hint: "Square", width: 1080, height: 1080 },
-  { label: "4:5", hint: "Instagram feed", width: 1080, height: 1350 },
-];
-
-export function formatLabel(width: number, height: number) {
-  return FORMATS.find((f) => f.width === width && f.height === height)?.label ?? `${width}×${height}`;
-}
+import type { ProjectSummary, Snapshot } from "../lib/types";
+import { Button, IconButton, ProgressBar } from "./ui";
 
 function SaveStatus() {
   const saveState = useEditor((s) => s.saveState);
@@ -27,12 +17,12 @@ function SaveStatus() {
     );
   if (saveState === "saving")
     return (
-      <span className="flex items-center gap-1 text-[12px] text-subtle" role="status">
+      <span className="flex items-center gap-1 text-[12px] text-muted" role="status">
         <Loader2 size={13} className="animate-spin" /> Saving…
       </span>
     );
   return (
-    <span className="flex items-center gap-1 text-[12px] text-subtle" role="status">
+    <span className="flex items-center gap-1 text-[12px] text-muted" role="status">
       <Check size={13} /> Saved
     </span>
   );
@@ -73,7 +63,7 @@ function ProjectName() {
         if (e.key === "Enter") commit();
         if (e.key === "Escape") setDraft(null);
       }}
-      className="h-7 w-[260px] rounded border border-accent bg-raised px-1.5 text-[13px] text-fg outline-none"
+      className="h-7 w-[260px] rounded border border-accent bg-raised px-1.5 text-[13px] text-fg"
     />
   );
 }
@@ -98,11 +88,11 @@ function ProjectMenu() {
     };
   }, [open]);
 
-  const run = async (fn: () => Promise<import("../lib/types").Snapshot>) => {
+  const run = async (fn: () => Promise<Snapshot>) => {
     setOpen(false);
     try {
       setSnap(await fn(), false);
-      useEditor.setState({ timeUs: 0, thumbs: {}, waveforms: {} });
+      useEditor.setState({ timeUs: 0, thumbs: {}, filmstrips: {}, waveforms: {} });
     } catch (e) {
       toast({ kind: "error", text: errorText(e) });
     }
@@ -115,7 +105,7 @@ function ProjectMenu() {
       </IconButton>
       {open && (
         <div className="absolute left-0 top-10 z-50 w-80 rounded-lg border border-line bg-panel p-2 shadow-2xl shadow-black/60">
-          <div className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-subtle">New project</div>
+          <div className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">New project</div>
           <div className="grid grid-cols-4 gap-1 pb-2">
             {FORMATS.map((f) => (
               <button
@@ -130,9 +120,9 @@ function ProjectMenu() {
               </button>
             ))}
           </div>
-          <div className="border-t border-line px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-subtle">Recent</div>
+          <div className="border-t border-line px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Recent</div>
           <div className="max-h-72 overflow-y-auto">
-            {projects.length === 0 && <div className="px-2 py-2 text-[12px] text-subtle">No saved projects yet.</div>}
+            {projects.length === 0 && <div className="px-2 py-2 text-[12px] text-muted">No saved projects yet.</div>}
             {projects.map((p) => (
               <button
                 key={p.path}
@@ -142,7 +132,7 @@ function ProjectMenu() {
                 className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left hover:bg-raised disabled:cursor-default disabled:bg-raised/60"
               >
                 <span className="truncate text-[13px] text-fg">{p.name}</span>
-                <span className="tabular shrink-0 pl-2 text-[11px] text-subtle">
+                <span className="tabular shrink-0 pl-2 text-[11px] text-muted">
                   {p.path === current ? "Open" : formatDuration(p.durationUs)}
                 </span>
               </button>
@@ -154,50 +144,38 @@ function ProjectMenu() {
   );
 }
 
-function FormatSelect() {
-  const canvas = useEditor((s) => s.snap?.project.canvas);
-  const edit = useEditor((s) => s.edit);
-  if (!canvas) return null;
-  return (
-    <label className="flex items-center gap-1.5 rounded-md border border-line bg-raised pl-2 text-[12px] text-muted">
-      Format
-      <span className="relative">
-        <select
-          aria-label="Canvas format"
-          value={`${canvas.width}x${canvas.height}`}
-          onChange={(e) => {
-            const [w, h] = e.target.value.split("x").map(Number);
-            edit({ type: "setCanvas", width: w, height: h });
-          }}
-          className="h-7 cursor-pointer appearance-none rounded-r-md bg-transparent pl-1 pr-6 text-[12px] font-medium text-fg outline-none"
-        >
-          {FORMATS.map((f) => (
-            <option key={f.label} value={`${f.width}x${f.height}`}>
-              {f.label} · {f.hint}
-            </option>
-          ))}
-          {!FORMATS.some((f) => f.width === canvas.width && f.height === canvas.height) && (
-            <option value={`${canvas.width}x${canvas.height}`}>{`${canvas.width}×${canvas.height}`}</option>
-          )}
-        </select>
-        <ChevronDown size={13} className="pointer-events-none absolute right-1.5 top-2 text-muted" />
-      </span>
-    </label>
-  );
-}
-
+/** Background work. Export shows first and reopens its dialog; captions open their tab. */
 function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
-  const running = Object.values(jobs).filter((j) => j.status === "running" && j.kind !== "export");
+  const running = Object.values(jobs).filter((j) => j.status === "running");
   if (running.length === 0) return null;
-  const j = running[0];
+  const j = running.find((x) => x.kind === "export") ?? running.find((x) => x.kind === "captions") ?? running[0];
+  const pct = j.progress > 0 ? `${Math.round(j.progress * 100)}%` : null;
+  const body = (
+    <>
+      <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
+      <span className="max-w-[220px] truncate">{j.kind === "export" ? "Exporting" : (j.phase ?? j.label)}</span>
+      {pct && <span className="tabular text-muted">{pct}</span>}
+      {j.kind === "export" && <ProgressBar value={j.progress} className="w-16" />}
+      {running.length > 1 && <span className="text-muted">+{running.length - 1}</span>}
+    </>
+  );
+  if (j.kind === "audio")
+    return (
+      <span className="flex items-center gap-1.5 text-[12px] text-fg" role="status">
+        {body}
+      </span>
+    );
   return (
-    <span className="flex items-center gap-1.5 text-[12px] text-muted" role="status">
-      <Loader2 size={13} className="animate-spin text-accent" />
-      <span className="max-w-[260px] truncate">{j.phase ?? j.label}</span>
-      <span className="tabular text-subtle">{Math.round(j.progress * 100)}%</span>
-      {running.length > 1 && <span className="text-subtle">+{running.length - 1}</span>}
-    </span>
+    <button
+      type="button"
+      role="status"
+      title={j.kind === "export" ? "Show export progress" : "Show captions"}
+      onClick={() => (j.kind === "export" ? useEditor.setState({ exportOpen: true }) : useEditor.setState({ panelTab: "captions" }))}
+      className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg hover:bg-raised"
+    >
+      {body}
+    </button>
   );
 }
 
@@ -215,7 +193,6 @@ export function TopBar() {
       <SaveStatus />
       <div className="flex-1" />
       <JobIndicator />
-      <FormatSelect />
       <div className="flex items-center">
         <IconButton label="Undo (Ctrl+Z)" disabled={!snap?.canUndo} onClick={undo}>
           <Undo2 size={16} />
@@ -225,7 +202,7 @@ export function TopBar() {
         </IconButton>
       </div>
       <span title={empty ? "Add a clip to the timeline to export" : "Export video (Ctrl+E)"}>
-        <Button variant="primary" disabled={empty} onClick={() => useEditor.setState({ exportOpen: true })}>
+        <Button variant="primary" disabled={empty} onClick={openExport}>
           <Download size={15} /> Export
         </Button>
       </span>

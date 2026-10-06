@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
-import { api } from "../lib/api";
-import { projectDuration, useEditor } from "../lib/store";
-import { formatTime } from "../lib/time";
-import { IconButton } from "./ui";
+import { api } from "../../lib/api";
+import { projectDuration, useEditor } from "../../lib/store";
+import { formatTime } from "../../lib/time";
+import { IconButton } from "../ui";
+import { LayerOverlay } from "./LayerOverlay";
+import { RatioMenu } from "./RatioMenu";
 
 const HEADER = 24;
 
@@ -102,43 +104,52 @@ export function Preview() {
     <section className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Preview">
       <div ref={boxRef} className="relative m-3 mb-0 min-h-0 flex-1">
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="relative overflow-hidden rounded-sm bg-black shadow-[0_0_0_1px_var(--color-line)]" style={{ width: fit.w, height: fit.h }}>
-            <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
-            {empty && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center">
-                <p className="text-[13px] text-fg">Your video appears here</p>
-                <p className="text-[12px] text-muted">Add media to the timeline to start editing.</p>
-              </div>
-            )}
-            {!connected && !engineError && <div className="skeleton absolute inset-0 opacity-60" aria-label="Connecting to preview" />}
-            {engineError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 p-6 text-center" role="alert">
-                <p className="text-[13px] font-medium text-danger">Preview is unavailable</p>
-                <p className="text-[12px] text-muted">{engineError}</p>
-              </div>
-            )}
+          <div className="relative" style={{ width: fit.w, height: fit.h }}>
+            <div className="absolute inset-0 overflow-hidden rounded-sm bg-black shadow-[0_0_0_1px_var(--color-line)]">
+              <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
+              {empty && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center">
+                  <p className="text-[13px] text-fg">Your video appears here</p>
+                  <p className="text-[12px] text-muted">Add media to the timeline to start editing.</p>
+                </div>
+              )}
+              {!connected && !engineError && <div className="skeleton absolute inset-0 opacity-60" aria-label="Connecting to preview" />}
+              {engineError && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 p-6 text-center" role="alert">
+                  <p className="text-[13px] font-medium text-danger">Preview is unavailable</p>
+                  <p className="text-[12px] text-muted">{engineError}</p>
+                </div>
+              )}
+            </div>
+            {/* Outside the clipped frame so handles of a layer larger than the canvas stay reachable. */}
+            {!empty && !engineError && canvas && fit.w > 0 && <LayerOverlay width={fit.w} height={fit.h} />}
           </div>
         </div>
       </div>
-      <div className="flex h-12 shrink-0 items-center justify-center gap-2 px-3">
-        <span className="tabular w-24 text-right text-[12px] text-fg">{formatTime(timeUs)}</span>
-        <IconButton label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
-          <SkipBack size={16} />
-        </IconButton>
-        <button
-          type="button"
-          aria-label={playing ? "Pause (Space)" : "Play (Space)"}
-          title={playing ? "Pause (Space)" : "Play (Space)"}
-          disabled={empty}
-          onClick={togglePlay}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-fg text-black transition-transform duration-[120ms] ease-out hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
-        >
-          {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="translate-x-px" />}
-        </button>
-        <IconButton label="Go to end (End)" onClick={() => seek(duration)} disabled={empty}>
-          <SkipForward size={16} />
-        </IconButton>
-        <span className="tabular w-24 text-[12px] text-subtle">{formatTime(duration)}</span>
+      <div className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3">
+        <span className="tabular text-[12px]">
+          <span className="text-fg">{formatTime(timeUs)}</span>
+          <span className="text-muted"> / {formatTime(duration)}</span>
+        </span>
+        <div className="flex items-center gap-2">
+          <IconButton label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
+            <SkipBack size={16} />
+          </IconButton>
+          <button
+            type="button"
+            aria-label={playing ? "Pause (Space)" : "Play (Space)"}
+            title={playing ? "Pause (Space)" : "Play (Space)"}
+            disabled={empty}
+            onClick={togglePlay}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-fg text-black transition-transform duration-[120ms] ease-out hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="translate-x-px" />}
+          </button>
+          <IconButton label="Go to end (End)" onClick={() => seek(duration)} disabled={empty}>
+            <SkipForward size={16} />
+          </IconButton>
+        </div>
+        <div className="flex justify-end">{canvas && <RatioMenu />}</div>
       </div>
     </section>
   );

@@ -12,10 +12,11 @@
   --color-accent-strong: #059669;
   --color-danger: #f05252;
   --color-warn: #f5a524;
+  /* "clip-text" would collide with Tailwind's bg-clip-text (background-clip: text). */
   --color-clip-video: #25435a;
   --color-clip-image: #3a3f63;
   --color-clip-audio: #1f4a3a;
-  --color-clip-text: #5a4520;
+  --color-clip-title: #5a4520;
   --color-clip-captions: #4a3460;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Inter", "Noto Sans", sans-serif;
 }
@@ -82,6 +83,64 @@ input[type="range"] {
   background: linear-gradient(90deg, #1d2024 0, #262a2f 50%, #1d2024 100%) no-repeat;
   background-size: 400px 100%;
   animation: skeleton 1.4s linear infinite;
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.indeterminate {
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
+/*
+ * Motion previews on transition and animation tiles. At rest a tile shows a frame from the
+ * middle of the effect; hovering or focusing the tile plays it in a loop.
+ */
+.pv {
+  animation-duration: 1.4s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+  animation-play-state: paused;
+  animation-delay: -0.56s;
+}
+button:hover .pv,
+button:focus-visible .pv {
+  animation-play-state: running;
+}
+.pv-out {
+  animation-direction: reverse;
+}
+
+@keyframes t-dissolve-b { 0%, 15% { opacity: 0 } 85%, 100% { opacity: 1 } }
+@keyframes t-swap-b { 0%, 49.9% { opacity: 0 } 50%, 100% { opacity: 1 } }
+@keyframes t-flash { 0%, 10% { opacity: 0 } 50% { opacity: 1 } 90%, 100% { opacity: 0 } }
+@keyframes t-slide-left-a { 0%, 15% { transform: translateX(0) } 85%, 100% { transform: translateX(-100%) } }
+@keyframes t-slide-left-b { 0%, 15% { transform: translateX(100%) } 85%, 100% { transform: translateX(0) } }
+@keyframes t-slide-up-a { 0%, 15% { transform: translateY(0) } 85%, 100% { transform: translateY(-100%) } }
+@keyframes t-slide-up-b { 0%, 15% { transform: translateY(100%) } 85%, 100% { transform: translateY(0) } }
+@keyframes t-zoom-a { 0%, 15% { transform: scale(1); opacity: 1 } 55%, 100% { transform: scale(1.9); opacity: 0 } }
+@keyframes t-zoom-b { 0%, 40% { transform: scale(0.85); opacity: 0 } 85%, 100% { transform: scale(1); opacity: 1 } }
+@keyframes t-wipe-b { 0%, 15% { clip-path: inset(0 0 0 100%) } 85%, 100% { clip-path: inset(0 0 0 0) } }
+@keyframes t-blur-a { 0%, 10% { filter: blur(0) } 50%, 100% { filter: blur(6px) } }
+@keyframes t-blur-b { 0%, 49.9% { opacity: 0; filter: blur(6px) } 50% { opacity: 1; filter: blur(6px) } 90%, 100% { opacity: 1; filter: blur(0) } }
+
+@keyframes a-fade { 0%, 15% { opacity: 0 } 70%, 100% { opacity: 1 } }
+@keyframes a-zoomIn { 0%, 15% { opacity: 0; transform: scale(0.3) } 70%, 100% { opacity: 1; transform: scale(1) } }
+@keyframes a-zoomOut { 0%, 15% { opacity: 0; transform: scale(1.9) } 70%, 100% { opacity: 1; transform: scale(1) } }
+@keyframes a-slideUp { 0%, 15% { opacity: 0; transform: translateY(120%) } 70%, 100% { opacity: 1; transform: translateY(0) } }
+@keyframes a-slideDown { 0%, 15% { opacity: 0; transform: translateY(-120%) } 70%, 100% { opacity: 1; transform: translateY(0) } }
+@keyframes a-slideLeft { 0%, 15% { opacity: 0; transform: translateX(120%) } 70%, 100% { opacity: 1; transform: translateX(0) } }
+@keyframes a-slideRight { 0%, 15% { opacity: 0; transform: translateX(-120%) } 70%, 100% { opacity: 1; transform: translateX(0) } }
+@keyframes a-pop { 0%, 15% { transform: scale(0) } 55% { transform: scale(1.18) } 70%, 100% { transform: scale(1) } }
+@keyframes a-typewriter { 0%, 15% { clip-path: inset(0 100% 0 0) } 70%, 100% { clip-path: inset(0 0 0 0) } }
+.a-typewriter {
+  animation-timing-function: steps(5, end);
 }
 
 @media (prefers-reduced-motion: reduce) {

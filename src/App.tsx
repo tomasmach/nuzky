@@ -1,58 +1,26 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
-import { allClips, findClip, MAIN_TRACK, projectDuration, useEditor } from "./lib/store";
+import { deleteSelection, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
 import { US } from "./lib/time";
 import type { JobEvent, Snapshot, Transport } from "./lib/types";
 import { ExportDialog } from "./components/ExportDialog";
-import { Inspector } from "./components/Inspector";
-import { MediaPanel, dropResolver, importPaths, pickAndImport, MEDIA_EXTENSIONS } from "./components/MediaPanel";
-import { Preview } from "./components/Preview";
-import { Timeline } from "./components/Timeline";
+import { Inspector } from "./components/inspector/Inspector";
+import { LeftPanel } from "./components/panel/LeftPanel";
+import { MEDIA_EXTENSIONS, dropResolver, importPaths, pickAndImport } from "./components/panel/assets";
+import { Preview } from "./components/preview/Preview";
+import { Timeline } from "./components/timeline/Timeline";
+import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
 
-function Toasts() {
-  const toasts = useEditor((s) => s.toasts);
-  const dismiss = useEditor((s) => s.dismissToast);
-  return (
-    <div className="pointer-events-none fixed left-1/2 top-14 z-[90] flex -translate-x-1/2 flex-col items-center gap-2" aria-live="polite">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          role={t.kind === "error" ? "alert" : "status"}
-          className={`pointer-events-auto flex max-w-[560px] items-center gap-2 rounded-lg border px-3 py-2 text-[13px] shadow-xl shadow-black/50 ${
-            t.kind === "error" ? "border-danger/50 bg-[#2a1416] text-fg" : "border-line bg-raised text-fg"
-          }`}
-        >
-          {t.kind === "error" ? (
-            <AlertCircle size={16} className="shrink-0 text-danger" />
-          ) : t.kind === "success" ? (
-            <CheckCircle2 size={16} className="shrink-0 text-accent" />
-          ) : (
-            <Info size={16} className="shrink-0 text-muted" />
-          )}
-          <span className="min-w-0 break-words">{t.text}</span>
-          {t.action && (
-            <button
-              type="button"
-              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-accent/10"
-              onClick={() => {
-                t.action!.run();
-                dismiss(t.id);
-              }}
-            >
-              {t.action.label}
-            </button>
-          )}
-          <button type="button" aria-label="Dismiss" className="shrink-0 text-subtle hover:text-fg" onClick={() => dismiss(t.id)}>
-            <X size={14} />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
+const TEXT_INPUTS = new Set(["text", "search", "email", "number", "password", "url", "tel"]);
+
+function isTyping(el: HTMLElement | null) {
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  return el.tagName === "INPUT" && TEXT_INPUTS.has((el as HTMLInputElement).type);
 }
 
 function DragChip() {
@@ -66,46 +34,21 @@ function DragChip() {
   );
 }
 
-function isTyping(e: KeyboardEvent) {
-  const el = e.target as HTMLElement | null;
-  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
-}
-
-async function deleteSelection() {
-  const { selection, edit, select, toast, undo } = useEditor.getState();
-  if (selection.length === 0) return;
-  const snap = await edit({ type: "deleteClips", clipIds: selection });
-  if (snap) {
-    select([]);
-    toast({ kind: "info", text: selection.length === 1 ? "Clip deleted" : `${selection.length} clips deleted`, action: { label: "Undo", run: undo } });
-  }
-}
-
-async function splitAtPlayhead() {
-  const { snap, selection, timeUs, edit, toast } = useEditor.getState();
-  if (!snap) return;
-  const fps = snap.project.canvas.fps;
-  const min = US / fps;
-  const under = (s: number, d: number) => timeUs > s + min && timeUs < s + d - min;
-  let targets = allClips(snap.project).filter((c) => selection.includes(c.id) && under(c.startUs, c.durationUs));
-  if (targets.length === 0) targets = (snap.project.tracks.find((t) => t.id === MAIN_TRACK)?.clips ?? []).filter((c) => under(c.startUs, c.durationUs));
-  if (targets.length === 0) {
-    toast({ kind: "info", text: "Move the playhead over a clip to split it." });
-    return;
-  }
-  for (const c of targets) await edit({ type: "splitClip", clipId: c.id, atUs: Math.round(timeUs) });
-}
-
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isTyping(e) || useEditor.getState().exportOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (isTyping(target) || useEditor.getState().exportOpen) return;
       const s = useEditor.getState();
       const mod = e.ctrlKey || e.metaKey;
       const fps = s.snap?.project.canvas.fps ?? 30;
       const key = e.key.toLowerCase();
+      // A focused slider keeps its own arrow, Home and End keys.
+      const onRange = target instanceof HTMLInputElement && target.type === "range";
       if (key === " ") {
         e.preventDefault();
+        // Otherwise the focused button would also be clicked when Space is released.
+        (document.activeElement as HTMLElement | null)?.blur();
         s.togglePlay();
       } else if (mod && key === "z" && !e.shiftKey) {
         e.preventDefault();
@@ -118,20 +61,23 @@ function useShortcuts() {
         pickAndImport();
       } else if (mod && key === "e") {
         e.preventDefault();
-        if (s.snap && projectDuration(s.snap.project) > 0) useEditor.setState({ exportOpen: true });
+        openExport();
+      } else if (mod && key === "d") {
+        e.preventDefault();
+        duplicateSelection();
       } else if (!mod && key === "s") {
         e.preventDefault();
         splitAtPlayhead();
       } else if (key === "delete" || key === "backspace") {
         e.preventDefault();
         deleteSelection();
-      } else if (key === "arrowleft" || key === "arrowright") {
+      } else if ((key === "arrowleft" || key === "arrowright") && !onRange) {
         e.preventDefault();
         const dir = key === "arrowleft" ? -1 : 1;
         s.seek(s.timeUs + dir * (e.shiftKey ? US : US / fps));
-      } else if (key === "home") {
+      } else if (key === "home" && !onRange) {
         s.seek(0);
-      } else if (key === "end") {
+      } else if (key === "end" && !onRange) {
         if (s.snap) s.seek(projectDuration(s.snap.project));
       } else if (key === "escape") {
         s.select([]);
@@ -146,14 +92,26 @@ function useShortcuts() {
   }, []);
 }
 
+function onJob(job: JobEvent) {
+  const { toast, exportOpen, exportJobId } = useEditor.getState();
+  useEditor.setState({ jobs: { ...useEditor.getState().jobs, [job.id]: job } });
+  if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
+  if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${job.message}` });
+  if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}` });
+  // The dialog shows the result itself; with it closed, a toast reports it.
+  if (job.kind === "export" && job.id === exportJobId && !exportOpen) {
+    if (job.status === "done") {
+      toast({ kind: "success", text: "Export finished", action: job.output ? { label: "Show in folder", run: () => revealItemInDir(job.output!) } : undefined });
+      useEditor.setState({ exportJobId: null });
+    }
+    if (job.status === "failed") toast({ kind: "error", text: `Export failed: ${job.message}`, action: { label: "Details", run: () => useEditor.setState({ exportOpen: true }) } });
+  }
+}
+
 function useBackendEvents() {
   useEffect(() => {
     const offs: Promise<() => void>[] = [];
-    offs.push(
-      listen<Transport>("transport", (e) => {
-        useEditor.setState({ playing: e.payload.playing, timeUs: e.payload.tUs });
-      }),
-    );
+    offs.push(listen<Transport>("transport", (e) => useEditor.setState({ playing: e.payload.playing, timeUs: e.payload.tUs })));
     offs.push(
       listen<{ revision: number; error: string | null }>("saved", (e) => {
         const snap = useEditor.getState().snap;
@@ -161,16 +119,7 @@ function useBackendEvents() {
         else if (!snap || e.payload.revision >= snap.revision) useEditor.setState({ saveState: "saved" });
       }),
     );
-    offs.push(
-      listen<JobEvent>("job", (e) => {
-        const job = e.payload;
-        const { toast } = useEditor.getState();
-        useEditor.setState({ jobs: { ...useEditor.getState().jobs, [job.id]: job } });
-        if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
-        if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${job.message}` });
-        if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}` });
-      }),
-    );
+    offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
@@ -191,11 +140,77 @@ function useBackendEvents() {
   }, []);
 }
 
+const TIMELINE_KEY = "capopen.timelineHeight";
+const TIMELINE_DEFAULT = 300;
+const TIMELINE_MIN = 160;
+/** Space kept for the top bar and a usable preview above the timeline. */
+const ABOVE_MIN = 48 + 300;
+
+const clampTimeline = (h: number) => Math.round(Math.max(TIMELINE_MIN, Math.min(window.innerHeight - ABOVE_MIN, h)));
+
+/** Drag handle between the preview row and the timeline; the height is remembered. */
+function useTimelineHeight() {
+  const [height, setHeight] = useState(() => clampTimeline(Number(localStorage.getItem(TIMELINE_KEY)) || TIMELINE_DEFAULT));
+  const set = (h: number) => {
+    const v = clampTimeline(h);
+    setHeight(v);
+    localStorage.setItem(TIMELINE_KEY, String(v));
+  };
+  useEffect(() => {
+    const onResize = () => setHeight((h) => clampTimeline(h));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return [height, set] as const;
+}
+
+function Divider({ height, onChange }: { height: number; onChange: (h: number) => void }) {
+  const [active, setActive] = useState(false);
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startY = e.clientY;
+    setActive(true);
+    const move = (ev: PointerEvent) => onChange(height - (ev.clientY - startY));
+    const up = () => {
+      setActive(false);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize timeline"
+      aria-valuenow={height}
+      aria-valuemin={TIMELINE_MIN}
+      tabIndex={0}
+      title="Drag to resize the timeline. Double-click to reset."
+      onPointerDown={onPointerDown}
+      onDoubleClick={() => onChange(TIMELINE_DEFAULT)}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          onChange(height + (e.key === "ArrowUp" ? 24 : -24));
+        }
+      }}
+      className="group relative z-30 -my-[3px] h-[7px] shrink-0 cursor-row-resize"
+    >
+      <div className={`absolute inset-x-0 top-[2px] h-[3px] transition-colors duration-[120ms] ${active ? "bg-accent" : "group-hover:bg-accent/60"}`} />
+    </div>
+  );
+}
+
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, api } });
 
 export default function App() {
   const snap = useEditor((s) => s.snap);
+  const [timelineH, setTimelineH] = useTimelineHeight();
   useShortcuts();
   useBackendEvents();
 
@@ -225,13 +240,14 @@ export default function App() {
     <div className="flex h-full flex-col">
       <TopBar />
       <div className="flex min-h-0 flex-1">
-        <MediaPanel />
+        <LeftPanel />
         <Preview />
         <Inspector />
       </div>
-      <Timeline />
+      <Divider height={timelineH} onChange={setTimelineH} />
+      <Timeline height={timelineH} />
       <ExportDialog />
-      <Toasts />
+      <Toasts bottom={timelineH + 12} />
       <DragChip />
     </div>
   );
