@@ -312,6 +312,10 @@ impl Project {
                 if before >= after {
                     c.duration_us = before;
                 } else {
+                    // Keyframes stay on the kept text, as when a split drops the first half.
+                    for k in &mut c.keyframes {
+                        k.t_us -= range.end_us - c.start_us;
+                    }
                     c.start_us = range.end_us;
                     c.duration_us = after;
                 }
@@ -1781,15 +1785,21 @@ mod tests {
         };
         let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into() };
         p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
+        let clip_id = p.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].id.clone();
+        // A keyframe at 2.5 s on the timeline, inside the part that stays.
+        let keyframes = vec![Keyframe { t_us: 1_500_000, transform: Transform::default() }];
+        p.apply(EditCmd::SetKeyframes { clip_id, keyframes }).unwrap();
         // Cutting [1.5, 2.2) leaves 0.5 s before and 0.8 s after: the later part stays.
         p.apply(EditCmd::RippleDeleteRanges {
             ranges: vec![TimeRange { start_us: 1_500_000, end_us: 2_200_000 }],
             keep_track_ids: Some(vec![]),
         })
         .unwrap();
-        let captions = p.tracks.iter().find(|t| t.name == "Captions").unwrap();
+        let captions = p.tracks.iter().find(|t| t.is_captions()).unwrap();
         let spans: Vec<_> = captions.clips.iter().map(|c| (c.start_us, c.end_us())).collect();
         assert_eq!(spans, vec![(1_500_000, 2_300_000)]);
+        // The keyframe moved with the cut to 1.8 s, 0.3 s into the kept text.
+        assert_eq!(captions.clips[0].keyframes.iter().map(|k| k.t_us).collect::<Vec<_>>(), vec![300_000]);
     }
 
     #[test]
