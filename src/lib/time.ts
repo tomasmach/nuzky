@@ -15,8 +15,3 @@ export function formatDuration(us: number): string {
   const s = us / US;
   return s < 60 ? `${s.toFixed(1)} s` : formatTime(us, false);
 }
-
-export function snapToFrame(us: number, fps: number): number {
-  const frame = US / fps;
-  return Math.round(Math.round(us / frame) * frame);
-}

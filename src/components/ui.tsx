@@ -403,7 +403,7 @@ export function PresetTile({
       className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40"
     >
       <span
-        className={`preset-tile relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
+        className={`relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
           selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line group-enabled:group-hover:border-muted"
         }`}
       >
