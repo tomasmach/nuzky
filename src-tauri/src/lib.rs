@@ -154,6 +154,14 @@ fn apply_edit(state: State<'_, AppState>, cmd: EditCmd, coalesce: Option<String>
     state.apply(cmd, coalesce)
 }
 
+/// All or nothing, as one undo step.
+#[tauri::command]
+fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<String>) -> CmdResult<Snapshot> {
+    let mut editor = state.editor.lock().unwrap();
+    let outcome = editor.apply_batch(cmds, coalesce).map_err(err)?;
+    Ok(state.commit(&editor, outcome.select))
+}
+
 #[tauri::command]
 fn undo(state: State<'_, AppState>) -> Snapshot {
     let mut editor = state.editor.lock().unwrap();
@@ -359,6 +367,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             boot,
             apply_edit,
+            apply_edits,
             undo,
             redo,
             import_media,

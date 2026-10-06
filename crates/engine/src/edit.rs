@@ -275,7 +275,8 @@ impl Project {
                 let clip = Clip::new(new_id(), start, TEXT_DURATION_US, ClipContent::Text {
                     text,
                     style,
-                    transform: Transform { y: 0.3, ..Transform::default() },
+                    // Centred like CapCut; captions sit lower, so a hook title and captions do not collide.
+                    transform: Transform::default(),
                 });
                 out.select.push(clip.id.clone());
                 self.tracks[t].clips.push(clip);
@@ -599,15 +600,25 @@ impl Editor {
     /// Applies `cmd`. Consecutive edits with the same `coalesce` key form one undo step, so
     /// callers scope keys to a gesture (one slider drag, one typing burst).
     pub fn apply(&mut self, cmd: EditCmd, coalesce: Option<String>) -> Result<EditOutcome> {
+        self.apply_batch(vec![cmd], coalesce)
+    }
+
+    /// Applies every command or none of them, as one undo step. The outcome selects what
+    /// the last command selected.
+    pub fn apply_batch(&mut self, cmds: Vec<EditCmd>, coalesce: Option<String>) -> Result<EditOutcome> {
         let before = self.project.clone();
-        let outcome = match self.project.apply(cmd) {
-            Ok(o) => o,
-            Err(e) => {
-                // A rejected edit may have changed the project halfway.
-                self.project = before;
-                return Err(e);
+        let mut outcome = EditOutcome::default();
+        for cmd in cmds {
+            match self.project.apply(cmd) {
+                Ok(o) if o.select.is_empty() => {}
+                Ok(o) => outcome = o,
+                Err(e) => {
+                    // A rejected edit may have changed the project halfway.
+                    self.project = before;
+                    return Err(e);
+                }
             }
-        };
+        }
         if self.project == before {
             return Ok(outcome);
         }
@@ -880,6 +891,22 @@ mod tests {
         assert!(p.apply(EditCmd::SetTransition { clip_id: a, transition: Some(t) }).is_err());
         p.apply(EditCmd::SetTransition { clip_id: b, transition: Some(t) }).unwrap();
         assert_eq!(p.tracks[0].clips[1].transition_in.unwrap().duration_us, 2_000_000);
+    }
+
+    #[test]
+    fn batches_are_atomic_and_one_undo_step() {
+        let mut e = Editor::new(project());
+        e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+        let id = e.project.tracks[0].clips[0].id.clone();
+        let split = |at_us| EditCmd::SplitClip { clip_id: id.clone(), at_us };
+        let before = e.project.clone();
+        // The second split is outside the clip, so nothing may change.
+        assert!(e.apply_batch(vec![split(1_000_000), split(60_000_000)], None).is_err());
+        assert_eq!(e.project, before);
+        e.apply_batch(vec![split(1_000_000), split(500_000)], None).unwrap();
+        assert_eq!(e.project.tracks[0].clips.len(), 3);
+        assert!(e.undo());
+        assert_eq!(e.project, before);
     }
 
     #[test]

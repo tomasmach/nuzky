@@ -4,6 +4,8 @@ import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, LayerBounds
 export const api = {
   boot: () => invoke<Boot>("boot"),
   applyEdit: (cmd: EditCmd, coalesce?: string) => invoke<Snapshot>("apply_edit", { cmd, coalesce: coalesce ?? null }),
+  /** All or nothing, as one undo step. */
+  applyEdits: (cmds: EditCmd[], coalesce?: string) => invoke<Snapshot>("apply_edits", { cmds, coalesce: coalesce ?? null }),
   undo: () => invoke<Snapshot>("undo"),
   redo: () => invoke<Snapshot>("redo"),
   importMedia: (paths: string[]) =>
