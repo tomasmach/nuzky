@@ -1,0 +1,16 @@
+[package]
+name = "capopen-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+capopen-engine.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+whisper-rs = "0.16.0"
+
+[[bin]]
+name = "capopen-analyze"
+path = "src/main.rs"

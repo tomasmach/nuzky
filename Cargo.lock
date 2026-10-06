@@ -535,6 +535,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "capopen-analysis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "capopen-engine",
+ "serde",
+ "serde_json",
+ "whisper-rs",
+]
+
+[[package]]
 name = "capopen-app"
 version = "0.1.0"
 dependencies = [

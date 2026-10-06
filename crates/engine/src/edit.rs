@@ -227,6 +227,8 @@ impl Project {
         }
     }
 
+    /// Applies one edit. On error the project may be partly changed; `Editor::apply`
+    /// restores it, so callers that need atomic edits go through the editor.
     pub fn apply(&mut self, cmd: EditCmd) -> Result<EditOutcome> {
         let mut out = EditOutcome::default();
         let mut moved: Option<(String, i64)> = None;
@@ -337,7 +339,9 @@ impl Project {
                         duration = (old_end - start).max(min);
                     }
                     if let Some(limit) = limit {
-                        new_src = new_src.min((limit - min).max(0));
+                        // The shortest clip still covers `min * speed` of source.
+                        let reserve = (min as f64 * speed).ceil() as i64;
+                        new_src = new_src.min((limit - reserve).max(0));
                         duration = duration.min(((limit - new_src) as f64 / speed) as i64).max(min);
                     }
                     *src = new_src;
@@ -382,6 +386,7 @@ impl Project {
             }
             EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed, adjust, fade_in_us, fade_out_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                let changes_length = speed.is_some();
                 let clip = &mut self.tracks[ti].clips[ci];
                 let half = clip.duration_us / 2;
                 match &mut clip.content {
@@ -422,6 +427,10 @@ impl Project {
                             *st = x;
                         }
                     }
+                }
+                let clip = &self.tracks[ti].clips[ci];
+                if changes_length && ti != 0 && !self.is_free(ti, clip.start_us, clip.end_us(), Some(&clip_id)) {
+                    bail!("There is no room on this track for the clip at the new speed");
                 }
             }
             EditCmd::SetAnimation { clip_id, slot, animation } => {
@@ -811,6 +820,35 @@ mod tests {
         p.apply(EditCmd::SplitClip { clip_id: id, at_us: 1_000_000 }).unwrap();
         let ClipContent::Media { source_in_us, .. } = &p.tracks[0].clips[1].content else { panic!() };
         assert_eq!(*source_in_us, 2_000_000);
+    }
+
+    #[test]
+    fn slowing_down_an_overlay_clip_cannot_overlap_its_neighbour() {
+        let mut e = Editor::new(project());
+        e.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }, None).unwrap();
+        let track = e.project.tracks[1].id.clone();
+        let first = e.project.tracks[1].clips[0].id.clone();
+        e.apply(EditCmd::TrimClip { clip_id: first.clone(), start_us: 0, duration_us: 5_000_000, source_in_us: None }, None).unwrap();
+        e.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(5_000_000), track_id: Some(track) }, None).unwrap();
+        let before = e.project.clone();
+        let EditCmd::UpdateClip { clip_id, transform, volume, text, style, adjust, fade_in_us, fade_out_us, .. } = update(&first) else { unreachable!() };
+        let slower = EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed: Some(0.5), adjust, fade_in_us, fade_out_us };
+        assert!(e.apply(slower, None).is_err());
+        assert_eq!(e.project, before);
+    }
+
+    #[test]
+    fn trim_at_high_speed_stays_inside_the_source() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let id = p.tracks[0].clips[0].id.clone();
+        let EditCmd::UpdateClip { clip_id, transform, volume, text, style, adjust, fade_in_us, fade_out_us, .. } = update(&id) else { unreachable!() };
+        p.apply(EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed: Some(10.0), adjust, fade_in_us, fade_out_us }).unwrap();
+        p.apply(EditCmd::TrimClip { clip_id: id, start_us: 0, duration_us: 33_334, source_in_us: Some(4_966_666) }).unwrap();
+        let c = &p.tracks[0].clips[0];
+        let ClipContent::Media { source_in_us, speed, .. } = &c.content else { panic!() };
+        let source_end = source_in_us + (c.duration_us as f64 * *speed as f64).round() as i64;
+        assert!(source_end <= 5_000_000, "source ends at {source_end}");
     }
 
     #[test]
