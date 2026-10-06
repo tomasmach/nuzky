@@ -29,10 +29,13 @@ export function Button({
   );
 }
 
-/** Icon-only button. `label` is required: it becomes the tooltip and the accessible name. */
+/**
+ * Icon-only button. `label` is required: it becomes the tooltip and the accessible name.
+ * Passing `active`, true or false, makes it a toggle button.
+ */
 export function IconButton({
   label,
-  active = false,
+  active,
   className = "",
   children,
   ...rest
@@ -42,7 +45,7 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      aria-pressed={active || undefined}
+      aria-pressed={active}
       className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35 disabled:active:translate-y-0 ${
         active ? "bg-accent/20 text-accent" : "text-muted hover:bg-raised hover:text-fg"
       } ${className}`}
