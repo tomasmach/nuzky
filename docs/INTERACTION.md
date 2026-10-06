@@ -21,7 +21,7 @@ Drag the line above the timeline to resize it; double-click resets it, ↑/↓ o
 
 ### Import
 Entry: Import button, `Ctrl+I`, or files dropped on the window. Files dropped on the timeline are also placed on it. The Audio tab's "Add music or sound" opens the picker filtered to audio.
-Outcome: items appear in Media (all kinds) and, for audio, in Audio. Unsupported files produce one toast naming each file and the reason; the rest still import.
+Outcome: items appear in Media (all kinds) and, for audio, in Audio. Unsupported files produce one toast naming each file by name only with a short reason ("build.log is not a video, audio or image file"); the rest still import.
 Hovering or focusing a media or audio item shows `+` (add at playhead) and a trash button (remove the item and its clips, after a confirmation).
 
 ### Add to timeline

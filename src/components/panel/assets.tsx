@@ -8,6 +8,20 @@ import { Button } from "../ui";
 export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
 export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
+const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
+
+/**
+ * One short line for the files that failed: the name only, never the full path or FFmpeg's wording.
+ * The engine's error ends with the reason, after "Cannot open <path>: ".
+ */
+function importFailures(failed: { path: string; error: string }[]) {
+  const undecodable = (e: string) => /Invalid data found|has no video or audio/.test(e);
+  const bad = failed.filter((f) => undecodable(f.error)).map((f) => fileName(f.path));
+  const other = failed.filter((f) => !undecodable(f.error)).map((f) => `Could not import ${fileName(f.path)}: ${f.error.split(": ").pop()}`);
+  const lead = bad.length === 1 ? `${bad[0]} is not a video, audio or image file` : bad.length > 1 ? `${bad.join(", ")} are not video, audio or image files` : null;
+  return [lead, ...other].filter(Boolean).join(". ");
+}
+
 /** Imports files; optionally places them on the timeline one after another. */
 export async function importPaths(paths: string[], place?: { trackId: string | null; startUs: number | null }) {
   const { setSnap, toast, edit } = useEditor.getState();
@@ -15,10 +29,7 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
   try {
     const res = await api.importMedia(paths);
     setSnap(res.snapshot);
-    if (res.failed.length > 0) {
-      const names = res.failed.map((f) => f.path.split(/[\\/]/).pop()).join(", ");
-      toast({ kind: "error", text: `Could not import ${names}: ${res.failed[0].error}` });
-    }
+    if (res.failed.length > 0) toast({ kind: "error", text: importFailures(res.failed) });
     if (place) {
       for (const id of res.added) await edit({ type: "addClip", assetId: id, startUs: place.startUs, trackId: place.trackId });
     }
