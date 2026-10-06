@@ -24,7 +24,7 @@ function AudioItem({ asset }: { asset: Asset }) {
         <span className="truncate text-[13px] text-fg">{asset.name}</span>
         <div className="relative h-3.5">
           {job?.status === "running" ? (
-            <ProgressBar value={job.progress} className="mt-1" />
+            <ProgressBar value={job.progress} label={job.label} className="mt-1" />
           ) : (
             <Waveform assetId={asset.id} sourceInUs={0} durationUs={asset.durationUs} speed={1} width={180} color="#5fd3a5" className="h-full" />
           )}

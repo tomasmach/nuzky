@@ -153,6 +153,7 @@ export function RangeInput({
   step,
   onChange,
   disabled,
+  valueText,
   className = "",
 }: {
   label: string;
@@ -162,6 +163,8 @@ export function RangeInput({
   step: number;
   onChange: (v: number) => void;
   disabled?: boolean;
+  /** What the value means to a person, for sliders whose position is not the value, such as logarithmic ones. */
+  valueText?: string;
   className?: string;
 }) {
   const frac = (v: number) => (max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0);
@@ -179,6 +182,7 @@ export function RangeInput({
         max={max}
         step={step}
         value={value}
+        aria-valuetext={valueText}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
         className="range relative w-full disabled:opacity-40"
@@ -220,7 +224,17 @@ export function Slider({
   return (
     <div className="flex items-center gap-2" title={title}>
       <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
-      <RangeInput label={label} value={value} min={min} max={max} step={step} onChange={onChange} disabled={disabled} className="min-w-0 flex-1" />
+      <RangeInput
+        label={label}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={onChange}
+        disabled={disabled}
+        valueText={mixed ? "Mixed" : `${format(value)}${unit && ` ${unit}`}`}
+        className="min-w-0 flex-1"
+      />
       <span className="flex shrink-0 items-center gap-0.5">
         <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} mixed={mixed} />
         <span className="w-3 text-[11px] text-muted">{unit}</span>
@@ -422,12 +436,13 @@ export function PresetTile({
   );
 }
 
-/** Determinate when `value` is above 0, otherwise an indeterminate sweep. */
-export function ProgressBar({ value, className = "" }: { value: number; className?: string }) {
+/** Determinate when `value` is above 0, otherwise an indeterminate sweep. `label` names the work in progress. */
+export function ProgressBar({ value, label, className = "" }: { value: number; label: string; className?: string }) {
   const known = value > 0;
   return (
     <div
       role="progressbar"
+      aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={known ? Math.round(value * 100) : undefined}

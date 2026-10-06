@@ -57,7 +57,7 @@ function MediaItem({ asset }: { asset: Asset }) {
         </button>
         {preparing && (
           <div className="absolute inset-x-1 bottom-1 mr-12">
-            <ProgressBar value={job.progress} />
+            <ProgressBar value={job.progress} label={job.label} />
           </div>
         )}
       </div>

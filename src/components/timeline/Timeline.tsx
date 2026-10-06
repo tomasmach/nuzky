@@ -175,7 +175,16 @@ export function Timeline({ height }: { height: number }) {
         <IconButton label="Zoom out (-)" onClick={() => setZoom(zoom / 1.3)}>
           <ZoomOut size={16} />
         </IconButton>
-        <RangeInput label="Timeline zoom" min={Math.log(4)} max={Math.log(600)} step={0.01} value={Math.log(zoom)} onChange={(v) => setZoom(Math.exp(v))} className="w-28" />
+        <RangeInput
+          label="Timeline zoom"
+          min={Math.log(4)}
+          max={Math.log(600)}
+          step={0.01}
+          value={Math.log(zoom)}
+          valueText={`${Math.round(zoom)} pixels per second`}
+          onChange={(v) => setZoom(Math.exp(v))}
+          className="w-28"
+        />
         <IconButton label="Zoom in (+)" onClick={() => setZoom(zoom * 1.3)}>
           <ZoomIn size={16} />
         </IconButton>

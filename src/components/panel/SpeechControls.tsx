@@ -93,7 +93,7 @@ export function SpeechJobCard({ job }: { job: JobEvent }) {
           <X size={14} /> Cancel
         </Button>
       </div>
-      <ProgressBar value={job.progress} className="mr-1.5" />
+      <ProgressBar value={job.progress} label={job.label} className="mr-1.5" />
     </div>
   );
 }

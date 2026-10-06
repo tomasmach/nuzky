@@ -153,7 +153,7 @@ function JobIndicator() {
       <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
       <span className="max-w-[220px] truncate">{j.kind === "export" ? "Exporting" : (j.phase ?? j.label)}</span>
       {pct && <span className="tabular text-muted">{pct}</span>}
-      {j.kind === "export" && <ProgressBar value={j.progress} className="w-16" />}
+      {j.kind === "export" && <ProgressBar value={j.progress} label={j.label} className="w-16" />}
       {running.length > 1 && <span className="text-muted">+{running.length - 1}</span>}
     </>
   );

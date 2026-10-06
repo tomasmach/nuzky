@@ -192,7 +192,7 @@ export function ExportDialog() {
                 <span className="text-fg">Rendering… {Math.round(job.progress * 100)}%</span>
                 <span className="tabular text-muted">{eta}</span>
               </div>
-              <ProgressBar value={job.progress} />
+              <ProgressBar value={job.progress} label={job.label} />
               <p className="text-[12px] text-muted">You can keep editing. Changes made now are not part of this export.</p>
             </div>
           )}
