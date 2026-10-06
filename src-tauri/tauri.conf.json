@@ -29,6 +29,15 @@
     "active": true,
     "targets": "all",
     "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE",
+    "category": "Video",
+    "shortDescription": "A local desktop video editor",
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    },
+    "windows": {
+      "bundleVCRuntime": true
+    },
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico", "icons/icon.icns"]
   }
 }

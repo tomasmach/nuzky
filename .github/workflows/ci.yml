@@ -1,0 +1,72 @@
+name: Build and test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Rust
+        shell: bash
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-v1
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev clang cmake pkg-config \
+            ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libswresample-dev libavfilter-dev libavdevice-dev libx264-dev \
+            patchelf libfuse2t64 librsvg2-bin libvulkan1 mesa-vulkan-drivers
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          test "$(uname -m)" = arm64
+          brew install ffmpeg@8 pkg-config cmake
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@8)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$(brew --prefix ffmpeg@8)/bin" >> "$GITHUB_PATH"
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows-deps.ps1
+      - run: npm ci
+      - run: npm run typecheck
+      - run: cargo test --workspace --locked
+      - name: Build installers
+        run: node scripts/build-bundles.mjs
+      - name: Verify Linux bundle
+        if: runner.os == 'Linux'
+        run: bash scripts/verify-linux-bundle.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capopen-${{ matrix.os }}
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/build-info-*.txt
+          if-no-files-found: error
+          retention-days: 14

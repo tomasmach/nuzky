@@ -1,0 +1,38 @@
+name: Draft release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/ci.yml
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: capopen-*
+          path: artifacts
+          merge-multiple: true
+      - name: Attach installers to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node -e 'const v = require("./src-tauri/tauri.conf.json").version; if (process.env.RELEASE_TAG !== `v${v}`) throw new Error(`Tag must match app version v${v}`)'
+          find artifacts -type f -exec cp {} . \;
+          sha256sum ./*.AppImage ./*.deb ./*.dmg ./*-setup.exe > SHA256SUMS
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "CapOpen $RELEASE_TAG" --notes-file scripts/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" ./*.AppImage ./*.deb ./*.dmg ./*-setup.exe ./build-info-*.txt SHA256SUMS --clobber

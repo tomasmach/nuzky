@@ -35,9 +35,9 @@ src             React + TypeScript UI
 
 More detail: [docs/INTERACTION.md](docs/INTERACTION.md) (behaviour), [DESIGN.md](DESIGN.md) (visual tokens).
 
-## Build and run (Linux)
+## Build and run
 
-Requirements: Rust 1.90+, Node 22+, FFmpeg 8 shared libraries with headers, ALSA headers, clang (for bindgen), cmake (for whisper.cpp), WebKitGTK 4.1.
+Use current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. CI builds Linux x86_64, macOS Apple Silicon and Windows x64. See [docs/BUILDING.md](docs/BUILDING.md) for exact dependencies, installers, runtime libraries and release limitations.
 
 Fedora / Nobara:
 
@@ -45,12 +45,14 @@ Fedora / Nobara:
 sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel
 ```
 
-Without root, `scripts/setup-linux-deps.sh` downloads the FFmpeg and ALSA headers into `~/.cache/capopen/deps` and writes a local `.cargo/config.toml`. Install cmake with `pip install --user cmake`.
+Without root on Fedora/Nobara, `bash scripts/setup-linux-deps.sh` downloads the FFmpeg and ALSA headers into `~/.cache/capopen/deps` and writes a local `.cargo/config.toml`. The corresponding runtime libraries and WebKitGTK must already be installed. Install cmake with `pip install --user cmake` and put `~/.local/bin` on `PATH`.
 
 ```sh
 npm install
 npm run tauri dev
 ```
+
+For macOS and Windows, install the platform dependencies in [BUILDING.md](docs/BUILDING.md) before running the same commands. CI artifacts contain installers; pushing a matching `v*` version tag prepares a draft GitHub Release. Builds are unsigned previews until verified on each target OS.
 
 ## CLI
 
