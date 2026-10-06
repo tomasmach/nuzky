@@ -23,8 +23,11 @@ An open-source desktop video editor in the spirit of CapCut, with a native Rust 
 ```
 crates/engine   project model, edits + undo, FFmpeg decoding, wgpu compositor,
                 text rendering, audio mixing, MP4 export
-crates/cli      `capopen` headless CLI on top of the engine
-src-tauri       desktop shell: preview thread, audio output, background jobs, autosave
+crates/analysis local speech recognition, caption grouping, silence and scene analysis
+crates/session  editing authority, undo runs, autosave, crash recovery and transcripts
+crates/mcp      agent tools, stdio bridge and live-app IPC
+crates/cli      `capopen` headless CLI and MCP entry point
+src-tauri       desktop shell: preview thread, audio output, background jobs, session events
 src             React + TypeScript UI
 ```
 
@@ -42,7 +45,7 @@ Use current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries wi
 Fedora / Nobara:
 
 ```sh
-sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel
+sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel vulkan-loader-devel vulkan-headers glslc
 ```
 
 Without root on Fedora/Nobara, `bash scripts/setup-linux-deps.sh` downloads the FFmpeg and ALSA headers into `~/.cache/capopen/deps` and writes a local `.cargo/config.toml`. The corresponding runtime libraries and WebKitGTK must already be installed. Install cmake with `pip install --user cmake` and put `~/.local/bin` on `PATH`.

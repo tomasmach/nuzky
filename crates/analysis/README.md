@@ -16,6 +16,9 @@ filler_words(transcript: &Transcript, language: &str) -> Vec<Range>
 ```
 
 `AudioSource::Asset { asset, cache }` uses the engine's 48 kHz stereo PCM cache.
+The engine's `pcm_path` includes the asset ID, source file size and modification
+time (nanoseconds), so a size or mtime change generates a new cache path. A change
+that preserves both size and mtime is not detected; this is not a content hash.
 `Transcript` contains `language`, `words` (`start_us`, `end_us`, `text`,
 `probability`) and `segments` (`start_us`, `end_us`, `text`). `SceneCut` contains
 `time_us` and `score`, rather than just an integer, so callers can rank proposals.
@@ -72,7 +75,7 @@ JSON value on stdout; errors and native diagnostics go to stderr. Loudness repor
 100 ms windows plus the explicitly named `integrated_lufs_approx`. `--cache` selects
 a cache directory; default is the OS temp directory's `capopen-analysis` folder.
 CLI cache IDs depend on canonical path, file size and modification time. API callers
-must maintain engine asset IDs/cache invalidation themselves.
+keep asset IDs stable; `pcm_path` performs the same size+mtime invalidation for them.
 
 Model discovery checks `$XDG_DATA_HOME/capopen/models` (or
 `~/.local/share/capopen/models`) and `tmp-test/xdg/data/capopen/models`. Explicit model

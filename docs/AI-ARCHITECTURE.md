@@ -1,6 +1,6 @@
 # AI architecture
 
-CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and the app's own AI panel runs the user's installed agent under their subscription. Research behind these decisions: [docs/research](research).
+CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and a planned in-app AI panel will run the user's installed agent under their subscription. The panel, `crates/agent` and Settings → Connect are not built yet. Research behind these decisions: [docs/research](research).
 
 Decided on 6 Oct 2026 after two independent proposals and a cross-critique, and refined the same day after the headless MCP landed (two more proposals and a cross-critique).
 
@@ -44,7 +44,7 @@ A run groups one agent turn. There is one linear history: a run is one entry in 
 
 - A transcript belongs to a media file, not to a timeline: words with times in the file's own (source) time, stored once in `<data dir>/capopen/transcripts/<fingerprint>.json`. The fingerprint hashes the file size, its first and last MiB, and 32 evenly spaced 64 KiB chunks. The same file in several projects is recognised once and a moved file keeps its transcript. Version 2 records also store duration_us; older records and duration differences over 1 ms are treated as missing.
 - What the timeline says is always derived: `engine::speech::map_words` maps the words of every heard clip (unmuted track, volume above 0, a video asset with sound, detached sound included) through its source range and speed. Cuts, slivers, speed, undo and redo are therefore always right, and a transcript never goes out of date; the only note left is "N clips not transcribed".
-- A cut made from words carries `expected_speech_layout_key`, a hash of exactly what `map_words` reads. The session rejects it with `SPEECH_CHANGED` when the speech moved in the meantime, and accepts it after unrelated edits such as a caption restyle.
+- `get_transcript` and `edit_transcript` use `transcript_key`, which includes recognised words as well as their timeline layout. `get_state` exposes `speech_layout_key`; `apply_edits` accepts it as `expected_speech_layout_key`, a hash of exactly what `map_words` reads. The session rejects it with `SPEECH_CHANGED` when the speech moved in the meantime, and accepts it after unrelated edits such as a caption restyle.
 - Tracks have `keep_in_place`; `RippleDeleteRanges` without `keep_track_ids` uses it, so agents cut the way the UI does and leave music alone.
 
 ## Tools
@@ -60,8 +60,8 @@ All times are integer microseconds on the timeline unless a field says `source`.
 | `inspect_frames(times[], width?)` | Rendered frames as one image (contact sheet with timestamps); fails if media is missing |
 | `analyze(kind, asset_id, params)` | `silences`, `loudness`, `scenes`, `fillers` from `crates/analysis` |
 | `transcribe(asset_ids?)` | Job recognising the heard media that has no transcript yet |
-| `get_transcript(range?)` | Numbered timeline words and sentences, the speech key, untranscribed clips |
-| `edit_transcript(run_id, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text |
+| `get_transcript(range?)` | Numbered timeline words and sentences, `transcript_key`, untranscribed clips |
+| `edit_transcript(run_id, transcript_key, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text |
 | `build_captions(run_id, style?, max_words?, max_chars?)` | Deterministic caption clips on one captions track, never across a cut; the Reel style by default |
 | `export_video(path, resolution, fps, quality)` | Job exporting a snapshot |
 | `job(job_id, get | cancel)` | Progress, result, cancel |
@@ -73,13 +73,13 @@ Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JS
 ## Agent setup
 
 - The app ships `skills/capopen-edit/SKILL.md` and an `AGENTS.md` template: units, magnetic main track, ripple behaviour, analyse → edit → inspect frames → export, and never editing the JSON directly.
-- Settings → Connect your agent shows the exact config change for Claude Code (`.mcp.json`), Codex (`config.toml`), Gemini CLI, Cursor and Claude Desktop, writes only the `capopen` entry after confirmation and keeps a backup.
-- Diagnostics check, in order: executable found, config parsed, MCP handshake, project attached, `get_state` and one `inspect_frames` call.
+- Planned: Settings → Connect your agent will show the exact config change for Claude Code (`.mcp.json`), Codex (`config.toml`), Gemini CLI, Cursor and Claude Desktop, write only the `capopen` entry after confirmation and keep a backup.
+- Planned diagnostics will check, in order: executable found, config parsed, MCP handshake, project attached, `get_state` and one `inspect_frames` call.
 
-## In-app AI panel
+## In-app AI panel (planned, not built)
 
-- v1 runs the user's installed agent over ACP: Codex (`codex-acp`), Claude Code (the official ACP adapter around the unmodified Claude Code, logged in by Claude Code itself) and Gemini CLI (`gemini --acp`). CapOpen passes its own MCP server for the session and disables the agent's shell and file-writing tools; each adapter must prove that in a test.
-- The ACP client lives in Rust (`crates/agent`); React renders normalised events: message, tool started, tool finished, job progress, error.
+- Planned v1 will run the user's installed agent over ACP: Codex (`codex-acp`), Claude Code (the official ACP adapter around the unmodified Claude Code, logged in by Claude Code itself) and Gemini CLI (`gemini --acp`). CapOpen passes its own MCP server for the session and disables the agent's shell and file-writing tools; each adapter must prove that in a test.
+- The planned ACP client will live in Rust (`crates/agent`, not created yet); React will render normalised events: message, tool started, tool finished, job progress, error.
 - A prompt automatically attaches the selection, playhead, selected range and optionally a frame; the attachment is shown before sending and frozen at send time.
 - States the panel distinguishes: agent not installed, not logged in, usage limit reached, CapOpen error. The typed prompt is never lost.
 - Later: "Continue with ChatGPT" directly through OpenAI's open-source sign-in, then API keys, OpenRouter and Ollama.
@@ -90,7 +90,7 @@ Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JS
 2. One authority: keyed undo steps in the engine, `keep_in_place`, `engine::speech`; `ProjectSession` on the live `Editor` with user edits, events, the writer thread and per-client access; the app on `Host` with its lock, read-only state and recovery dialog; one job system.
 3. Transcripts per media file, `get_transcript`, `edit_transcript` and captions from the derived words, in the app and in MCP; the frontend's own transcript bookkeeping goes away.
 4. IPC and the `capopen-app mcp` bridge, then the run UI. Gate: Claude Code in a project folder cuts silences, adds captions and exports, live in the open app, with one Undo and a Stop mid-run.
-5. Panel: `crates/agent` (ACP) and the React panel. Gate: the same task from the panel through Codex and Claude Code, including Stop and Undo.
+5. Panel (planned, not built): `crates/agent` (ACP) and the React panel. Gate: the same task from the panel through Codex and Claude Code, including Stop and Undo.
 6. Direct ChatGPT sign-in and other providers.
 
 ## Risks
