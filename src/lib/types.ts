@@ -187,6 +187,8 @@ export interface Boot {
   previewUrl: string;
   transport: Transport;
   limits: Limits;
+  /** Why the preview could not start, when it failed before the UI listened. */
+  engineError: string | null;
 }
 
 export interface JobEvent {

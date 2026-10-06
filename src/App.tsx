@@ -311,6 +311,7 @@ export default function App() {
     api.boot().then((boot) => {
       setLimits(boot.limits);
       useEditor.setState({ previewUrl: boot.previewUrl, playing: boot.transport.playing, timeUs: boot.transport.tUs });
+      if (boot.engineError) useEditor.setState({ engineError: boot.engineError });
       useEditor.getState().setSnap(boot.snapshot, true, true);
       useEditor.setState({ saveState: "saved" });
     });

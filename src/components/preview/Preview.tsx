@@ -138,7 +138,7 @@ export function Preview() {
             <div className="absolute inset-0 overflow-hidden rounded-sm bg-black shadow-[0_0_0_1px_var(--color-line)]">
               <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
               {showSafe && area && canvas && <SafeZone area={area} width={canvas.width} height={canvas.height} />}
-              {empty && (
+              {empty && !engineError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center">
                   <p className="text-[13px] text-fg">Your video appears here</p>
                   <p className="text-[12px] text-muted">Add media to the timeline to start editing.</p>

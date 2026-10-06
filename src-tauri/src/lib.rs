@@ -69,6 +69,7 @@ pub struct Boot {
     snapshot: Snapshot,
     preview_url: String,
     transport: Transport,
+    engine_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -306,6 +307,7 @@ fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
         snapshot: state.session.lock().unwrap().snapshot(Vec::new())?,
         preview_url: state.preview_url.clone(),
         transport: *state.engine.transport.lock().unwrap(),
+        engine_error: state.engine.error.lock().unwrap().clone(),
     })
 }
 

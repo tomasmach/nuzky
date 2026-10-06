@@ -35,18 +35,21 @@ pub struct Transport {
 pub struct Engine {
     tx: Sender<Msg>,
     pub transport: Arc<Mutex<Transport>>,
+    /// Why the preview could not start; kept for a UI that subscribes after the event.
+    pub error: Arc<Mutex<Option<String>>>,
 }
 
 impl Engine {
     pub fn start(app: AppHandle, server: Arc<PreviewServer>, project: Arc<Project>, cache_dir: PathBuf) -> Self {
         let (tx, rx) = channel();
         let transport = Arc::new(Mutex::new(Transport::default()));
-        let t = transport.clone();
+        let error = Arc::new(Mutex::new(None));
+        let (t, e) = (transport.clone(), error.clone());
         std::thread::Builder::new()
             .name("preview-engine".into())
-            .spawn(move || run(rx, app, server, project, cache_dir, t))
+            .spawn(move || run(rx, app, server, project, cache_dir, t, e))
             .expect("spawn preview engine");
-        Self { tx, transport }
+        Self { tx, transport, error }
     }
 
     pub fn send(&self, msg: Msg) {
@@ -77,11 +80,13 @@ fn run(
     project: Arc<Project>,
     cache_dir: PathBuf,
     transport: Arc<Mutex<Transport>>,
+    error: Arc<Mutex<Option<String>>>,
 ) {
     let mut renderer = match Renderer::new() {
         Ok(r) => r,
         Err(e) => {
             log::error!("Preview renderer failed: {e:#}");
+            *error.lock().unwrap() = Some(format!("{e:#}"));
             app.emit("engine-error", format!("{e:#}")).ok();
             return;
         }
