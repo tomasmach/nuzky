@@ -1700,9 +1700,15 @@ mod tests {
         // the captions never removes it.
         p.apply(EditCmd::AddText { start_us: 5_000_000, text: "Title".into(), style: style.clone() }).unwrap();
         let titles = p.tracks.iter().find(|t| t.kind == TrackKind::Text && !t.is_captions()).unwrap().id.clone();
-        let replace =
-            EditCmd::ReplaceCaptions { track_id: titles.clone(), segments: vec![seg(0, 1_000_000, "X")], style };
+        let replace = EditCmd::ReplaceCaptions {
+            track_id: titles.clone(),
+            segments: vec![seg(0, 1_000_000, "X")],
+            style: style.clone(),
+        };
         assert!(p.apply(replace).is_err());
+        let captions = p.tracks.iter().find(|t| t.is_captions()).unwrap().id.clone();
+        p.apply(EditCmd::ReplaceCaptions { track_id: captions, segments: vec![seg(0, 1_000_000, "Y")], style })
+            .unwrap();
         let title = &p.tracks.iter().find(|t| t.id == titles).unwrap().clips[0].content;
         assert!(matches!(title, ClipContent::Text { text, .. } if text == "Title"));
     }
