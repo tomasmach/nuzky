@@ -1,3 +1,4 @@
+import captionStyles from "../../assets/presets/captions.json";
 import type { Adjust, AnimationKind, TextStyle, Transform, TransitionKind } from "./types";
 
 export const FORMATS = [
@@ -12,8 +13,6 @@ export function formatLabel(width: number, height: number) {
 }
 
 export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
-/** Where the engine places generated captions (CAPTION_Y in crates/engine edit.rs). */
-export const CAPTION_Y = 0.15;
 export const NO_ADJUST: Adjust = { exposure: 0, tint: 0, highlights: 0, shadows: 0, fade: 0, brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
 
 export const ADJUST_ROWS: { key: keyof Adjust; label: string; min: number }[] = [
@@ -38,15 +37,11 @@ export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = 
   { name: "Plain", text: "Plain text", style: { fontSize: 64, color: "#ffffff", bold: false, strokeWidth: 0, strokeColor: "#000000", background: null } },
 ];
 
-/** Presets carry no font: the font is picked separately and survives a preset change. */
-export const CAPTION_STYLES: { name: string; style: TextStyle }[] = [
-  // Talking-head reels: regular weight, thick outline, no box, 1–3 words at a time.
-  { name: "Reel", style: { fontSize: 95, color: "#ffffff", bold: false, strokeWidth: 7.5, strokeColor: "#000000", background: null } },
-  { name: "Outline", style: { fontSize: 70, color: "#ffffff", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
-  { name: "Yellow", style: { fontSize: 74, color: "#ffe14d", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
-  { name: "Box", style: { fontSize: 62, color: "#ffffff", bold: true, strokeWidth: 0, strokeColor: "#000000", background: "#000000b3" } },
-  { name: "Clean", style: { fontSize: 60, color: "#ffffff", bold: false, strokeWidth: 3, strokeColor: "#00000099", background: null } },
-];
+/**
+ * Caption looks, shared with the engine and MCP (assets/presets/captions.json); Reel comes first. Presets
+ * carry no font: the font is picked separately and survives a preset change.
+ */
+export const CAPTION_STYLES: { name: string; style: TextStyle }[] = captionStyles;
 
 /** Same look apart from the font. */
 export function sameStyle(a: TextStyle, b: TextStyle) {
@@ -85,7 +80,6 @@ export const TRANSITIONS: { kind: TransitionKind; label: string }[] = [
 ];
 
 export const DEFAULT_TRANSITION_US = 500_000;
-export const MAX_TRANSITION_US = 2_000_000;
 
 export const FILTERS: { id: string; label: string; adjust: Adjust }[] = [
   { id: "none", label: "None", adjust: NO_ADJUST },
@@ -118,15 +112,3 @@ export function adjustCss(a: Adjust): { filter: string; tint: string | null; vig
 }
 
 export const SPEED_PRESETS = [0.5, 1, 1.5, 2, 3];
-export const MIN_SPEED = 0.1;
-export const MAX_SPEED = 10;
-
-/**
- * Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of the
- * top bar, the like and comment rail and the caption and buttons at the bottom. The same rule as the
- * engine's `Canvas::safe_area` (250 / 180 / 500 / 60 px of 1080×1920); null for other formats.
- */
-export function safeArea(width: number, height: number): { left: number; top: number; right: number; bottom: number } | null {
-  if (height < width * 1.7) return null;
-  return { left: (width * 60) / 1080, top: (height * 250) / 1920, right: width - (width * 180) / 1080, bottom: height - (height * 500) / 1920 };
-}

@@ -3,7 +3,7 @@ import { AlertCircle, Loader2, X } from "lucide-react";
 import { api, errorText } from "../../lib/api";
 import { useSpeech } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
-import type { CaptionModel, JobEvent } from "../../lib/types";
+import type { JobEvent, SpeechModel } from "../../lib/types";
 import { Button, Field, ProgressBar } from "../ui";
 
 const LANGUAGES = [
@@ -34,12 +34,12 @@ export function useSpeechJobs(kind: JobEvent["kind"]) {
 export function SpeechFields({ disabled }: { disabled: boolean }) {
   const model = useSpeech((s) => s.model);
   const language = useSpeech((s) => s.language);
-  const [models, setModels] = useState<CaptionModel[]>([]);
+  const [models, setModels] = useState<SpeechModel[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const { running } = useSpeechJobs("captions");
   // Refreshed when a job starts and ends, so a model downloaded by it loses its "download" note.
   useEffect(() => {
-    api.captionModels().then(
+    api.speechModels().then(
       (list) => {
         setModels(list);
         setModelsError(null);

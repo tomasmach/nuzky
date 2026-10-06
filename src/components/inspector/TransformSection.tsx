@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } from "lucide-react";
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
-import { CAPTION_Y, DEFAULT_TRANSFORM } from "../../lib/presets";
+import { LIMITS } from "../../lib/limits";
+import { DEFAULT_TRANSFORM } from "../../lib/presets";
 import { editClip, isCaptionTrack, setClipTransform, useEditor } from "../../lib/store";
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
 import { Button, IconButton, NumberInput, Section, Slider } from "../ui";
@@ -113,7 +114,7 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
   // New text is centred; captions sit low in the frame, where the engine puts them.
   const reset = () =>
     editClip(clip.id, (c, track) => [
-      { type: "updateClip", clipId: c.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? CAPTION_Y : 0 } },
+      { type: "updateClip", clipId: c.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0 } },
       { type: "setKeyframes", clipId: c.id, keyframes: [] },
     ]);
 

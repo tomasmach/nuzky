@@ -1,7 +1,8 @@
 import { useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ArrowLeft, ArrowUp, Ban, Blend, ChevronsLeft, Droplet, Moon, Sun, Trash2, ZoomIn, type LucideIcon } from "lucide-react";
-import { DEFAULT_TRANSITION_US, MAX_TRANSITION_US, TRANSITIONS } from "../../lib/presets";
+import { LIMITS } from "../../lib/limits";
+import { DEFAULT_TRANSITION_US, TRANSITIONS } from "../../lib/presets";
 import { deleteSelection, editClip, mainClips, transitionTarget, useEditor, type Cut } from "../../lib/store";
 import { US, formatTime } from "../../lib/time";
 import type { TransitionKind } from "../../lib/types";
@@ -66,9 +67,9 @@ function useMaxTransitionUs(clipId: string) {
   const shortest = useEditor((s) => {
     const clips = s.snap ? mainClips(s.snap.project) : [];
     const i = clips.findIndex((c) => c.id === clipId);
-    return i > 0 ? Math.min(clips[i - 1].durationUs, clips[i].durationUs) : MAX_TRANSITION_US;
+    return i > 0 ? Math.min(clips[i - 1].durationUs, clips[i].durationUs) : LIMITS.maxTransitionUs;
   });
-  return Math.max(100_000, Math.min(MAX_TRANSITION_US, shortest));
+  return Math.max(100_000, Math.min(LIMITS.maxTransitionUs, shortest));
 }
 
 function DurationSlider({ valueUs, maxUs, onChange, title }: { valueUs: number; maxUs: number; onChange: (s: number) => void; title?: string }) {

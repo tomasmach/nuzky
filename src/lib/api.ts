@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
+import type { Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -9,16 +9,16 @@ type Epoch = string | undefined;
 
 export const api = {
   setUiContext: (selection: string[], playheadUs: number) => invoke<void>("set_ui_context", { selection, playheadUs: Math.round(playheadUs) }),
-  resolveRecovery: (action: "keep" | "restore", epoch: Epoch) => invoke<Snapshot>("resolve_recovery", { action, expectEpoch: epoch }),
-  stopRun: (epoch: Epoch) => invoke<Snapshot>("stop_run", { expectEpoch: epoch }),
+  resolveRecovery: (action: "keep" | "restore", epoch: Epoch) => invoke<Snapshot>("resolve_recovery", { action, expectedEpoch: epoch }),
+  stopRun: (epoch: Epoch) => invoke<Snapshot>("stop_run", { expectedEpoch: epoch }),
   boot: () => invoke<Boot>("boot"),
-  applyEdit: (cmd: EditCmd, coalesce: string | null, epoch: Epoch) => invoke<Snapshot>("apply_edit", { cmd, coalesce, expectEpoch: epoch }),
+  applyEdit: (cmd: EditCmd, coalesce: string | null, epoch: Epoch) => invoke<Snapshot>("apply_edit", { cmd, coalesce, expectedEpoch: epoch }),
   /** All or nothing, as one undo step. */
-  applyEdits: (cmds: EditCmd[], coalesce: string | null, epoch: Epoch) => invoke<Snapshot>("apply_edits", { cmds, coalesce, expectEpoch: epoch }),
-  undo: (epoch: Epoch) => invoke<Snapshot>("undo", { expectEpoch: epoch }),
-  redo: (epoch: Epoch) => invoke<Snapshot>("redo", { expectEpoch: epoch }),
+  applyEdits: (cmds: EditCmd[], coalesce: string | null, epoch: Epoch) => invoke<Snapshot>("apply_edits", { cmds, coalesce, expectedEpoch: epoch }),
+  undo: (epoch: Epoch) => invoke<Snapshot>("undo", { expectedEpoch: epoch }),
+  redo: (epoch: Epoch) => invoke<Snapshot>("redo", { expectedEpoch: epoch }),
   importMedia: (paths: string[], epoch: Epoch) =>
-    invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("import_media", { paths, expectEpoch: epoch }),
+    invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("import_media", { paths, expectedEpoch: epoch }),
   thumbnail: (assetId: string) => invoke<string | null>("thumbnail", { assetId }),
   waveform: (assetId: string) => invoke<number[] | null>("waveform", { assetId }),
   play: () => invoke<void>("play"),
@@ -28,22 +28,22 @@ export const api = {
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
-  startExport: (path: string, options: ExportRequest, epoch: Epoch) => invoke<string>("start_export", { path, options, expectEpoch: epoch }),
+  startExport: (path: string, options: ExportRequest, epoch: Epoch) => invoke<string>("start_export", { path, options, expectedEpoch: epoch }),
   filmstrip: (assetId: string) => invoke<Filmstrip | null>("filmstrip", { assetId }),
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
-  captionModels: () => invoke<CaptionModel[]>("caption_models"),
+  speechModels: () => invoke<SpeechModel[]>("speech_models"),
   /** `maxWords`/`maxChars` null group by phrase, capped at 12 words and 42 characters. */
   startCaptions: (model: string, language: string, style: TextStyle, maxWords: number | null, maxChars: number | null, epoch: Epoch) =>
-    invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars }, expectEpoch: epoch }),
+    invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars }, expectedEpoch: epoch }),
   /** Recognises the heard media without a transcript, or all of it with `refresh`. */
-  startTranscript: (model: string, language: string, refresh: boolean, epoch: Epoch) => invoke<string>("start_transcript", { model, language, refresh, expectEpoch: epoch }),
+  startTranscript: (model: string, language: string, refresh: boolean, epoch: Epoch) => invoke<string>("start_transcript", { model, language, refresh, expectedEpoch: epoch }),
   transcriptView: (pauseUs: number) => invoke<TranscriptView>("transcript_view", { pauseUs: Math.round(pauseUs) }),
   /** Inclusive word index ranges, as one undo step. */
-  cutWords: (key: string, ranges: [number, number][], epoch: Epoch) => invoke<TranscriptCut>("cut_words", { key, delete: ranges, expectEpoch: epoch }),
+  cutWords: (key: string, ranges: [number, number][], epoch: Epoch) => invoke<TranscriptCut>("cut_words", { key, delete: ranges, expectedEpoch: epoch }),
   /** The view's pauses at `pauseUs`, by index, or all of them. */
   removePauses: (key: string, pauseUs: number, only: number[] | null, epoch: Epoch) =>
-    invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only, expectEpoch: epoch }),
+    invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only, expectedEpoch: epoch }),
   listFonts: () => invoke<FontFamilies>("list_fonts"),
 };
 

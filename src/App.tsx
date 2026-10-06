@@ -4,6 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./lib/api";
+import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
 import { US } from "./lib/time";
@@ -308,6 +309,7 @@ export default function App() {
 
   useEffect(() => {
     api.boot().then((boot) => {
+      setLimits(boot.limits);
       useEditor.setState({ previewUrl: boot.previewUrl, playing: boot.transport.playing, timeUs: boot.transport.tUs });
       useEditor.getState().setSnap(boot.snapshot, true, true);
       useEditor.setState({ saveState: "saved" });

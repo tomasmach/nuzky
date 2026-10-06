@@ -136,6 +136,24 @@ export interface Canvas {
   background: string;
   /** 0 = solid colour; above 0 a blurred copy of the main-track frame fills the background. 0..1 */
   backgroundBlur: number;
+  /** Where Reels and TikTok draw nothing over a vertical video, in canvas pixels; computed by the engine, null for other formats. */
+  safeArea?: SafeArea | null;
+}
+
+export interface SafeArea {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/** Editing limits the engine enforces, sent at boot so the UI never copies them. */
+export interface Limits {
+  minSpeed: number;
+  maxSpeed: number;
+  maxTransitionUs: number;
+  /** Vertical offset of generated captions from the canvas centre, as a fraction of its height. */
+  captionY: number;
 }
 
 export interface Project {
@@ -148,7 +166,8 @@ export interface Project {
 
 export interface Snapshot {
   sessionEpoch: string;
-  openRun: string | null;
+  /** Label of the AI run editing the project, or null. */
+  openRunLabel: string | null;
   recovery: boolean;
   project: Project;
   revision: number;
@@ -167,6 +186,7 @@ export interface Boot {
   snapshot: Snapshot;
   previewUrl: string;
   transport: Transport;
+  limits: Limits;
 }
 
 export interface JobEvent {
@@ -187,7 +207,7 @@ export interface ProjectSummary {
   durationUs: number;
 }
 
-export interface CaptionModel {
+export interface SpeechModel {
   id: string;
   label: string;
   sizeMb: number;

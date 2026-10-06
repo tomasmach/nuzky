@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Pause, Play, SkipBack, SkipForward, Smartphone } from "lucide-react";
 import { api } from "../../lib/api";
 import { projectDuration, useEditor } from "../../lib/store";
-import { safeArea } from "../../lib/presets";
 import { formatTime } from "../../lib/time";
+import type { SafeArea } from "../../lib/types";
 import { IconButton } from "../ui";
 import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
@@ -12,7 +12,7 @@ const HEADER = 24;
 const SAFE_ZONE_KEY = "capopen.safeZone";
 
 /** The parts of the frame Reels and TikTok cover with their interface, dimmed, around the free area. */
-function SafeZone({ area, width, height }: { area: NonNullable<ReturnType<typeof safeArea>>; width: number; height: number }) {
+function SafeZone({ area, width, height }: { area: SafeArea; width: number; height: number }) {
   const pct = (v: number, of: number) => `${(v / of) * 100}%`;
   const band = "pointer-events-none absolute bg-black/45";
   return (
@@ -120,7 +120,7 @@ export function Preview() {
   }, []);
 
   const aspect = canvas ? canvas.width / canvas.height : 9 / 16;
-  const area = canvas ? safeArea(canvas.width, canvas.height) : null;
+  const area = canvas?.safeArea ?? null;
   const [showSafe, setShowSafe] = useState(() => localStorage.getItem(SAFE_ZONE_KEY) === "1");
   const toggleSafe = () => {
     localStorage.setItem(SAFE_ZONE_KEY, showSafe ? "0" : "1");

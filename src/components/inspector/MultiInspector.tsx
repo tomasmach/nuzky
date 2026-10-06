@@ -1,5 +1,6 @@
 import { Copy, Layers, RotateCcw, Trash2 } from "lucide-react";
-import { ADJUST_ROWS, CAPTION_Y, DEFAULT_TRANSFORM, NO_ADJUST, sameAdjust } from "../../lib/presets";
+import { LIMITS } from "../../lib/limits";
+import { ADJUST_ROWS, DEFAULT_TRANSFORM, NO_ADJUST, sameAdjust } from "../../lib/presets";
 import { deleteSelection, duplicateSelection, editClips, findClip, isCaptionTrack, transformAtPlayhead, useEditor } from "../../lib/store";
 import type { Adjust, Clip, EditCmd, Project, Track, Transform } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
@@ -51,7 +52,7 @@ function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }
     );
   const reset = () =>
     editClips(ids, (clip, track) => [
-      { type: "updateClip", clipId: clip.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? CAPTION_Y : 0 } },
+      { type: "updateClip", clipId: clip.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0 } },
       { type: "setKeyframes", clipId: clip.id, keyframes: [] },
     ]);
   const scale = field("scale");

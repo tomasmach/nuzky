@@ -1,5 +1,6 @@
 import { RotateCcw, Unlink } from "lucide-react";
-import { ADJUST_ROWS, MAX_SPEED, MIN_SPEED, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
+import { LIMITS } from "../../lib/limits";
+import { ADJUST_ROWS, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
 import { detachAudio, detachBlocker, editClip, findClip, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
@@ -46,8 +47,8 @@ export function SpeedSection({ clip, content, asset }: { clip: Clip; content: Me
       <Slider
         label="Speed"
         value={Math.log10(speed)}
-        min={Math.log10(MIN_SPEED)}
-        max={Math.log10(MAX_SPEED)}
+        min={Math.log10(LIMITS.minSpeed)}
+        max={Math.log10(LIMITS.maxSpeed)}
         step={0.01}
         unit="x"
         format={(v) => (10 ** v).toFixed(2)}

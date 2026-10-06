@@ -194,7 +194,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       cut: snap.select.length === 0 && keepSelection && cut && mainCuts(snap.project).some((c) => c.clipId === cut) ? cut : null,
       saveState: switched ? "saved" : changed ? "saving" : get().saveState,
       timeUs: Math.min(get().timeUs, projectDuration(snap.project)),
-      aiRun: snap.openRun,
+      aiRun: snap.openRunLabel,
     });
   },
 
