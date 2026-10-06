@@ -5,7 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./lib/api";
 import { useSpeech } from "./lib/speech";
-import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
+import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
 import { US } from "./lib/time";
 import type { JobEvent, Snapshot, Transport } from "./lib/types";
 import { ExportDialog } from "./components/ExportDialog";
@@ -307,13 +307,6 @@ export default function App() {
       useEditor.setState({ saveState: "saved" });
     });
   }, []);
-
-  // Drop selection entries that no longer exist after undo or delete.
-  useEffect(() => {
-    if (!snap) return;
-    const sel = useEditor.getState().selection.filter((id) => findClip(snap.project, id));
-    if (sel.length !== useEditor.getState().selection.length) useEditor.setState({ selection: sel });
-  }, [snap]);
 
   if (!snap)
     return (
