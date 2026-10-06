@@ -42,7 +42,7 @@ function MediaItem({ asset }: { asset: Asset }) {
           aria-label={`Add ${asset.name} at playhead`}
           title="Add at playhead"
           onClick={() => addAtPlayhead(asset.id)}
-          className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-accent text-black opacity-0 shadow transition-opacity duration-[120ms] hover:bg-accent-strong focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-accent text-black opacity-0 shadow transition-opacity duration-[120ms] hover:bg-accent-strong group-hover:opacity-100 group-focus-within:opacity-100"
         >
           <Plus size={16} />
         </button>
@@ -51,7 +51,7 @@ function MediaItem({ asset }: { asset: Asset }) {
           aria-label={`Remove ${asset.name}`}
           title="Remove from project"
           onClick={() => setConfirm(true)}
-          className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/70 text-fg opacity-0 transition-opacity duration-[120ms] hover:bg-black/90 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/70 text-fg opacity-0 transition-opacity duration-[120ms] hover:bg-black/90 hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
         >
           <Trash2 size={14} />
         </button>
