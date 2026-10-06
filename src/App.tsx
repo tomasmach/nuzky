@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { AlertCircle } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api } from "./lib/api";
+import { api, errorText } from "./lib/api";
 import { receiveTranscript, speechJobEnded, useSpeech } from "./lib/speech";
 import { deleteSelection, deleteSide, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
 import { US } from "./lib/time";
@@ -15,6 +16,7 @@ import { Preview } from "./components/preview/Preview";
 import { Timeline } from "./components/timeline/Timeline";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
+import { Button } from "./components/ui";
 
 const TEXT_INPUTS = new Set(["text", "search", "email", "number", "password", "url", "tel"]);
 
@@ -46,7 +48,7 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      if (isTyping(target) || useEditor.getState().exportOpen) return;
+      if (isTyping(target) || useEditor.getState().exportOpen || useEditor.getState().snap?.recovery) return;
       const s = useEditor.getState();
       const mod = e.ctrlKey || e.metaKey;
       const fps = s.snap?.project.canvas.fps ?? 30;
@@ -137,11 +139,11 @@ function useBackendEvents() {
     offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
     offs.push(listen<{ jobId: string; transcript: TimelineTranscript }>("transcript-ready", (e) => receiveTranscript(e.payload.transcript)));
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
-    offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload)));
+    offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
     offs.push(
       getCurrentWebview().onDragDropEvent((e) => {
-        if (e.payload.type !== "drop") return;
+        if (e.payload.type !== "drop" || useEditor.getState().snap?.recovery) return;
         const paths = e.payload.paths.filter((p) => MEDIA_EXTENSIONS.includes(p.split(".").pop()?.toLowerCase() ?? ""));
         if (paths.length === 0) {
           useEditor.getState().toast({ kind: "error", text: "Those files are not video, audio or images CapOpen can open." });
@@ -154,6 +156,53 @@ function useBackendEvents() {
     );
     return () => offs.forEach((p) => p.then((off) => off()));
   }, []);
+}
+
+function useUiContext() {
+  const selection = useEditor((s) => s.selection);
+  const timeUs = useEditor((s) => s.timeUs);
+  const epoch = useEditor((s) => s.snap?.sessionEpoch);
+  useEffect(() => {
+    if (!epoch) return;
+    const timer = setTimeout(() => {
+      void api.setUiContext(selection, timeUs).catch((e) => useEditor.getState().toast({ kind: "error", text: errorText(e) }));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [selection, timeUs, epoch]);
+}
+
+function RecoveryDialog() {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    dialog.current?.showModal();
+    dialog.current?.querySelector<HTMLButtonElement>("[data-autofocus]")?.focus();
+  }, []);
+  const resolve = async (action: "keep" | "restore") => {
+    setBusy(true);
+    setError(null);
+    try {
+      const snap = await api.resolveRecovery(action);
+      useEditor.getState().setSnap(snap, true);
+      useEditor.setState({ saveState: "saved" });
+      if (action === "restore") useEditor.getState().toast({ kind: "success", text: "Previous version restored", action: { label: "Undo", run: () => void useEditor.getState().undo() } });
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <dialog ref={dialog} onCancel={(e) => e.preventDefault()} aria-labelledby="recovery-title" aria-describedby="recovery-description" className="fixed inset-0 m-auto w-[440px] rounded-lg border border-line bg-panel p-6 text-fg shadow-2xl backdrop:bg-black/60">
+      <h2 id="recovery-title" className="text-[16px] font-semibold">An AI edit didn't finish</h2>
+      <p id="recovery-description" className="mt-3 text-[13px] text-muted">Keep the changes it made, or go back to the version before it started?</p>
+      {error && <p role="alert" className="mt-3 flex items-start gap-2 text-[13px] text-danger"><AlertCircle size={16} className="shrink-0" />{error}</p>}
+      <div className="mt-6 flex justify-end gap-2">
+        <Button disabled={busy} onClick={() => void resolve("restore")}>Restore previous version</Button>
+        <Button variant="primary" data-autofocus disabled={busy} onClick={() => void resolve("keep")}>Keep changes</Button>
+      </div>
+    </dialog>
+  );
 }
 
 const TIMELINE_KEY = "capopen.timelineHeight";
@@ -229,6 +278,7 @@ export default function App() {
   const [timelineH, setTimelineH] = useTimelineHeight();
   useShortcuts();
   useBackendEvents();
+  useUiContext();
 
   useEffect(() => {
     api.boot().then((boot) => {
@@ -253,18 +303,21 @@ export default function App() {
     );
 
   return (
-    <div className="flex h-full flex-col">
-      <TopBar />
-      <div className="flex min-h-0 flex-1">
-        <LeftPanel />
-        <Preview />
-        <Inspector />
+    <>
+      <div className="flex h-full flex-col" inert={snap.recovery}>
+        <TopBar />
+        <div className="flex min-h-0 flex-1">
+          <LeftPanel />
+          <Preview />
+          <Inspector />
+        </div>
+        <Divider height={timelineH} onChange={setTimelineH} />
+        <Timeline height={timelineH} />
+        <ExportDialog />
+        <Toasts bottom={timelineH + 12} />
+        <DragChip />
       </div>
-      <Divider height={timelineH} onChange={setTimelineH} />
-      <Timeline height={timelineH} />
-      <ExportDialog />
-      <Toasts bottom={timelineH + 12} />
-      <DragChip />
-    </div>
+      {snap.recovery && <RecoveryDialog key={snap.sessionEpoch} />}
+    </>
   );
 }

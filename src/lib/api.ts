@@ -2,10 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TimelineTranscript } from "./types";
 
 export const api = {
+  setUiContext: (selection: string[], playheadUs: number) => invoke<void>("set_ui_context", { selection, playheadUs: Math.round(playheadUs) }),
+  resolveRecovery: (action: "keep" | "restore") => invoke<Snapshot>("resolve_recovery", { action }),
   boot: () => invoke<Boot>("boot"),
-  applyEdit: (cmd: EditCmd, coalesce?: string) => invoke<Snapshot>("apply_edit", { cmd, coalesce: coalesce ?? null }),
+  applyEdit: (cmd: EditCmd, coalesce?: string, expectRevision?: number, expectSpeechKey?: string) => invoke<Snapshot>("apply_edit", { cmd, coalesce: coalesce ?? null, expectRevision, expectSpeechKey }),
   /** All or nothing, as one undo step. */
-  applyEdits: (cmds: EditCmd[], coalesce?: string) => invoke<Snapshot>("apply_edits", { cmds, coalesce: coalesce ?? null }),
+  applyEdits: (cmds: EditCmd[], coalesce?: string, expectRevision?: number, expectSpeechKey?: string) => invoke<Snapshot>("apply_edits", { cmds, coalesce: coalesce ?? null, expectRevision, expectSpeechKey }),
   undo: () => invoke<Snapshot>("undo"),
   redo: () => invoke<Snapshot>("redo"),
   importMedia: (paths: string[]) =>

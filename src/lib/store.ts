@@ -150,17 +150,19 @@ export const useEditor = create<EditorState>((set, get) => ({
   keepTracks: {},
 
   setSnap: (snap, keepSelection = true) => {
+    const previous = get().snap;
+    if (previous?.sessionEpoch === snap.sessionEpoch && snap.revision < previous.revision) return;
     const ids = new Set(allClips(snap.project).map((c) => c.id));
     const kept = keepSelection ? get().selection.filter((id) => ids.has(id)) : [];
     const { cut, snap: prev } = get();
-    // Only a new revision (or another project) is saved; a snapshot of an unchanged project, such
-    // as after a failed import, gets no "saved" event and would leave Saving… forever.
-    const changed = !prev || snap.path !== prev.path || snap.revision > prev.revision;
+    // Opening loads a durable project. Only a new revision waits for a saved event.
+    const switched = !prev || snap.sessionEpoch !== prev.sessionEpoch;
+    const changed = !switched && snap.revision > prev.revision;
     set({
       snap,
       selection: snap.select.length > 0 ? snap.select : kept,
       cut: snap.select.length === 0 && keepSelection && cut && mainCuts(snap.project).some((c) => c.clipId === cut) ? cut : null,
-      saveState: changed ? "saving" : get().saveState,
+      saveState: switched ? "saved" : changed ? "saving" : get().saveState,
       timeUs: Math.min(get().timeUs, projectDuration(snap.project)),
     });
   },

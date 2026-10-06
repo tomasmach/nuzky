@@ -150,7 +150,7 @@ impl ExportRequest {
 
 pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let project = state.editor.lock().unwrap().project.clone();
+    let project = state.project()?;
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
@@ -290,12 +290,12 @@ struct TranscriptReady {
 
 #[tauri::command]
 pub fn get_transcript(state: tauri::State<'_, AppState>) -> Option<TimelineTranscript> {
-    let editor = state.editor.lock().unwrap();
-    let path = state.project_path.lock().unwrap();
+    let current = state.session.lock().unwrap();
+    let view = current.session.state().ok()?;
     let stored = state.transcript.lock().unwrap();
     let cached = stored.as_ref()?;
-    if cached.source.path != *path || cached.source.revision != editor.revision
-        || cached.source.project != editor.project {
+    if cached.source.path != current.path || cached.source.revision != view.stamp.revision
+        || cached.source.project != view.project {
         return None;
     }
     Some(cached.view())
@@ -320,8 +320,9 @@ fn start_speech(app: AppHandle, model: String, language: String, captions: Optio
     }
     let state = app.state::<AppState>();
     let source = {
-        let editor = state.editor.lock().unwrap();
-        SpeechSnapshot { project: editor.project.clone(), revision: editor.revision, path: state.project_path.lock().unwrap().clone() }
+        let current = state.session.lock().unwrap();
+        let view = current.session.state().map_err(crate::err)?;
+        SpeechSnapshot { project: view.project, revision: view.stamp.revision, path: current.path.clone() }
     };
     if speech_clips(&source.project).next().is_none() {
         return Err("No video clip with sound on the timeline to transcribe.".into());
@@ -374,18 +375,20 @@ fn run_speech_job(
     check_cancelled(cancel)?;
     anyhow::ensure!(!transcript.words.is_empty(), "No speech was recognised.");
     let cached = CachedTranscript { source: source.clone(), model: model.into(), requested_language: language.into(), transcript };
-    let mut editor = state.editor.lock().unwrap();
-    anyhow::ensure!(*state.project_path.lock().unwrap() == source.path,
+    let current = state.session.lock().unwrap();
+    let view = current.session.state()?;
+    anyhow::ensure!(current.path == source.path,
         "Another project was opened, so the speech recognition result was not applied.");
     check_cancelled(cancel)?;
     let result = if let Some(request) = captions {
         rep.progress(1.0, Some("Grouping captions"));
         let segments = group_words(&cached.transcript.words, request.grouping());
         let count = segments.len();
-        let cmd = caption_edit(&editor.project, segments, request.style.clone());
-        let outcome = editor.apply(cmd, None).context("Applying captions")?;
-        let snap = state.commit(&editor, outcome.select);
-        app.emit("project-changed", &snap).ok();
+        let cmd = caption_edit(&view.project, segments, request.style.clone());
+        current.session.edit(vec![cmd], None, capopen_session::Expect {
+            revision: Some(view.stamp.revision),
+            speech_key: Some(capopen_engine::speech::speech_key(&source.project)),
+        }).context("Applying captions")?;
         format!("{count} captions")
     } else {
         format!("{} words", cached.transcript.words.len())

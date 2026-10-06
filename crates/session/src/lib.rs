@@ -135,6 +135,17 @@ impl ProjectSession {
         })
     }
 
+    /// A consistent project view with the availability of undo and redo.
+    pub fn view(&self) -> Result<(SessionState, bool, bool)> {
+        loop {
+            let state = self.state()?;
+            let inner = self.inner.lock().unwrap();
+            if state.stamp.revision == inner.editor.revision {
+                return Ok((state, inner.editor.can_undo(), inner.editor.can_redo()));
+            }
+        }
+    }
+
     pub fn set_ui_context(&self, selection: Vec<String>, playhead_us: i64) {
         self.inner.lock().unwrap().ui = UiContext { selection, playhead_us };
     }

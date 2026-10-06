@@ -117,3 +117,7 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Esc` | Cancel drag, close menu or dialog, clear selection |
 
 Shortcuts are ignored while typing in a text field and while the export dialog is open. A focused tab bar keeps `←`/`→` (and `Home`/`End`) to switch tabs, so the playhead does not move. The focused transcript keeps `←`/`→`, `Home`/`End`, `Delete` and `Backspace` for its words.
+
+## Interrupted AI edits
+
+Opening a project with an unfinished AI checkpoint blocks the editor with “An AI edit didn't finish”. “Keep changes” keeps the saved edits. “Restore previous version” restores the checkpoint as one undoable step and offers Undo in a toast. The dialog cannot be dismissed before choosing; a failed recovery keeps it open with the error. While an AI run is open, user edits report RUN_ACTIVE through the existing error toast.

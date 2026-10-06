@@ -142,6 +142,9 @@ export interface Project {
 }
 
 export interface Snapshot {
+  sessionEpoch: string;
+  openRun: string | null;
+  recovery: boolean;
   project: Project;
   revision: number;
   canUndo: boolean;

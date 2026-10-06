@@ -923,3 +923,19 @@ fn recovery_save_retry_preserves_one_undo_step_and_checkpoint() {
     assert_eq!(s.redo().unwrap().revision, 3);
     assert_eq!(s.state().unwrap().project, restored);
 }
+
+#[test]
+fn view_tracks_history_and_project_together() {
+    let f = Fixture::new();
+    let s = f.open();
+    let (_, undo, redo) = s.view().unwrap();
+    assert!(!undo && !redo);
+    s.edit(rename("Changed"), None, Expect::default()).unwrap();
+    let (state, undo, redo) = s.view().unwrap();
+    assert_eq!(state.project.name, "Changed");
+    assert!(undo && !redo);
+    s.undo().unwrap();
+    let (state, undo, redo) = s.view().unwrap();
+    assert_eq!(state.project.name, "Original");
+    assert!(!undo && redo);
+}
