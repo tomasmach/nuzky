@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Redo2, Undo2 } from "lucide-react";
+import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { FORMATS } from "../lib/presets";
-import { openExport, projectDuration, useEditor } from "../lib/store";
+import { openExport, projectDuration, stopAiRun, useEditor } from "../lib/store";
 import { formatDuration } from "../lib/time";
 import type { ProjectSummary, Snapshot } from "../lib/types";
 import { Button, IconButton, ProgressBar } from "./ui";
@@ -179,9 +179,27 @@ function JobIndicator() {
   );
 }
 
+/** While an agent edits, what it is doing and a way to take over. */
+function AiRunBar() {
+  const label = useEditor((s) => s.aiRun);
+  if (!label) return null;
+  return (
+    <div className="flex h-8 max-w-[420px] items-center gap-2 rounded-md bg-raised pl-2.5 pr-1 text-[12px] text-fg" role="status">
+      <Sparkles size={14} className="shrink-0 animate-pulse text-accent" />
+      <span className="truncate">
+        AI is editing <span className="text-muted">· {label}</span>
+      </span>
+      <Button className="h-6 px-2 text-[12px]" title="Stop the AI and keep what it did so far" onClick={() => void stopAiRun()}>
+        Stop
+      </Button>
+    </div>
+  );
+}
+
 export function TopBar() {
   const snap = useEditor((s) => s.snap);
   const { undo, redo } = useEditor.getState();
+  const aiRun = useEditor((s) => s.aiRun);
   const empty = !snap || projectDuration(snap.project) === 0;
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel px-3">
@@ -192,12 +210,13 @@ export function TopBar() {
       <ProjectName />
       <SaveStatus />
       <div className="flex-1" />
+      <AiRunBar />
       <JobIndicator />
       <div className="flex items-center">
-        <IconButton label="Undo (Ctrl+Z)" disabled={!snap?.canUndo} onClick={undo}>
+        <IconButton label={aiRun ? "Undo is available when the AI is done" : "Undo (Ctrl+Z)"} disabled={!snap?.canUndo || !!aiRun} onClick={undo}>
           <Undo2 size={16} />
         </IconButton>
-        <IconButton label="Redo (Ctrl+Shift+Z)" disabled={!snap?.canRedo} onClick={redo}>
+        <IconButton label={aiRun ? "Redo is available when the AI is done" : "Redo (Ctrl+Shift+Z)"} disabled={!snap?.canRedo || !!aiRun} onClick={redo}>
           <Redo2 size={16} />
         </IconButton>
       </div>

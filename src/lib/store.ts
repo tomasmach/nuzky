@@ -34,6 +34,8 @@ interface EditorState {
   toasts: Toast[];
   /** Extra space under the toasts, e.g. for the transcript's Delete bar while it shows. */
   toastLift: number;
+  /** Label of the AI run editing the project right now, or null. */
+  aiRun: string | null;
   saveState: "saved" | "saving" | "error";
   engineError: string | null;
   thumbs: Record<string, string | null>;
@@ -109,11 +111,22 @@ async function drain() {
       snap = await item.run();
       if (snap) useEditor.getState().setSnap(snap);
     } catch (e) {
-      useEditor.getState().toast({ kind: "error", text: errorText(e) });
+      const text = errorText(e);
+      if (text.startsWith("RUN_ACTIVE")) useEditor.getState().toast({ kind: "info", text: "AI is editing. Stop it to edit yourself.", action: { label: "Stop and edit", run: stopAiRun } });
+      else useEditor.getState().toast({ kind: "error", text });
     }
     item.waiters.forEach((w) => w(snap));
   }
   draining = false;
+}
+
+/** Ends the agent's run with its changes kept, so the user can edit; Undo then removes the whole run. */
+export async function stopAiRun() {
+  try {
+    useEditor.getState().setSnap(await api.stopRun());
+  } catch (e) {
+    useEditor.getState().toast({ kind: "error", text: errorText(e) });
+  }
 }
 
 /** Resolves once every edit queued before it has been confirmed. */
@@ -138,6 +151,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   jobs: {},
   toasts: [],
   toastLift: 0,
+  aiRun: null,
   saveState: "saved",
   engineError: null,
   thumbs: {},
@@ -167,6 +181,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       cut: snap.select.length === 0 && keepSelection && cut && mainCuts(snap.project).some((c) => c.clipId === cut) ? cut : null,
       saveState: switched ? "saved" : changed ? "saving" : get().saveState,
       timeUs: Math.min(get().timeUs, projectDuration(snap.project)),
+      aiRun: snap.openRun,
     });
   },
 

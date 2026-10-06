@@ -142,6 +142,13 @@ function useBackendEvents() {
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
     offs.push(
+      listen<string | null>("run-changed", (e) => {
+        const { aiRun, toast, undo } = useEditor.getState();
+        useEditor.setState({ aiRun: e.payload });
+        if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: { label: "Undo", run: () => void undo() } });
+      }),
+    );
+    offs.push(
       listen<string>("close-save-failed", (e) =>
         useEditor.getState().toast({ kind: "error", text: `Your last changes could not be saved: ${e.payload}. Free some disk space and close again, or close again to quit without them.` }),
       ),
