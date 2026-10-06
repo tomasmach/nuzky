@@ -107,18 +107,20 @@ export function ExportDialog() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ resolution: next.resolution, quality: next.quality }));
   };
 
-  const run = async (path: string) => {
+  /** `epoch`: the project the export was asked for, taken before any wait. */
+  const run = async (path: string, epoch = currentEpoch()) => {
     setError(null);
     lastPath.current = path;
     try {
       startedAt.current = Date.now();
-      useEditor.setState({ exportJobId: await api.startExport(path, options, currentEpoch()) });
+      useEditor.setState({ exportJobId: await api.startExport(path, options, epoch) });
     } catch (e) {
       setError(errorText(e));
     }
   };
 
   const pickAndRun = async () => {
+    const epoch = currentEpoch();
     const safe = project.name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "CapOpen export";
     let defaultPath = `${safe}.mp4`;
     try {
@@ -127,7 +129,7 @@ export function ExportDialog() {
       /* no Videos folder; the dialog falls back to its default location */
     }
     const path = await save({ defaultPath, filters: [{ name: "MP4 video", extensions: ["mp4"] }] });
-    if (path) await run(path.endsWith(".mp4") ? path : `${path}.mp4`);
+    if (path) await run(path.endsWith(".mp4") ? path : `${path}.mp4`, epoch);
   };
 
   const eta = (() => {

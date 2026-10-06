@@ -78,13 +78,15 @@ export function useTranscriptView(): { view: TranscriptView | null; error: strin
 /** Starts recognition for the transcript, of every heard file with `refresh`, or for captions with `style`. */
 export async function startSpeech(captions: { style: TextStyle } | null, refresh = false) {
   const { model, language, captionWords } = useSpeech.getState();
+  // Taken before waiting, so a project opened meanwhile refuses the request instead of running it.
+  const epoch = currentEpoch();
   // The backend transcribes the project as it is when the job starts; wait for queued edits.
   await whenIdle();
   try {
     if (captions) {
       const words = captionWords || null;
-      await api.startCaptions(model, language, captions.style, words, words ? SHORT_CAPTION_CHARS : null, currentEpoch());
-    } else await api.startTranscript(model, language, refresh, currentEpoch());
+      await api.startCaptions(model, language, captions.style, words, words ? SHORT_CAPTION_CHARS : null, epoch);
+    } else await api.startTranscript(model, language, refresh, epoch);
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });
   }

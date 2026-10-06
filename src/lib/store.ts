@@ -116,10 +116,9 @@ async function drain() {
       if (snap) useEditor.getState().setSnap(snap);
     } catch (e) {
       const text = errorText(e);
-      // Made for the project open before; that project is gone from the editor, so is the change.
-      if (text.startsWith("EPOCH_CHANGED")) continue;
+      // EPOCH_CHANGED: the change was made for the project open before, which the editor no longer shows.
       if (text.startsWith("RUN_ACTIVE")) useEditor.getState().toast({ kind: "info", text: "AI is editing. Stop it to edit yourself.", action: { label: "Stop and edit", run: stopAiRun } });
-      else useEditor.getState().toast({ kind: "error", text });
+      else if (!text.startsWith("EPOCH_CHANGED")) useEditor.getState().toast({ kind: "error", text });
     }
     item.waiters.forEach((w) => w(snap));
   }
@@ -430,17 +429,16 @@ export async function splitAtPlayhead() {
     toast({ kind: "info", text: "Move the playhead over a clip to split it." });
     return;
   }
-  for (const c of targets) await edit({ type: "splitClip", clipId: c.id, atUs: Math.round(timeUs) });
+  // One batch: one undo step, and every second half stays selected.
+  const at = Math.round(timeUs);
+  await edit((project) => splitTargets(project, selection, at).map((c): EditCmd => ({ type: "splitClip", clipId: c.id, atUs: at })));
 }
 
 export async function duplicateSelection() {
-  const { selection, edit, select } = useEditor.getState();
-  const copies: string[] = [];
-  for (const id of selection) {
-    const snap = await edit({ type: "duplicateClip", clipId: id });
-    if (snap) copies.push(...snap.select);
-  }
-  if (copies.length > 0) select(copies);
+  const { selection, edit } = useEditor.getState();
+  if (selection.length === 0) return;
+  // One batch: one undo step, and the snapshot selects every copy.
+  await edit(selection.map((id): EditCmd => ({ type: "duplicateClip", clipId: id })));
 }
 
 /**
