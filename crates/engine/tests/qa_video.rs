@@ -311,7 +311,12 @@ fn preview_decodes_new_media_after_a_clip_is_relinked() {
     p.assets[0].path = red.to_string_lossy().into_owned();
     let after = centre(&renderer.render(&p, 0, 64, 64, Wait::Exact, false).unwrap());
     assert!(after[0] > 200 && after[2] < 50, "red: {after:?}");
-    // The decoder of the old file goes at once, not after idling.
+    // The decoder of the old file goes at once, not after idling, even when the new file fails.
+    assert_eq!(renderer.decoders(), 1);
+    let broken = d.join("broken.mp4");
+    std::fs::write(&broken, b"not a video").unwrap();
+    p.assets[0].path = broken.to_string_lossy().into_owned();
+    assert!(renderer.render(&p, 0, 64, 64, Wait::Exact, false).is_err());
     assert_eq!(renderer.decoders(), 1);
 }
 

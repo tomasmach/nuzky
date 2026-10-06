@@ -1,6 +1,6 @@
 //! Turns a project and a time into a composited frame. Preview and export both use this.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -230,6 +230,7 @@ impl Renderer {
         wait: Wait,
         playing: bool,
     ) -> Result<Vec<u8>> {
+        self.drop_stale_workers(project);
         let canvas = &project.canvas;
         let k = out_w as f32 / canvas.width.max(1) as f32;
         let mut draws = Vec::new();
@@ -279,16 +280,28 @@ impl Renderer {
         if playing {
             self.prefetch(project, t_us, k);
         }
-        // Decoders of removed or relinked clips go at once; others after idling.
-        let current = |clip_id: &str, path: &str| {
-            project.tracks.iter().flat_map(|t| &t.clips).any(|c| {
-                c.id == clip_id
-                    && matches!(&c.content, ClipContent::Media { asset_id, .. } if project.asset(asset_id).is_some_and(|a| a.path == path))
-            })
-        };
-        self.workers.retain(|(clip_id, path), w| w.last_used.elapsed() < IDLE_WORKER && current(clip_id, path));
         self.blurred.retain(|key, _| blur_used.contains(key));
         self.gpu.render(out_w, out_h, parse_color(&canvas.background), &draws)
+    }
+
+    /// Decoders of removed or relinked clips go at once, others after idling. Runs before drawing,
+    /// so a frame that fails on unreadable media still releases them.
+    fn drop_stale_workers(&mut self, project: &Project) {
+        if self.workers.is_empty() {
+            return;
+        }
+        let current: HashSet<(&str, &str)> = project
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .filter_map(|c| match &c.content {
+                ClipContent::Media { asset_id, .. } => Some((c.id.as_str(), project.asset(asset_id)?.path.as_str())),
+                ClipContent::Text { .. } => None,
+            })
+            .collect();
+        self.workers.retain(|(clip_id, path), w| {
+            w.last_used.elapsed() < IDLE_WORKER && current.contains(&(clip_id.as_str(), path.as_str()))
+        });
     }
 
     fn background(&mut self, layer: &Layer, strength: f32, w: u32, h: u32, used: &mut Vec<(usize, usize)>) -> Layer {
