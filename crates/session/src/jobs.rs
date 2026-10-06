@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -15,6 +15,7 @@ const MAX_ACTIVE: usize = 4;
 pub struct JobState {
     pub id: String,
     pub owner: String,
+    pub run_id: Option<String>,
     pub kind: &'static str,
     pub stamp: Stamp,
     pub status: &'static str,
@@ -30,7 +31,7 @@ impl JobState {
         json!({"job_id": self.id, "kind": self.kind, "revision": self.stamp.revision,
             "session_epoch": self.stamp.session_epoch, "status": self.status,
             "progress": self.progress, "phase": self.phase, "cancel_requested": self.cancel.load(Ordering::Relaxed),
-            "owner": self.owner, "result": self.result, "error": self.error})
+            "owner": self.owner, "run_id": self.run_id, "result": self.result, "error": self.error})
     }
 }
 
@@ -45,7 +46,15 @@ impl Progress {
 }
 
 #[derive(Default)]
+struct Lifecycle {
+    stopped_runs: HashSet<String>,
+    disconnected_clients: HashSet<String>,
+    closing: bool,
+}
+
+#[derive(Default)]
 pub struct Jobs {
+    lifecycle: Mutex<Lifecycle>,
     entries: Mutex<HashMap<String, Arc<Mutex<JobState>>>>,
     workers: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -54,10 +63,15 @@ impl Jobs {
     pub fn start(
         &self,
         owner: &str,
+        run_id: Option<&str>,
         kind: &'static str,
         stamp: Stamp,
         work: impl FnOnce(Arc<AtomicBool>, Progress) -> Result<Value> + Send + 'static,
     ) -> Result<Value> {
+        let lifecycle = self.lifecycle.lock().unwrap();
+        ensure!(!lifecycle.closing, "APP_CLOSED: host is closing");
+        ensure!(!lifecycle.disconnected_clients.contains(owner), "CLIENT_CLOSED: client disconnected");
+        ensure!(run_id.is_none_or(|run| !lifecycle.stopped_runs.contains(run)), "RUN_STOPPED: run was stopped by the user");
         let mut entries = self.entries.lock().unwrap();
         ensure!(
             entries
@@ -71,6 +85,7 @@ impl Jobs {
         let state = Arc::new(Mutex::new(JobState {
             id: id.clone(),
             owner: owner.into(),
+            run_id: run_id.map(str::to_owned),
             kind,
             stamp,
             status: "running",
@@ -119,12 +134,17 @@ impl Jobs {
     }
 
     pub fn get(&self, id: &str, cancel: bool) -> Result<Value> {
+        self.get_for(None, id, cancel)
+    }
+
+    pub fn get_for(&self, client: Option<&str>, id: &str, cancel: bool) -> Result<Value> {
         let entries = self.entries.lock().unwrap();
         let state = entries
             .get(id)
             .context("UNKNOWN_JOB: no such job in this session")?
             .lock()
             .unwrap();
+        ensure!(!cancel || client.is_none_or(|client| state.owner == client), "UNAUTHORIZED: job belongs to another client");
         if cancel && state.status == "running" {
             state.cancel.store(true, Ordering::Relaxed);
         }
@@ -132,6 +152,8 @@ impl Jobs {
     }
 
     pub fn cancel_owner(&self, owner: &str) {
+        let mut lifecycle = self.lifecycle.lock().unwrap();
+        lifecycle.disconnected_clients.insert(owner.into());
         for state in self.entries.lock().unwrap().values() {
             let state = state.lock().unwrap();
             if state.owner == owner && state.status == "running" {
@@ -140,10 +162,25 @@ impl Jobs {
         }
     }
 
-    pub fn shutdown(&self) {
+    pub fn cancel_run(&self, run_id: &str) {
+        let mut lifecycle = self.lifecycle.lock().unwrap();
+        lifecycle.stopped_runs.insert(run_id.into());
+        for state in self.entries.lock().unwrap().values() {
+            let state = state.lock().unwrap();
+            if state.run_id.as_deref() == Some(run_id) { state.cancel.store(true, Ordering::Relaxed); }
+        }
+    }
+
+    pub fn begin_shutdown(&self) {
+        let mut lifecycle = self.lifecycle.lock().unwrap();
+        lifecycle.closing = true;
         for state in self.entries.lock().unwrap().values() {
             state.lock().unwrap().cancel.store(true, Ordering::Relaxed);
         }
+    }
+
+    pub fn shutdown(&self) {
+        self.begin_shutdown();
         for worker in self.workers.lock().unwrap().drain(..) {
             let _ = worker.join();
         }
@@ -165,6 +202,7 @@ mod tests {
         let started = jobs
             .start(
                 "client",
+                None,
                 "test",
                 Stamp {
                     revision: 7,

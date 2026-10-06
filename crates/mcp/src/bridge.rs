@@ -41,9 +41,9 @@ impl Target {
 
 pub fn run(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
     #[cfg(unix)]
-    let target = match crate::ipc::Remote::connect(project, allow_write) {
-        Ok(remote) => Target::App(Arc::new(remote)),
-        Err(_) => Target::Local(Arc::new(Backend::open(project, allow_write, cache)?)),
+    let target = match crate::ipc::Remote::connect(project, allow_write)? {
+        Some(remote) => Target::App(Arc::new(remote)),
+        None => Target::Local(Arc::new(Backend::open(project, allow_write, cache)?)),
     };
     #[cfg(not(unix))]
     let target = Target::Local(Arc::new(Backend::open(project, allow_write, cache)?));

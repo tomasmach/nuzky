@@ -615,6 +615,7 @@ dependencies = [
  "capopen-analysis",
  "capopen-engine",
  "capopen-session",
+ "libc",
  "png 0.18.1",
  "rmcp",
  "schemars 1.2.2",

@@ -157,6 +157,7 @@ impl Drop for OpenSession {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
         self.close_ipc();
+        if let Err(error) = self.host.retire() { log::error!("{error:#}"); }
     }
 }
 
@@ -543,6 +544,7 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 let mut current = state.session.lock().unwrap();
                 current.close_ipc();
+                if let Err(error) = current.host.retire() { log::error!("{error:#}"); }
                 current.stopped.store(true, Ordering::Release);
                 if let Err(error) = current.host.session.disconnect() {
                     log::error!("Cannot save project on exit: {error:#}");
@@ -550,4 +552,42 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod ipc_lifecycle_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn switching_with_slow_job_returns_promptly_and_retains_project_lock() {
+        let dir = std::env::temp_dir().join(format!("capopen-switch-{}", new_id()));
+        let old_path = dir.join("old.capopen");
+        let next_path = dir.join("next.capopen");
+        store::create(&old_path, &Project::new("old")).unwrap();
+        store::create(&next_path, &Project::new("next")).unwrap();
+        let (mut current, _) = OpenSession::open(old_path.clone()).unwrap();
+        let (next, _) = OpenSession::open(next_path).unwrap();
+        let (release, wait) = mpsc::channel();
+        let stamp = current.host.session.state().unwrap().stamp;
+        current.host.start_job("client", None, "test", stamp, move |_, _| {
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(serde_json::json!({}))
+        }).unwrap();
+        let began = Instant::now();
+        current.close_ipc();
+        current.host.session.disconnect().unwrap();
+        current = next;
+        let elapsed = began.elapsed();
+        let locked = capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_err();
+        release.send(()).unwrap();
+        assert!(elapsed < Duration::from_millis(300), "switch took {elapsed:?}");
+        assert!(locked, "old project lock must survive until work ends");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_ok() { break; }
+            assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(current);
+    }
 }

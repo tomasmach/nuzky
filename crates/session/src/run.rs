@@ -22,6 +22,12 @@ fn run_key(id: &str) -> String {
 }
 
 impl ProjectSession {
+    pub(crate) fn register_job<T>(&self, run: Option<&str>, register: impl FnOnce() -> Result<T>) -> Result<T> {
+        let inner = self.inner.lock().unwrap();
+        if let Some(run) = run { inner.owns_run(run)?; }
+        register()
+    }
+
     pub fn check_run(&self, run_id: &str) -> Result<()> {
         self.inner.lock().unwrap().owns_run(run_id)
     }

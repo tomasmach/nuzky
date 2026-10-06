@@ -25,6 +25,7 @@ impl App {
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("ipc-{}", new_id()));
         std::fs::create_dir_all(dir.join("capopen")).unwrap();
+        std::fs::set_permissions(dir.join("capopen"), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = dir.join("project.capopen");
         let mut project = Project::new("Before");
         project
@@ -279,7 +280,8 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
         .host
         .jobs
         .start(
-            run.as_str().unwrap(),
+            "test-client",
+            run.as_str(),
             "test",
             app.host.session.state().unwrap().stamp,
             |cancel, _| {

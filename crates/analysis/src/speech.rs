@@ -48,6 +48,15 @@ pub fn transcribe_words(
     vad_model_path: &Path,
     language: &str,
 ) -> Result<Transcript> {
+    transcribe_words_cancellable(source, model_path, vad_model_path, language, || false)
+}
+
+pub fn transcribe_words_cancellable(
+    source: AudioSource<'_>, model_path: &Path, vad_model_path: &Path, language: &str,
+    cancelled: impl Fn() -> bool,
+) -> Result<Transcript> {
+    let check = || { ensure!(!cancelled(), "CANCELLED: transcription cancelled"); Ok::<_, anyhow::Error>(()) };
+    check()?;
     ensure!(
         language == "auto"
             || (!language.contains('\0') && whisper_rs::get_lang_id(language).is_some()),
@@ -84,7 +93,9 @@ pub fn transcribe_words(
     if audio.is_empty() {
         return Ok(transcript);
     }
+    check()?;
     let regions = voice_regions(audio, vad_model_path)?;
+    check()?;
     if regions.is_empty() {
         return Ok(transcript);
     }
@@ -106,14 +117,16 @@ pub fn transcribe_words(
         .context("Creating speech recognition state")?;
     // Independent decoding prevents tokens from drifting across compacted pauses.
     for region in regions {
+        check()?;
         let (compact, mapping) = compact_audio(audio, &[region]);
         state
             .full(recognition_params(&transcript.language), &compact)
             .context("Recognising speech region")?;
+        check()?;
         transcript.language = whisper_rs::get_lang_str(state.full_lang_id_from_state())
             .context("Missing detected language")?
             .into();
-        append_segments(&state, context.token_eot(), &mapping, &mut transcript)?;
+        append_segments(&state, context.token_eot(), &mapping, &mut transcript, &cancelled)?;
     }
     Ok(transcript)
 }
@@ -140,8 +153,10 @@ fn append_segments(
     end_token: i32,
     mapping: &[Mapping],
     transcript: &mut Transcript,
+    cancelled: &impl Fn() -> bool,
 ) -> Result<()> {
     for segment in state.as_iter() {
+        ensure!(!cancelled(), "CANCELLED: transcription cancelled");
         let text = segment
             .to_str_lossy()
             .context("Reading transcript segment")?;

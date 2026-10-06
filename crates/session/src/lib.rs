@@ -1,5 +1,6 @@
 //! One editing authority for user edits and agent runs, with ordered background saves.
 pub mod host;
+pub mod hash;
 pub mod jobs;
 pub mod transcripts;
 

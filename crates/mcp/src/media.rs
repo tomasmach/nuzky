@@ -6,7 +6,7 @@ use capopen_engine::{Project, Renderer, Wait, model::ClipContent};
 const DEFAULT_WIDTH: u32 = 320;
 const MAX_FRAMES: usize = 16;
 const LABEL_HEIGHT: u32 = 24;
-const MAX_SHEET_PIXELS: u64 = 24_000_000;
+use crate::limits::MAX_SHEET_PIXELS;
 
 pub fn check_media(project: &Project) -> Result<()> {
     for clip in project.tracks.iter().flat_map(|t| &t.clips) {
@@ -45,7 +45,7 @@ pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_
     let (sheet_w, sheet_h) = (columns * width, rows * (height + LABEL_HEIGHT));
     ensure!(
         sheet_w as u64 * sheet_h as u64 <= MAX_SHEET_PIXELS,
-        "Contact sheet too large; use a smaller width or fewer times"
+        "RESULT_TOO_LARGE: contact sheet exceeds transport budget; use a smaller width or fewer times"
     );
     let mut pixels = vec![0u8; sheet_w as usize * sheet_h as usize * 4];
     for pixel in pixels.chunks_exact_mut(4) {

@@ -14,8 +14,7 @@ const SAMPLE_BYTES: u64 = 1024 * 1024;
 const INTERIOR_CHUNKS: u64 = 32;
 const CHUNK_BYTES: u64 = 64 * 1024;
 const DURATION_TOLERANCE_US: u64 = 1_000;
-const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-const FNV_PRIME: u64 = 0x100000001b3;
+use crate::hash::{FNV_OFFSET, hash_bytes};
 pub const VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -140,10 +139,6 @@ impl TranscriptStore {
         crate::storage::save(&self.directory.join(format!("{fingerprint}.json")), record)
             .context("STORE_WRITE_FAILED: publishing transcript")
     }
-}
-
-fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
-    for byte in bytes { *hash = (*hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME); }
 }
 
 fn hash_chunk(file: &mut File, offset: u64, buffer: &mut [u8], hash: &mut u64) -> Result<()> {

@@ -10,7 +10,7 @@ pub use audio::{SilenceParams, integrated_lufs, loudness, silences, speech_segme
 pub use captions::{CaptionGrouping, group_words};
 pub use fillers::filler_words;
 pub use scenes::{SceneCut, SceneParams, scene_cuts};
-pub use speech::{AudioSource, Segment, Transcript, Word, transcribe_words};
+pub use speech::{AudioSource, Segment, Transcript, Word, transcribe_words, transcribe_words_cancellable};
 
 use serde::{Deserialize, Serialize};
 
