@@ -34,15 +34,16 @@ export const useSpeech = create<SpeechState>(() => ({
   stored: 0,
 }));
 
-/** Why the timeline cannot be transcribed, or null. */
+/** Why the timeline cannot be transcribed, or null. Same rule as the engine's `is_heard`. */
 export function speechBlocker(project: Project): string | null {
   const heard = project.tracks.some(
     (t) =>
-      t.kind === "video" &&
       !t.muted &&
       t.clips.some((c) => {
         const m = c.content;
-        return m.type === "media" && !!project.assets.find((a) => a.id === m.assetId)?.hasAudio;
+        if (m.type !== "media" || m.volume <= 0) return false;
+        const asset = project.assets.find((a) => a.id === m.assetId);
+        return asset?.kind === "video" && asset.hasAudio;
       }),
   );
   return heard ? null : "Add a video with sound to the timeline first";
