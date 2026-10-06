@@ -506,12 +506,12 @@ pub(crate) fn tool_error(backend: &Backend, message: String) -> CallToolResult {
 
 fn caption_stats(project: &Project) -> Value {
     let captions =
-        project.tracks.iter().filter(|track| track.name == "Captions").flat_map(|track| &track.clips).filter_map(
-            |clip| match &clip.content {
+        project.tracks.iter().filter(|track| track.is_captions()).flat_map(|track| &track.clips).filter_map(|clip| {
+            match &clip.content {
                 capopen_engine::model::ClipContent::Text { text, .. } => Some(text),
                 _ => None,
-            },
-        );
+            }
+        });
     let (count, max_chars, max_words) = captions.fold((0, 0, 0), |(count, chars, words), text| {
         (count + 1, chars.max(text.chars().count()), words.max(text.split_whitespace().count()))
     });

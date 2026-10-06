@@ -128,6 +128,15 @@ pub struct Track {
     pub clips: Vec<Clip>,
 }
 
+/// Generated captions live on text tracks with this name; other text tracks hold titles.
+pub const CAPTIONS_TRACK: &str = "Captions";
+
+impl Track {
+    pub fn is_captions(&self) -> bool {
+        self.kind == TrackKind::Text && self.name == CAPTIONS_TRACK
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

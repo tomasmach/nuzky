@@ -5,8 +5,8 @@ use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Adjust, Animation, Asset, AssetKind, Canvas, Clip, ClipContent, Keyframe, Project, TextStyle, Track, TrackKind,
-    Transform, Transition,
+    Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, Clip, ClipContent, Keyframe, Project, TextStyle,
+    Track, TrackKind, Transform, Transition,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -342,7 +342,7 @@ impl Project {
 
     fn caption_track(&mut self, track_id: &str) -> Result<usize> {
         self.track_index(track_id)
-            .filter(|&i| self.tracks[i].kind == TrackKind::Text)
+            .filter(|&i| self.tracks[i].is_captions())
             .ok_or_else(|| anyhow!("Unknown captions track"))
     }
 
@@ -777,7 +777,7 @@ impl Project {
                 self.tracks.push(Track {
                     id: new_id(),
                     kind: TrackKind::Text,
-                    name: "Captions".into(),
+                    name: CAPTIONS_TRACK.into(),
                     muted: false,
                     hidden: false,
                     keep_in_place: false,
@@ -1684,8 +1684,16 @@ mod tests {
         assert_eq!(caption_tracks.len(), 1);
         assert_eq!(caption_tracks[0].clips.len(), 1);
         // Adding never removes an existing captions track.
-        p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_000_000, "Druhá")], style }).unwrap();
+        p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_000_000, "Druhá")], style: style.clone() }).unwrap();
         assert_eq!(p.tracks.iter().filter(|t| t.name == "Captions").count(), 2);
+        // A title track is not a captions track, so its text is never replaced.
+        p.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style: style.clone() }).unwrap();
+        let titles = p.tracks.iter().find(|t| t.kind == TrackKind::Text && !t.is_captions()).unwrap().id.clone();
+        let replace =
+            EditCmd::ReplaceCaptions { track_id: titles.clone(), segments: vec![seg(0, 1_000_000, "X")], style };
+        assert!(p.apply(replace).is_err());
+        let title = &p.tracks.iter().find(|t| t.id == titles).unwrap().clips[0].content;
+        assert!(matches!(title, ClipContent::Text { text, .. } if text == "Title"));
     }
 
     #[test]

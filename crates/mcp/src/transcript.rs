@@ -8,7 +8,7 @@ use capopen_analysis::{AudioSource, CaptionGrouping, group_words};
 use capopen_engine::{
     Project,
     edit::{EditCmd, TimeRange, merge_ranges},
-    model::{Asset, ClipContent, TextStyle, TrackKind},
+    model::{Asset, ClipContent, TextStyle},
     speech::{TimelineWord, Word, is_heard, map_words},
 };
 use capopen_session::{
@@ -481,7 +481,7 @@ pub fn caption_edit(
     segments.sort_by_key(|s| s.start_us);
     let count = segments.len();
     ensure!(count > 0, "NO_CAPTIONS: no transcript words in retained media");
-    let tracks: Vec<_> = project.tracks.iter().filter(|t| t.kind == TrackKind::Text && t.name == "Captions").collect();
+    let tracks: Vec<_> = project.tracks.iter().filter(|t| t.is_captions()).collect();
     ensure!(tracks.len() <= 1, "AMBIGUOUS_CAPTIONS: multiple caption tracks; use explicit replaceCaptions");
     let edit = match tracks.first() {
         Some(track) => EditCmd::ReplaceCaptions { track_id: track.id.clone(), segments, style },
@@ -493,7 +493,7 @@ pub fn caption_edit(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use capopen_engine::model::{Asset, AssetKind};
+    use capopen_engine::model::{Asset, AssetKind, TrackKind};
 
     pub fn fixture() -> (Project, HashMap<String, Vec<Word>>) {
         let mut project = Project::new("speech test");
