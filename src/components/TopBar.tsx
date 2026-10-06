@@ -74,7 +74,7 @@ function ProjectMenu() {
 
   useEffect(() => {
     if (!open) return;
-    api.listProjects().then(setProjects);
+    api.listProjects().then(setProjects, (e) => toast({ kind: "error", text: errorText(e) }));
     const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("pointerdown", close);
