@@ -328,8 +328,33 @@ export function tabListKeys<T extends string>(ids: readonly T[], value: T, onCha
   };
 }
 
-/** Text tabs with an underline, arrow keys move between them. */
-export function TabBar<T extends string>({ tabs, value, onChange, label }: { tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void; label: string }) {
+/** Ids that tie a tab to its panel, unique per tab `group`. */
+export const tabIds = (group: string, id: string) => ({ tab: `${group}-tab-${id}`, panel: `${group}-panel-${id}` });
+
+/** The content of the selected tab, named by its tab. */
+export function TabPanel({ group, id, className, children }: { group: string; id: string; className?: string; children: ReactNode }) {
+  const ids = tabIds(group, id);
+  return (
+    <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className={className}>
+      {children}
+    </div>
+  );
+}
+
+/** Text tabs with an underline, arrow keys move between them. The selected tab's content goes in a `TabPanel` of the same `group`. */
+export function TabBar<T extends string>({
+  group,
+  tabs,
+  value,
+  onChange,
+  label,
+}: {
+  group: string;
+  tabs: { id: T; label: string }[];
+  value: T;
+  onChange: (id: T) => void;
+  label: string;
+}) {
   const onKeyDown = tabListKeys(
     tabs.map((t) => t.id),
     value,
@@ -342,8 +367,10 @@ export function TabBar<T extends string>({ tabs, value, onChange, label }: { tab
           key={t.id}
           type="button"
           role="tab"
+          id={tabIds(group, t.id).tab}
           data-tab={t.id}
           aria-selected={t.id === value}
+          aria-controls={t.id === value ? tabIds(group, t.id).panel : undefined}
           tabIndex={t.id === value ? 0 : -1}
           onClick={() => onChange(t.id)}
           className={`h-10 shrink-0 px-2 text-[13px] transition-colors duration-[120ms] ease-out ${

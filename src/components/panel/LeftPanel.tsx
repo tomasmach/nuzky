@@ -1,6 +1,6 @@
 import { Blend, Captions, Film, Music, Palette, ScrollText, Type } from "lucide-react";
 import { useEditor, type PanelTab } from "../../lib/store";
-import { tabListKeys } from "../ui";
+import { TabPanel, tabIds, tabListKeys } from "../ui";
 import { AudioTab } from "./AudioTab";
 import { CaptionsTab } from "./CaptionsTab";
 import { FiltersTab } from "./FiltersTab";
@@ -34,8 +34,10 @@ export function LeftPanel() {
             key={t.id}
             type="button"
             role="tab"
+            id={tabIds("library", t.id).tab}
             data-tab={t.id}
             aria-selected={tab === t.id}
+            aria-controls={tab === t.id ? tabIds("library", t.id).panel : undefined}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
             className={`flex flex-auto flex-col items-center gap-0.5 px-1 py-2 text-[11px] whitespace-nowrap transition-colors duration-[120ms] ${
@@ -47,13 +49,15 @@ export function LeftPanel() {
           </button>
         ))}
       </div>
-      {tab === "media" && <MediaTab />}
-      {tab === "audio" && <AudioTab />}
-      {tab === "text" && <TextTab />}
-      {tab === "captions" && <CaptionsTab />}
-      {tab === "transcript" && <TranscriptTab />}
-      {tab === "transitions" && <TransitionsTab />}
-      {tab === "filters" && <FiltersTab />}
+      <TabPanel group="library" id={tab} className="flex min-h-0 flex-1 flex-col">
+        {tab === "media" && <MediaTab />}
+        {tab === "audio" && <AudioTab />}
+        {tab === "text" && <TextTab />}
+        {tab === "captions" && <CaptionsTab />}
+        {tab === "transcript" && <TranscriptTab />}
+        {tab === "transitions" && <TransitionsTab />}
+        {tab === "filters" && <FiltersTab />}
+      </TabPanel>
     </aside>
   );
 }
