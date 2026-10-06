@@ -346,6 +346,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let stream = input.streams().best(ff::media::Type::Audio).ok_or_else(|| anyhow!("No audio stream"))?;
     let stream_index = stream.index();
     let time_base = f64::from(stream.time_base());
+    let video = input.streams().best(ff::media::Type::Video).map(|s| (s.index(), f64::from(s.time_base())));
     let duration_us = input.duration().max(1) as f64;
     let origin = origin_us(&input);
     let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
@@ -387,7 +388,8 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
                            resampler: &mut Option<(resampling::Context, (ff::format::Sample, u64, u32))>,
                            mono: &mut bool,
                            writer: &mut BufWriter<File>,
-                           written: &mut u64|
+                           written: &mut u64,
+                           max_lead_us: i64|
          -> Result<()> {
             let mut layout = f.channel_layout();
             if layout.is_empty() {
@@ -406,7 +408,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
             {
                 let start_us = ((pts as f64 * time_base * 1e6) as i64).saturating_sub(origin).max(0);
                 // The container duration includes a broken offset, so it cannot bound the silence.
-                if start_us > MAX_AUDIO_LEAD_US {
+                if start_us > max_lead_us {
                     bail!("Audio starts {} s after the video; the file's timestamps look broken", start_us / 1_000_000);
                 }
                 let pad = (start_us as u64 * SAMPLE_RATE as u64) / 1_000_000;
@@ -424,15 +426,30 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
             write_out(&out, *mono, writer, written)
         };
 
+        // Video read so far shows how late real audio may start; demuxing interleaves by time.
+        let mut video_end_us = 0;
         for (s, packet) in input.packets() {
             if s.index() != stream_index {
+                if let (Some((index, base)), Some(pts)) = (video, packet.pts())
+                    && s.index() == index
+                {
+                    let end_us = (pts.saturating_add(packet.duration()) as f64 * base * 1e6) as i64;
+                    video_end_us = video_end_us.max(end_us.saturating_sub(origin));
+                }
                 continue;
             }
             if decoder.send_packet(&packet).is_err() {
                 continue;
             }
             while decoder.receive_frame(&mut decoded).is_ok() {
-                write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
+                write_frame(
+                    &decoded,
+                    &mut resampler,
+                    &mut mono,
+                    &mut writer,
+                    &mut written,
+                    video_end_us.max(MAX_AUDIO_LEAD_US),
+                )?;
             }
             if let Some(pts) = packet.pts() {
                 let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
@@ -444,7 +461,14 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
         }
         decoder.send_eof().ok();
         while decoder.receive_frame(&mut decoded).is_ok() {
-            write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
+            write_frame(
+                &decoded,
+                &mut resampler,
+                &mut mono,
+                &mut writer,
+                &mut written,
+                video_end_us.max(MAX_AUDIO_LEAD_US),
+            )?;
         }
         if let Some((ctx, _)) = resampler.as_mut() {
             loop {
@@ -467,7 +491,8 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     result
 }
 
-/// Real recordings start audio within seconds of the video; longer leads are broken timestamps.
+/// Audio may start this late even before the video read so far covers it; later starts past the
+/// video are broken timestamps.
 const MAX_AUDIO_LEAD_US: i64 = 600_000_000;
 
 const PCM_FORMAT: ff::format::Sample = ff::format::Sample::F32(ff::format::sample::Type::Packed);

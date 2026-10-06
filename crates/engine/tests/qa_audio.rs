@@ -172,6 +172,38 @@ fn broken_audio_offset_is_rejected_without_writing_silence() {
     assert_eq!(leftovers.count(), 0);
 }
 #[test]
+fn microphone_switched_on_late_in_a_long_recording_is_kept() {
+    if !available() {
+        return;
+    }
+    let d = dir("late-microphone");
+    let source = d.join("long.mkv");
+    // 11 minutes of video with sound from 10:50, past the fallback limit but inside the video.
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:s=64x64:r=1:d=660",
+            "-itsoffset",
+            "650",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=880:r=48000:d=1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+        ],
+        &source,
+    );
+    let out = d.join("long.pcm");
+    let frames = extract_pcm(&source, &out, |_| {}).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    assert!((frames as i64 - 651 * 48_000).abs() <= 2048, "frames={frames}");
+}
+#[test]
 fn mp3_attached_picture_remains_audio_asset() {
     if !available() {
         return;
