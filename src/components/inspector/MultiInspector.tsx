@@ -29,6 +29,9 @@ function shared(values: number[]) {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** Nouns for the selection summary: "2 videos · 3 captions · 1 audio clip". */
+const KIND_NOUNS: Record<string, string> = { video: "video", image: "image", caption: "caption", text: "text clip", audio: "audio clip" };
+
 function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }) {
   const timeUs = useEditor((s) => s.timeUs);
   const ids = found.map((f) => f.clip.id);
@@ -152,7 +155,7 @@ export function MultiInspector({ ids }: { ids: string[] }) {
   const all = (k: "transform" | "adjust" | "sound" | "text") => found.length > 0 && info.every((i) => i[k]);
   const counts = new Map<string, number>();
   for (const i of info) counts.set(i.kind, (counts.get(i.kind) ?? 0) + 1);
-  const detail = [...counts].map(([kind, n]) => `${n} ${kind}`).join(" · ");
+  const detail = [...counts].map(([kind, n]) => plural(n, KIND_NOUNS[kind] ?? kind)).join(" · ");
   // Scoped to this selection, so a drag is one undo step and never merges with another selection's.
   const coalesce = `multi:${ids.join(",")}`;
   return (
