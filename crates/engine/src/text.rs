@@ -17,7 +17,9 @@ const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RASTER_SCALE: f32 = 8.0;
 const MIN_RASTER_SCALE: f32 = 0.01;
-const MAX_LAYOUT_SIDE: f32 = 4.0 * 7680.0;
+const MAX_LAYOUT_WIDTH: f32 = 4.0 * 7680.0;
+/// Bounds layout work for pasted walls of text at any font size.
+const MAX_TEXT_LINES: f32 = 1000.0;
 
 fn finite_clamp(value: f32, min: f32, max: f32) -> f32 {
     if value.is_finite() { value.clamp(min, max) } else { min }
@@ -162,13 +164,14 @@ impl TextRenderer {
         let wanted = finite_clamp(scale, MIN_RASTER_SCALE, MAX_RASTER_SCALE);
         let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / MIN_RASTER_SCALE);
         let stroke = finite_clamp(style.stroke_width, 0.0, max_stroke_width(size));
-        let max_width = finite_clamp(max_width / wanted, 1.0, MAX_LAYOUT_SIDE);
+        let max_width = finite_clamp(max_width / wanted, 1.0, MAX_LAYOUT_WIDTH);
         let pad_box = if style.background.is_some() { size * 0.3 } else { 0.0 };
         let pad = (stroke.ceil() + pad_box.ceil() + 2.0) as i32;
 
-        let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, size * 1.2));
+        let line_height = size * 1.2;
+        let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
         let wrap = (max_width - 2.0 * pad as f32).max(size);
-        buffer.set_size(Some(wrap), Some(MAX_LAYOUT_SIDE));
+        buffer.set_size(Some(wrap), Some(MAX_TEXT_LINES * line_height));
         let family = self.family(style.font_family.as_deref());
         let weight = if style.bold && self.draws_bold(family) { Weight::BOLD } else { Weight::NORMAL };
         let attrs = Attrs::new().family(family).weight(weight);
@@ -187,14 +190,23 @@ impl TextRenderer {
         let canvas_w = (line_w.ceil() + 2.0 * pad as f32).max(1.0);
         let canvas_h = (text_h.ceil() + 2.0 * pad as f32).max(1.0);
         // Large text gets a coarser raster rather than a smaller font or a cropped bitmap.
-        let scale = wanted
+        let mut scale = wanted
             .min(MAX_GLYPH_PX / size)
             .min(MAX_RASTER_SIDE as f32 / canvas_w.max(canvas_h))
             .min((MAX_RASTER_PIXELS as f32 / (canvas_w * canvas_h)).sqrt())
             .max(MIN_RASTER_SCALE);
+        let pixels = |scale: f32| ((canvas_w * scale).ceil() as usize, (canvas_h * scale).ceil() as usize);
+        // Rounding up can overshoot a limit by a pixel.
+        while scale > MIN_RASTER_SCALE
+            && let (w, h) = pixels(scale)
+            && (w.max(h) > MAX_RASTER_SIDE || w * h > MAX_RASTER_PIXELS)
+        {
+            scale = (scale * 0.999).max(MIN_RASTER_SCALE);
+        }
         // Pathological text below the minimum scale is clipped before any allocation.
-        let w = ((canvas_w * scale).ceil() as usize).clamp(1, MAX_RASTER_SIDE);
-        let h = ((canvas_h * scale).ceil() as usize).clamp(1, MAX_RASTER_SIDE.min(MAX_RASTER_PIXELS / w));
+        let (w, h) = pixels(scale);
+        let w = w.clamp(1, MAX_RASTER_SIDE);
+        let h = h.clamp(1, MAX_RASTER_SIDE.min(MAX_RASTER_PIXELS / w));
 
         let mut fill = vec![0u8; w * h];
         for run in buffer.layout_runs() {
@@ -321,6 +333,29 @@ mod tests {
             background: None,
             max_width: None,
         }
+    }
+
+    #[test]
+    fn large_text_gets_a_coarser_raster_instead_of_a_crop() {
+        let mut renderer = bundled_renderer();
+        let canvas_size =
+            |text: &TextImage| (text.image.width as f32 / text.scale, text.image.height as f32 / text.scale);
+        // Captions at 2160p: the pixel limit lowers the scale, rounding must not cut the last row.
+        let mut title = style("Inter");
+        title.font_size = 300.0;
+        title.stroke_width = 0.0;
+        title.background = Some("#ffffffff".into());
+        let exact = canvas_size(&renderer.render("BIG\nTITLE", &title, 1.0, 972.0));
+        let export = renderer.render("BIG\nTITLE", &title, 8.0, 972.0 * 8.0);
+        assert!(export.scale < 8.0);
+        let coarse = canvas_size(&export);
+        assert!(coarse.0 >= exact.0 && coarse.1 >= exact.1, "{coarse:?} vs {exact:?}");
+        assert!(coarse.0 - exact.0 < 1.0 && coarse.1 - exact.1 < 1.0, "{coarse:?} vs {exact:?}");
+        // A valid 8K title keeps all three lines.
+        title.font_size = 15360.0;
+        title.background = None;
+        let lines = renderer.render("A\nA\nA", &title, 1.0, 6912.0);
+        assert!(canvas_size(&lines).1 > 3.0 * 15360.0 * 1.2, "{:?}", canvas_size(&lines));
     }
 
     #[test]
