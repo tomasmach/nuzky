@@ -129,20 +129,20 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     assert_eq!(tools.len(), 15);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
-    assert!(apply["inputSchema"]["properties"]["expected_speech_key"].is_object());
+    assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
     let captions = tools.iter().find(|t| t["name"] == "build_captions").unwrap();
     assert!(!captions["inputSchema"]["required"].as_array().unwrap().contains(&json!("style")));
     let recovery = tools.iter().find(|t| t["name"] == "resolve_recovery").unwrap();
     assert!(recovery["description"].as_str().unwrap().contains("Ask the user"));
     let before = c.call("get_state", json!({}));
     assert_eq!(before["name"], "Original");
-    assert!(before["speech_key"].is_string());
+    assert!(before["speech_layout_key"].is_string());
     assert_eq!(before["selection"], json!([]));
     assert_eq!(before["playhead_us"], 0);
     let run = c.call("begin_run", json!({"label":"integration"}));
-    let args = json!({"run_id":run["run_id"],"request_id":"rename","expected_revision":run["revision"],"expected_speech_key":before["speech_key"],"edits":[{"type":"renameProject","name":"Edited via MCP"}]});
+    let args = json!({"run_id":run["run_id"],"request_id":"rename","expected_revision":run["revision"],"expected_speech_layout_key":before["speech_layout_key"],"edits":[{"type":"renameProject","name":"Edited via MCP"}]});
     let rejected = c.rpc("tools/call", json!({"name":"apply_edits", "arguments":{
-        "run_id":run["run_id"], "request_id":"wrong-speech", "expected_speech_key":"stale",
+        "run_id":run["run_id"], "request_id":"wrong-speech", "expected_speech_layout_key":"stale",
         "edits":[{"type":"renameProject","name":"Must not apply"}]
     }}));
     assert_eq!(rejected["result"]["isError"], true);
@@ -257,9 +257,9 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     assert!(transcript["words"].as_array().unwrap().len() >= 2);
     assert_eq!(transcript["untranscribed"], json!([]));
     let run = c.call("begin_run", json!({"label":"words and captions"}));
-    let args = json!({"run_id":run["run_id"],"speech_key":transcript["speech_key"],"delete":[[0,0]],"dry_run":true});
+    let args = json!({"run_id":run["run_id"],"transcript_key":transcript["transcript_key"],"delete":[[0,0]],"dry_run":true});
     let preview = c.call("edit_transcript", args.clone());
-    assert_eq!(c.call("get_transcript", json!({}))["speech_key"], transcript["speech_key"]);
+    assert_eq!(c.call("get_transcript", json!({}))["transcript_key"], transcript["transcript_key"]);
     let mut args = args;
     args["dry_run"] = json!(false);
     let edited = c.call("edit_transcript", args);

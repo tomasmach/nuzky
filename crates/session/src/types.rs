@@ -37,7 +37,7 @@ pub struct RunInfo {
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionState {
     pub project: Project,
-    pub speech_key: String,
+    pub speech_layout_key: String,
     #[serde(flatten)]
     pub stamp: Stamp,
     pub open_run: Option<RunInfo>,
@@ -76,7 +76,7 @@ pub struct RunResult {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Expect {
     pub revision: Option<u64>,
-    pub speech_key: Option<String>,
+    pub speech_layout_key: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

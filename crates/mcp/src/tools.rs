@@ -158,7 +158,7 @@ impl Backend {
                     &a.run_id,
                     &a.request_id,
                     a.edits,
-                    Expect { revision: a.expected_revision, speech_key: a.expected_speech_key },
+                    Expect { revision: a.expected_revision, speech_layout_key: a.expected_speech_layout_key },
                 )?)?)
             }
             "end_run" => {
@@ -245,7 +245,7 @@ impl Backend {
             &args.run_id,
             &new_id(),
             vec![EditCmd::AddAssets { assets }],
-            Expect { revision: Some(state.stamp.revision), speech_key: None },
+            Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
         )?;
         Ok(
             json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "asset_ids": ids}),
@@ -332,7 +332,7 @@ impl Backend {
     fn get_transcript(&self, args: GetTranscript, state: &SessionState) -> Result<Value> {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         let mut result = transcript::summary(&derived, args.range_us)?;
-        result["speech_key"] = json!(transcript::word_key(&state.project, &derived.words));
+        result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
         Ok(result)
     }
 
@@ -365,7 +365,7 @@ impl Backend {
 
     fn prepare_transcript_edit(&self, args: &EditTranscript, state: &SessionState) -> Result<PreparedTranscriptEdit> {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
-        transcript::check_key(&state.project, &derived, &args.speech_key)?;
+        transcript::check_key(&state.project, &derived, &args.transcript_key)?;
         let before = state.project.duration_us();
         let ranges = transcript::edit_ranges(&state.project, &derived, args.delete.as_deref(),
             args.keep.as_deref(), Some(args.shorten_pauses_us.unwrap_or(transcript::DEFAULT_PAUSE_US)))?;
@@ -374,10 +374,10 @@ impl Backend {
         let preview_text: String = cut.words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(PREVIEW_CHARS).collect();
         Ok(PreparedTranscriptEdit {
             arguments: serde_json::to_value(args)?,
-            expect: Expect { revision: Some(state.stamp.revision), speech_key: Some(state.speech_key.clone()) },
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: Some(state.speech_layout_key.clone()) },
             response: json!({"duration_us":{"before":before,"after":after},
                 "removed_us":before-after,"ranges":cut.ranges,"preview_text":preview_text,
-                "speech_key":transcript::word_key(&cut.preview, &cut.words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
+                "transcript_key":transcript::word_key(&cut.preview, &cut.words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
             edit: cut.edit,
         })
     }
@@ -393,7 +393,7 @@ impl Backend {
             &args.run_id,
             &new_id(),
             vec![edit],
-            Expect { revision: Some(state.stamp.revision), speech_key: None },
+            Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
         )?;
         Ok(
             json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "caption_count": result.outcome.created.len(), "created": result.outcome.created, "removed": result.outcome.removed}),
@@ -612,7 +612,7 @@ mod transcript_tests {
         let run = backend.host.session.begin_run("remove slips".into()).unwrap();
         let state = backend.host.session.state().unwrap();
         let initial = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap();
-        let args = json!({"run_id":run.run_id,"speech_key":initial["speech_key"],"delete":[[1,2],[6,6]],"dry_run":true});
+        let args = json!({"run_id":run.run_id,"transcript_key":initial["transcript_key"],"delete":[[1,2],[6,6]],"dry_run":true});
         let preview = backend.dispatch("edit_transcript", args.clone(), &state).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, project);
         assert_eq!(backend.host.session.state().unwrap().stamp.revision, state.stamp.revision);
@@ -622,7 +622,7 @@ mod transcript_tests {
         assert_eq!(preview["duration_us"], result["duration_us"]);
         assert_eq!(preview["preview_text"], result["preview_text"]);
         let changed = backend.host.session.state().unwrap();
-        assert_eq!(result["speech_key"], backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap()["speech_key"]);
+        assert_eq!(result["transcript_key"], backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap()["transcript_key"]);
         assert!(backend.dispatch("edit_transcript", apply, &changed).unwrap_err().to_string().contains("SPEECH_CHANGED"));
         let transcript = backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap();
         assert_eq!(transcript["words"].as_array().unwrap().len(), 5);
@@ -634,7 +634,7 @@ mod transcript_tests {
         backend.host.transcripts.put(&project.assets[0], &record).unwrap();
         let new_run = backend.host.session.begin_run("stale recognition".into()).unwrap();
         let current = backend.host.session.state().unwrap();
-        let stale = json!({"run_id":new_run.run_id,"speech_key":initial["speech_key"],"delete":[[0,0]],"dry_run":true});
+        let stale = json!({"run_id":new_run.run_id,"transcript_key":initial["transcript_key"],"delete":[[0,0]],"dry_run":true});
         assert!(backend.dispatch("edit_transcript", stale, &current).unwrap_err().to_string().contains("SPEECH_CHANGED"));
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
@@ -645,7 +645,7 @@ mod transcript_tests {
         let run = backend.host.session.begin_run("retry transcript".into()).unwrap();
         let initial = backend.host.session.state().unwrap();
         let transcript = backend.get_transcript(GetTranscript { range_us: None }, &initial).unwrap();
-        let args = json!({"run_id":run.run_id,"request_id":"cut-once","speech_key":transcript["speech_key"],"delete":[[1,2]]});
+        let args = json!({"run_id":run.run_id,"request_id":"cut-once","transcript_key":transcript["transcript_key"],"delete":[[1,2]]});
         std::fs::remove_file(&backend.project_path).unwrap();
         std::fs::create_dir(&backend.project_path).unwrap();
         let error = backend.dispatch("edit_transcript", args.clone(), &initial).unwrap_err();
@@ -675,10 +675,10 @@ mod transcript_tests {
         let (dir, backend, before) = fixture();
         let run = backend.host.session.begin_run("wrong key".into()).unwrap();
         let state = backend.host.session.state().unwrap();
-        let args = json!({"run_id":run.run_id,"speech_key":state.speech_key,"dry_run":true});
+        let args = json!({"run_id":run.run_id,"transcript_key":state.speech_layout_key,"dry_run":true});
         let error = backend.dispatch("edit_transcript", args, &state).unwrap_err().to_string();
         assert!(error.contains("SPEECH_CHANGED"));
-        assert!(error.contains("use get_transcript's speech_key"));
+        assert!(error.contains("use get_transcript's transcript_key"));
         assert_eq!(backend.host.session.state().unwrap().project, before);
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();

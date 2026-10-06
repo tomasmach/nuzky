@@ -27,7 +27,7 @@ use anyhow::{Context, Result, ensure};
 use capopen_engine::{
     Project,
     edit::{EditCmd, Editor, new_id},
-    speech::speech_key,
+    speech::speech_layout_key,
 };
 use serde_json::Value;
 
@@ -129,7 +129,7 @@ impl ProjectSession {
         }
         Ok(SessionState {
             project: inner.editor.project.clone(),
-            speech_key: speech_key(&inner.editor.project),
+            speech_layout_key: speech_layout_key(&inner.editor.project),
             stamp: inner.stamp(),
             open_run: inner.run.as_ref().map(|r| r.info.clone()),
             recovery_checkpoint: inner.recovery.clone(),
@@ -245,8 +245,8 @@ impl Inner {
         if let Some(expected) = expect.revision {
             ensure!(expected == self.editor.revision, "STALE_REVISION: expected {expected}, current {}", self.editor.revision);
         }
-        if let Some(expected) = &expect.speech_key {
-            ensure!(expected == &speech_key(&self.editor.project), "SPEECH_CHANGED: timeline speech changed");
+        if let Some(expected) = &expect.speech_layout_key {
+            ensure!(expected == &speech_layout_key(&self.editor.project), "SPEECH_CHANGED: timeline speech changed");
         }
         Ok(())
     }

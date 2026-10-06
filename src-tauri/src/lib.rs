@@ -45,7 +45,7 @@ pub struct Snapshot {
     project: Project,
     revision: u64,
     session_epoch: String,
-    open_run: Option<String>,
+    open_run_label: Option<String>,
     recovery: bool,
     can_undo: bool,
     can_redo: bool,
@@ -90,9 +90,9 @@ struct OpenSession {
     stopped: Arc<AtomicBool>,
 }
 
-fn lock_session<'a>(session: &'a Mutex<OpenSession>, expect_epoch: Option<&str>) -> CmdResult<std::sync::MutexGuard<'a, OpenSession>> {
+fn lock_session<'a>(session: &'a Mutex<OpenSession>, expected_epoch: Option<&str>) -> CmdResult<std::sync::MutexGuard<'a, OpenSession>> {
     let current = session.lock().unwrap();
-    if let Some(epoch) = expect_epoch {
+    if let Some(epoch) = expected_epoch {
         if current.host.session.state().map_err(err)?.stamp.session_epoch != epoch {
             return Err("EPOCH_CHANGED: another project is open".into());
         }
@@ -132,7 +132,7 @@ impl OpenSession {
             project: state.project,
             revision: state.stamp.revision,
             session_epoch: state.stamp.session_epoch,
-            open_run: state.open_run.map(|run| run.label),
+            open_run_label: state.open_run.map(|run| run.label),
             recovery: state.recovery_checkpoint.is_some(),
             can_undo,
             can_redo,
@@ -196,8 +196,8 @@ impl AppState {
         self.engine.send(Msg::Project(Arc::new(project.clone())));
     }
 
-    fn apply_batch(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect, expect_epoch: Option<&str>) -> CmdResult<Snapshot> {
-        let current = lock_session(&self.session, expect_epoch)?;
+    fn apply_batch(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect, expected_epoch: Option<&str>) -> CmdResult<Snapshot> {
+        let current = lock_session(&self.session, expected_epoch)?;
         let result = current.host.session.edit(cmds, coalesce, expect).map_err(err)?;
         current.snapshot(result.outcome.select)
     }
@@ -253,25 +253,25 @@ fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
 }
 
 #[tauri::command]
-fn apply_edit(state: State<'_, AppState>, cmd: EditCmd, coalesce: Option<String>, expect_revision: Option<u64>, expect_speech_key: Option<String>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
-    state.apply_batch(vec![cmd], coalesce, Expect { revision: expect_revision, speech_key: expect_speech_key }, expect_epoch.as_deref())
+fn apply_edit(state: State<'_, AppState>, cmd: EditCmd, coalesce: Option<String>, expected_revision: Option<u64>, expected_speech_layout_key: Option<String>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+    state.apply_batch(vec![cmd], coalesce, Expect { revision: expected_revision, speech_layout_key: expected_speech_layout_key }, expected_epoch.as_deref())
 }
 
 #[tauri::command]
-fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<String>, expect_revision: Option<u64>, expect_speech_key: Option<String>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
-    state.apply_batch(cmds, coalesce, Expect { revision: expect_revision, speech_key: expect_speech_key }, expect_epoch.as_deref())
+fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<String>, expected_revision: Option<u64>, expected_speech_layout_key: Option<String>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+    state.apply_batch(cmds, coalesce, Expect { revision: expected_revision, speech_layout_key: expected_speech_layout_key }, expected_epoch.as_deref())
 }
 
 #[tauri::command]
-fn undo(state: State<'_, AppState>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
-    let current = lock_session(&state.session, expect_epoch.as_deref())?;
+fn undo(state: State<'_, AppState>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expected_epoch.as_deref())?;
     current.host.session.undo().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
-fn redo(state: State<'_, AppState>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
-    let current = lock_session(&state.session, expect_epoch.as_deref())?;
+fn redo(state: State<'_, AppState>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expected_epoch.as_deref())?;
     current.host.session.redo().map_err(err)?;
     current.snapshot(Vec::new())
 }
@@ -283,26 +283,26 @@ fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_u
 
 /// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step.
 #[tauri::command]
-fn stop_run(state: State<'_, AppState>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
-    let current = lock_session(&state.session, expect_epoch.as_deref())?;
+fn stop_run(state: State<'_, AppState>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expected_epoch.as_deref())?;
     current.host.stop_run().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
-fn resolve_recovery(state: State<'_, AppState>, action: String, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
+fn resolve_recovery(state: State<'_, AppState>, action: String, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
     let action = match action.as_str() {
         "keep" => RecoveryAction::Keep,
         "restore" => RecoveryAction::Restore,
         _ => return Err("Unknown recovery action".into()),
     };
-    let current = lock_session(&state.session, expect_epoch.as_deref())?;
+    let current = lock_session(&state.session, expected_epoch.as_deref())?;
     current.host.session.resolve_recovery(action).map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
-async fn import_media(app: AppHandle, paths: Vec<String>, expect_epoch: Option<String>) -> CmdResult<ImportResult> {
+async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option<String>) -> CmdResult<ImportResult> {
     let probed = tauri::async_runtime::spawn_blocking(move || {
         paths.into_iter().map(|p| (p.clone(), probe(Path::new(&p), new_id()))).collect::<Vec<_>>()
     })
@@ -319,9 +319,9 @@ async fn import_media(app: AppHandle, paths: Vec<String>, expect_epoch: Option<S
     }
     let added: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
     let snapshot = if assets.is_empty() {
-        lock_session(&state.session, expect_epoch.as_deref())?.snapshot(Vec::new())?
+        lock_session(&state.session, expected_epoch.as_deref())?.snapshot(Vec::new())?
     } else {
-        let snap = state.apply_batch(vec![EditCmd::AddAssets { assets }], None, Expect::default(), expect_epoch.as_deref())?;
+        let snap = state.apply_batch(vec![EditCmd::AddAssets { assets }], None, Expect::default(), expected_epoch.as_deref())?;
         jobs::ensure_audio(&state, &snap.project);
         snap
     };
@@ -411,8 +411,8 @@ fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot>
 }
 
 #[tauri::command]
-fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest, expect_epoch: Option<String>) -> CmdResult<String> {
-    jobs::start_export(&app, PathBuf::from(path), options, expect_epoch.as_deref())
+fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest, expected_epoch: Option<String>) -> CmdResult<String> {
+    jobs::start_export(&app, PathBuf::from(path), options, expected_epoch.as_deref())
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
@@ -539,7 +539,7 @@ pub fn run() {
             layer_bounds,
             cancel_job,
             jobs::start_captions,
-            jobs::caption_models,
+            jobs::speech_models,
             jobs::start_transcript,
             transcripts::transcript_view,
             transcripts::cut_words,

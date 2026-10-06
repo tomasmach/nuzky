@@ -122,11 +122,11 @@ fn retries_are_idempotent_and_conflicting_content_is_rejected() {
     let run = s.begin_run("a".into()).unwrap();
     let rev = Some(run.stamp.revision);
     let first = s
-        .apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_key: None })
+        .apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_layout_key: None })
         .unwrap();
     apply(&s, &run.run_id, "Second");
     let retry = s
-        .apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_key: None })
+        .apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_layout_key: None })
         .unwrap();
     assert_eq!(
         serde_json::to_value(first).unwrap(),
@@ -134,14 +134,14 @@ fn retries_are_idempotent_and_conflicting_content_is_rejected() {
     );
     assert_eq!(f.disk().name, "Second");
     assert!(
-        s.apply_edits(&run.run_id, "req", rename("Other"), Expect { revision: rev, speech_key: None })
+        s.apply_edits(&run.run_id, "req", rename("Other"), Expect { revision: rev, speech_layout_key: None })
             .unwrap_err()
             .to_string()
             .contains("REQUEST_CONFLICT")
     );
     s.end_run(&run.run_id, EndAction::Keep).unwrap();
     assert!(
-        s.apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_key: None })
+        s.apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_layout_key: None })
             .unwrap_err().to_string().contains("INVALID_RUN")
     );
 }
@@ -152,7 +152,7 @@ fn stale_revision_and_wrong_or_expired_run_do_not_mutate() {
     let s = f.open();
     let r = s.begin_run("a".into()).unwrap();
     assert!(
-        s.apply_edits(&r.run_id, "a", rename("Bad"), Expect { revision: Some(r.stamp.revision + 1), speech_key: None })
+        s.apply_edits(&r.run_id, "a", rename("Bad"), Expect { revision: Some(r.stamp.revision + 1), speech_layout_key: None })
             .unwrap_err()
             .to_string()
             .contains("STALE_REVISION")
@@ -724,7 +724,7 @@ fn speech_expectation_allows_caption_restyle_but_rejects_moved_speech() {
     project.tracks[0].clips.push(media_clip());
     storage::save(&f.0, &project).unwrap();
     let s = f.open();
-    let key = s.state().unwrap().speech_key;
+    let key = s.state().unwrap().speech_layout_key;
     let caption: EditCmd = serde_json::from_value(serde_json::json!({
         "type": "addText", "startUs": 0, "text": "Caption",
         "style": {"fontSize": 64, "color": "#ffffff", "bold": false, "strokeWidth": 0, "strokeColor": "#000000"}
@@ -733,14 +733,14 @@ fn speech_expectation_allows_caption_restyle_but_rejects_moved_speech() {
     let restyle = serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": id,
         "style": {"fontSize": 80, "color": "#ffffff", "bold": true, "strokeWidth": 0, "strokeColor": "#000000"}
     })).unwrap();
-    s.edit(vec![restyle], None, Expect { revision: None, speech_key: Some(key.clone()) }).unwrap();
+    s.edit(vec![restyle], None, Expect { revision: None, speech_layout_key: Some(key.clone()) }).unwrap();
     let run = s.begin_run("speech".into()).unwrap().run_id;
-    s.apply_edits(&run, "caption", rename("Unrelated"), Expect { revision: None, speech_key: Some(key.clone()) }).unwrap();
+    s.apply_edits(&run, "caption", rename("Unrelated"), Expect { revision: None, speech_layout_key: Some(key.clone()) }).unwrap();
     let speed = serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": "c", "speed": 2})).unwrap();
-    s.apply_edits(&run, "speed", vec![speed], Expect { revision: None, speech_key: Some(key.clone()) }).unwrap();
-    assert!(s.apply_edits(&run, "stale", rename("Bad"), Expect { revision: None, speech_key: Some(key.clone()) }).unwrap_err().to_string().contains("SPEECH_CHANGED"));
+    s.apply_edits(&run, "speed", vec![speed], Expect { revision: None, speech_layout_key: Some(key.clone()) }).unwrap();
+    assert!(s.apply_edits(&run, "stale", rename("Bad"), Expect { revision: None, speech_layout_key: Some(key.clone()) }).unwrap_err().to_string().contains("SPEECH_CHANGED"));
     s.end_run(&run, EndAction::Keep).unwrap();
-    assert!(s.edit(rename("Bad"), None, Expect { revision: None, speech_key: Some(key) }).unwrap_err().to_string().contains("SPEECH_CHANGED"));
+    assert!(s.edit(rename("Bad"), None, Expect { revision: None, speech_layout_key: Some(key) }).unwrap_err().to_string().contains("SPEECH_CHANGED"));
 }
 
 #[test]
@@ -872,7 +872,7 @@ fn failed_discard_blocks_more_batches_and_retry_cannot_change_its_action() {
 fn stale_user_revision_and_reserved_run_key_do_not_commit() {
     let f = Fixture::new();
     let s = f.open();
-    assert!(s.edit(rename("Bad"), None, Expect { revision: Some(1), speech_key: None }).unwrap_err().to_string().contains("STALE_REVISION"));
+    assert!(s.edit(rename("Bad"), None, Expect { revision: Some(1), speech_layout_key: None }).unwrap_err().to_string().contains("STALE_REVISION"));
     assert!(s.edit(rename("Bad"), Some("run:spoof".into()), Expect::default()).unwrap_err().to_string().contains("INVALID_REQUEST"));
     assert_eq!(s.state().unwrap().stamp.revision, 0);
     assert_eq!(s.state().unwrap().project, f.disk());

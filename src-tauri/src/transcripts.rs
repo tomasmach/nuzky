@@ -80,7 +80,7 @@ fn cut(host: &Host, key: &str, target: Target) -> Result<(Vec<String>, i64, i64)
     };
     ensure!(!ranges.is_empty(), "Nothing to cut");
     let plan = transcript::plan_cut(&state.project, &derived, ranges)?;
-    let edited = host.session.edit(vec![plan.edit], None, Expect { revision: None, speech_key: Some(state.speech_key) })?;
+    let edited = host.session.edit(vec![plan.edit], None, Expect { revision: None, speech_layout_key: Some(state.speech_layout_key) })?;
     Ok((edited.outcome.select, plan.ranges[0].start_us, state.project.duration_us() - plan.preview.duration_us()))
 }
 
@@ -106,19 +106,19 @@ pub async fn transcript_view(app: AppHandle, pause_us: i64) -> CmdResult<Transcr
 }
 
 #[tauri::command]
-pub async fn cut_words(app: AppHandle, key: String, delete: Vec<[usize; 2]>, expect_epoch: Option<String>) -> CmdResult<TranscriptCut> {
-    apply_cut(app, key, Target::Words(delete), expect_epoch).await
+pub async fn cut_words(app: AppHandle, key: String, delete: Vec<[usize; 2]>, expected_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+    apply_cut(app, key, Target::Words(delete), expected_epoch).await
 }
 
 #[tauri::command]
-pub async fn remove_pauses(app: AppHandle, key: String, pause_us: i64, only: Option<Vec<usize>>, expect_epoch: Option<String>) -> CmdResult<TranscriptCut> {
-    apply_cut(app, key, Target::Pauses { pause_us, only }, expect_epoch).await
+pub async fn remove_pauses(app: AppHandle, key: String, pause_us: i64, only: Option<Vec<usize>>, expected_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+    apply_cut(app, key, Target::Pauses { pause_us, only }, expected_epoch).await
 }
 
-async fn apply_cut(app: AppHandle, key: String, target: Target, expect_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+async fn apply_cut(app: AppHandle, key: String, target: Target, expected_epoch: Option<String>) -> CmdResult<TranscriptCut> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let current = crate::lock_session(&state.session, expect_epoch.as_deref())?;
+        let current = crate::lock_session(&state.session, expected_epoch.as_deref())?;
         let (select, start_us, removed_us) = cut(&current.host, &key, target).map_err(explain)?;
         Ok(TranscriptCut { snapshot: current.snapshot(select)?, start_us, removed_us })
     })

@@ -80,7 +80,7 @@ pub fn map_words(project: &Project, transcripts: &HashMap<String, Vec<Word>>) ->
 /// Changes whenever `map_words` could place a word differently, and stays the same through edits
 /// that leave the heard clips alone, such as text, transforms, grading or volume above zero.
 /// Comparable within one process only.
-pub fn speech_key(project: &Project) -> String {
+pub fn speech_layout_key(project: &Project) -> String {
     let mut hasher = DefaultHasher::new();
     for clip in heard_clips(project) {
         if let ClipContent::Media { asset_id, source_in_us, speed, .. } = &clip.content {
@@ -175,10 +175,10 @@ mod tests {
         let video = main_id(&p, 0);
         let sound = p.apply(EditCmd::DetachAudio { clip_id: video }).unwrap().select[0].clone();
         assert_eq!(placed(&p, &words).len(), 10);
-        let before = speech_key(&p);
+        let before = speech_layout_key(&p);
         p.apply(EditCmd::MoveClip { clip_id: sound.clone(), track_id: None, start_us: S }).unwrap();
         assert_eq!(placed(&p, &words)[0], ("w0".into(), 1_200_000));
-        assert_ne!(speech_key(&p), before);
+        assert_ne!(speech_layout_key(&p), before);
         assert!(map_words(&p, &words).iter().all(|w| w.clip_id == sound));
     }
 
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn the_key_changes_only_when_speech_moves() {
         let (mut p, _) = talk();
-        let key = speech_key(&p);
+        let key = speech_layout_key(&p);
         let style = TextStyle {
             font_family: None,
             font_size: 64.0,
@@ -231,8 +231,8 @@ mod tests {
             fade_out_us: None,
         })
         .unwrap();
-        assert_eq!(speech_key(&p), key);
+        assert_eq!(speech_layout_key(&p), key);
         ripple(&mut p, 0, S);
-        assert_ne!(speech_key(&p), key);
+        assert_ne!(speech_layout_key(&p), key);
     }
 }

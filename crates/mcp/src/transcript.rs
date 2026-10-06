@@ -109,7 +109,7 @@ pub fn word_key(project: &Project, words: &[TimelineWord]) -> String {
     for word in words {
         (&word.asset_id, word.source_start_us, word.start_us, word.end_us, &word.text).hash(&mut hash);
     }
-    format!("{}:{:016x}", capopen_engine::speech::speech_key(project), hash.finish())
+    format!("{}:{:016x}", capopen_engine::speech::speech_layout_key(project), hash.finish())
 }
 
 pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
@@ -319,7 +319,7 @@ pub fn deletion_ranges(
 pub fn check_key(project: &Project, derived: &Derived, key: &str) -> Result<()> {
     ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
     ensure!(key == word_key(project, &derived.words),
-        "SPEECH_CHANGED: speech changed or wrong key; use get_transcript's speech_key (get_state's key is for apply_edits)");
+        "SPEECH_CHANGED: speech changed or wrong key; use get_transcript's transcript_key (get_state's key is for apply_edits)");
     Ok(())
 }
 

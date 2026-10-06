@@ -151,9 +151,9 @@ impl ExportRequest {
     }
 }
 
-pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest, expect_epoch: Option<&str>) -> Result<String, String> {
+pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest, expected_epoch: Option<&str>) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let project = crate::lock_session(&state.session, expect_epoch)?.host.session.state().map_err(crate::err)?.project;
+    let project = crate::lock_session(&state.session, expected_epoch)?.host.session.state().map_err(crate::err)?.project;
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
@@ -181,7 +181,7 @@ pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest, expec
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct CaptionModel {
+pub struct SpeechModel {
     pub id: &'static str,
     pub label: &'static str,
     pub size_mb: u32,
@@ -199,10 +199,10 @@ fn model_path(id: &str) -> PathBuf {
 }
 
 #[tauri::command]
-pub fn caption_models() -> Vec<CaptionModel> {
+pub fn speech_models() -> Vec<SpeechModel> {
     MODELS
         .iter()
-        .map(|(id, label, size)| CaptionModel { id, label, size_mb: *size, downloaded: model_path(id).exists() })
+        .map(|(id, label, size)| SpeechModel { id, label, size_mb: *size, downloaded: model_path(id).exists() })
         .collect()
 }
 
@@ -244,17 +244,17 @@ struct SpeechRequest {
 }
 
 #[tauri::command]
-pub fn start_captions(app: AppHandle, request: CaptionRequest, expect_epoch: Option<String>) -> Result<String, String> {
+pub fn start_captions(app: AppHandle, request: CaptionRequest, expected_epoch: Option<String>) -> Result<String, String> {
     let (model, language) = (request.model.clone(), request.language.clone());
-    start_speech(app, SpeechRequest { model, language, refresh: false, captions: Some(request) }, expect_epoch.as_deref())
+    start_speech(app, SpeechRequest { model, language, refresh: false, captions: Some(request) }, expected_epoch.as_deref())
 }
 
 #[tauri::command]
-pub fn start_transcript(app: AppHandle, model: String, language: String, refresh: bool, expect_epoch: Option<String>) -> Result<String, String> {
-    start_speech(app, SpeechRequest { model, language, refresh, captions: None }, expect_epoch.as_deref())
+pub fn start_transcript(app: AppHandle, model: String, language: String, refresh: bool, expected_epoch: Option<String>) -> Result<String, String> {
+    start_speech(app, SpeechRequest { model, language, refresh, captions: None }, expected_epoch.as_deref())
 }
 
-fn start_speech(app: AppHandle, request: SpeechRequest, expect_epoch: Option<&str>) -> Result<String, String> {
+fn start_speech(app: AppHandle, request: SpeechRequest, expected_epoch: Option<&str>) -> Result<String, String> {
     if !MODELS.iter().any(|(id, ..)| *id == request.model) {
         return Err("Unknown speech model".into());
     }
@@ -264,7 +264,7 @@ fn start_speech(app: AppHandle, request: SpeechRequest, expect_epoch: Option<&st
     }
     let state = app.state::<AppState>();
     let (host, project) = {
-        let current = crate::lock_session(&state.session, expect_epoch)?;
+        let current = crate::lock_session(&state.session, expected_epoch)?;
         (Arc::downgrade(&current.host), current.host.session.state().map_err(crate::err)?.project)
     };
     let heard = transcript::heard_assets(&project);
@@ -325,7 +325,7 @@ fn run_speech_job(
     anyhow::ensure!(derived.untranscribed.is_empty(), "A clip was added during recognition. Generate the captions again.");
     rep.progress(1.0, Some("Grouping captions"));
     let (cmd, count) = transcript::caption_edit(&derived.words, &view.project, captions.style.clone(), captions.grouping())?;
-    current.host.session.edit(vec![cmd], None, capopen_session::Expect { revision: None, speech_key: Some(view.speech_key) })
+    current.host.session.edit(vec![cmd], None, capopen_session::Expect { revision: None, speech_layout_key: Some(view.speech_layout_key) })
         .context("Applying captions")?;
     // Not the frontend's own edit: send it the new timeline, as for an agent's edits.
     if let Ok(snap) = current.snapshot(Vec::new()) {

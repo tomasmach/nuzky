@@ -24,7 +24,7 @@ pub struct Apply {
     pub request_id: String,
     pub edits: Vec<EditCmd>,
     pub expected_revision: Option<u64>,
-    pub expected_speech_key: Option<String>,
+    pub expected_speech_layout_key: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -115,7 +115,7 @@ pub struct EditTranscript {
     pub run_id: String,
     /// Reuse this id with identical arguments to retry a failed save without cutting twice.
     pub request_id: Option<String>,
-    pub speech_key: String,
+    pub transcript_key: String,
     /// Inclusive zero-based word indices [from,to].
     pub delete: Option<Vec<[usize; 2]>>,
     /// Inclusive zero-based word indices [from,to]. Mutually exclusive with delete.
