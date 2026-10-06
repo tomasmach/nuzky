@@ -17,7 +17,8 @@ const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RASTER_SCALE: f32 = 8.0;
 const MIN_RASTER_SCALE: f32 = 0.01;
-const MAX_LAYOUT_WIDTH: f32 = 4.0 * 7680.0;
+/// Layout bounds in canvas pixels; tall text may also use up to MAX_TEXT_LINES lines.
+const MAX_LAYOUT_SIDE: f32 = 4.0 * 7680.0;
 /// Bounds layout work for pasted walls of text at any font size.
 const MAX_TEXT_LINES: f32 = 1000.0;
 
@@ -164,14 +165,14 @@ impl TextRenderer {
         let wanted = finite_clamp(scale, MIN_RASTER_SCALE, MAX_RASTER_SCALE);
         let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / MIN_RASTER_SCALE);
         let stroke = finite_clamp(style.stroke_width, 0.0, max_stroke_width(size));
-        let max_width = finite_clamp(max_width / wanted, 1.0, MAX_LAYOUT_WIDTH);
+        let max_width = finite_clamp(max_width / wanted, 1.0, MAX_LAYOUT_SIDE);
         let pad_box = if style.background.is_some() { size * 0.3 } else { 0.0 };
         let pad = (stroke.ceil() + pad_box.ceil() + 2.0) as i32;
 
         let line_height = size * 1.2;
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, line_height));
         let wrap = (max_width - 2.0 * pad as f32).max(size);
-        buffer.set_size(Some(wrap), Some(MAX_TEXT_LINES * line_height));
+        buffer.set_size(Some(wrap), Some((MAX_TEXT_LINES * line_height).max(MAX_LAYOUT_SIDE)));
         let family = self.family(style.font_family.as_deref());
         let weight = if style.bold && self.draws_bold(family) { Weight::BOLD } else { Weight::NORMAL };
         let attrs = Attrs::new().family(family).weight(weight);
@@ -356,6 +357,10 @@ mod tests {
         title.background = None;
         let lines = renderer.render("A\nA\nA", &title, 1.0, 6912.0);
         assert!(canvas_size(&lines).1 > 3.0 * 15360.0 * 1.2, "{:?}", canvas_size(&lines));
+        // So do 1100 lines of tiny text that fit the same canvas.
+        title.font_size = 5.0;
+        let lines = renderer.render(&"A\n".repeat(1100), &title, 1.0, 6912.0);
+        assert!(canvas_size(&lines).1 > 1100.0 * 5.0 * 1.2, "{:?}", canvas_size(&lines));
     }
 
     #[test]
