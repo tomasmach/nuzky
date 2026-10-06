@@ -20,8 +20,6 @@ pub enum AudioSource<'a> {
         asset: &'a Asset,
         cache: &'a Path,
     },
-    /// Already mixed 16 kHz mono f32, with time zero at the timeline origin.
-    TimelineAudio(&'a [f32]),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -79,7 +77,6 @@ pub fn transcribe_words_cancellable(
                 .collect::<Vec<_>>();
             &converted
         }
-        AudioSource::TimelineAudio(audio) => audio,
     };
     ensure!(
         audio.iter().all(|s| s.is_finite()),

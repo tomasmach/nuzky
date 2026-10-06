@@ -87,14 +87,6 @@ pub fn silences(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Ve
     quiet_ranges(pcm.samples(), params)
 }
 
-/// Complement of the padded silence ranges over the actual decoded PCM duration.
-/// Includes breath padding and any music above the silence threshold.
-pub fn speech_segments(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Vec<Range>> {
-    let pcm = open_pcm(asset, cache)?;
-    let silence = quiet_ranges(pcm.samples(), params)?;
-    Ok(complement(&silence, samples_to_us(pcm.frames() as i64)))
-}
-
 fn quiet_ranges(samples: &[f32], params: SilenceParams) -> Result<Vec<Range>> {
     ensure!(
         params.min_silence_us > 0 && params.pad_us >= 0,
@@ -134,27 +126,6 @@ fn quiet_ranges(samples: &[f32], params: SilenceParams) -> Result<Vec<Range>> {
     Ok(ranges)
 }
 
-fn complement(ranges: &[Range], duration: i64) -> Vec<Range> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    for range in ranges {
-        if pos < range.start_us {
-            out.push(Range {
-                start_us: pos,
-                end_us: range.start_us,
-            });
-        }
-        pos = range.end_us;
-    }
-    if pos < duration {
-        out.push(Range {
-            start_us: pos,
-            end_us: duration,
-        });
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn noisy_pause_padding_and_complement() -> Result<()> {
+    fn noisy_pause_padding() -> Result<()> {
         let mut samples = vec![0.2; 3 * 48_000 * CHANNELS];
         let mut seed = 17u32;
         for sample in &mut samples[48_000 * CHANNELS..96_000 * CHANNELS] {
@@ -191,19 +162,6 @@ mod tests {
                 start_us: 1_120_000,
                 end_us: 1_880_000
             }]
-        );
-        assert_eq!(
-            complement(&gaps, 3_000_000),
-            vec![
-                Range {
-                    start_us: 0,
-                    end_us: 1_120_000
-                },
-                Range {
-                    start_us: 1_880_000,
-                    end_us: 3_000_000
-                },
-            ]
         );
         assert!(quiet_ranges(&[0.2; 48_000], SilenceParams::default())?.is_empty());
         assert!(quiet_ranges(&[0.0; 960], SilenceParams::default())?.is_empty());

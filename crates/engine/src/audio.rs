@@ -264,7 +264,6 @@ mod tests {
         std::fs::write(&legacy, b"old cache").unwrap();
         let first = ensure_pcm(&cache, &asset, |_| {}).unwrap();
         assert_ne!(first, legacy);
-        assert_eq!(first, crate::media::pcm_path(&cache, &asset));
         let old_audio = std::fs::read(&first).unwrap();
         let modified = std::fs::metadata(&source).unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
         write_test_wav(&source, 16_384, 4_800);

@@ -77,7 +77,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
     // Recreate only this test's caches: input IDs are intentionally stable for reproduction.
     let cache = d.join("cache");
     for a in &p.assets {
-        let f = capopen_engine::media::pcm_path(&cache, a);
+        let f = capopen_engine::audio::pcm_path(&cache, a);
         if f.exists() {
             std::fs::remove_file(f).unwrap();
         }

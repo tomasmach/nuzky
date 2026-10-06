@@ -341,7 +341,7 @@ async fn waveform(app: AppHandle, asset_id: String) -> CmdResult<Option<Vec<u8>>
     let state = app.state::<AppState>();
     let asset = state.project()?.asset(&asset_id).cloned();
     let Some(asset) = asset else { return Ok(None) };
-    let path = capopen_engine::media::pcm_path(&state.cache_dir, &asset);
+    let path = capopen_engine::audio::pcm_path(&state.cache_dir, &asset);
     tauri::async_runtime::spawn_blocking(move || {
         let pcm = capopen_engine::audio::Pcm::open(&path).ok()?;
         Some(capopen_engine::audio::peaks(&pcm, 50))

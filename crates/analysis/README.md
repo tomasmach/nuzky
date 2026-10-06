@@ -2,14 +2,13 @@
 
 Local, synchronous analysis for editing proposals. All public results and parameter
 structs implement serde. Times are integer microseconds relative to the media's
-container origin (or the origin of supplied timeline audio); ranges are half-open.
+container origin; ranges are half-open.
 Functions return `anyhow::Result` except the lexical `filler_words` helper.
 
 ```rust,ignore
 loudness(asset: &Asset, cache: &Path, window_us: i64) -> Result<Vec<f32>>
 integrated_lufs(asset: &Asset, cache: &Path) -> Result<f32>
 silences(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Vec<Range>>
-speech_segments(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Vec<Range>>
 scene_cuts(asset: &Asset, params: SceneParams) -> Result<Vec<SceneCut>>
 transcribe_words(source: AudioSource<'_>, model: &Path, vad: &Path, language: &str)
     -> Result<Transcript>
@@ -17,7 +16,6 @@ filler_words(transcript: &Transcript, language: &str) -> Vec<Range>
 ```
 
 `AudioSource::Asset { asset, cache }` uses the engine's 48 kHz stereo PCM cache.
-`AudioSource::TimelineAudio(&samples)` accepts caller-mixed 16 kHz mono f32 audio.
 `Transcript` contains `language`, `words` (`start_us`, `end_us`, `text`,
 `probability`) and `segments` (`start_us`, `end_us`, `text`). `SceneCut` contains
 `time_us` and `score`, rather than just an integer, so callers can rank proposals.
@@ -31,8 +29,7 @@ filler_words(transcript: &Transcript, language: &str) -> Vec<Range>
 - Silence uses 10 ms RMS windows. Default threshold is the 10th percentile +6 dB,
   capped at -35 dBFS to avoid treating a steady foreground signal as silence.
   `threshold_db: Some(dbfs)` overrides it. Runs must last 400 ms before subtracting
-  120 ms at each end, including at file edges. `speech_segments` is the exact
-  complement over decoded PCM length. A steady quiet music bed can be treated as
+  120 ms at each end, including at file edges. A steady quiet music bed can be treated as
   background; loud or changing music can hide pauses. This is not speech VAD.
 - Scenes compare every decoded frame at 64x36 RGB, with a minimum score of 0.18,
   an adaptive recent-motion threshold and 300 ms minimum separation. RGB catches

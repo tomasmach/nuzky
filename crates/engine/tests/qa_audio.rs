@@ -151,7 +151,7 @@ fn late_audio_is_padded_to_video_container_origin() {
     );
     let asset = probe(&source, "late-audio-qa".into()).unwrap();
     let cache = d.join("cache");
-    let cached = capopen_engine::media::pcm_path(&cache, &asset);
+    let cached = capopen_engine::audio::pcm_path(&cache, &asset);
     if cached.exists() {
         std::fs::remove_file(&cached).unwrap();
     }

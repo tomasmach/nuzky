@@ -16,7 +16,6 @@ use schemars::{JsonSchema, schema_for};
 use serde_json::Value;
 
 use bridge::Target;
-pub use bridge::run as serve;
 
 const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
 

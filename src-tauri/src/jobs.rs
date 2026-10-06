@@ -115,7 +115,7 @@ fn unregister(app: &AppHandle, id: &str) {
 pub fn ensure_audio(state: &AppState, project: &Project) {
     let app = state.app.clone();
     for asset in project.assets.iter().filter(|a| has_audio(a)) {
-        let path = capopen_engine::media::pcm_path(&state.cache_dir, asset);
+        let path = capopen_engine::audio::pcm_path(&state.cache_dir, asset);
         if path.exists() {
             continue;
         }

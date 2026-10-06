@@ -13,6 +13,5 @@ pub mod speech;
 pub mod text;
 pub mod worker;
 
-pub use edit::{EditCmd, Editor};
 pub use model::Project;
 pub use render::{Renderer, Wait};

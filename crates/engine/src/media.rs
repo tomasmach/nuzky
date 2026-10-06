@@ -461,7 +461,6 @@ fn bytemuck_slice(bytes: &[u8]) -> &[f32] {
     bytemuck::cast_slice(&bytes[..bytes.len() / 4 * 4])
 }
 
-pub use crate::audio::pcm_path;
 
 #[cfg(test)]
 mod tests {

@@ -291,8 +291,11 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
 #[test]
 fn cancelled_transcription_never_loads_models() {
     let missing = Path::new("/nonexistent-capopen-model");
+    let asset = capopen_engine::model::Asset { id: "cancelled".into(), name: "cancelled".into(),
+        path: "/nonexistent-capopen-source".into(), kind: capopen_engine::model::AssetKind::Audio,
+        duration_us: 1, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 };
     let error = capopen_analysis::transcribe_words_cancellable(
-        capopen_analysis::AudioSource::TimelineAudio(&[0.0]),
+        capopen_analysis::AudioSource::Asset { asset: &asset, cache: missing },
         missing,
         missing,
         "auto",

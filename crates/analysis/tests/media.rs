@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use capopen_analysis::{
-    SceneParams, SilenceParams, loudness, scene_cuts, silences, speech_segments,
+    SceneParams, SilenceParams, loudness, scene_cuts, silences,
 };
 use capopen_engine::media::probe;
 
@@ -162,11 +162,6 @@ fn pcm_cache_audio_api_and_cli_are_consistent() -> Result<()> {
     assert_eq!(gaps.len(), 1);
     assert!((gaps[0].start_us - 1_120_000).abs() <= 30_000);
     assert!((gaps[0].end_us - 1_880_000).abs() <= 30_000);
-    let speech = speech_segments(&asset, &dir, SilenceParams::default())?;
-    assert_eq!(speech.len(), 2);
-    assert_eq!(speech[0].end_us, gaps[0].start_us);
-    assert_eq!(speech[1].start_us, gaps[0].end_us);
-    assert_eq!(speech[1].end_us, 3_000_000);
     let binary = env!("CARGO_BIN_EXE_capopen-analyze");
     let result = Command::new(binary)
         .arg(&path)
