@@ -401,8 +401,29 @@ impl Project {
                     Some(ids) => self.tracks.iter().map(|t| ids.contains(&t.id)).collect(),
                     None => self.tracks.iter().map(|t| t.keep_in_place).collect(),
                 };
+                let mut ranges = merge_ranges(ranges);
+                if let Some(main) = self.track_index(MAIN_TRACK).filter(|&ti| !kept[ti]) {
+                    let mut slivers = Vec::new();
+                    for clip in &self.tracks[main].clips {
+                        let mut start = clip.start_us;
+                        for range in &ranges {
+                            let end = range.start_us.min(clip.end_us());
+                            if start < end && end - start < min {
+                                slivers.push(TimeRange { start_us: start, end_us: end });
+                            }
+                            start = start.max(range.end_us);
+                            if start >= clip.end_us() { break; }
+                        }
+                        if start < clip.end_us() && clip.end_us() - start < min {
+                            slivers.push(TimeRange { start_us: start, end_us: clip.end_us() });
+                        }
+                    }
+                    // Packing also removes these fragments; every moving track must lose that time.
+                    ranges.extend(slivers);
+                    ranges = merge_ranges(ranges);
+                }
                 // Later ranges first, so earlier coordinates stay valid while cutting.
-                for range in merge_ranges(ranges).into_iter().rev() {
+                for range in ranges.into_iter().rev() {
                     for ti in (0..self.tracks.len()).filter(|&ti| !kept[ti]) {
                         self.ripple_delete_track(ti, range, min);
                     }
@@ -1321,6 +1342,34 @@ mod tests {
         let captions = p.tracks.iter().find(|t| t.name == "Captions").unwrap();
         let spans: Vec<_> = captions.clips.iter().map(|c| (c.start_us, c.end_us())).collect();
         assert_eq!(spans, vec![(1_500_000, 2_300_000)]);
+    }
+
+    #[test]
+    fn ripple_slivers_shift_captions_and_overlay_with_main() {
+        for ranges in [
+            vec![TimeRange { start_us: 10_000, end_us: 1_000_000 }],
+            vec![TimeRange { start_us: 0, end_us: 500_000 }, TimeRange { start_us: 510_000, end_us: 1_000_000 }],
+        ] {
+            let mut p = project();
+            p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+            let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false,
+                stroke_width: 0.0, stroke_color: "#000".into(), background: None, max_width: None };
+            p.apply(EditCmd::AddCaptions { segments: vec![CaptionSegment { start_us: 2_000_000,
+                end_us: 3_000_000, text: "aligned".into() }], style }).unwrap();
+            let mut overlay = p.tracks[0].clone();
+            overlay.id = "overlay".into();
+            overlay.clips[0].id = "overlay-clip".into();
+            overlay.clips[0].start_us = 2_000_000;
+            overlay.clips[0].duration_us = 1_000_000;
+            p.tracks.push(overlay);
+            p.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: Some(vec![]) }).unwrap();
+            assert_eq!(main_layout(&p), vec![(0, 4000)]);
+            let ClipContent::Media { source_in_us, .. } = p.tracks[0].clips[0].content else { panic!() };
+            assert_eq!(source_in_us, 1_000_000);
+            for track in &p.tracks[1..] {
+                assert_eq!(track.clips[0].start_us, 1_000_000, "{}", track.id);
+            }
+        }
     }
 
     #[test]
