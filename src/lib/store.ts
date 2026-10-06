@@ -41,9 +41,16 @@ interface EditorState {
   exportOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
+  ratioOpen: boolean;
 
   setSnap: (snap: Snapshot, keepSelection?: boolean) => void;
-  edit: (cmd: EditCmd, coalesce?: string) => Promise<Snapshot | null>;
+  /**
+   * Queues an edit. A function is called with the latest confirmed project right before
+   * sending, so edits fired before the previous snapshot arrives build on it instead of
+   * overwriting it. A list is applied all or nothing, as one undo step. Resolves to null
+   * when the edit failed or the builder had nothing to do.
+   */
+  edit: (input: EditInput, coalesce?: string) => Promise<Snapshot | null>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   select: (ids: string[]) => void;
@@ -58,8 +65,51 @@ interface EditorState {
   loadWaveform: (assetId: string, force?: boolean) => void;
 }
 
+export type EditInput = EditCmd | EditCmd[] | ((project: Project) => EditCmd | EditCmd[] | null);
+
 let toastId = 0;
 const pending = new Set<string>();
+
+/**
+ * Edits, undo and redo run one at a time in the order they were made. An entry with the same
+ * coalesce key as the unsent one before it replaces that one: both set absolute values and
+ * would merge into one undo step anyway, so a fast slider drag never builds a backlog.
+ */
+interface QueuedEdit {
+  run: () => Promise<Snapshot | null>;
+  key: string | null;
+  waiters: ((snap: Snapshot | null) => void)[];
+}
+const queue: QueuedEdit[] = [];
+let draining = false;
+
+function enqueue(run: () => Promise<Snapshot | null>, key: string | null = null): Promise<Snapshot | null> {
+  return new Promise((resolve) => {
+    const last = queue[queue.length - 1];
+    if (key && last?.key === key) {
+      last.run = run;
+      last.waiters.push(resolve);
+    } else queue.push({ run, key, waiters: [resolve] });
+    void drain();
+  });
+}
+
+async function drain() {
+  if (draining) return;
+  draining = true;
+  while (queue.length > 0) {
+    const item = queue.shift()!;
+    let snap: Snapshot | null = null;
+    try {
+      snap = await item.run();
+      if (snap) useEditor.getState().setSnap(snap);
+    } catch (e) {
+      useEditor.getState().toast({ kind: "error", text: errorText(e) });
+    }
+    item.waiters.forEach((w) => w(snap));
+  }
+  draining = false;
+}
 
 let gesture = 0;
 if (typeof window !== "undefined") {
@@ -86,6 +136,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   exportOpen: false,
   exportJobId: null,
   panelTab: "media",
+  ratioOpen: false,
 
   setSnap: (snap, keepSelection = true) => {
     const ids = new Set(allClips(snap.project).map((c) => c.id));
@@ -100,26 +151,23 @@ export const useEditor = create<EditorState>((set, get) => ({
     });
   },
 
-  edit: async (cmd, coalesce) => {
-    try {
-      // Keys are scoped to a gesture: one drag or one focus session is one undo step.
-      const snap = await api.applyEdit(cmd, coalesce && `${coalesce}#${gesture}`);
-      get().setSnap(snap);
-      return snap;
-    } catch (e) {
-      get().toast({ kind: "error", text: errorText(e) });
-      return null;
-    }
+  edit: (input, coalesce) => {
+    // Keys are scoped to a gesture: one drag or one focus session is one undo step.
+    const key = coalesce ? `${coalesce}#${gesture}` : null;
+    return enqueue(async () => {
+      const project = get().snap?.project;
+      const cmd = typeof input === "function" ? (project ? input(project) : null) : input;
+      if (!cmd || (Array.isArray(cmd) && cmd.length === 0)) return null;
+      return Array.isArray(cmd) ? api.applyEdits(cmd, key ?? undefined) : api.applyEdit(cmd, key ?? undefined);
+    }, key);
   },
 
   undo: async () => {
-    if (!get().snap?.canUndo) return;
-    get().setSnap(await api.undo());
+    await enqueue(async () => (get().snap?.canUndo ? api.undo() : null));
   },
 
   redo: async () => {
-    if (!get().snap?.canRedo) return;
-    get().setSnap(await api.redo());
+    await enqueue(async () => (get().snap?.canRedo ? api.redo() : null));
   },
 
   select: (ids) => set({ selection: ids, cut: null }),
@@ -242,15 +290,31 @@ export function transformAtPlayhead(clip: Clip, timeUs: number): Transform {
   return transformAt(clip, clip.content.transform, clipOffset(clip, timeUs));
 }
 
+/** Queues an edit built from the clip's latest confirmed state; skipped when the clip is gone. */
+export function editClip(clipId: string, build: (clip: Clip, track: Track, project: Project) => EditCmd | EditCmd[] | null, coalesce?: string) {
+  return useEditor.getState().edit((project) => {
+    const found = findClip(project, clipId);
+    return found ? build(found.clip, found.track, project) : null;
+  }, coalesce);
+}
+
 /**
  * Writes a transform the way CapCut does: a clip with keyframes gets a keyframe at the
- * playhead, a clip without keyframes changes its single transform.
+ * playhead, a clip without keyframes changes its single transform. `patch` is merged into the
+ * transform at the playhead as it is when the edit is sent, so quick edits never undo each other.
  */
-export function setClipTransform(clip: Clip, transform: Transform, coalesce?: string) {
-  const { edit, timeUs, snap } = useEditor.getState();
-  if (clip.keyframes.length === 0) return edit({ type: "updateClip", clipId: clip.id, transform }, coalesce);
-  const tol = keyframeTolerance(snap?.project.canvas.fps ?? 30);
-  return edit({ type: "setKeyframes", clipId: clip.id, keyframes: upsertKeyframe(clip, clipOffset(clip, timeUs), transform, tol) }, coalesce);
+export function setClipTransform(clipId: string, patch: Partial<Transform>, coalesce?: string) {
+  const timeUs = useEditor.getState().timeUs;
+  return editClip(
+    clipId,
+    (clip, _track, project) => {
+      const offset = clipOffset(clip, timeUs);
+      const transform = { ...transformAt(clip, clip.content.transform, offset), ...patch };
+      if (clip.keyframes.length === 0) return { type: "updateClip", clipId, transform };
+      return { type: "setKeyframes", clipId, keyframes: upsertKeyframe(clip, offset, transform, keyframeTolerance(project.canvas.fps)) };
+    },
+    coalesce,
+  );
 }
 
 export async function deleteSelection() {
@@ -269,10 +333,15 @@ export async function deleteSelection() {
   }
 }
 
+/** The playhead is inside the clip with at least one frame left on each side. */
+export function canSplitClip(clip: Clip, timeUs: number, fps: number) {
+  const min = US / fps;
+  return timeUs > clip.startUs + min && timeUs < clip.startUs + clip.durationUs - min;
+}
+
 /** Selected clips under the playhead, or the main-track clip under it when none is selected. */
 export function splitTargets(project: Project, selection: string[], timeUs: number): Clip[] {
-  const min = US / project.canvas.fps;
-  const under = (c: Clip) => timeUs > c.startUs + min && timeUs < c.startUs + c.durationUs - min;
+  const under = (c: Clip) => canSplitClip(c, timeUs, project.canvas.fps);
   const sel = allClips(project).filter((c) => selection.includes(c.id) && under(c));
   return sel.length > 0 ? sel : mainClips(project).filter(under);
 }
@@ -314,13 +383,9 @@ export async function detachAudio(clipId: string) {
   if (await edit({ type: "detachAudio", clipId })) toast({ kind: "info", text: "Audio moved to its own track", action: { label: "Undo", run: undo } });
 }
 
-/** Restyles every caption clip as one undo step. */
-export async function applyCaptionStyle(style: TextStyle) {
-  const { snap, edit } = useEditor.getState();
-  const track = snap?.project.tracks.find(isCaptionTrack);
-  if (!track) return;
-  const key = `captions-style:${Date.now()}`;
-  for (const c of track.clips) await edit({ type: "updateClip", clipId: c.id, style }, key);
+/** Restyles every caption clip at once, as one undo step. */
+export function applyCaptionStyle(style: TextStyle) {
+  return useEditor.getState().edit((project) => project.tracks.find(isCaptionTrack)?.clips.map((c): EditCmd => ({ type: "updateClip", clipId: c.id, style })) ?? null);
 }
 
 export function openExport() {

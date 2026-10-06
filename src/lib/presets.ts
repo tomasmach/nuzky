@@ -12,6 +12,8 @@ export function formatLabel(width: number, height: number) {
 }
 
 export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+/** Where the engine places generated captions (crates/engine edit.rs). */
+export const CAPTION_Y = 0.28;
 export const NO_ADJUST: Adjust = { brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
 
 export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = [
