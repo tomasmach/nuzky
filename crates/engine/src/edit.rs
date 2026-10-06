@@ -15,6 +15,7 @@ const MAX_SPEED: f32 = 10.0;
 const MAX_TRANSITION_US: i64 = 2_000_000;
 const CAPTION_Y: f32 = 0.15;
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionSegment {
@@ -23,6 +24,7 @@ pub struct CaptionSegment {
     pub text: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EditCmd {
@@ -68,6 +70,7 @@ pub enum EditCmd {
 }
 
 /// Timeline range `[start_us, end_us)`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeRange {
@@ -75,6 +78,7 @@ pub struct TimeRange {
     pub end_us: i64,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimationSlot {
@@ -82,6 +86,7 @@ pub enum AnimationSlot {
     Out,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditOutcome {
@@ -198,6 +203,18 @@ impl Project {
     /// Removes `range` from one track: clips are cut at its edges, the inside goes, later
     /// clips move left. Pieces shorter than `min` are dropped rather than kept as slivers.
     fn ripple_delete_track(&mut self, ti: usize, range: TimeRange, min: i64) {
+        // Splitting a text clip would show its whole text twice; keep only the longer side.
+        for c in self.tracks[ti].clips.iter_mut().filter(|c| matches!(c.content, ClipContent::Text { .. })) {
+            if c.start_us < range.start_us && range.end_us < c.end_us() {
+                let (before, after) = (range.start_us - c.start_us, c.end_us() - range.end_us);
+                if before >= after {
+                    c.duration_us = before;
+                } else {
+                    c.start_us = range.end_us;
+                    c.duration_us = after;
+                }
+            }
+        }
         for at in [range.start_us, range.end_us] {
             if let Some(ci) = self.tracks[ti].clips.iter().position(|c| c.start_us < at && at < c.end_us()) {
                 self.split_clip(ti, ci, at);
@@ -1048,13 +1065,28 @@ mod tests {
             })
             .collect();
         assert_eq!(sources, vec![0, 2000, 3500]);
-        // The text clip [2 s, 5 s) loses [3, 3.5) and moves left by the 1 s cut before it.
+        // The text clip [2 s, 5 s) loses [3, 3.5); its longer later part [3.5, 5) stays (one
+        // copy of the text) and moves left by both cuts, staying over the same video frames.
         let text = p.tracks.iter().find(|t| t.kind == TrackKind::Text).unwrap();
         let spans: Vec<_> = text.clips.iter().map(|c| (c.start_us / 1000, c.end_us() / 1000)).collect();
-        assert_eq!(spans, vec![(1000, 2000), (2000, 3500)]);
+        assert_eq!(spans, vec![(2000, 3500)]);
         // Kept music is untouched.
         let music = p.tracks.iter().find(|t| t.id == music).unwrap();
         assert_eq!((music.clips[0].start_us, music.clips[0].duration_us), (0, 20_000_000));
+    }
+
+    #[test]
+    fn ripple_delete_inside_a_caption_keeps_one_copy_of_its_text() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None };
+        let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into() };
+        p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
+        // Cutting [1.5, 2.2) leaves 0.5 s before and 0.8 s after: the later part stays.
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 1_500_000, end_us: 2_200_000 }], keep_track_ids: vec![] }).unwrap();
+        let captions = p.tracks.iter().find(|t| t.name == "Captions").unwrap();
+        let spans: Vec<_> = captions.clips.iter().map(|c| (c.start_us, c.end_us())).collect();
+        assert_eq!(spans, vec![(1_500_000, 2_300_000)]);
     }
 
     #[test]

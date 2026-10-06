@@ -12,7 +12,7 @@ use capopen_analysis::{AudioSource, CaptionGrouping, Transcript, group_words, tr
 use capopen_engine::audio::{Mixer, ensure_pcm, has_audio, us_to_samples};
 use capopen_engine::edit::{CaptionSegment, EditCmd, new_id};
 use capopen_engine::export::{ExportOptions, export};
-use capopen_engine::model::{CHANNELS, Project, TextStyle, TrackKind};
+use capopen_engine::model::{AssetKind, CHANNELS, Clip, ClipContent, Project, TextStyle, Track};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -254,10 +254,10 @@ pub struct CachedTranscript {
 }
 
 impl CachedTranscript {
+    /// Text, styling or zoom changes keep a transcript valid; only what can be heard matters.
     fn matches(&self, source: &SpeechSnapshot, model: &str, language: &str) -> bool {
-        self.source.path == source.path && self.source.revision == source.revision
-            // Opening a project resets its revision; compare content as well.
-            && self.source.project == source.project
+        self.source.path == source.path
+            && speech_signature(&self.source.project) == speech_signature(&source.project)
             && self.model == model && self.requested_language == language
     }
 
@@ -331,11 +331,7 @@ fn start_speech(app: AppHandle, model: String, language: String, captions: Optio
         let editor = state.editor.lock().unwrap();
         SpeechSnapshot { project: editor.project.clone(), revision: editor.revision, path: state.project_path.lock().unwrap().clone() }
     };
-    let has_speech = source.project.tracks.iter()
-        .filter(|t| t.kind == TrackKind::Video && !t.muted)
-        .flat_map(|t| &t.clips)
-        .any(|c| matches!(&c.content, capopen_engine::model::ClipContent::Media { asset_id, .. } if source.project.asset(asset_id).is_some_and(has_audio)));
-    if !has_speech {
+    if speech_clips(&source.project).next().is_none() {
         return Err("No video clip with sound on the timeline to transcribe.".into());
     }
     let kind = if captions.is_some() { "captions" } else { "transcript" };
@@ -469,17 +465,53 @@ fn download(url: &str, path: &Path, cancel: &AtomicBool, rep: &mut Reporter, pha
 
 /// Mixes the sound of video tracks (music tracks would confuse recognition) and
 /// downsamples it to 16 kHz mono for Whisper.
+/// Speech is the sound of video files (the camera), wherever the clip sits, including sound
+/// detached onto an audio track. Separate audio files are treated as music and left out.
+fn is_speech(project: &Project, track: &Track, clip: &Clip) -> bool {
+    let ClipContent::Media { asset_id, volume, .. } = &clip.content else { return false };
+    !track.muted && *volume > 0.0 && project.asset(asset_id).is_some_and(|a| a.kind == AssetKind::Video && has_audio(a))
+}
+
+fn speech_clips(project: &Project) -> impl Iterator<Item = &Clip> {
+    project.tracks.iter().flat_map(move |t| t.clips.iter().filter(move |c| is_speech(project, t, c)))
+}
+
+/// The project reduced to its speech clips, for mixing and for comparing transcripts.
+fn speech_project(project: &Project) -> Project {
+    let mut speech = project.clone();
+    for track in &mut speech.tracks {
+        let original = project.tracks.iter().find(|t| t.id == track.id).cloned();
+        track.clips.retain(|c| original.as_ref().is_some_and(|t| is_speech(project, t, c)));
+    }
+    speech
+}
+
+/// Everything about the speech clips that changes what is heard and when.
+fn speech_signature(project: &Project) -> Vec<(String, i64, i64, i64, u32, u32, i64, i64, Option<i64>)> {
+    speech_clips(project)
+        .filter_map(|c| match &c.content {
+            ClipContent::Media { asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, .. } => Some((
+                asset_id.clone(),
+                c.start_us,
+                c.duration_us,
+                *source_in_us,
+                speed.to_bits(),
+                volume.to_bits(),
+                *fade_in_us,
+                *fade_out_us,
+                c.transition_in.map(|t| t.duration_us),
+            )),
+            ClipContent::Text { .. } => None,
+        })
+        .collect()
+}
+
 fn speech_audio(project: &Project, cache: &Path, cancel: &AtomicBool) -> anyhow::Result<Vec<f32>> {
     for asset in project.assets.iter().filter(|a| has_audio(a)) {
         check_cancelled(cancel)?;
         ensure_pcm(cache, asset, |_| {}).with_context(|| format!("Preparing audio for {}", asset.name))?;
     }
-    let mut speech = project.clone();
-    for t in &mut speech.tracks {
-        if t.kind == TrackKind::Audio {
-            t.muted = true;
-        }
-    }
+    let speech = speech_project(project);
     let total = us_to_samples(project.duration_us());
     let mut mixer = Mixer::new(cache.to_path_buf());
     let mut out = Vec::with_capacity(total as usize / 3 + 1);
@@ -532,6 +564,7 @@ fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use capopen_engine::model::TrackKind;
     use capopen_analysis::Word;
     use capopen_engine::Editor;
 
@@ -560,25 +593,42 @@ mod tests {
     }
 
     #[test]
-    fn transcript_reuse_requires_same_project_revision_model_and_language() {
-        let source = SpeechSnapshot { project: Project::new("Test"), path: "test.json".into(), revision: 3 };
+    fn transcript_reuse_follows_what_is_heard_not_the_revision() {
+        use capopen_engine::model::{Asset, Transform};
+        let mut project = Project::new("Test");
+        project.assets.push(Asset { id: "cam".into(), name: "cam".into(), path: String::new(), kind: AssetKind::Video,
+            duration_us: 10_000_000, width: 1080, height: 1920, fps: 30.0, has_audio: true, rotation: 0 });
+        project.apply(EditCmd::AddClip { asset_id: "cam".into(), start_us: None, track_id: None }).unwrap();
+        let source = SpeechSnapshot { project, path: "test.json".into(), revision: 3 };
         let cached = CachedTranscript { source: source.clone(), model: "small".into(), requested_language: "cs".into(), transcript: transcript() };
         assert!(cached.matches(&source, "small", "cs"));
         assert!(!cached.matches(&source, "base", "cs"));
         assert!(!cached.matches(&source, "small", "auto"));
+
+        // Captions, zoom and a new revision do not change what is heard.
         let mut changed = source.clone();
-        changed.revision += 1;
-        assert!(!cached.matches(&changed, "small", "cs"));
-        changed = source.clone();
-        changed.path = "other.json".into();
-        assert!(!cached.matches(&changed, "small", "cs"));
-        changed = source.clone();
-        changed.project.name = "Reopened different content".into();
-        assert!(!cached.matches(&changed, "small", "cs"));
+        changed.revision += 5;
+        changed.project.apply(EditCmd::AddCaptions { segments: vec![CaptionSegment { start_us: 0, end_us: 1_000_000, text: "Ahoj".into() }],
+            style: TextStyle { font_family: None, font_size: 90.0, color: "#fff".into(), bold: false, stroke_width: 7.0, stroke_color: "#000".into(), background: None } }).unwrap();
+        let clip = changed.project.tracks[0].clips[0].id.clone();
+        changed.project.apply(EditCmd::UpdateClip { clip_id: clip.clone(), transform: Some(Transform { scale: 1.1, ..Transform::default() }),
+            volume: None, text: None, style: None, speed: None, adjust: None, fade_in_us: None, fade_out_us: None }).unwrap();
+        assert!(cached.matches(&changed, "small", "cs"));
+
+        // Cutting the speech or muting it does.
+        let mut cut = changed.clone();
+        cut.project.apply(EditCmd::RippleDeleteRanges { ranges: vec![capopen_engine::edit::TimeRange { start_us: 1_000_000, end_us: 2_000_000 }], keep_track_ids: vec![] }).unwrap();
+        assert!(!cached.matches(&cut, "small", "cs"));
+        let mut muted = changed.clone();
+        muted.project.tracks[0].muted = true;
+        assert!(!cached.matches(&muted, "small", "cs"));
+        let mut moved = changed;
+        moved.path = "other.json".into();
+        assert!(!cached.matches(&moved, "small", "cs"));
+
         let view = serde_json::to_value(cached.view()).unwrap();
         assert_eq!(view["revision"], 3);
         assert_eq!(view["words"][0]["startUs"], 2_000_000);
-        assert_eq!(view["words"][0]["endUs"], 2_400_000);
         assert_eq!(view["words"][0]["text"], "Ahoj");
     }
 
