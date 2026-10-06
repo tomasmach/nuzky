@@ -37,7 +37,8 @@ pub enum Wait {
 pub struct Renderer {
     gpu: Gpu,
     text: TextRenderer,
-    workers: HashMap<String, VideoWorker>,
+    /// Keyed by clip and source path, so a clip relinked to other media gets a fresh decoder.
+    workers: HashMap<(String, String), VideoWorker>,
     blurred: HashMap<(usize, usize), (Image, Image)>,
     solids: [Image; 3],
     pub late_layers: u64,
@@ -323,7 +324,7 @@ impl Renderer {
                     let size = decode_resolution(project, clip, asset, k);
                     let worker = self
                         .workers
-                        .entry(clip.id.clone())
+                        .entry((clip.id.clone(), asset.path.clone()))
                         .or_insert_with(|| VideoWorker::spawn(PathBuf::from(&asset.path)));
                     worker.get(source_time(clip, clip.start_us), size, false, false);
                 }
@@ -355,7 +356,7 @@ impl Renderer {
                 };
                 let worker = self
                     .workers
-                    .entry(clip.id.clone())
+                    .entry((clip.id.clone(), asset.path.clone()))
                     .or_insert_with(|| VideoWorker::spawn(PathBuf::from(&asset.path)));
                 let frame = worker.get(source_t, size, playing, wait == Wait::Exact);
                 if wait == Wait::Exact {

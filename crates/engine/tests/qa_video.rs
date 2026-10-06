@@ -294,6 +294,26 @@ fn png_alpha_composites_over_video() {
 }
 
 #[test]
+fn preview_decodes_new_media_after_a_clip_is_relinked() {
+    if !available() {
+        return;
+    }
+    let d = dir("relink");
+    let (blue, red) = (d.join("blue.mp4"), d.join("red.mp4"));
+    ff(&["-f", "lavfi", "-i", "color=blue:s=64x64:r=25:d=0.2", "-c:v", "libx264", "-threads", "2"], &blue);
+    ff(&["-f", "lavfi", "-i", "color=red:s=64x64:r=25:d=0.2", "-c:v", "libx264", "-threads", "2"], &red);
+    // The preview keeps one renderer across projects; a copied project keeps its clip ids.
+    let mut renderer = Renderer::new().unwrap();
+    let mut p = project(&blue, 200_000);
+    let centre = |frame: &[u8]| frame[(32 * 64 + 32) * 4..(32 * 64 + 32) * 4 + 3].to_vec();
+    let before = centre(&renderer.render(&p, 0, 64, 64, Wait::Exact, false).unwrap());
+    assert!(before[2] > 200 && before[0] < 50, "blue: {before:?}");
+    p.assets[0].path = red.to_string_lossy().into_owned();
+    let after = centre(&renderer.render(&p, 0, 64, 64, Wait::Exact, false).unwrap());
+    assert!(after[0] > 200 && after[2] < 50, "red: {after:?}");
+}
+
+#[test]
 fn cold_seek_immediately_before_keyframe_uses_previous_frame() {
     if !available() {
         return;
