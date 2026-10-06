@@ -9,6 +9,19 @@ use cosmic_text::{Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shap
 use crate::gpu::Image;
 use crate::model::{TextStyle, parse_color};
 
+// Physical raster limits also bound legacy files, zoomed text, many lines and cache retention.
+const MAX_GLYPH_PX: f32 = 2048.0;
+const MAX_RASTER_SIDE: usize = 8192;
+const MAX_RASTER_PIXELS: usize = 16 * 1024 * 1024;
+const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_RASTER_SCALE: f32 = 8.0;
+const MAX_LAYOUT_WIDTH: f32 = 4.0 * 7680.0;
+
+fn finite_clamp(value: f32, min: f32, max: f32) -> f32 {
+    if value.is_finite() { value.clamp(min, max) } else { min }
+}
+
 #[derive(serde::Deserialize)]
 pub struct FontFace {
     pub family: String,
@@ -124,24 +137,28 @@ impl TextRenderer {
         if let Some(img) = self.cache.get(&key) {
             return img.clone();
         }
-        if self.cache.len() > 512 {
+        let img = self.rasterize(text, style, scale, max_width);
+        if self.cache.len() >= 512
+            || self.cache.values().map(|image| image.data.len()).sum::<usize>() + img.data.len() > MAX_TEXT_CACHE_BYTES
+        {
             self.cache.clear();
         }
-        let img = self.rasterize(text, style, scale, max_width);
         self.cache.insert(key, img.clone());
         img
     }
 
     fn rasterize(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> Image {
         // Layout stays in canvas pixels; only glyph rasterisation uses the output scale.
-        let size = style.font_size.max(1.0);
-        let stroke = style.stroke_width.max(0.0);
+        let scale = finite_clamp(scale, 0.01, MAX_RASTER_SCALE);
+        let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / scale);
+        let stroke = finite_clamp(style.stroke_width, 0.0, size);
+        let max_width = finite_clamp(max_width / scale, 1.0, MAX_LAYOUT_WIDTH);
         let pad_box = if style.background.is_some() { size * 0.3 } else { 0.0 };
         let pad = (stroke.ceil() + pad_box.ceil() + 2.0) as i32;
 
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, size * 1.2));
-        let wrap = (max_width / scale - 2.0 * pad as f32).max(size);
-        buffer.set_size(Some(wrap), None);
+        let wrap = (max_width - 2.0 * pad as f32).max(size);
+        buffer.set_size(Some(wrap), Some(MAX_RASTER_SIDE as f32 / scale));
         let family = self.family(style.font_family.as_deref());
         let weight = if style.bold && self.draws_bold(family) { Weight::BOLD } else { Weight::NORMAL };
         let attrs = Attrs::new().family(family).weight(weight);
@@ -157,14 +174,21 @@ impl TextRenderer {
         }
         // Glyphs are centred inside `wrap`, so crop to the widest line.
         let x0 = ((wrap - line_w) / 2.0).floor() as i32;
-        let w = ((line_w.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize;
-        let h = ((text_h.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize;
+        // Clip pathological text before allocating masks or rasterising any glyphs.
+        let w = (((line_w.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize).clamp(1, MAX_RASTER_SIDE);
+        let h = (((text_h.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize)
+            .clamp(1, MAX_RASTER_SIDE.min(MAX_RASTER_PIXELS / w));
 
         let mut fill = vec![0u8; w * h];
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
                 let offset = ((pad - x0) as f32 * scale, (run.line_y + pad as f32) * scale);
                 let physical = glyph.physical(offset, scale);
+                if self.swash.image_cache.values().flatten().map(|image| image.data.len()).sum::<usize>()
+                    > MAX_GLYPH_CACHE_BYTES
+                {
+                    self.swash.image_cache.clear();
+                }
                 self.swash.with_pixels(
                     &mut self.fonts,
                     physical.cache_key,
@@ -280,6 +304,33 @@ mod tests {
             background: None,
             max_width: None,
         }
+    }
+
+    #[test]
+    fn legacy_text_styles_render_with_bounded_allocations() {
+        let mut renderer = bundled_renderer();
+        let mut canvas = crate::Project::new("old project").canvas;
+        canvas.width = 64;
+        canvas.height = 64;
+        for value in [f32::MAX, f32::INFINITY, f32::NAN, -1.0] {
+            let mut old = style("Inter");
+            old.font_size = value;
+            old.stroke_width = value;
+            old.max_width = Some(value);
+            let bounded = old.bounded(&canvas);
+            let image = renderer.render("Old title", &bounded, 1.0, bounded.max_width.unwrap());
+            assert!(image.width > 0 && image.height > 0);
+            assert_eq!(image.data.len(), image.width as usize * image.height as usize * 4);
+            assert!(image.data.len() <= MAX_RASTER_PIXELS * 4);
+        }
+        // Direct renderer callers are protected too, including malformed scales and many lines.
+        let mut old = style("Inter");
+        old.font_size = f32::MAX;
+        old.stroke_width = f32::MAX;
+        let image = renderer.render("A", &old, 1.0, f32::MAX);
+        assert!(image.data.len() <= MAX_RASTER_PIXELS * 4);
+        let image = renderer.render(&"line\n".repeat(1000), &style("Inter"), f32::NAN, f32::INFINITY);
+        assert!(image.data.len() <= MAX_RASTER_PIXELS * 4);
     }
 
     #[test]

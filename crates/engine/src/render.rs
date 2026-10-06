@@ -98,6 +98,7 @@ fn placement(
             ((asset.width as f32 * fit, asset.height as f32 * fit), None)
         }
         ClipContent::Text { text, style, .. } => {
+            let style = style.bounded(canvas);
             let count = (text.chars().count() as f32 * reveal).ceil() as usize;
             let end = text.char_indices().nth(count).map(|(i, _)| i).unwrap_or(text.len());
             let zoom = match visible.transition {
@@ -106,7 +107,7 @@ fn placement(
             };
             let scale = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0, MAX_TEXT_SCALE).log2().ceil());
             let wrap = style.max_width.unwrap_or(canvas.width as f32 * 0.9);
-            let image = text_renderer.render(&text[..end], style, scale, wrap * scale);
+            let image = text_renderer.render(&text[..end], &style, scale, wrap * scale);
             ((image.width as f32 / scale, image.height as f32 / scale), Some(image))
         }
     };

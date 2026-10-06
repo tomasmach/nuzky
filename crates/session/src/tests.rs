@@ -930,3 +930,23 @@ fn view_tracks_history_and_project_together() {
     assert_eq!(state.project.name, "Original");
     assert!(!undo && redo);
 }
+
+#[test]
+fn oversized_agent_text_is_rejected_without_changing_state_or_history() {
+    let f = Fixture::new();
+    let session = f.open();
+    let run = session.begin_run("unsafe text".into()).unwrap();
+    let before = session.state().unwrap();
+    let style = serde_json::from_value(serde_json::json!({"fontSize":1e20,"color":"#ffffff"})).unwrap();
+    let result = session.apply_edits(
+        &run.run_id,
+        "oversized",
+        vec![EditCmd::AddText { start_us: 0, text: "Too large".into(), style }],
+        Expect::default(),
+    );
+    assert!(result.unwrap_err().to_string().contains("INVALID_PROJECT: text style"));
+    let after = session.state().unwrap();
+    assert_eq!(before.project, after.project);
+    assert_eq!(before.stamp.revision, after.stamp.revision);
+    assert_eq!(f.disk(), before.project);
+}

@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use anyhow::{Result, ensure};
 use capopen_engine::{
     Project,
-    model::{AssetKind, Clip, ClipContent, PROJECT_VERSION, TrackKind, Transform},
+    model::{
+        AssetKind, Clip, ClipContent, MAX_FONT_HEIGHT_RATIO, MAX_STROKE_FONT_RATIO, MAX_TEXT_WIDTH_RATIO,
+        PROJECT_VERSION, TrackKind, Transform,
+    },
 };
 
 /// Structural validity; missing media is reported by media tools, not by editing.
@@ -114,8 +117,13 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             ensure!(
                 style.font_size.is_finite()
                     && style.font_size > 0.0
+                    && style.font_size <= MAX_FONT_HEIGHT_RATIO * project.canvas.height as f32
                     && style.stroke_width.is_finite()
-                    && style.stroke_width >= 0.0,
+                    && style.stroke_width >= 0.0
+                    && style.stroke_width <= MAX_STROKE_FONT_RATIO * style.font_size
+                    && style.max_width.is_none_or(|width| width.is_finite()
+                        && width > 0.0
+                        && width <= MAX_TEXT_WIDTH_RATIO * project.canvas.width as f32),
                 "INVALID_PROJECT: text style"
             );
             transform(t)?;
@@ -147,6 +155,43 @@ mod tests {
         edit::EditCmd,
         model::{Adjust, Asset},
     };
+
+    #[test]
+    fn text_styles_require_finite_canvas_relative_bounds() {
+        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+            "fontSize":95.0,"color":"#ffffff","strokeWidth":7.5
+        }))
+        .unwrap();
+        let mut project = Project::new("text bounds");
+        project.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style: style.clone() }).unwrap();
+        for field in ["font", "stroke", "width"] {
+            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, f32::MAX] {
+                let mut bad = style.clone();
+                match field {
+                    "font" => bad.font_size = value,
+                    "stroke" => bad.stroke_width = value,
+                    _ => bad.max_width = Some(value),
+                }
+                let ClipContent::Text { style, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+                *style = bad;
+                assert!(validate(&project).is_err(), "{field}: {value}");
+            }
+        }
+        for (font, stroke, width, valid) in [
+            (3840.0, 3840.0, Some(4320.0), true),
+            (3841.0, 0.0, None, false),
+            (95.0, 96.0, None, false),
+            (95.0, 0.0, Some(4321.0), false),
+            (95.0, 0.0, Some(0.0), false),
+            (0.0, 0.0, None, false),
+        ] {
+            let ClipContent::Text { style, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+            style.font_size = font;
+            style.stroke_width = stroke;
+            style.max_width = width;
+            assert_eq!(validate(&project).is_ok(), valid, "font {font}, stroke {stroke}, width {width:?}");
+        }
+    }
 
     #[test]
     fn new_color_adjustments_reject_non_finite_values() {

@@ -332,6 +332,25 @@ pub struct TextStyle {
     pub max_width: Option<f32>,
 }
 
+/// Oversized titles may extend beyond the canvas; these bounds still reject unbounded allocations.
+pub const MAX_FONT_HEIGHT_RATIO: f32 = 2.0;
+pub const MAX_STROKE_FONT_RATIO: f32 = 1.0;
+pub const MAX_TEXT_WIDTH_RATIO: f32 = 4.0;
+
+impl TextStyle {
+    /// Older project files can bypass session validation when rendered by the CLI.
+    pub fn bounded(&self, canvas: &Canvas) -> Self {
+        let mut style = self.clone();
+        let finite = |value: f32, fallback: f32| if value.is_finite() { value } else { fallback };
+        style.font_size = finite(style.font_size, 1.0).clamp(1.0, MAX_FONT_HEIGHT_RATIO * canvas.height.max(1) as f32);
+        style.stroke_width = finite(style.stroke_width, 0.0).clamp(0.0, MAX_STROKE_FONT_RATIO * style.font_size);
+        style.max_width = style.max_width.map(|width| {
+            finite(width, canvas.width as f32 * 0.9).clamp(1.0, MAX_TEXT_WIDTH_RATIO * canvas.width.max(1) as f32)
+        });
+        style
+    }
+}
+
 fn one() -> f32 {
     1.0
 }
