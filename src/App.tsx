@@ -231,25 +231,30 @@ const TIMELINE_MIN = 160;
 /** Space kept for the top bar and a usable preview above the timeline. */
 const ABOVE_MIN = 48 + 300;
 
-const clampTimeline = (h: number) => Math.round(Math.max(TIMELINE_MIN, Math.min(window.innerHeight - ABOVE_MIN, h)));
+const timelineMax = () => Math.max(TIMELINE_MIN, window.innerHeight - ABOVE_MIN);
+const clampTimeline = (h: number) => Math.round(Math.min(timelineMax(), Math.max(TIMELINE_MIN, h)));
 
 /** Drag handle between the preview row and the timeline; the height is remembered. */
 function useTimelineHeight() {
   const [height, setHeight] = useState(() => clampTimeline(Number(localStorage.getItem(TIMELINE_KEY)) || TIMELINE_DEFAULT));
+  const [max, setMax] = useState(timelineMax);
   const set = (h: number) => {
     const v = clampTimeline(h);
     setHeight(v);
     localStorage.setItem(TIMELINE_KEY, String(v));
   };
   useEffect(() => {
-    const onResize = () => setHeight((h) => clampTimeline(h));
+    const onResize = () => {
+      setMax(timelineMax());
+      setHeight((h) => clampTimeline(h));
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  return [height, set] as const;
+  return [height, set, max] as const;
 }
 
-function Divider({ height, onChange }: { height: number; onChange: (h: number) => void }) {
+function Divider({ height, max, onChange }: { height: number; max: number; onChange: (h: number) => void }) {
   const [active, setActive] = useState(false);
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -272,6 +277,7 @@ function Divider({ height, onChange }: { height: number; onChange: (h: number) =
       aria-label="Resize timeline"
       aria-valuenow={height}
       aria-valuemin={TIMELINE_MIN}
+      aria-valuemax={max}
       tabIndex={0}
       title="Drag to resize the timeline. Double-click to reset."
       onPointerDown={onPointerDown}
@@ -295,7 +301,7 @@ if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store
 
 export default function App() {
   const snap = useEditor((s) => s.snap);
-  const [timelineH, setTimelineH] = useTimelineHeight();
+  const [timelineH, setTimelineH, timelineMaxH] = useTimelineHeight();
   useShortcuts();
   useBackendEvents();
   useUiContext();
@@ -324,7 +330,7 @@ export default function App() {
           <Preview />
           <Inspector />
         </div>
-        <Divider height={timelineH} onChange={setTimelineH} />
+        <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
         <Timeline height={timelineH} />
         <ExportDialog />
         <Toasts bottom={timelineH + 12} />
