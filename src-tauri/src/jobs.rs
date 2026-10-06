@@ -151,9 +151,9 @@ impl ExportRequest {
     }
 }
 
-pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest) -> Result<String, String> {
+pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest, expect_epoch: Option<&str>) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let project = state.project()?;
+    let project = crate::lock_session(&state.session, expect_epoch)?.host.session.state().map_err(crate::err)?.project;
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
@@ -244,17 +244,17 @@ struct SpeechRequest {
 }
 
 #[tauri::command]
-pub fn start_captions(app: AppHandle, request: CaptionRequest) -> Result<String, String> {
+pub fn start_captions(app: AppHandle, request: CaptionRequest, expect_epoch: Option<String>) -> Result<String, String> {
     let (model, language) = (request.model.clone(), request.language.clone());
-    start_speech(app, SpeechRequest { model, language, refresh: false, captions: Some(request) })
+    start_speech(app, SpeechRequest { model, language, refresh: false, captions: Some(request) }, expect_epoch.as_deref())
 }
 
 #[tauri::command]
-pub fn start_transcript(app: AppHandle, model: String, language: String, refresh: bool) -> Result<String, String> {
-    start_speech(app, SpeechRequest { model, language, refresh, captions: None })
+pub fn start_transcript(app: AppHandle, model: String, language: String, refresh: bool, expect_epoch: Option<String>) -> Result<String, String> {
+    start_speech(app, SpeechRequest { model, language, refresh, captions: None }, expect_epoch.as_deref())
 }
 
-fn start_speech(app: AppHandle, request: SpeechRequest) -> Result<String, String> {
+fn start_speech(app: AppHandle, request: SpeechRequest, expect_epoch: Option<&str>) -> Result<String, String> {
     if !MODELS.iter().any(|(id, ..)| *id == request.model) {
         return Err("Unknown speech model".into());
     }
@@ -264,7 +264,7 @@ fn start_speech(app: AppHandle, request: SpeechRequest) -> Result<String, String
     }
     let state = app.state::<AppState>();
     let (host, project) = {
-        let current = state.session.lock().unwrap();
+        let current = crate::lock_session(&state.session, expect_epoch)?;
         (Arc::downgrade(&current.host), current.host.session.state().map_err(crate::err)?.project)
     };
     let heard = transcript::heard_assets(&project);

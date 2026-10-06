@@ -90,6 +90,16 @@ struct OpenSession {
     stopped: Arc<AtomicBool>,
 }
 
+fn lock_session<'a>(session: &'a Mutex<OpenSession>, expect_epoch: Option<&str>) -> CmdResult<std::sync::MutexGuard<'a, OpenSession>> {
+    let current = session.lock().unwrap();
+    if let Some(epoch) = expect_epoch {
+        if current.host.session.state().map_err(err)?.stamp.session_epoch != epoch {
+            return Err("EPOCH_CHANGED: another project is open".into());
+        }
+    }
+    Ok(current)
+}
+
 impl OpenSession {
     fn open(path: PathBuf) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
         let (tx, rx) = mpsc::channel();
@@ -173,14 +183,10 @@ impl AppState {
         self.engine.send(Msg::Project(Arc::new(project.clone())));
     }
 
-    fn apply_batch(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect) -> CmdResult<Snapshot> {
-        let current = self.session.lock().unwrap();
+    fn apply_batch(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect, expect_epoch: Option<&str>) -> CmdResult<Snapshot> {
+        let current = lock_session(&self.session, expect_epoch)?;
         let result = current.host.session.edit(cmds, coalesce, expect).map_err(err)?;
         current.snapshot(result.outcome.select)
-    }
-
-    pub fn apply(&self, cmd: EditCmd, coalesce: Option<String>) -> CmdResult<Snapshot> {
-        self.apply_batch(vec![cmd], coalesce, Expect::default())
     }
 
     fn asset_preview<T: Clone>(&self, asset_id: &str, cache: &Mutex<HashMap<String, T>>, decode: impl FnOnce(&capopen_engine::model::Asset) -> anyhow::Result<Option<T>>) -> CmdResult<Option<T>> {
@@ -235,25 +241,25 @@ fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
 }
 
 #[tauri::command]
-fn apply_edit(state: State<'_, AppState>, cmd: EditCmd, coalesce: Option<String>, expect_revision: Option<u64>, expect_speech_key: Option<String>) -> CmdResult<Snapshot> {
-    state.apply_batch(vec![cmd], coalesce, Expect { revision: expect_revision, speech_key: expect_speech_key })
+fn apply_edit(state: State<'_, AppState>, cmd: EditCmd, coalesce: Option<String>, expect_revision: Option<u64>, expect_speech_key: Option<String>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
+    state.apply_batch(vec![cmd], coalesce, Expect { revision: expect_revision, speech_key: expect_speech_key }, expect_epoch.as_deref())
 }
 
 #[tauri::command]
-fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<String>, expect_revision: Option<u64>, expect_speech_key: Option<String>) -> CmdResult<Snapshot> {
-    state.apply_batch(cmds, coalesce, Expect { revision: expect_revision, speech_key: expect_speech_key })
+fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<String>, expect_revision: Option<u64>, expect_speech_key: Option<String>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
+    state.apply_batch(cmds, coalesce, Expect { revision: expect_revision, speech_key: expect_speech_key }, expect_epoch.as_deref())
 }
 
 #[tauri::command]
-fn undo(state: State<'_, AppState>) -> CmdResult<Snapshot> {
-    let current = state.session.lock().unwrap();
+fn undo(state: State<'_, AppState>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expect_epoch.as_deref())?;
     current.host.session.undo().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
-fn redo(state: State<'_, AppState>) -> CmdResult<Snapshot> {
-    let current = state.session.lock().unwrap();
+fn redo(state: State<'_, AppState>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expect_epoch.as_deref())?;
     current.host.session.redo().map_err(err)?;
     current.snapshot(Vec::new())
 }
@@ -265,26 +271,26 @@ fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_u
 
 /// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step.
 #[tauri::command]
-fn stop_run(state: State<'_, AppState>) -> CmdResult<Snapshot> {
-    let current = state.session.lock().unwrap();
+fn stop_run(state: State<'_, AppState>, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expect_epoch.as_deref())?;
     current.host.stop_run().map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
-fn resolve_recovery(state: State<'_, AppState>, action: String) -> CmdResult<Snapshot> {
+fn resolve_recovery(state: State<'_, AppState>, action: String, expect_epoch: Option<String>) -> CmdResult<Snapshot> {
     let action = match action.as_str() {
         "keep" => RecoveryAction::Keep,
         "restore" => RecoveryAction::Restore,
         _ => return Err("Unknown recovery action".into()),
     };
-    let current = state.session.lock().unwrap();
+    let current = lock_session(&state.session, expect_epoch.as_deref())?;
     current.host.session.resolve_recovery(action).map_err(err)?;
     current.snapshot(Vec::new())
 }
 
 #[tauri::command]
-async fn import_media(app: AppHandle, paths: Vec<String>) -> CmdResult<ImportResult> {
+async fn import_media(app: AppHandle, paths: Vec<String>, expect_epoch: Option<String>) -> CmdResult<ImportResult> {
     let probed = tauri::async_runtime::spawn_blocking(move || {
         paths.into_iter().map(|p| (p.clone(), probe(Path::new(&p), new_id()))).collect::<Vec<_>>()
     })
@@ -301,9 +307,9 @@ async fn import_media(app: AppHandle, paths: Vec<String>) -> CmdResult<ImportRes
     }
     let added: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
     let snapshot = if assets.is_empty() {
-        state.session.lock().unwrap().snapshot(Vec::new())?
+        lock_session(&state.session, expect_epoch.as_deref())?.snapshot(Vec::new())?
     } else {
-        let snap = state.apply(EditCmd::AddAssets { assets }, None)?;
+        let snap = state.apply_batch(vec![EditCmd::AddAssets { assets }], None, Expect::default(), expect_epoch.as_deref())?;
         jobs::ensure_audio(&state, &snap.project);
         snap
     };
@@ -393,8 +399,8 @@ fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot>
 }
 
 #[tauri::command]
-fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest) -> CmdResult<String> {
-    jobs::start_export(&app, PathBuf::from(path), options)
+fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest, expect_epoch: Option<String>) -> CmdResult<String> {
+    jobs::start_export(&app, PathBuf::from(path), options, expect_epoch.as_deref())
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
@@ -559,6 +565,36 @@ pub fn run() {
 mod ipc_lifecycle_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn pending_mutation_rejects_replaced_session_epoch() {
+        let dir = std::env::temp_dir().join(format!("capopen-epoch-{}", new_id()));
+        let old_path = dir.join("old.capopen");
+        let next_path = dir.join("next.capopen");
+        store::create(&old_path, &Project::new("old")).unwrap();
+        store::create(&next_path, &Project::new("next")).unwrap();
+        let (old, _) = OpenSession::open(old_path).unwrap();
+        let epoch = old.host.session.state().unwrap().stamp.session_epoch;
+        let session = Mutex::new(old);
+        assert!(lock_session(&session, Some(&epoch)).is_ok());
+        let (next, _) = OpenSession::open(next_path).unwrap();
+        *session.lock().unwrap() = next;
+        let image = dir.join("import.ppm");
+        std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+        let asset = probe(&image, new_id()).unwrap();
+        let apply = || -> CmdResult<()> {
+            let current = lock_session(&session, Some(&epoch))?;
+            current.host.session.edit(vec![EditCmd::AddAssets { assets: vec![asset] }], None, Expect::default()).map_err(err)?;
+            Ok(())
+        };
+        assert_eq!(apply().unwrap_err(), "EPOCH_CHANGED: another project is open");
+        let current = lock_session(&session, None).unwrap();
+        assert!(current.host.session.state().unwrap().project.assets.is_empty());
+        let epoch = current.host.session.state().unwrap().stamp.session_epoch;
+        drop(current);
+        assert!(lock_session(&session, Some(&epoch)).is_ok());
+        drop(session);
+    }
 
     #[test]
     fn switching_with_slow_job_returns_promptly_and_retains_project_lock() {

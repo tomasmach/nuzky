@@ -106,19 +106,19 @@ pub async fn transcript_view(app: AppHandle, pause_us: i64) -> CmdResult<Transcr
 }
 
 #[tauri::command]
-pub async fn cut_words(app: AppHandle, key: String, delete: Vec<[usize; 2]>) -> CmdResult<TranscriptCut> {
-    apply_cut(app, key, Target::Words(delete)).await
+pub async fn cut_words(app: AppHandle, key: String, delete: Vec<[usize; 2]>, expect_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+    apply_cut(app, key, Target::Words(delete), expect_epoch).await
 }
 
 #[tauri::command]
-pub async fn remove_pauses(app: AppHandle, key: String, pause_us: i64, only: Option<Vec<usize>>) -> CmdResult<TranscriptCut> {
-    apply_cut(app, key, Target::Pauses { pause_us, only }).await
+pub async fn remove_pauses(app: AppHandle, key: String, pause_us: i64, only: Option<Vec<usize>>, expect_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+    apply_cut(app, key, Target::Pauses { pause_us, only }, expect_epoch).await
 }
 
-async fn apply_cut(app: AppHandle, key: String, target: Target) -> CmdResult<TranscriptCut> {
+async fn apply_cut(app: AppHandle, key: String, target: Target, expect_epoch: Option<String>) -> CmdResult<TranscriptCut> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let current = state.session.lock().unwrap();
+        let current = crate::lock_session(&state.session, expect_epoch.as_deref())?;
         let (select, start_us, removed_us) = cut(&current.host, &key, target).map_err(explain)?;
         Ok(TranscriptCut { snapshot: current.snapshot(select)?, start_us, removed_us })
     })
