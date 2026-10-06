@@ -97,7 +97,8 @@ fn placement(project: &Project, visible: VisibleClip, t_us: i64, k: f32, text_re
                 _ => 1.0,
             };
             let scale = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0, MAX_TEXT_SCALE).log2().ceil());
-            let image = text_renderer.render(&text[..end], style, scale, canvas.width as f32 * 0.9 * scale);
+            let wrap = style.max_width.unwrap_or(canvas.width as f32 * 0.9);
+            let image = text_renderer.render(&text[..end], style, scale, wrap * scale);
             ((image.width as f32 / scale, image.height as f32 / scale), Some(image))
         }
     };
@@ -392,6 +393,7 @@ fn quad(t: &Transform, size: (f32, f32), cw: f32, ch: f32, k: f32) -> [[f32; 2];
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::{CaptionSegment, EditCmd};
     use crate::model::{TextStyle, Track};
 
     #[test]
@@ -411,7 +413,7 @@ mod tests {
     fn text_scale_keeps_wrapping_bounds_and_animation_cache() {
         use crate::model::{Animation, AnimationKind, Transition};
         let mut project = Project::new("scaled text");
-        let style = TextStyle { font_family: None, font_size: 60.0, stroke_width: 2.5, background: Some("#222222".into()), color: "#ffffff".into(), bold: true, stroke_color: "#000000".into() };
+        let style = TextStyle { font_family: None, font_size: 60.0, stroke_width: 2.5, background: Some("#222222".into()), color: "#ffffff".into(), bold: true, stroke_color: "#000000".into(), max_width: None };
         for (id, start) in [("out", 0), ("in", 1_000_000)] {
             let mut clip = Clip::new(id.into(), start, 1_000_000, ClipContent::Text {
                 text: "A long wrapped title with accents: Příliš žluťoučký kůň".into(), style: style.clone(),
@@ -467,10 +469,32 @@ mod tests {
     }
 
     #[test]
+    fn captions_on_vertical_videos_stay_inside_the_reels_and_tiktok_safe_area() {
+        let mut project = Project::new("safe");
+        let area = project.canvas.safe_area().unwrap();
+        assert_eq!((area.left, area.top, area.right, area.bottom), (60.0, 250.0, 900.0, 1420.0));
+        let style = TextStyle { font_family: None, font_size: 95.0, color: "#ffffff".into(), bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None, max_width: None };
+        // The longest reel caption, 15 characters, is wider than the safe area at 95 px and wraps.
+        let segment = CaptionSegment { start_us: 0, end_us: 1_000_000, text: "Největší rozdíl".into() };
+        project.apply(EditCmd::AddCaptions { segments: vec![segment], style }).unwrap();
+        let ClipContent::Text { style, .. } = &project.tracks[1].clips[0].content else { panic!() };
+        assert_eq!(style.max_width, Some(720.0));
+        let quad = layer_bounds(&project, 500_000, &mut TextRenderer::new())[0].1;
+        let (xs, ys): (Vec<f32>, Vec<f32>) = quad.iter().map(|p| (p[0], p[1])).unzip();
+        // The outline and padding may reach a few pixels past the wrap width.
+        let slack = 20.0;
+        assert!(xs.iter().all(|&x| x >= area.left - slack && x <= area.right + slack), "{xs:?}");
+        assert!(ys.iter().all(|&y| y >= area.top && y <= area.bottom), "{ys:?}");
+        let mut wide = project.canvas.clone();
+        (wide.width, wide.height) = (1920, 1080);
+        assert!(wide.safe_area().is_none());
+    }
+
+    #[test]
     fn text_bounds_match_canvas_raster_and_hidden_tracks_are_excluded() {
         let mut project = Project::new("bounds");
         let mut text = TextRenderer::new();
-        let style = TextStyle { font_family: None, font_size: 60.0, color: "#ffffff".into(), bold: true, stroke_width: 3.0, stroke_color: "#000000".into(), background: None };
+        let style = TextStyle { font_family: None, font_size: 60.0, color: "#ffffff".into(), bold: true, stroke_width: 3.0, stroke_color: "#000000".into(), background: None, max_width: None };
         let image = text.render("Ahoj světe", &style, 1.0, 972.0);
         let clip = Clip::new("text".into(), 0, 1_000_000, ClipContent::Text { text: "Ahoj světe".into(), style, transform: Transform { scale: 1.5, x: 0.1, ..Transform::default() } });
         project.tracks.push(Track { id: "text".into(), kind: TrackKind::Text, name: String::new(), muted: false, hidden: false, keep_in_place: false, clips: vec![clip] });

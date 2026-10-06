@@ -4,7 +4,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Adjust, Animation, Asset, AssetKind, Clip, ClipContent, Keyframe, Project, TextStyle, Track, TrackKind, Transform, Transition};
+use crate::model::{Adjust, Animation, Asset, AssetKind, Canvas, Clip, ClipContent, Keyframe, Project, TextStyle, Track, TrackKind, Transform, Transition};
 
 pub const MAIN_TRACK: &str = "main";
 const IMAGE_DURATION_US: i64 = 3_000_000;
@@ -565,13 +565,13 @@ impl Project {
                 }
             }
             EditCmd::AddCaptions { segments, style } => {
-                let clips = caption_clips(segments, &style, min);
+                let clips = caption_clips(segments, &style, &self.canvas, min);
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks.push(Track { id: new_id(), kind: TrackKind::Text, name: "Captions".into(), muted: false, hidden: false, keep_in_place: false, clips });
             }
             EditCmd::ReplaceCaptions { track_id, segments, style } => {
                 let ti = self.caption_track(&track_id)?;
-                let clips = caption_clips(segments, &style, min);
+                let clips = caption_clips(segments, &style, &self.canvas, min);
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks[ti].clips = clips;
             }
@@ -614,7 +614,12 @@ fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
 
 /// One text clip per segment, sorted and never overlapping: a segment starting inside the
 /// previous one ends it there, and one starting within a frame of it is merged into it.
-fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, min: i64) -> Vec<Clip> {
+/// On vertical videos captions wrap inside the Reels and TikTok safe area unless the style says otherwise.
+fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &Canvas, min: i64) -> Vec<Clip> {
+    let mut style = style.clone();
+    if style.max_width.is_none() {
+        style.max_width = canvas.safe_area().map(|area| area.centered_width(canvas.width as f32));
+    }
     segments.retain(|s| s.end_us > s.start_us && !s.text.trim().is_empty());
     segments.sort_by_key(|s| s.start_us);
     let mut merged: Vec<CaptionSegment> = Vec::with_capacity(segments.len());
@@ -1235,6 +1240,7 @@ mod tests {
             stroke_width: 5.0,
             stroke_color: "#000".into(),
             background: None,
+            max_width: None,
         };
         let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into() };
         p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_200_000, "Ahoj"), seg(1_000_000, 2_000_000, "světe")], style: style.clone() })
@@ -1258,9 +1264,10 @@ mod tests {
             stroke_width: 0.0,
             stroke_color: "#000".into(),
             background: None,
+            max_width: None,
         };
         let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into() };
-        let clips = caption_clips(vec![seg(0, 1_000_000, "first"), seg(0, 2_000_000, "second"), seg(1_500_000, 3_000_000, "third")], &style, 33_334);
+        let clips = caption_clips(vec![seg(0, 1_000_000, "first"), seg(0, 2_000_000, "second"), seg(1_500_000, 3_000_000, "third")], &style, &Project::new("c").canvas, 33_334);
         let spans: Vec<_> = clips.iter().map(|c| (c.start_us, c.end_us())).collect();
         assert_eq!(spans, vec![(0, 1_500_000), (1_500_000, 3_000_000)]);
         let ClipContent::Text { text, .. } = &clips[0].content else { panic!() };
@@ -1272,7 +1279,7 @@ mod tests {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
         p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
-        let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None };
+        let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None, max_width: None };
         p.apply(EditCmd::AddText { start_us: 2_000_000, text: "hi".into(), style }).unwrap();
         let music = p.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().id.clone();
         let ranges = vec![
@@ -1306,7 +1313,7 @@ mod tests {
     fn ripple_delete_inside_a_caption_keeps_one_copy_of_its_text() {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
-        let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None };
+        let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None, max_width: None };
         let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into() };
         p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
         // Cutting [1.5, 2.2) leaves 0.5 s before and 0.8 s after: the later part stays.

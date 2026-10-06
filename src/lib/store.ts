@@ -496,9 +496,12 @@ export async function detachAudio(clipId: string) {
   if (await edit({ type: "detachAudio", clipId })) toast({ kind: "info", text: "Audio moved to its own track", action: { label: "Undo", run: undo } });
 }
 
-/** Restyles every caption clip at once, as one undo step. */
+/** Restyles every caption clip at once, as one undo step, keeping each caption's wrap width (the safe area). */
 export function applyCaptionStyle(style: TextStyle) {
-  return useEditor.getState().edit((project) => project.tracks.find(isCaptionTrack)?.clips.map((c): EditCmd => ({ type: "updateClip", clipId: c.id, style })) ?? null);
+  return useEditor.getState().edit(
+    (project) =>
+      project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...style, maxWidth: c.content.style.maxWidth } }] : [])) ?? null,
+  );
 }
 
 /** Sets the font of every caption, keeping the rest of each caption's style, as one undo step. */

@@ -33,7 +33,7 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
         />
         <div className="grid grid-cols-3 gap-2">
           {presets.map((p) => (
-            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: style.fontFamily } })}>
+            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: style.fontFamily, maxWidth: style.maxWidth } })}>
               <span className="absolute inset-0 flex items-center justify-center bg-[#2b3036]">
                 <TextSwatch style={{ ...p.style, fontFamily: style.fontFamily }} label="Aa" />
               </span>

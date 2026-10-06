@@ -32,6 +32,8 @@ export interface TextStyle {
   strokeWidth: number;
   strokeColor: string;
   background: string | null;
+  /** Lines wrap at this width in canvas pixels; captions on vertical videos keep to the Reels/TikTok safe area. */
+  maxWidth?: number | null;
 }
 
 /** All 0 = unchanged. -1..1, vignette 0..1. */

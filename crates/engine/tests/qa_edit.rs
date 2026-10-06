@@ -234,6 +234,7 @@ fn equal_start_captions_do_not_overlap() {
         stroke_width: 0.0,
         stroke_color: "#000".into(),
         background: None,
+        max_width: None,
     };
     let _ = e.apply(
         EditCmd::AddCaptions {

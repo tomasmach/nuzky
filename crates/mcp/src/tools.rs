@@ -413,6 +413,7 @@ mod tests {
             stroke_width: 0.0,
             stroke_color: "#000".into(),
             background: None,
+            max_width: None,
         };
         project
             .apply(EditCmd::AddText {

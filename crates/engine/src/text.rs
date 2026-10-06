@@ -241,7 +241,7 @@ mod tests {
 
     fn style(family: &str) -> TextStyle {
         TextStyle { font_family: Some(family.into()), font_size: 95.0, color: "#ffffff".into(),
-            bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None }
+            bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None, max_width: None }
     }
 
     fn bundled_renderer() -> TextRenderer {

@@ -155,6 +155,7 @@ pub fn reel_style() -> TextStyle {
         stroke_width: 7.5,
         stroke_color: "#000000".into(),
         background: None,
+        max_width: None,
     }
 }
 

@@ -290,6 +290,7 @@ mod tests {
             stroke_width: 4.0,
             stroke_color: "#000000".into(),
             background: None,
+            max_width: None,
         }
     }
     #[test]

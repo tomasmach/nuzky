@@ -36,6 +36,41 @@ pub struct Canvas {
     pub background_blur: f32,
 }
 
+/// Taller than this is a vertical video, shown in Reels and TikTok under their interface.
+const VERTICAL_MIN_RATIO: f32 = 1.7;
+
+/// Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of
+/// the top bar, the like and comment rail on the right and the caption and buttons at the bottom.
+/// Conservative values that suit both apps, from 250 / 180 / 500 / 60 px of 1080×1920.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SafeArea {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl SafeArea {
+    /// The widest text centred on the canvas that stays inside.
+    pub fn centered_width(&self, canvas_width: f32) -> f32 {
+        let center = canvas_width / 2.0;
+        2.0 * (center - self.left).min(self.right - center)
+    }
+}
+
+impl Canvas {
+    /// The app interface's free area on vertical videos; other formats have nothing over them.
+    pub fn safe_area(&self) -> Option<SafeArea> {
+        let (w, h) = (self.width as f32, self.height as f32);
+        (h >= w * VERTICAL_MIN_RATIO).then(|| SafeArea {
+            left: w * 60.0 / 1080.0,
+            top: h * 250.0 / 1920.0,
+            right: w - w * 180.0 / 1080.0,
+            bottom: h - h * 500.0 / 1920.0,
+        })
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -276,6 +311,9 @@ pub struct TextStyle {
     /// `#rrggbbaa` box behind the text.
     #[serde(default)]
     pub background: Option<String>,
+    /// Lines wrap at this width in canvas pixels; `None` wraps at 90% of the canvas width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<f32>,
 }
 
 fn one() -> f32 {
@@ -369,6 +407,7 @@ mod tests {
                     stroke_width: 6.0,
                     stroke_color: "#000000".into(),
                     background: None,
+                    max_width: None,
                 },
                 transform: Transform::default(),
             },

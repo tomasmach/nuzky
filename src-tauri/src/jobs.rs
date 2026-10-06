@@ -574,7 +574,7 @@ mod tests {
     fn request(max_words: Option<u8>, max_chars: Option<u8>) -> CaptionRequest {
         CaptionRequest { model: "small".into(), language: "cs".into(), max_words, max_chars,
             style: TextStyle { font_family: Some("Inter".into()), font_size: 95.0, color: "#ffffff".into(),
-                bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None } }
+                bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None, max_width: None } }
     }
 
     fn transcript() -> Transcript {
@@ -612,7 +612,7 @@ mod tests {
         let mut changed = source.clone();
         changed.revision += 5;
         changed.project.apply(EditCmd::AddCaptions { segments: vec![CaptionSegment { start_us: 0, end_us: 1_000_000, text: "Ahoj".into() }],
-            style: TextStyle { font_family: None, font_size: 90.0, color: "#fff".into(), bold: false, stroke_width: 7.0, stroke_color: "#000".into(), background: None } }).unwrap();
+            style: TextStyle { font_family: None, font_size: 90.0, color: "#fff".into(), bold: false, stroke_width: 7.0, stroke_color: "#000".into(), background: None, max_width: None } }).unwrap();
         let clip = changed.project.tracks[0].clips[0].id.clone();
         changed.project.apply(EditCmd::UpdateClip { clip_id: clip.clone(), transform: Some(Transform { scale: 1.1, ..Transform::default() }),
             volume: None, text: None, style: None, speed: None, adjust: None, fade_in_us: None, fade_out_us: None }).unwrap();
