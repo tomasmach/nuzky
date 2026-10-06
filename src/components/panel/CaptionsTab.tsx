@@ -1,6 +1,6 @@
 import { Captions } from "lucide-react";
 import { CAPTION_STYLES, sameStyle } from "../../lib/presets";
-import { startSpeech, useSpeech } from "../../lib/speech";
+import { speechBlocker, startSpeech, useSpeech } from "../../lib/speech";
 import { applyCaptionFont, applyCaptionStyle, isCaptionTrack, useEditor } from "../../lib/store";
 import { FontPicker } from "../FontPicker";
 import { Button, Segmented, TextSwatch } from "../ui";
@@ -22,6 +22,7 @@ export function CaptionsTab() {
     return first?.type === "text" ? first.style : null;
   });
   const { running, last } = useSpeechJobs("captions");
+  const blocker = useEditor((s) => (s.snap ? speechBlocker(s.snap.project) : null));
   const hasCaptions = captionStyle !== null;
   // With captions on the timeline, the highlighted style and the font are the ones they use.
   const current = hasCaptions ? CAPTION_STYLES.findIndex((s) => sameStyle(s.style, captionStyle)) : styleIdx;
@@ -80,9 +81,11 @@ export function CaptionsTab() {
       {running ? (
         <SpeechJobCard job={running} />
       ) : (
-        <Button variant="primary" onClick={start}>
-          <Captions size={15} /> {hasCaptions ? "Regenerate captions" : "Generate captions"}
-        </Button>
+        <span className="flex" title={blocker ?? undefined}>
+          <Button variant="primary" className="flex-1" disabled={!!blocker} onClick={start}>
+            <Captions size={15} /> {hasCaptions ? "Regenerate captions" : "Generate captions"}
+          </Button>
+        </span>
       )}
       {!running && <JobError job={last} />}
     </div>
