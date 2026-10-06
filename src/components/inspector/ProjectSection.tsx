@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import { formatLabel } from "../../lib/presets";
 import { useEditor } from "../../lib/store";
 import { ColorInput, Section, Segmented, Slider } from "../ui";
@@ -7,21 +8,31 @@ const DEFAULT_BLUR = 0.5;
 export function ProjectSection() {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   const edit = useEditor((s) => s.edit);
+  // Size comes from the latest confirmed canvas, so a Ratio change made a moment ago is kept.
   const setCanvas = (patch: { background?: string; backgroundBlur?: number }, key?: string) =>
-    edit({ type: "setCanvas", width: canvas.width, height: canvas.height, ...patch }, key);
+    edit((p) => ({ type: "setCanvas", width: p.canvas.width, height: p.canvas.height, ...patch }), key);
   const blur = canvas.backgroundBlur > 0;
   return (
     <>
       <Section title="Project">
-        <dl className="tabular grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+        <dl className="tabular grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1 text-[12px]">
           <dt className="text-muted">Format</dt>
-          <dd className="text-fg">
-            {formatLabel(canvas.width, canvas.height)} · {canvas.width}×{canvas.height}
+          <dd>
+            {/* Opens Ratio under the preview, which stays the one control for the format. */}
+            <button
+              type="button"
+              aria-haspopup="menu"
+              title="Change the canvas ratio"
+              onClick={() => useEditor.setState({ ratioOpen: true })}
+              className="-mx-1.5 inline-flex h-6 items-center gap-1 rounded px-1.5 text-fg transition-colors duration-[120ms] ease-out hover:bg-raised"
+            >
+              {formatLabel(canvas.width, canvas.height)} · {canvas.width}×{canvas.height}
+              <ChevronDown size={13} className="text-muted" />
+            </button>
           </dd>
           <dt className="text-muted">Frame rate</dt>
           <dd className="text-fg">{canvas.fps} fps</dd>
         </dl>
-        <p className="text-[12px] text-muted">Change the format with Ratio under the preview.</p>
       </Section>
       <Section title="Background">
         <Segmented

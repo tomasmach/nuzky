@@ -1,13 +1,15 @@
 import { CAPTION_STYLES, TEXT_PRESETS, sameStyle } from "../../lib/presets";
-import { useEditor } from "../../lib/store";
+import { editClip, useEditor } from "../../lib/store";
 import type { Clip, TextStyle } from "../../lib/types";
-import { Checkbox, ColorInput, Section, Slider, TextSwatch } from "../ui";
+import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch } from "../ui";
 
-const STYLE_PRESETS = [...TEXT_PRESETS.slice(0, 4), ...CAPTION_STYLES.slice(1, 3)];
-
-export function TextSection({ clip, text, style }: { clip: Clip; text: string; style: TextStyle }) {
+/** Style tiles use the presets and names of the Text tab, or of the Captions tab for a caption. */
+export function TextSection({ clip, text, style, caption }: { clip: Clip; text: string; style: TextStyle; caption: boolean }) {
   const edit = useEditor((s) => s.edit);
-  const setStyle = (patch: Partial<TextStyle>, key: string) => edit({ type: "updateClip", clipId: clip.id, style: { ...style, ...patch } }, `${clip.id}:style:${key}`);
+  // Built from the latest confirmed style, so two quick changes to different properties both stick.
+  const setStyle = (patch: Partial<TextStyle>, key: string) =>
+    editClip(clip.id, (c) => (c.content.type === "text" ? { type: "updateClip", clipId: c.id, style: { ...c.content.style, ...patch } } : null), `${clip.id}:style:${key}`);
+  const presets = caption ? CAPTION_STYLES : TEXT_PRESETS;
   return (
     <>
       <Section title="Text">
@@ -18,22 +20,14 @@ export function TextSection({ clip, text, style }: { clip: Clip; text: string; s
           onChange={(e) => edit({ type: "updateClip", clipId: clip.id, text: e.target.value }, `${clip.id}:text`)}
           className="resize-y rounded-md border border-line bg-raised p-2 text-[13px] text-fg focus:border-accent"
         />
-        <div className="grid grid-cols-3 gap-1.5">
-          {STYLE_PRESETS.map((p) => {
-            const on = sameStyle(p.style, style);
-            return (
-              <button
-                key={p.name}
-                type="button"
-                aria-pressed={on}
-                title={`Apply ${p.name} style`}
-                onClick={() => edit({ type: "updateClip", clipId: clip.id, style: p.style })}
-                className={`flex h-9 items-center justify-center overflow-hidden rounded-md border bg-[#2b3036] ${on ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line hover:border-muted"}`}
-              >
+        <div className="grid grid-cols-3 gap-2">
+          {presets.map((p) => (
+            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: p.style })}>
+              <span className="absolute inset-0 flex items-center justify-center bg-[#2b3036]">
                 <TextSwatch style={p.style} label="Aa" />
-              </button>
-            );
-          })}
+              </span>
+            </PresetTile>
+          ))}
         </div>
       </Section>
       <Section title="Style">

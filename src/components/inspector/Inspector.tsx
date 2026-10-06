@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AudioLines, Blend, Captions, Copy, Film, Image as ImageIcon, Trash2, Type } from "lucide-react";
+import { TRANSITIONS } from "../../lib/presets";
 import { deleteSelection, duplicateSelection, findClip, isCaptionTrack, mainCuts, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
 import type { Asset, Clip } from "../../lib/types";
-import { TransitionEditor } from "../panel/TransitionsTab";
-import { Button, TabBar } from "../ui";
+import { TransitionSettings } from "../panel/TransitionsTab";
+import { Button, Section, TabBar } from "../ui";
 import { AnimationSection } from "./AnimationSection";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
 import { ProjectSection } from "./ProjectSection";
@@ -65,7 +66,7 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
       <TabBar label="Clip settings" tabs={tabs} value={tab} onChange={(id) => onChoose({ ...chosen, [kind]: id })} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         {(tab === "video" || tab === "transform") && <TransformSection clip={clip} asset={asset} />}
-        {tab === "text" && c.type === "text" && <TextSection clip={clip} text={c.text} style={c.style} />}
+        {tab === "text" && c.type === "text" && <TextSection clip={clip} text={c.text} style={c.style} caption={kind === "caption"} />}
         {tab === "adjust" && c.type === "media" && <AdjustSection clip={clip} content={c} />}
         {tab === "speed" && c.type === "media" && <SpeedSection clip={clip} content={c} asset={asset} />}
         {tab === "animation" && <AnimationSection clip={clip} />}
@@ -83,11 +84,17 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
 function CutInspector({ clipId }: { clipId: string }) {
   const cut = useEditor(useShallow((s) => (s.snap ? mainCuts(s.snap.project).find((c) => c.clipId === clipId) : undefined)));
   if (!cut) return null;
+  const t = cut.transition;
   return (
     <>
-      <Header icon={Blend} title="Transition" detail={`Cut at ${formatTime(cut.atUs)}`} />
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <TransitionEditor cut={cut} />
+      {/* The icon says what is selected, like for clips; a kind icon such as Slide left's arrow would read as "back". */}
+      <Header
+        icon={Blend}
+        title={t ? (TRANSITIONS.find((k) => k.kind === t.kind)?.label ?? "Transition") : "Cut"}
+        detail={`${t ? "Transition · " : ""}cut at ${formatTime(cut.atUs)}`}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <TransitionSettings cut={cut} />
       </div>
     </>
   );
@@ -95,9 +102,8 @@ function CutInspector({ clipId }: { clipId: string }) {
 
 function MultiInspector({ count }: { count: number }) {
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-8 text-center">
-      <p className="text-[13px] text-fg">{count} clips selected</p>
-      <div className="flex gap-2">
+    <Section title={`${count} clips selected`}>
+      <div className="grid grid-cols-2 gap-2">
         <Button onClick={duplicateSelection} title="Duplicate (Ctrl+D)">
           <Copy size={14} /> Duplicate
         </Button>
@@ -105,7 +111,7 @@ function MultiInspector({ count }: { count: number }) {
           <Trash2 size={14} /> Delete
         </Button>
       </div>
-    </div>
+    </Section>
   );
 }
 

@@ -71,6 +71,43 @@ input[type="range"] {
   accent-color: var(--color-accent);
 }
 
+/* RangeInput (ui.tsx): `line` track, accent fill between --fill-from and --fill-to, `fg` thumb. */
+input[type="range"].range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].range:disabled {
+  cursor: not-allowed;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--color-line) var(--fill-from),
+    var(--color-accent) var(--fill-from),
+    var(--color-accent) var(--fill-to),
+    var(--color-line) var(--fill-to)
+  );
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--color-fg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.range:enabled:hover::-webkit-slider-thumb {
+  background: #fff;
+}
+
 @keyframes skeleton {
   from {
     background-position: -200px 0;

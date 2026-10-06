@@ -53,7 +53,6 @@ export function CaptionsTab() {
     setStyleIdx(i);
     if (hasCaptions) applyCaptionStyle(CAPTION_STYLES[i].style);
   };
-  const selected = models.find((m) => m.id === model);
   const running = !!job;
 
   return (
@@ -68,7 +67,7 @@ export function CaptionsTab() {
           ))}
         </select>
       </Field>
-      <Field label="Accuracy" hint={selected && !selected.downloaded ? `Downloads a ${selected.sizeMb} MB speech model on first use.` : undefined}>
+      <Field label="Accuracy">
         <select value={model} disabled={running} onChange={(e) => setModel(e.target.value)} className={selectClass}>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
@@ -97,19 +96,18 @@ export function CaptionsTab() {
           ))}
         </div>
       </div>
+      {/* The running card has no fill, so the empty part of the progress track stays visible. */}
       {job ? (
-        <div className="flex flex-col gap-2 rounded-md border border-line bg-raised p-3" role="status">
-          <div className="flex items-center justify-between text-[12px]">
-            <span className="flex items-center gap-1.5 text-fg">
-              <Loader2 size={13} className="animate-spin text-accent" />
-              {job.phase ?? "Starting"}
-            </span>
+        <div className="flex flex-col gap-2 rounded-md border border-line py-2 pl-3 pr-1.5" role="status">
+          <div className="flex items-center gap-2 text-[12px]">
+            <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
+            <span className="min-w-0 flex-1 truncate text-fg">{job.phase ?? "Starting"}</span>
             {job.progress > 0 && <span className="tabular text-muted">{Math.round(job.progress * 100)}%</span>}
+            <Button variant="ghost" className="h-7 px-2" onClick={() => api.cancelJob(job.id)}>
+              <X size={14} /> Cancel
+            </Button>
           </div>
-          <ProgressBar value={job.progress} />
-          <Button variant="ghost" className="self-end" onClick={() => api.cancelJob(job.id)}>
-            <X size={14} /> Cancel
-          </Button>
+          <ProgressBar value={job.progress} className="mr-1.5" />
         </div>
       ) : (
         <Button variant="primary" onClick={start}>

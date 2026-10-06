@@ -1,6 +1,6 @@
-import type { KeyboardEvent } from "react";
 import { Blend, Captions, Film, Music, Palette, Type } from "lucide-react";
 import { useEditor, type PanelTab } from "../../lib/store";
+import { tabListKeys } from "../ui";
 import { AudioTab } from "./AudioTab";
 import { CaptionsTab } from "./CaptionsTab";
 import { FiltersTab } from "./FiltersTab";
@@ -18,19 +18,15 @@ const TABS: { id: PanelTab; label: string; icon: typeof Film }[] = [
   { id: "filters", label: "Filters", icon: Palette },
 ];
 
+const TAB_IDS = TABS.map((t) => t.id);
+
 export function LeftPanel() {
   const tab = useEditor((s) => s.panelTab);
   const setTab = (id: PanelTab) => useEditor.setState({ panelTab: id });
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    const i = TABS.findIndex((t) => t.id === tab);
-    const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
-    setTab(next.id);
-    (e.currentTarget.querySelector(`[data-tab="${next.id}"]`) as HTMLElement | null)?.focus();
-  };
   return (
     <aside className="flex w-[340px] shrink-0 flex-col border-r border-line bg-panel">
-      <div className="flex shrink-0 border-b border-line" role="tablist" aria-label="Library" onKeyDown={onKeyDown}>
+      {/* Tabs size to their labels and share the leftover width, so "Captions" and "Transitions" never touch. */}
+      <div className="flex shrink-0 gap-1 border-b border-line px-1" role="tablist" aria-label="Library" onKeyDown={tabListKeys(TAB_IDS, tab, setTab)}>
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -40,12 +36,12 @@ export function LeftPanel() {
             aria-selected={tab === t.id}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
-            className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 py-2 text-[11px] transition-colors duration-[120ms] ${
+            className={`flex flex-auto flex-col items-center gap-0.5 px-1.5 py-2 text-[11px] whitespace-nowrap transition-colors duration-[120ms] ${
               tab === t.id ? "text-accent shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg"
             }`}
           >
             <t.icon size={17} />
-            <span className="max-w-full truncate">{t.label}</span>
+            <span>{t.label}</span>
           </button>
         ))}
       </div>

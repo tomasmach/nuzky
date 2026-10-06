@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Check, ChevronDown, RectangleHorizontal } from "lucide-react";
 import { FORMATS, formatLabel } from "../../lib/presets";
 import { useEditor } from "../../lib/store";
 
-/** CapCut's "Ratio" control next to the player: the one place to change the canvas format. */
+/**
+ * CapCut's "Ratio" control next to the player: the one place to change the canvas format.
+ * Open state lives in the store so the Format row in the Project inspector can open it too.
+ */
 export function RatioMenu() {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   const edit = useEditor((s) => s.edit);
-  const [open, setOpen] = useState(false);
+  const open = useEditor((s) => s.ratioOpen);
+  const setOpen = (ratioOpen: boolean) => useEditor.setState({ ratioOpen });
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
