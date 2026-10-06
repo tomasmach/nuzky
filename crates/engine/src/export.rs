@@ -10,7 +10,7 @@ use ff::util::{color, format::Pixel, frame};
 
 use crate::audio::{Mixer, ensure_pcm, has_audio};
 use crate::media::{init, set_sws_colorspace};
-use crate::model::{CHANNELS, Project, SAMPLE_RATE};
+use crate::model::{CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 use crate::render::{Renderer, Wait};
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
@@ -71,7 +71,15 @@ pub fn export(
         bail!("The timeline is empty");
     }
     check_source_path(project, out)?;
-    for asset in project.assets.iter().filter(|a| has_audio(a)) {
+    let heard: std::collections::HashSet<&str> = project.tracks.iter()
+        .filter(|track| !track.muted && track.kind != TrackKind::Text)
+        .flat_map(|track| &track.clips)
+        .filter_map(|clip| match &clip.content {
+            ClipContent::Media { asset_id, volume, .. }
+                if *volume > 0.0 && clip.end_us() > 0 && clip.start_us < duration => Some(asset_id.as_str()),
+            _ => None,
+        }).collect();
+    for asset in project.assets.iter().filter(|a| heard.contains(a.id.as_str()) && has_audio(a)) {
         ensure_pcm(cache_dir, asset, |_| {})?;
     }
     // Reserve beside the destination so rename stays on the same filesystem.

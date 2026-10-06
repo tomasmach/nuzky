@@ -300,3 +300,39 @@ fn missing_image_fails_exact_render_and_export_but_preview_survives() {
     assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
     std::fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
+    let d = dir(&format!("unused-audio-{}", capopen_engine::edit::new_id()));
+    let image = d.join("image.ppm");
+    std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+    let mut p = Project::new("used audio only");
+    p.canvas.width = 64;
+    p.canvas.height = 64;
+    p.assets.push(probe(&image, "image".into()).unwrap());
+    p.tracks[0].clips.push(clip("image", "image", 0, 100_000));
+    for id in ["unused", "muted", "zero"] {
+        p.assets.push(Asset { id: id.into(), name: id.into(), path: d.join(format!("{id}.wav")).to_string_lossy().into(),
+            kind: AssetKind::Audio, duration_us: 100_000, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 });
+    }
+    let mut muted = p.tracks[0].clone();
+    muted.id = "muted".into();
+    muted.kind = TrackKind::Audio;
+    muted.muted = true;
+    muted.clips = vec![clip("muted", "muted", 0, 100_000)];
+    let mut zero = muted.clone();
+    zero.id = "zero".into();
+    zero.muted = false;
+    zero.clips = vec![clip("zero", "zero", 0, 100_000)];
+    if let ClipContent::Media { volume, .. } = &mut zero.clips[0].content { *volume = 0.0; }
+    p.tracks.extend([muted, zero]);
+    let out = d.join("out.mp4");
+    export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap();
+    assert!(std::fs::metadata(&out).unwrap().len() > 0);
+    assert!(!d.join("cache/pcm").exists());
+    p.tracks[1].muted = false;
+    p.tracks[1].hidden = true;
+    let error = export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap_err();
+    assert!(format!("{error:#}").contains("muted.wav"));
+    std::fs::remove_dir_all(d).unwrap();
+}
