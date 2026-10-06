@@ -24,7 +24,7 @@ export interface Transform {
 }
 
 export interface TextStyle {
-  /** Font family; null or missing uses the default sans-serif. */
+  /** Font family; null or missing uses the bundled default, Inter. */
   fontFamily?: string | null;
   fontSize: number;
   color: string;
@@ -159,7 +159,7 @@ export interface Boot {
 
 export interface JobEvent {
   id: string;
-  kind: "audio" | "export" | "captions";
+  kind: "audio" | "export" | "captions" | "transcript";
   label: string;
   status: "running" | "done" | "failed" | "cancelled";
   progress: number;
@@ -180,6 +180,33 @@ export interface CaptionModel {
   label: string;
   sizeMb: number;
   downloaded: boolean;
+}
+
+/** Families the engine can draw: bundled ones ship with CapOpen, system ones are installed here. */
+export interface FontFamilies {
+  bundled: string[];
+  system: string[];
+}
+
+/** A recognised word in timeline time. */
+export interface TranscriptWord {
+  startUs: number;
+  endUs: number;
+  text: string;
+  probability: number;
+}
+
+/** Words of the whole timeline, valid for the project `revision` it was made from. */
+export interface TimelineTranscript {
+  revision: number;
+  language: string;
+  words: TranscriptWord[];
+}
+
+/** Timeline range [startUs, endUs). */
+export interface TimeRange {
+  startUs: number;
+  endUs: number;
 }
 
 export interface CaptionSegment {
@@ -216,6 +243,6 @@ export type EditCmd =
   | { type: "updateTrack"; trackId: string; muted?: boolean | null; hidden?: boolean | null }
   | { type: "addCaptions"; segments: CaptionSegment[]; style: TextStyle }
   | { type: "replaceCaptions"; trackId: string; segments: CaptionSegment[]; style: TextStyle }
-  | { type: "rippleDeleteRanges"; ranges: { startUs: number; endUs: number }[]; keepTrackIds: string[] }
+  | { type: "rippleDeleteRanges"; ranges: TimeRange[]; keepTrackIds: string[] }
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
   | { type: "renameProject"; name: string };

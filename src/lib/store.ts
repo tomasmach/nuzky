@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api, errorText } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, Track, Transform, Transition } from "./types";
+import type { Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition } from "./types";
 
 export interface Toast {
   id: number;
@@ -18,7 +18,7 @@ export interface AssetDrag {
   y: number;
 }
 
-export type PanelTab = "media" | "audio" | "text" | "captions" | "transitions" | "filters";
+export type PanelTab = "media" | "audio" | "text" | "captions" | "transcript" | "transitions" | "filters";
 
 interface EditorState {
   snap: Snapshot | null;
@@ -42,6 +42,8 @@ interface EditorState {
   exportJobId: string | null;
   panelTab: PanelTab;
   ratioOpen: boolean;
+  /** Audio tracks the user set to stay in place (true) or to be cut with the video (false). */
+  keepTracks: Record<string, boolean>;
 
   setSnap: (snap: Snapshot, keepSelection?: boolean) => void;
   /**
@@ -111,6 +113,11 @@ async function drain() {
   draining = false;
 }
 
+/** Resolves once every edit queued before it has been confirmed. */
+export function whenIdle(): Promise<void> {
+  return enqueue(async () => null).then(() => undefined);
+}
+
 let gesture = 0;
 if (typeof window !== "undefined") {
   window.addEventListener("pointerdown", () => gesture++, true);
@@ -137,6 +144,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   exportJobId: null,
   panelTab: "media",
   ratioOpen: false,
+  keepTracks: {},
 
   setSnap: (snap, keepSelection = true) => {
     const ids = new Set(allClips(snap.project).map((c) => c.id));
@@ -298,6 +306,19 @@ export function editClip(clipId: string, build: (clip: Clip, track: Track, proje
   }, coalesce);
 }
 
+/** Queues one edit, all or nothing, built from the latest confirmed state of every clip in `ids`. */
+export function editClips(ids: string[], build: (clip: Clip, track: Track, project: Project) => EditCmd | EditCmd[] | null, coalesce?: string) {
+  return useEditor.getState().edit(
+    (project) =>
+      ids.flatMap((id) => {
+        const found = findClip(project, id);
+        const cmd = found ? build(found.clip, found.track, project) : null;
+        return cmd === null ? [] : Array.isArray(cmd) ? cmd : [cmd];
+      }),
+    coalesce,
+  );
+}
+
 /**
  * Writes a transform the way CapCut does: a clip with keyframes gets a keyframe at the
  * playhead, a clip without keyframes changes its single transform. `patch` is merged into the
@@ -367,6 +388,77 @@ export async function duplicateSelection() {
   if (copies.length > 0) select(copies);
 }
 
+/**
+ * Whether ripple cuts (Q/W, transcript deletes) leave this track alone. By default music and
+ * sound files stay in place, while sound detached from a video is cut with it so speech stays in sync.
+ */
+export function keepsInPlace(project: Project, track: Track, overrides: Record<string, boolean>): boolean {
+  if (track.kind !== "audio") return false;
+  if (track.id in overrides) return overrides[track.id];
+  return track.clips.every((c) => {
+    const m = c.content;
+    return m.type === "media" && project.assets.find((a) => a.id === m.assetId)?.kind === "audio";
+  });
+}
+
+/** Cuts `ranges` out of every track that does not stay in place and closes the gaps. */
+export function rippleDelete(project: Project, ranges: TimeRange[]): EditCmd {
+  const overrides = useEditor.getState().keepTracks;
+  return {
+    type: "rippleDeleteRanges",
+    ranges: ranges.map((r) => ({ startUs: Math.round(r.startUs), endUs: Math.round(r.endUs) })),
+    keepTrackIds: project.tracks.filter((t) => keepsInPlace(project, t, overrides)).map((t) => t.id),
+  };
+}
+
+/**
+ * CapCut's Q and W: delete the part of the clip left or right of the playhead. On the main track
+ * the time is cut from every track that does not stay in place, so captions and overlays stay in
+ * sync; clips on other tracks are trimmed. Selected clips under the playhead win over the main track.
+ */
+export async function deleteSide(side: "left" | "right") {
+  const { snap, selection, timeUs, edit, seek, toast } = useEditor.getState();
+  if (!snap) return;
+  const t = Math.round(timeUs);
+  const ids = splitTargets(snap.project, selection, t).map((c) => c.id);
+  if (ids.length === 0) {
+    toast({ kind: "info", text: "Move the playhead over a clip to delete one side of it." });
+    return;
+  }
+  let cutAt: number | null = null;
+  const done = await edit((project) => {
+    const trims: EditCmd[] = [];
+    const ranges: TimeRange[] = [];
+    for (const id of ids) {
+      const found = findClip(project, id);
+      if (!found || !canSplitClip(found.clip, t, project.canvas.fps)) continue;
+      const { clip, track } = found;
+      const end = clip.startUs + clip.durationUs;
+      const c = clip.content;
+      if (track.id === MAIN_TRACK) {
+        ranges.push(side === "left" ? { startUs: clip.startUs, endUs: t } : { startUs: t, endUs: end });
+        if (side === "left") cutAt = Math.min(cutAt ?? clip.startUs, clip.startUs);
+      } else if (side === "right") {
+        trims.push({ type: "trimClip", clipId: id, startUs: clip.startUs, durationUs: t - clip.startUs, sourceInUs: null });
+      } else {
+        const sourceInUs = c.type === "media" ? c.sourceInUs + Math.round((t - clip.startUs) * c.speed) : null;
+        trims.push({ type: "trimClip", clipId: id, startUs: t, durationUs: end - t, sourceInUs });
+      }
+    }
+    // Trims first, at today's positions; the ripple then moves everything after the cut.
+    return ranges.length > 0 ? [...trims, rippleDelete(project, ranges)] : trims;
+  });
+  // What was right of the playhead now starts where the deleted part began.
+  if (done && cutAt !== null) seek(cutAt);
+}
+
+/** Selects every clip on the track of `clipId`. */
+export function selectTrack(clipId: string) {
+  const { snap, select } = useEditor.getState();
+  const found = snap && findClip(snap.project, clipId);
+  if (found) select(found.track.clips.map((c) => c.id));
+}
+
 /** Why a clip's sound cannot be detached, or null when it can. */
 export function detachBlocker(project: Project, clip: Clip): string | null {
   const c = clip.content;
@@ -386,6 +478,14 @@ export async function detachAudio(clipId: string) {
 /** Restyles every caption clip at once, as one undo step. */
 export function applyCaptionStyle(style: TextStyle) {
   return useEditor.getState().edit((project) => project.tracks.find(isCaptionTrack)?.clips.map((c): EditCmd => ({ type: "updateClip", clipId: c.id, style })) ?? null);
+}
+
+/** Sets the font of every caption, keeping the rest of each caption's style, as one undo step. */
+export function applyCaptionFont(fontFamily: string) {
+  return useEditor.getState().edit(
+    (project) =>
+      project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...c.content.style, fontFamily } }] : [])) ?? null,
+  );
 }
 
 export function openExport() {

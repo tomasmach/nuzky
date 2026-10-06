@@ -1,7 +1,18 @@
 import { CAPTION_STYLES, TEXT_PRESETS, sameStyle } from "../../lib/presets";
 import { editClip, useEditor } from "../../lib/store";
 import type { Clip, TextStyle } from "../../lib/types";
+import { FontPicker } from "../FontPicker";
 import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch } from "../ui";
+
+/** Label column of the inspector's property rows, next to a full-width control. */
+export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-[76px] shrink-0 truncate text-[12px] text-muted">{label}</span>
+      {children}
+    </div>
+  );
+}
 
 /** Style tiles use the presets and names of the Text tab, or of the Captions tab for a caption. */
 export function TextSection({ clip, text, style, caption }: { clip: Clip; text: string; style: TextStyle; caption: boolean }) {
@@ -22,15 +33,18 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
         />
         <div className="grid grid-cols-3 gap-2">
           {presets.map((p) => (
-            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: p.style })}>
+            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: style.fontFamily } })}>
               <span className="absolute inset-0 flex items-center justify-center bg-[#2b3036]">
-                <TextSwatch style={p.style} label="Aa" />
+                <TextSwatch style={{ ...p.style, fontFamily: style.fontFamily }} label="Aa" />
               </span>
             </PresetTile>
           ))}
         </div>
       </Section>
       <Section title="Style">
+        <FieldRow label="Font">
+          <FontPicker value={style.fontFamily} onChange={(fontFamily) => setStyle({ fontFamily }, "font")} />
+        </FieldRow>
         <Slider label="Size" value={style.fontSize} min={12} max={300} step={1} format={(v) => String(Math.round(v))} onChange={(v) => setStyle({ fontSize: v }, "size")} />
         <ColorInput label="Color" value={style.color} onChange={(v) => setStyle({ color: v }, "color")} />
         <Checkbox label="Bold" checked={style.bold} onChange={(v) => setStyle({ bold: v }, "bold")} />

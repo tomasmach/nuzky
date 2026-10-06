@@ -1,5 +1,6 @@
 import { useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
+import { fontCss } from "../lib/fonts";
 import type { TextStyle } from "../lib/types";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
@@ -68,6 +69,7 @@ const parseNumber = (s: string) => Number(s.replace(",", ".").replace(/[^\d.+-]/
 /**
  * Numeric field that keeps what you type until Enter or blur, so partial input like "-"
  * or "1." is never rejected mid-typing. Esc restores the value; ↑/↓ step (Shift ×10).
+ * `mixed` shows "—" for a selection with different values; any typed value then applies to all.
  */
 export function NumberInput({
   label,
@@ -79,6 +81,7 @@ export function NumberInput({
   format,
   parse = parseNumber,
   disabled,
+  mixed = false,
   className = "w-14",
 }: {
   label: string;
@@ -90,6 +93,7 @@ export function NumberInput({
   format: (v: number) => string;
   parse?: (s: string) => number;
   disabled?: boolean;
+  mixed?: boolean;
   className?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -115,15 +119,15 @@ export function NumberInput({
       inputMode="decimal"
       disabled={disabled}
       className={`tabular h-6 rounded border border-line bg-raised px-1.5 text-right text-[12px] text-fg focus:border-accent disabled:opacity-40 ${className}`}
-      value={draft ?? format(value)}
+      value={draft ?? (mixed ? "—" : format(value))}
       onFocus={(e) => {
-        setDraft(format(value));
+        setDraft(mixed ? "" : format(value));
         e.currentTarget.select();
       }}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
-        const v = draft === null ? NaN : parse(draft);
-        if (!cancel.current && Number.isFinite(v) && format(clamp(v)) !== format(value)) onChange(clamp(v));
+        const v = draft === null || draft.trim() === "" ? NaN : parse(draft);
+        if (!cancel.current && Number.isFinite(v) && (mixed || format(clamp(v)) !== format(value))) onChange(clamp(v));
         cancel.current = false;
         setDraft(null);
       }}
@@ -193,6 +197,7 @@ export function Slider({
   format = (v) => String(Math.round(v * 100) / 100),
   parse,
   disabled,
+  mixed,
   title,
 }: {
   label: string;
@@ -205,6 +210,8 @@ export function Slider({
   format?: (v: number) => string;
   parse?: (s: string) => number;
   disabled?: boolean;
+  /** The selected clips differ; the thumb sits at the first clip's value. */
+  mixed?: boolean;
   title?: string;
 }) {
   return (
@@ -212,7 +219,7 @@ export function Slider({
       <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
       <RangeInput label={label} value={value} min={min} max={max} step={step} onChange={onChange} disabled={disabled} className="min-w-0 flex-1" />
       <span className="flex shrink-0 items-center gap-0.5">
-        <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} />
+        <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} mixed={mixed} />
         <span className="w-3 text-[11px] text-muted">{unit}</span>
       </span>
     </div>
@@ -427,13 +434,15 @@ export function ProgressBar({ value, className = "" }: { value: number; classNam
   );
 }
 
+/** A style preview in the font the engine draws it with. */
 export function TextSwatch({ style, label }: { style: TextStyle; label: string }) {
   return (
     <span
       className="inline-block max-w-full truncate rounded px-1.5 text-[15px] leading-6"
       style={{
+        fontFamily: fontCss(style.fontFamily),
         color: style.color,
-        fontWeight: style.bold ? 800 : 400,
+        fontWeight: style.bold ? 700 : 400,
         background: style.background ?? undefined,
         WebkitTextStroke: style.strokeWidth > 0 ? `${Math.min(2, style.strokeWidth / 4)}px ${style.strokeColor}` : undefined,
         paintOrder: "stroke fill",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Captions, Copy, Eye, EyeOff, Film, Magnet, Maximize2, Scissors, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
-import { MAIN_TRACK, allClips, deleteSelection, displayTracks, duplicateSelection, isCaptionTrack, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, Captions, Copy, Eye, EyeOff, Film, Magnet, Maximize2, Scissors, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
+import { MAIN_TRACK, allClips, deleteSelection, deleteSide, displayTracks, duplicateSelection, isCaptionTrack, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
@@ -330,6 +330,12 @@ export function Timeline({ height }: { height: number }) {
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
         <IconButton label={canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={!canSplit} onClick={splitAtPlayhead}>
           <Scissors size={16} />
+        </IconButton>
+        <IconButton label={canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"} disabled={!canSplit} onClick={() => deleteSide("left")}>
+          <ArrowLeftToLine size={16} />
+        </IconButton>
+        <IconButton label={canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"} disabled={!canSplit} onClick={() => deleteSide("right")}>
+          <ArrowRightToLine size={16} />
         </IconButton>
         <IconButton label={deleteLabel} disabled={selection.length === 0 && !cut} onClick={deleteSelection}>
           <Trash2 size={16} />

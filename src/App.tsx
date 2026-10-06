@@ -3,9 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
-import { deleteSelection, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
+import { receiveTranscript, speechJobEnded, useSpeech } from "./lib/speech";
+import { deleteSelection, deleteSide, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
 import { US } from "./lib/time";
-import type { JobEvent, Snapshot, Transport } from "./lib/types";
+import type { JobEvent, Snapshot, TimelineTranscript, Transport } from "./lib/types";
 import { ExportDialog } from "./components/ExportDialog";
 import { Inspector } from "./components/inspector/Inspector";
 import { LeftPanel } from "./components/panel/LeftPanel";
@@ -76,6 +77,9 @@ function useShortcuts() {
       } else if (!mod && key === "s") {
         e.preventDefault();
         splitAtPlayhead();
+      } else if (!mod && (key === "q" || key === "w")) {
+        e.preventDefault();
+        deleteSide(key === "q" ? "left" : "right");
       } else if (key === "delete" || key === "backspace") {
         e.preventDefault();
         deleteSelection();
@@ -105,6 +109,9 @@ function onJob(job: JobEvent) {
   useEditor.setState({ jobs: { ...useEditor.getState().jobs, [job.id]: job } });
   if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
   if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${job.message}` });
+  if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
+  if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${job.message}` });
+  if ((job.kind === "captions" || job.kind === "transcript") && (job.status === "failed" || job.status === "cancelled")) speechJobEnded();
   if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}` });
   // The dialog shows the result itself; with it closed, a toast reports it.
   if (job.kind === "export" && job.id === exportJobId && !exportOpen) {
@@ -128,6 +135,7 @@ function useBackendEvents() {
       }),
     );
     offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
+    offs.push(listen<{ jobId: string; transcript: TimelineTranscript }>("transcript-ready", (e) => receiveTranscript(e.payload.transcript)));
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
@@ -214,7 +222,7 @@ function Divider({ height, onChange }: { height: number; onChange: (h: number) =
 }
 
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
-if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, api } });
+if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api } });
 
 export default function App() {
   const snap = useEditor((s) => s.snap);

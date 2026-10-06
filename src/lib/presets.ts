@@ -12,8 +12,8 @@ export function formatLabel(width: number, height: number) {
 }
 
 export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
-/** Where the engine places generated captions (crates/engine edit.rs). */
-export const CAPTION_Y = 0.28;
+/** Where the engine places generated captions (CAPTION_Y in crates/engine edit.rs). */
+export const CAPTION_Y = 0.15;
 export const NO_ADJUST: Adjust = { brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
 
 export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = [
@@ -25,13 +25,17 @@ export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = 
   { name: "Plain", text: "Plain text", style: { fontSize: 64, color: "#ffffff", bold: false, strokeWidth: 0, strokeColor: "#000000", background: null } },
 ];
 
+/** Presets carry no font: the font is picked separately and survives a preset change. */
 export const CAPTION_STYLES: { name: string; style: TextStyle }[] = [
+  // Talking-head reels: regular weight, thick outline, no box, 1–3 words at a time.
+  { name: "Reel", style: { fontSize: 95, color: "#ffffff", bold: false, strokeWidth: 7.5, strokeColor: "#000000", background: null } },
   { name: "Outline", style: { fontSize: 70, color: "#ffffff", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
   { name: "Yellow", style: { fontSize: 74, color: "#ffe14d", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
   { name: "Box", style: { fontSize: 62, color: "#ffffff", bold: true, strokeWidth: 0, strokeColor: "#000000", background: "#000000b3" } },
   { name: "Clean", style: { fontSize: 60, color: "#ffffff", bold: false, strokeWidth: 3, strokeColor: "#00000099", background: null } },
 ];
 
+/** Same look apart from the font. */
 export function sameStyle(a: TextStyle, b: TextStyle) {
   return (
     a.fontSize === b.fontSize &&
