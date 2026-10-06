@@ -67,14 +67,18 @@ function ProjectName() {
 
 function ProjectMenu() {
   const [open, setOpen] = useState(false);
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // null until the list has loaded, so a failed load never claims there are no projects.
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const current = useEditor((s) => s.snap?.path);
   const { toast } = useEditor.getState();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    api.listProjects().then(setProjects, (e) => toast({ kind: "error", text: errorText(e) }));
+    api.listProjects().then(setProjects, (e) => {
+      setProjects(null);
+      toast({ kind: "error", text: errorText(e) });
+    });
     const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("pointerdown", close);
@@ -119,8 +123,8 @@ function ProjectMenu() {
           </div>
           <div className="border-t border-line px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Recent</div>
           <div className="max-h-72 overflow-y-auto">
-            {projects.length === 0 && <div className="px-2 py-2 text-[12px] text-muted">No saved projects yet.</div>}
-            {projects.map((p) => (
+            {projects?.length === 0 && <div className="px-2 py-2 text-[12px] text-muted">No saved projects yet.</div>}
+            {projects?.map((p) => (
               <button
                 key={p.path}
                 type="button"
