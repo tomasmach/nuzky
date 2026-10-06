@@ -46,8 +46,6 @@ interface EditorState {
   exportJobId: string | null;
   panelTab: PanelTab;
   ratioOpen: boolean;
-  /** Audio tracks the user set to stay in place (true) or to be cut with the video (false). */
-  keepTracks: Record<string, boolean>;
 
   /** `opened`: the snapshot of a project just opened, created or booted; others must belong to the open session. */
   setSnap: (snap: Snapshot, keepSelection?: boolean, opened?: boolean) => void;
@@ -90,7 +88,7 @@ interface QueuedEdit {
 const queue: QueuedEdit[] = [];
 let draining = false;
 
-function enqueue(run: () => Promise<Snapshot | null>, key: string | null = null): Promise<Snapshot | null> {
+export function enqueue(run: () => Promise<Snapshot | null>, key: string | null = null): Promise<Snapshot | null> {
   return new Promise((resolve) => {
     const last = queue[queue.length - 1];
     if (key && last?.key === key) {
@@ -162,7 +160,6 @@ export const useEditor = create<EditorState>((set, get) => ({
   exportJobId: null,
   panelTab: "media",
   ratioOpen: false,
-  keepTracks: {},
 
   setSnap: (snap, keepSelection = true, opened = false) => {
     const previous = get().snap;
@@ -430,29 +427,6 @@ export async function duplicateSelection() {
 }
 
 /**
- * Whether ripple cuts (Q/W, transcript deletes) leave this track alone. By default music and
- * sound files stay in place, while sound detached from a video is cut with it so speech stays in sync.
- */
-export function keepsInPlace(project: Project, track: Track, overrides: Record<string, boolean>): boolean {
-  if (track.kind !== "audio") return false;
-  if (track.id in overrides) return overrides[track.id];
-  return track.clips.every((c) => {
-    const m = c.content;
-    return m.type === "media" && project.assets.find((a) => a.id === m.assetId)?.kind === "audio";
-  });
-}
-
-/** Cuts `ranges` out of every track that does not stay in place and closes the gaps. */
-export function rippleDelete(project: Project, ranges: TimeRange[]): EditCmd {
-  const overrides = useEditor.getState().keepTracks;
-  return {
-    type: "rippleDeleteRanges",
-    ranges: ranges.map((r) => ({ startUs: Math.round(r.startUs), endUs: Math.round(r.endUs) })),
-    keepTrackIds: project.tracks.filter((t) => keepsInPlace(project, t, overrides)).map((t) => t.id),
-  };
-}
-
-/**
  * CapCut's Q and W: delete the part of the clip left or right of the playhead. On the main track
  * the time is cut from every track that does not stay in place, so captions and overlays stay in
  * sync; clips on other tracks are trimmed. Selected clips under the playhead win over the main track.
@@ -487,7 +461,7 @@ export async function deleteSide(side: "left" | "right") {
       }
     }
     // Trims first, at today's positions; the ripple then moves everything after the cut.
-    return ranges.length > 0 ? [...trims, rippleDelete(project, ranges)] : trims;
+    return ranges.length > 0 ? [...trims, { type: "rippleDeleteRanges", ranges }] : trims;
   });
   // What was right of the playhead now starts where the deleted part began.
   if (done && cutAt !== null) seek(cutAt);

@@ -19,8 +19,6 @@ const LANGUAGES = [
   ["uk", "Ukrainian"],
 ];
 
-export const LANGUAGE_NAMES: Record<string, string> = Object.fromEntries(LANGUAGES.slice(1));
-
 export const selectClass = "h-8 rounded-md border border-line bg-raised px-2 text-[13px] text-fg disabled:cursor-not-allowed disabled:opacity-40";
 
 const isSpeech = (j: JobEvent) => j.kind === "captions" || j.kind === "transcript";
