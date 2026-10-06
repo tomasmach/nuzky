@@ -424,14 +424,20 @@ export function splitTargets(project: Project, selection: string[], timeUs: numb
 export async function splitAtPlayhead() {
   const { snap, selection, timeUs, edit, toast } = useEditor.getState();
   if (!snap) return;
-  const targets = splitTargets(snap.project, selection, timeUs);
-  if (targets.length === 0) {
+  const at = Math.round(timeUs);
+  const ids = splitTargets(snap.project, selection, at).map((c) => c.id);
+  if (ids.length === 0) {
     toast({ kind: "info", text: "Move the playhead over a clip to split it." });
     return;
   }
-  // One batch: one undo step, and every second half stays selected.
-  const at = Math.round(timeUs);
-  await edit((project) => splitTargets(project, selection, at).map((c): EditCmd => ({ type: "splitClip", clipId: c.id, atUs: at })));
+  // One batch: one undo step, and every second half stays selected. An earlier queued edit may
+  // have removed a target; it is skipped rather than replaced by another clip.
+  await edit((project) =>
+    ids.flatMap((id): EditCmd[] => {
+      const found = findClip(project, id);
+      return found && canSplitClip(found.clip, at, project.canvas.fps) ? [{ type: "splitClip", clipId: id, atUs: at }] : [];
+    }),
+  );
 }
 
 export async function duplicateSelection() {
