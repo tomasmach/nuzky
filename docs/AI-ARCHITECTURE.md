@@ -2,7 +2,7 @@
 
 CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and the app's own AI panel runs the user's installed agent under their subscription. Research behind these decisions: [docs/research](research).
 
-Decided on 6 Oct 2026 after two independent proposals and a cross-critique.
+Decided on 6 Oct 2026 after two independent proposals and a cross-critique, and refined the same day after the headless MCP landed (two more proposals and a cross-critique).
 
 ## Principles
 
@@ -14,28 +14,38 @@ Decided on 6 Oct 2026 after two independent proposals and a cross-critique.
 ## Processes
 
 ```
-Claude Code / Codex / Gemini / Cursor ──stdio──▶ capopen mcp --project P ──IPC──▶ CapOpen app (ProjectSession for P)
+Claude Code / Codex / Gemini / Cursor ──stdio──▶ capopen-app mcp --project P ──IPC──▶ CapOpen app (Host for P)
                                                          │
-                                                         └─ no app running: hosts ProjectSession for P itself
+                                                         └─ no app running: its own Host for P
 ```
 
-- `crates/session` holds `ProjectSession`: editor and history, revision, session epoch, the open run, the single write queue (replaces today's autosave) and crash recovery. It has no Tauri dependency; the app and the bridge both use it.
-- `crates/mcp` is the stdio MCP server (`capopen mcp --project <path>`). If the app owns the project it forwards every tool call to the app over IPC; otherwise it hosts the session in process. Headless writes need `--allow-write`. A second headless bridge for the same project gets `PROJECT_BUSY`.
-- IPC: a Unix domain socket (`$XDG_RUNTIME_DIR/capopen/<project-hash>.sock`, owner-only) or a Windows named pipe restricted to the current user. Versioned JSON-RPC; the bridge authenticates with a random token from an owner-only file next to the socket. Nothing listens on the network.
-- Ownership of a project is an OS lock on `<project>.lock`. The app opening a project held by a headless bridge says so and opens it read-only.
+- `crates/session` holds `Host`: the `ProjectSession`, the one job system and the transcript store. The app and the bridge each create one; the app's commands and the MCP tools are thin calls on it. `ProjectSession` owns the live `Editor` and its history, revision, session epoch, the open run, the writer thread and crash recovery. It has no Tauri dependency.
+- The bridge is `capopen-app mcp --project <path> [--allow-write]`, handled before Tauri starts, so agents run the installed app's own version; `capopen mcp` is the same code for development. The bridge serves the MCP catalog, guide and schema itself and sends each tool call to the app, or to its own Host when no app owns the project.
+- IPC: a Unix domain socket (`$XDG_RUNTIME_DIR/capopen/<project-hash>.sock`, directory 0700, files 0600) or a Windows named pipe restricted to the current user. Newline-delimited JSON: a hello `{capopen: 1, token, client, access}` answered with the session epoch, then `{id, tool, args}` → `{id, result}`. The token is a random file next to the socket, rewritten on every open. Nothing listens on the network.
+- Access is per client: a read-only client never takes the lock and mutating tools return `READ_ONLY`.
+- Ownership is an OS lock on `<project>.lock`. A headless bridge takes it only while a run is open (and its idle window), looks for the app's socket before every run and reloads the project from disk when it takes the lock again. The app opening a project during a headless run opens it read-only and retries.
+- The session reports changes as events on a channel, never calling out while holding its lock. The app forwards them to the preview and the frontend, which ignores snapshots older than the one it has within the same session epoch. The revision changes only when the project does.
 
-## Runs
+## Runs and undo
 
-A run groups one agent turn.
+A run groups one agent turn. There is one linear history: a run is one entry in it, between the user's own edits.
 
-- `begin_run(label)` records a checkpoint (the project before the run) in memory and in `<project>.checkpoint.json`, and returns `run_id`. Mutations are only accepted from the run that owns the session; manual edits in the UI are blocked with "AI is editing · Stop".
-- `apply_edits(run_id, request_id, edits[])` applies a batch atomically to the live project: all or nothing. A repeated `request_id` with the same content returns the stored result; with different content it is an error. The result lists created, changed and removed clip ids and the real times after magnetic repacking.
-- `end_run(run_id, keep | discard)`: keep pushes the checkpoint as one undo entry; discard restores it. A run also ends with keep when its client disconnects or after 2 minutes without calls, so a crashed agent never leaves the editor locked.
-- Stop in the UI revokes the run first (late calls are rejected), cancels its jobs, then ends it with keep. The user can still press Undo.
+- `begin_run(label)` seals the history, writes `<project>.checkpoint.json` and returns `run_id`. Mutations are only accepted from the run that owns the session. Manual edits, Undo and Redo in the UI are blocked with "AI is editing · Stop"; the toast offers "Stop and edit", so stopping the AI is always deliberate.
+- `apply_edits(run_id, request_id, edits[])` applies a batch atomically to the live project under the run's coalesce key `run:<id>`, so the whole run merges into one undo entry. A repeated `request_id` with the same content returns the stored result; with different content it is an error. The result lists created, changed and removed clip ids and the real times after magnetic repacking, and is returned only once the project is on disk.
+- `end_run(run_id, keep | discard)`: keep seals the entry; discard drops it without a redo entry. A run also ends with keep when its client disconnects or after 2 minutes without calls.
+- Stop in the UI revokes the run first (late calls get `RUN_STOPPED`), cancels its jobs, then ends it with keep. Ctrl+Z then undoes the whole run and Ctrl+Shift+Z brings it back.
 - `undo_run(run_id)` works only while that run is the last history entry.
 - Every result carries `revision` and `session_epoch`; mutations may pass `expected_revision` to fail fast on stale state.
-- Exports started during a run render an immutable snapshot taken at the call and report its revision.
-- On open, a leftover checkpoint file means a run did not finish: the app offers to restore the state before it.
+- User edits are saved shortly after they stop; run batches are saved before they are acknowledged.
+- On open, a leftover checkpoint means a run did not finish: the app asks to keep the AI changes or restore the version before, as an undoable edit. Headless mode refuses writes until that is resolved.
+- Agents never set the user's selection.
+
+## Transcripts
+
+- A transcript belongs to a media file, not to a timeline: words with times in the file's own (source) time, stored once in `<data dir>/capopen/transcripts/<fingerprint>.json`. The fingerprint is the file size and a hash of its first and last MiB, so the same file in several projects is recognised once and a moved file keeps its transcript.
+- What the timeline says is always derived: `engine::speech::map_words` maps the words of every heard clip (unmuted track, volume above 0, a video asset with sound, detached sound included) through its source range and speed. Cuts, slivers, speed, undo and redo are therefore always right, and a transcript never goes out of date; the only note left is "N clips not transcribed".
+- A cut made from words carries `expected_speech_key`, a hash of exactly what `map_words` reads. The session rejects it with `SPEECH_CHANGED` when the speech moved in the meantime, and accepts it after unrelated edits such as a caption restyle.
+- Tracks have `keep_in_place`; `RippleDeleteRanges` without `keep_track_ids` uses it, so agents cut the way the UI does and leave music alone.
 
 ## Tools
 
@@ -43,18 +53,20 @@ All times are integer microseconds on the timeline unless a field says `source`.
 
 | Tool | Purpose |
 |---|---|
-| `get_state(range?, clip_ids?)` | Project, tracks, clips with ids and times, selection, playhead, revision, open run |
+| `get_state(range?, clip_ids?)` | Project, tracks, clips with ids and times, the user's selection and playhead, revision, open run |
 | `begin_run(label)` / `end_run(run_id, action)` / `undo_run(run_id)` | Run lifecycle |
 | `apply_edits(run_id, request_id, edits[], expected_revision?)` | Atomic batch of `EditCmd` |
 | `import_media(run_id, paths[])` | Probe allowed files and add them as assets |
 | `inspect_frames(times[], width?)` | Rendered frames as one image (contact sheet with timestamps); fails if media is missing |
-| `analyze(kind, target, params)` | `silences`, `loudness`, `scenes`, `fillers` from `crates/analysis` |
-| `transcribe(target, language, model)` | Job producing a transcript with word timestamps, bound to the revision it was made from |
-| `build_captions(run_id, transcript_id, style, words_per_caption)` | Deterministic caption clips on one captions track |
+| `analyze(kind, asset_id, params)` | `silences`, `loudness`, `scenes`, `fillers` from `crates/analysis` |
+| `transcribe(asset_ids?)` | Job recognising the heard media that has no transcript yet |
+| `get_transcript(range?)` | Numbered timeline words and sentences, the speech key, untranscribed clips |
+| `edit_transcript(run_id, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text |
+| `build_captions(run_id, style?, max_words?, max_chars?)` | Deterministic caption clips on one captions track, never across a cut; the Reel style by default |
 | `export_video(path, resolution, fps, quality)` | Job exporting a snapshot |
 | `job(job_id, get | cancel)` | Progress, result, cancel |
 
-New edit commands: `RippleDeleteRanges { ranges, keep_track_ids }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` takes an optional target track and never deletes other tracks.
+`RippleDeleteRanges { ranges, keep_track_ids? }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` never deletes other tracks.
 
 Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema). Prompt: `edit_selected(goal)`.
 
@@ -74,13 +86,18 @@ Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JS
 
 ## Phases
 
-1. Foundation: `crates/session` (runs, revisions, write queue, recovery, validation) and the new edit commands; the app switches to it.
-2. MCP: `crates/mcp` with IPC to the app and headless mode; analysis, transcription, captions and frame tools; skill and Connect flow. Gate: Claude Code in a project folder cuts silences, adds captions and exports, live in the open app, with one Undo.
-3. Panel: `crates/agent` (ACP) and the React panel. Gate: the same task from the panel through Codex and Claude Code, including Stop and Undo.
-4. Direct ChatGPT sign-in and other providers.
+1. Headless foundation (done): `crates/session` and `crates/mcp` hosting their own session.
+2. One authority: keyed undo steps in the engine, `keep_in_place`, `engine::speech`; `ProjectSession` on the live `Editor` with user edits, events, the writer thread and per-client access; the app on `Host` with its lock, read-only state and recovery dialog; one job system.
+3. Transcripts per media file, `get_transcript`, `edit_transcript` and captions from the derived words, in the app and in MCP; the frontend's own transcript bookkeeping goes away.
+4. IPC and the `capopen-app mcp` bridge, then the run UI. Gate: Claude Code in a project folder cuts silences, adds captions and exports, live in the open app, with one Undo and a Stop mid-run.
+5. Panel: `crates/agent` (ACP) and the React panel. Gate: the same task from the panel through Codex and Claude Code, including Stop and Undo.
+6. Direct ChatGPT sign-in and other providers.
 
 ## Risks
 
-- Retiming after cuts is the hardest correctness problem; it needs fixtures with speed changes, detached audio, keyframes, transitions and captions.
+- Retiming after cuts is the hardest correctness problem; `map_words` needs fixtures with speed changes, detached audio, slivers, kept music, transitions and duplicated clips.
+- Recognising a whole long recording once costs time up front; if that hurts, store which ranges a transcript covers.
+- Blocking manual edits for a whole run may feel heavy; revisit after trying it by hand.
+- On Windows the app is a GUI-subsystem executable; stdio for `capopen-app mcp` must be tested there.
 - Provider adapters and subscription terms change; keep them behind `crates/agent` and pin tested versions.
 - ACP is not a sandbox; restrictions on the agent's own tools must be verified per adapter.
