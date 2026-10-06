@@ -32,12 +32,13 @@ pub fn filler_words(transcript: &Transcript, language: &str) -> Vec<Range> {
         {
             ranges.push(Range { start_us: word.start_us, end_us: words[index + 1].end_us });
         }
-        if !token.is_empty() && !word.text.ends_with(['.', '?', '!', ',', ';', ':']) {
-            if let Some(next) = words.get(index + 1) {
-                let gap = next.start_us.saturating_sub(word.end_us);
-                if normalized[index + 1] == token && (0..=250_000).contains(&gap) {
-                    ranges.push(Range { start_us: word.start_us, end_us: word.end_us });
-                }
+        if !token.is_empty()
+            && !word.text.ends_with(['.', '?', '!', ',', ';', ':'])
+            && let Some(next) = words.get(index + 1)
+        {
+            let gap = next.start_us.saturating_sub(word.end_us);
+            if normalized[index + 1] == token && (0..=250_000).contains(&gap) {
+                ranges.push(Range { start_us: word.start_us, end_us: word.end_us });
             }
         }
     }

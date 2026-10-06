@@ -81,9 +81,9 @@ fn seeded_sequences(with_speed: bool) {
         for step in 0..120 {
             let clips: Vec<_> =
                 e.project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| (t.id.clone(), c.clone()))).collect();
-            let cmd = if clips.is_empty() || rng.next() % 7 == 0 {
+            let cmd = if clips.is_empty() || rng.next().is_multiple_of(7) {
                 EditCmd::AddClip {
-                    asset_id: if rng.next() % 2 == 0 { "a" } else { "b" }.into(),
+                    asset_id: if rng.next().is_multiple_of(2) { "a" } else { "b" }.into(),
                     start_us: None,
                     track_id: None,
                 }
@@ -92,7 +92,7 @@ fn seeded_sequences(with_speed: bool) {
                 match rng.next() % if with_speed { 6 } else { 5 } {
                     0 => EditCmd::MoveClip {
                         clip_id: c.id.clone(),
-                        track_id: if rng.next() % 2 == 0 { Some("main".into()) } else { None },
+                        track_id: if rng.next().is_multiple_of(2) { Some("main".into()) } else { None },
                         start_us: (rng.next() % 10_000_000) as i64,
                     },
                     1 => EditCmd::TrimClip {

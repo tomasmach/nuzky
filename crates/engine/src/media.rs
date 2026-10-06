@@ -119,7 +119,7 @@ unsafe impl Send for Scaler {}
 
 fn sws_colorspace(space: color::Space, height: u32) -> i32 {
     use ff::ffi::*;
-    (match space {
+    match space {
         color::Space::BT709 => SWS_CS_ITU709,
         color::Space::BT2020NCL | color::Space::BT2020CL => SWS_CS_BT2020,
         color::Space::SMPTE240M => SWS_CS_SMPTE240M,
@@ -127,7 +127,7 @@ fn sws_colorspace(space: color::Space, height: u32) -> i32 {
         color::Space::BT470BG | color::Space::SMPTE170M => SWS_CS_ITU601,
         _ if height >= 720 => SWS_CS_ITU709,
         _ => SWS_CS_ITU601,
-    }) as i32
+    }
 }
 
 /// Sets the YUV matrix and range explicitly; swscale would otherwise assume BT.601.
@@ -164,7 +164,7 @@ fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: 
         let mut ctx =
             scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
         let src_cs = sws_colorspace(f.color_space(), f.height());
-        set_sws_colorspace(&mut ctx, src_cs, is_full_range(f), ff::ffi::SWS_CS_DEFAULT as i32, true);
+        set_sws_colorspace(&mut ctx, src_cs, is_full_range(f), ff::ffi::SWS_CS_DEFAULT, true);
         *scaler = Some(Scaler { key, ctx });
     }
     let mut out = frame::Video::new(Pixel::RGBA, w, h);
@@ -401,13 +401,13 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
                 *resampler = Some((ctx, key));
             }
             // Align the first samples with the container origin.
-            if *written == 0 {
-                if let Some(pts) = f.timestamp().or(f.pts()) {
-                    let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
-                    let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
-                    writer.write_all(&vec![0u8; pad as usize * CHANNELS * 4])?;
-                    *written += pad;
-                }
+            if *written == 0
+                && let Some(pts) = f.timestamp().or(f.pts())
+            {
+                let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
+                let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
+                writer.write_all(&vec![0u8; pad as usize * CHANNELS * 4])?;
+                *written += pad;
             }
             let mut f = f.clone();
             f.set_channel_layout(layout);
@@ -526,7 +526,7 @@ mod tests {
             let mut pair = [None, None];
             for target in [0, 1, 33_333, 500_001, 900_005, 1_000_000, 2_333_333, 10_000_000] {
                 pair = decoder.frame_covering(target, pair).unwrap();
-                let expected = times.iter().copied().filter(|t| *t <= target).last();
+                let expected = times.iter().copied().rfind(|t| *t <= target);
                 assert_eq!(pair[0].as_ref().map(|f| f.0), expected, "{name} at {target}");
                 decoder.seek(target).unwrap();
                 pair = decoder.frame_covering(target, [None, None]).unwrap();

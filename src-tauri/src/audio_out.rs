@@ -137,7 +137,7 @@ fn open_stream(
             return None;
         }
         let c = def.config();
-        (c.clone(), c.channels as usize, c.sample_rate)
+        (c, c.channels as usize, c.sample_rate)
     };
 
     // Nearest-sample rate conversion and channel mapping for unusual devices.

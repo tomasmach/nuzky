@@ -199,6 +199,16 @@ fn gain_at(i: i64, start: i64, end: i64, incoming: Option<(i64, i64)>, outgoing:
     gain
 }
 
+/// Peak envelope for waveform drawing, `per_second` buckets of 0..=255.
+pub fn peaks(pcm: &Pcm, per_second: u32) -> Vec<u8> {
+    let samples = pcm.samples();
+    let bucket = (SAMPLE_RATE / per_second.max(1)) as usize * CHANNELS;
+    samples
+        .chunks(bucket.max(CHANNELS))
+        .map(|c| (c.iter().fold(0f32, |m, s| m.max(s.abs())).min(1.0) * 255.0) as u8)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,14 +476,4 @@ mod tests {
             }
         }
     }
-}
-
-/// Peak envelope for waveform drawing, `per_second` buckets of 0..=255.
-pub fn peaks(pcm: &Pcm, per_second: u32) -> Vec<u8> {
-    let samples = pcm.samples();
-    let bucket = (SAMPLE_RATE / per_second.max(1)) as usize * CHANNELS;
-    samples
-        .chunks(bucket.max(CHANNELS))
-        .map(|c| (c.iter().fold(0f32, |m, s| m.max(s.abs())).min(1.0) * 255.0) as u8)
-        .collect()
 }

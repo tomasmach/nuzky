@@ -115,10 +115,10 @@ pub fn export(
 }
 
 fn check_source_path(project: &Project, path: &Path) -> Result<()> {
-    if let Ok(target) = std::fs::canonicalize(path) {
-        if project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target)) {
-            bail!("{} is used in this project. Choose another file name.", path.display());
-        }
+    if let Ok(target) = std::fs::canonicalize(path)
+        && project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target))
+    {
+        bail!("{} is used in this project. Choose another file name.", path.display());
     }
     Ok(())
 }
@@ -149,7 +149,7 @@ fn output_size(project: &Project, options: &ExportOptions, max_dimension: u32) -
         bail!("Canvas dimensions must be at least 2 pixels");
     }
     let short = options.resolution.unwrap_or(w.min(h));
-    if short < 2 || short > 7680 {
+    if !(2..=7680).contains(&short) {
         bail!("Export resolution must be between 2 and 7680");
     }
     let scale = short as f64 / w.min(h) as f64;
@@ -255,7 +255,7 @@ fn encode(
 
     let mut mixer = Mixer::new(cache_dir.to_path_buf());
     let mut scaler = scaling::Context::get(Pixel::RGBA, w, h, Pixel::YUV420P, w, h, scaling::Flags::BICUBIC)?;
-    set_sws_colorspace(&mut scaler, ff::ffi::SWS_CS_DEFAULT as i32, true, ff::ffi::SWS_CS_ITU709 as i32, false);
+    set_sws_colorspace(&mut scaler, ff::ffi::SWS_CS_DEFAULT, true, ff::ffi::SWS_CS_ITU709, false);
     let mut rgba = frame::Video::new(Pixel::RGBA, w, h);
     let mut yuv = frame::Video::new(Pixel::YUV420P, w, h);
     let total_samples = crate::audio::us_to_samples(duration);

@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::handshake::server::{Callback, ErrorResponse, Request, Response};
 use tungstenite::http::StatusCode;
 use tungstenite::{Bytes, Message};
 
@@ -63,19 +63,24 @@ impl PreviewServer {
     }
 }
 
-fn serve(stream: TcpStream, path: &str, slot: Arc<Slot>) {
-    stream.set_nodelay(true).ok();
-    let check = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
+struct PreviewHandshake<'a>(&'a str);
+
+impl Callback for PreviewHandshake<'_> {
+    fn on_request(self, req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
         let origin = req.headers().get("origin").and_then(|o| o.to_str().ok()).unwrap_or("");
-        if req.uri().path() != path || !ALLOWED_ORIGINS.contains(&origin) {
+        if req.uri().path() != self.0 || !ALLOWED_ORIGINS.contains(&origin) {
             log::warn!("Rejected preview connection from origin {origin:?}");
             let mut e = ErrorResponse::new(None);
             *e.status_mut() = StatusCode::FORBIDDEN;
             return Err(e);
         }
         Ok(resp)
-    };
-    let Ok(mut ws) = tungstenite::accept_hdr(stream, check) else { return };
+    }
+}
+
+fn serve(stream: TcpStream, path: &str, slot: Arc<Slot>) {
+    stream.set_nodelay(true).ok();
+    let Ok(mut ws) = tungstenite::accept_hdr(stream, PreviewHandshake(path)) else { return };
     let mut sent = 0;
     loop {
         let frame = {
@@ -95,10 +100,10 @@ fn serve(stream: TcpStream, path: &str, slot: Arc<Slot>) {
             sent = g.0;
             g.1.clone()
         };
-        if let Some(f) = frame {
-            if ws.send(Message::Binary(f)).is_err() {
-                return;
-            }
+        if let Some(f) = frame
+            && ws.send(Message::Binary(f)).is_err()
+        {
+            return;
         }
     }
 }

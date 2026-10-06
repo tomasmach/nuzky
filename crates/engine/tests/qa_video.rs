@@ -250,10 +250,8 @@ fn full_range_444_rgb_alpha_and_gif() {
         if error > 1.0 {
             failures.push(format!("{name} MAE={error}"));
         }
-        if name == "full.mkv" {
-            if (rgba.data[0] as i16 - 16).abs() > 4 || (rgba.data[63 * 4] as i16 - 205).abs() > 4 {
-                failures.push(format!("range {}..{}", rgba.data[0], rgba.data[63 * 4]));
-            }
+        if name == "full.mkv" && ((rgba.data[0] as i16 - 16).abs() > 4 || (rgba.data[63 * 4] as i16 - 205).abs() > 4) {
+            failures.push(format!("range {}..{}", rgba.data[0], rgba.data[63 * 4]));
         }
         if name == "alpha.png" {
             assert_eq!(rgba.data[3], 128);

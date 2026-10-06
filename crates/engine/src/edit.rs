@@ -530,7 +530,7 @@ impl Project {
                     Some(i) => self.insert_track(i + 1, kind, keep),
                     None => {
                         let at = match kind {
-                            TrackKind::Video => ti.max(0) + 1,
+                            TrackKind::Video => ti + 1,
                             _ => self.tracks.len(),
                         };
                         self.insert_track(at, kind, keep)

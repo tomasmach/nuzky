@@ -86,7 +86,7 @@ fn list_in(dir: &Path) -> Vec<ProjectSummary> {
             })
         })
         .collect();
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.sort_by_key(|entry| std::cmp::Reverse(entry.modified_ms));
     out
 }
 

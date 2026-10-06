@@ -104,10 +104,10 @@ fn run(
 
     loop {
         // While playing, wake up for the next frame; otherwise sleep until a message.
-        let msg = if st.audio.is_some() {
+        let msg = if let Some(audio) = &st.audio {
             let frame = st.project.frame_duration_us();
             let next = ((st.t_us as f64 / frame).floor() + 1.0) * frame;
-            let now = st.audio.as_ref().unwrap().now_us();
+            let now = audio.now_us();
             let wait = Duration::from_micros((next - now as f64).clamp(0.0, 50_000.0) as u64);
             match rx.recv_timeout(wait) {
                 Ok(m) => Some(m),
@@ -165,10 +165,9 @@ fn run(
             }
         }
 
-        let playing = st.audio.is_some();
-        if playing {
+        if let Some(audio) = &st.audio {
             let end = st.project.duration_us();
-            let now = st.audio.as_ref().unwrap().now_us();
+            let now = audio.now_us();
             if now >= end {
                 st.audio = None;
                 st.t_us = end;
