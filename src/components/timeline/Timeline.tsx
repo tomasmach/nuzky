@@ -1,29 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  AudioLines,
-  Captions,
-  Eye,
-  EyeOff,
-  Film,
-  Magnet,
-  Maximize2,
-  Scissors,
-  Trash2,
-  Type,
-  Volume2,
-  VolumeX,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
-import { MAIN_TRACK, allClips, displayTracks, projectDuration, useEditor } from "../lib/store";
-import { US, formatDuration, formatTime } from "../lib/time";
-import type { Asset, Clip, Project, Track } from "../lib/types";
-import { setDropResolver } from "./MediaPanel";
-import { IconButton } from "./ui";
+import { AudioLines, Captions, Copy, Eye, EyeOff, Film, Magnet, Maximize2, Scissors, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
+import { MAIN_TRACK, allClips, deleteSelection, displayTracks, duplicateSelection, isCaptionTrack, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
+import { US, formatDuration, formatTime } from "../../lib/time";
+import type { Clip, Track } from "../../lib/types";
+import { setDropResolver } from "../panel/assets";
+import { IconButton } from "../ui";
+import { ClipMenu, type MenuAt } from "./ClipMenu";
+import { ClipView, EDGE, clipAsset } from "./ClipView";
+import { CutMarkers } from "./CutMarkers";
 
 const HEADER_W = 132;
 const RULER_H = 28;
-const EDGE = 7;
 const SNAP_PX = 8;
 
 function rowHeight(track: Track) {
@@ -50,16 +37,7 @@ interface Drag {
   candidates: number[];
   maxDurUs: number | null;
   sourceInUs: number | null;
-}
-
-function clipAsset(project: Project, clip: Clip): Asset | undefined {
-  const c = clip.content;
-  return c.type === "media" ? project.assets.find((a) => a.id === c.assetId) : undefined;
-}
-
-function clipKind(project: Project, clip: Clip): Track["kind"] {
-  if (clip.content.type === "text") return "text";
-  return clipAsset(project, clip)?.kind === "audio" ? "audio" : "video";
+  speed: number;
 }
 
 /** Clip timing while a drag is in progress. */
@@ -67,7 +45,7 @@ function dragResult(d: Drag, minUs: number): { startUs: number; durationUs: numb
   const { clip } = d;
   if (d.mode === "move") return { startUs: Math.max(0, clip.startUs + d.dxUs), durationUs: clip.durationUs };
   if (d.mode === "trimL") {
-    const lower = d.sourceInUs !== null ? -d.sourceInUs : -clip.startUs;
+    const lower = d.sourceInUs !== null ? -d.sourceInUs / d.speed : -clip.startUs;
     const delta = Math.min(Math.max(d.dxUs, lower, -clip.startUs), clip.durationUs - minUs);
     return { startUs: clip.startUs + delta, durationUs: clip.durationUs - delta };
   }
@@ -86,114 +64,27 @@ function tickStep(zoom: number): number {
   return 1200;
 }
 
-function Waveform({ assetId, sourceInUs, durationUs, width, color }: { assetId: string; sourceInUs: number; durationUs: number; width: number; color: string }) {
-  const peaks = useEditor((s) => s.waveforms[assetId]);
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => useEditor.getState().loadWaveform(assetId), [assetId]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !peaks) return;
-    const w = Math.max(1, Math.min(4096, Math.round(width)));
-    const h = el.clientHeight || 24;
-    el.width = w;
-    el.height = h;
-    const ctx = el.getContext("2d")!;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = color;
-    const per = 50; // peaks per second
-    const first = (sourceInUs / US) * per;
-    const span = (durationUs / US) * per;
-    for (let x = 0; x < w; x++) {
-      const a = Math.floor(first + (x / w) * span);
-      const b = Math.max(a + 1, Math.floor(first + ((x + 1) / w) * span));
-      let m = 0;
-      for (let i = a; i < b && i < peaks.length; i++) m = Math.max(m, peaks[i]);
-      // Square root keeps quiet audio visible, roughly like a dB scale.
-      const bar = Math.max(1, Math.sqrt(m / 255) * h);
-      ctx.fillRect(x, h - bar, 1, bar);
-    }
-  }, [peaks, sourceInUs, durationUs, width, color]);
-  if (!peaks) return null;
-  return <canvas ref={ref} className="pointer-events-none absolute inset-x-0 bottom-0 h-[60%] w-full opacity-80" />;
-}
-
-function ClipView({
-  clip,
-  track,
-  project,
-  zoom,
-  selected,
-  ghost,
-  timing,
-  onPointerDown,
-}: {
-  clip: Clip;
-  track: Track;
-  project: Project;
-  zoom: number;
-  selected: boolean;
-  ghost?: boolean;
-  timing?: { startUs: number; durationUs: number };
-  onPointerDown?: (e: React.PointerEvent, clip: Clip, track: Track) => void;
-}) {
-  const asset = clipAsset(project, clip);
-  const thumb = useEditor((s) => (asset ? s.thumbs[asset.id] : undefined));
-  useEffect(() => {
-    if (asset && asset.kind !== "audio") useEditor.getState().loadThumb(asset.id);
-  }, [asset]);
-  const { startUs, durationUs } = timing ?? clip;
-  const left = (startUs / US) * zoom;
-  const width = Math.max(2, (durationUs / US) * zoom);
-  const isCaption = clip.content.type === "text" && track.name === "Captions";
-  const bg =
-    clip.content.type === "text"
-      ? isCaption
-        ? "bg-clip-captions"
-        : "bg-clip-text"
-      : asset?.kind === "audio"
-        ? "bg-clip-audio"
-        : asset?.kind === "image"
-          ? "bg-clip-image"
-          : "bg-clip-video";
-  const Icon = clip.content.type === "text" ? (isCaption ? Captions : Type) : asset?.kind === "audio" ? AudioLines : Film;
-  const label = clip.content.type === "text" ? clip.content.text : (asset?.name ?? "Missing media");
-  const showThumb = thumb && asset && asset.kind !== "audio";
-
+/** Track header toggle. Off states swap the icon and brighten it; accent stays for selection. */
+function TrackToggle({ off, label, onIcon, offIcon, onClick }: { off: boolean; label: string; onIcon: React.ReactNode; offIcon: React.ReactNode; onClick: () => void }) {
   return (
-    <div
-      data-clip-id={clip.id}
-      onPointerDown={onPointerDown ? (e) => onPointerDown(e, clip, track) : undefined}
-      className={`group absolute top-1 bottom-1 overflow-hidden rounded-md ${bg} ${
-        ghost ? "z-30 opacity-85 shadow-xl shadow-black/60 ring-2 ring-accent" : selected ? "z-10 ring-2 ring-accent" : "ring-1 ring-black/40 hover:ring-muted/60"
-      } ${track.hidden ? "opacity-40" : ""} cursor-grab active:cursor-grabbing`}
-      style={{
-        left,
-        width,
-        backgroundImage: showThumb ? `url(${thumb})` : undefined,
-        backgroundSize: showThumb ? "auto 100%" : undefined,
-        backgroundRepeat: "repeat-x",
-      }}
-      aria-label={`${label}, ${formatDuration(durationUs)}`}
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={off}
+      onClick={onClick}
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out ${off ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
     >
-      {asset?.kind === "audio" && clip.content.type === "media" && (
-        <Waveform assetId={asset.id} sourceInUs={clip.content.sourceInUs} durationUs={durationUs} width={width} color="#5fd3a5" />
-      )}
-      <div className={`pointer-events-none flex items-center gap-1 px-1.5 py-0.5 text-[11px] text-fg ${showThumb ? "bg-gradient-to-b from-black/70 to-transparent" : ""}`}>
-        <Icon size={11} className="shrink-0" />
-        <span className="truncate">{label}</span>
-        {width > 110 && <span className="tabular ml-auto shrink-0 pl-1 text-[10px] text-fg/70">{formatDuration(durationUs)}</span>}
-      </div>
-      {/* Trim handles: visible on hover and selection so edges look grabbable. */}
-      <div className={`absolute inset-y-0 left-0 w-[7px] cursor-ew-resize rounded-l-md bg-white/0 ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
-      <div className={`absolute inset-y-0 right-0 w-[7px] cursor-ew-resize rounded-r-md bg-white/0 ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
-    </div>
+      {off ? offIcon : onIcon}
+    </button>
   );
 }
 
-export function Timeline() {
+export function Timeline({ height }: { height: number }) {
   const snap0 = useEditor((s) => s.snap);
   const project = snap0?.project;
   const selection = useEditor((s) => s.selection);
+  const cut = useEditor((s) => s.cut);
   const timeUs = useEditor((s) => s.timeUs);
   const playing = useEditor((s) => s.playing);
   const zoom = useEditor((s) => s.zoom);
@@ -204,12 +95,15 @@ export function Timeline() {
   const [drag, setDrag] = useState<Drag | null>(null);
   const [snapping, setSnapping] = useState(true);
   const [view, setView] = useState({ left: 0, width: 1000 });
+  const [menu, setMenu] = useState<MenuAt | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   const tracks = useMemo(() => (project ? displayTracks(project) : []), [project]);
   const duration = project ? projectDuration(project) : 0;
   const fps = project?.canvas.fps ?? 30;
   const minUs = Math.ceil(US / fps);
-  const laneWidth = Math.max(view.width - HEADER_W, ((duration / US) + 30) * zoom);
+  const laneWidth = Math.max(view.width - HEADER_W, (duration / US + 30) * zoom);
+  const visible: [number, number] = [view.left - 200, view.left + view.width + 200];
 
   const timeAt = useCallback(
     (clientX: number) => {
@@ -252,8 +146,8 @@ export function Timeline() {
     const el = scroller.current;
     if (!el || !playing) return;
     const x = (timeUs / US) * zoom;
-    const visible = el.clientWidth - HEADER_W;
-    if (x > el.scrollLeft + visible - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
+    const lane = el.clientWidth - HEADER_W;
+    if (x > el.scrollLeft + lane - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
   }, [timeUs, playing, zoom]);
 
   // Ctrl + wheel zooms around the pointer.
@@ -282,16 +176,24 @@ export function Timeline() {
     const x = e.clientX - rect.left;
     const mode: Mode = x <= EDGE ? "trimL" : x >= rect.width - EDGE ? "trimR" : "move";
     const asset = clipAsset(project, clip);
-    const sourceInUs = clip.content.type === "media" && asset?.kind !== "image" ? clip.content.sourceInUs : null;
-    const maxDurUs = sourceInUs !== null && asset ? asset.durationUs - sourceInUs : null;
+    const media = clip.content.type === "media" ? clip.content : null;
+    const sourceInUs = media && asset?.kind !== "image" ? media.sourceInUs : null;
+    // The right edge stops where the source ends, at this clip's speed.
+    const maxDurUs = sourceInUs !== null && asset && media ? (asset.durationUs - sourceInUs) / media.speed : null;
     const candidates = [0, useEditor.getState().timeUs];
     for (const c of allClips(project)) if (c.id !== clip.id) candidates.push(c.startUs, c.startUs + c.durationUs);
-    setDrag({ clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs });
+    setDrag({ clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 });
+  };
+
+  const openMenu = (e: React.MouseEvent, clip: Clip) => {
+    e.preventDefault();
+    if (!useEditor.getState().selection.includes(clip.id)) select([clip.id]);
+    setMenu({ clipId: clip.id, x: e.clientX, y: e.clientY });
   };
 
   useEffect(() => {
     if (!drag || !project) return;
-    const kind = clipKind(project, drag.clip);
+    const kind = project.tracks.find((t) => t.id === drag.trackId)?.kind ?? "video";
     const onMove = (e: PointerEvent) => {
       const moved = drag.moved || Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 3;
       if (!moved) return;
@@ -353,7 +255,7 @@ export function Timeline() {
         if (trackId === d.trackId && r.startUs === d.clip.startUs) return;
         edit({ type: "moveClip", clipId: d.clip.id, trackId, startUs: r.startUs });
       } else {
-        const sourceInUs = d.mode === "trimL" && d.sourceInUs !== null ? d.sourceInUs + (r.startUs - d.clip.startUs) : null;
+        const sourceInUs = d.mode === "trimL" && d.sourceInUs !== null ? d.sourceInUs + Math.round((r.startUs - d.clip.startUs) * d.speed) : null;
         edit({ type: "trimClip", clipId: d.clip.id, startUs: r.startUs, durationUs: r.durationUs, sourceInUs });
       }
       select([d.clip.id]);
@@ -397,15 +299,9 @@ export function Timeline() {
     window.addEventListener("pointerup", up);
   };
 
-  if (!project) return <section className="h-[300px] border-t border-line bg-panel" />;
+  if (!project) return <section className="shrink-0 border-t border-line bg-panel" style={{ height }} />;
 
-  const splitTargets = (() => {
-    const under = (c: Clip) => timeUs > c.startUs + minUs && timeUs < c.startUs + c.durationUs - minUs;
-    const sel = allClips(project).filter((c) => selection.includes(c.id) && under(c));
-    if (sel.length > 0) return sel;
-    return (project.tracks.find((t) => t.id === MAIN_TRACK)?.clips ?? []).filter(under);
-  })();
-
+  const canSplit = splitTargets(project, selection, timeUs).length > 0;
   const step = tickStep(zoom);
   const firstTick = Math.floor(Math.max(0, view.left - 100) / zoom / step) * step;
   const lastTick = (view.left + view.width + 100) / zoom;
@@ -414,39 +310,34 @@ export function Timeline() {
 
   const ghostTiming = drag?.moved ? dragResult(drag, minUs) : null;
   const ghostTrackId = drag?.moved ? (drag.target === undefined ? drag.trackId : drag.target) : null;
-  const dropTime = assetDrag && scroller.current ? (() => {
-    const r = scroller.current.getBoundingClientRect();
-    return assetDrag.x >= r.left && assetDrag.x <= r.right && assetDrag.y >= r.top && assetDrag.y <= r.bottom ? timeAt(assetDrag.x) : null;
-  })() : null;
+  const dropTime =
+    assetDrag && scroller.current
+      ? (() => {
+          const r = scroller.current.getBoundingClientRect();
+          return assetDrag.x >= r.left && assetDrag.x <= r.right && assetDrag.y >= r.top && assetDrag.y <= r.bottom ? timeAt(assetDrag.x) : null;
+        })()
+      : null;
   const emptyTimeline = allClips(project).length === 0;
+  const dragKind = drag ? project.tracks.find((t) => t.id === drag.trackId)?.kind : null;
+  const deleteLabel = cut ? "Delete transition (Delete)" : selection.length ? "Delete selection (Delete)" : "Delete: select a clip first";
 
   return (
-    <section className="flex h-[300px] shrink-0 flex-col border-t border-line bg-panel" aria-label="Timeline">
+    <section className="flex shrink-0 flex-col border-t border-line bg-panel" style={{ height }} aria-label="Timeline">
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
-        <IconButton
-          label={splitTargets.length ? "Split at playhead (S)" : "Split: move the playhead over a clip"}
-          disabled={splitTargets.length === 0}
-          onClick={async () => {
-            for (const c of splitTargets) await edit({ type: "splitClip", clipId: c.id, atUs: Math.round(timeUs) });
-          }}
-        >
+        <IconButton label={canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={!canSplit} onClick={splitAtPlayhead}>
           <Scissors size={16} />
         </IconButton>
-        <IconButton
-          label={selection.length ? "Delete selection (Delete)" : "Delete: select a clip first"}
-          disabled={selection.length === 0}
-          onClick={() => edit({ type: "deleteClips", clipIds: selection }).then((s) => s && select([]))}
-        >
+        <IconButton label={deleteLabel} disabled={selection.length === 0 && !cut} onClick={deleteSelection}>
           <Trash2 size={16} />
+        </IconButton>
+        <IconButton label={selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"} disabled={selection.length === 0} onClick={duplicateSelection}>
+          <Copy size={15} />
         </IconButton>
         <span className="mx-1 h-5 w-px bg-line" />
         <IconButton label={snapping ? "Snapping on" : "Snapping off"} active={snapping} onClick={() => setSnapping(!snapping)}>
           <Magnet size={16} />
         </IconButton>
         <div className="flex-1" />
-        <span className="tabular mr-2 text-[12px] text-muted">
-          {formatTime(timeUs)} <span className="text-subtle">/ {formatTime(duration)}</span>
-        </span>
         <IconButton label="Zoom out (-)" onClick={() => setZoom(zoom / 1.3)}>
           <ZoomOut size={16} />
         </IconButton>
@@ -476,11 +367,7 @@ export function Timeline() {
         </IconButton>
       </div>
 
-      <div
-        ref={scroller}
-        className="relative min-h-0 flex-1 overflow-auto"
-        onScroll={(e) => setView({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })}
-      >
+      <div ref={scroller} className="relative min-h-0 flex-1 overflow-auto" onScroll={(e) => setView({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })}>
         <div className="relative" style={{ width: HEADER_W + laneWidth, minHeight: "100%" }}>
           {/* Ruler */}
           <div className="sticky top-0 z-40 flex" style={{ height: RULER_H }}>
@@ -489,7 +376,7 @@ export function Timeline() {
               {ticks.map((t) => (
                 <div key={t} className="absolute top-0 h-full" style={{ left: t * zoom }}>
                   <div className="h-2.5 w-px bg-subtle" />
-                  <span className="tabular absolute left-1 top-2.5 text-[10px] text-subtle">{formatTime(t * US, step < 1)}</span>
+                  <span className="tabular absolute left-1 top-2.5 text-[11px] text-muted">{formatTime(t * US, step < 1)}</span>
                   {[1, 2, 3, 4].map((i) => (
                     <div key={i} className="absolute top-0 h-1.5 w-px bg-line" style={{ left: (i * step * zoom) / 5 }} />
                   ))}
@@ -500,40 +387,33 @@ export function Timeline() {
 
           {/* Tracks */}
           <div className="relative flex flex-col gap-1 py-1">
-            {drag?.moved && drag.target === null && clipKind(project, drag.clip) !== "audio" && (
-              <div className="ml-[132px] h-0.5 bg-accent" title="Drop to create a new track" />
-            )}
+            {drag?.moved && drag.target === null && dragKind !== "audio" && <div className="ml-[132px] h-0.5 bg-accent" title="Drop to create a new track" />}
             {tracks.map((track) => {
               const h = rowHeight(track);
               const isMain = track.id === MAIN_TRACK;
-              const KindIcon = track.kind === "audio" ? AudioLines : track.kind === "text" ? (track.name === "Captions" ? Captions : Type) : Film;
+              const KindIcon = track.kind === "audio" ? AudioLines : track.kind === "text" ? (isCaptionTrack(track) ? Captions : Type) : Film;
               return (
                 <div key={track.id} className="flex" style={{ height: h }}>
-                  <div
-                    className="sticky left-0 z-20 flex shrink-0 items-center gap-1 border-r border-line bg-panel pl-2 pr-1"
-                    style={{ width: HEADER_W }}
-                  >
+                  <div className="sticky left-0 z-20 flex shrink-0 items-center gap-1 border-r border-line bg-panel pl-2 pr-1" style={{ width: HEADER_W }}>
                     <KindIcon size={13} className="shrink-0 text-muted" />
                     <span className={`flex-1 truncate text-[12px] ${isMain ? "font-medium text-fg" : "text-muted"}`}>{track.name || track.kind}</span>
                     {track.kind !== "audio" && (
-                      <IconButton
+                      <TrackToggle
+                        off={track.hidden}
                         label={track.hidden ? `Show ${track.name}` : `Hide ${track.name}`}
-                        className="h-7 w-7"
-                        active={track.hidden}
+                        onIcon={<Eye size={14} />}
+                        offIcon={<EyeOff size={14} />}
                         onClick={() => edit({ type: "updateTrack", trackId: track.id, hidden: !track.hidden })}
-                      >
-                        {track.hidden ? <EyeOff size={14} /> : <Eye size={14} />}
-                      </IconButton>
+                      />
                     )}
                     {track.kind !== "text" && (
-                      <IconButton
+                      <TrackToggle
+                        off={track.muted}
                         label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`}
-                        className="h-7 w-7"
-                        active={track.muted}
+                        onIcon={<Volume2 size={14} />}
+                        offIcon={<VolumeX size={14} />}
                         onClick={() => edit({ type: "updateTrack", trackId: track.id, muted: !track.muted })}
-                      >
-                        {track.muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-                      </IconButton>
+                      />
                     )}
                   </div>
                   <div
@@ -541,9 +421,7 @@ export function Timeline() {
                       if (el) rows.current.set(track.id, el);
                       else rows.current.delete(track.id);
                     }}
-                    className={`relative flex-1 ${isMain ? "bg-white/[0.035]" : "bg-white/[0.015]"} ${
-                      assetDrag && dropTime !== null ? "outline-1 outline-dashed outline-line" : ""
-                    }`}
+                    className={`relative flex-1 ${isMain ? "bg-white/[0.035]" : "bg-white/[0.015]"} ${assetDrag && dropTime !== null ? "outline-1 outline-dashed outline-line" : ""}`}
                     onPointerDown={(e) => {
                       if (e.target === e.currentTarget) {
                         select([]);
@@ -561,7 +439,7 @@ export function Timeline() {
                         <div
                           key={clip.id}
                           className="absolute top-1 bottom-1 rounded-md border border-dashed border-muted/50"
-                          style={{ left: (clip.startUs / US) * zoom, width: (clip.durationUs / US) * zoom }}
+                          style={{ left: (clip.startUs / US) * zoom + 1, width: (clip.durationUs / US) * zoom - 2 }}
                         />
                       ) : (
                         <ClipView
@@ -570,37 +448,47 @@ export function Timeline() {
                           track={track}
                           project={project}
                           zoom={zoom}
+                          height={h}
+                          visible={visible}
                           selected={selection.includes(clip.id)}
                           onPointerDown={startClipDrag}
+                          onContextMenu={openMenu}
                         />
                       ),
                     )}
+                    {isMain && !drag?.moved && <CutMarkers project={project} zoom={zoom} />}
                     {drag?.moved && ghostTiming && ghostTrackId === track.id && (
-                      <ClipView clip={drag.clip} track={track} project={project} zoom={zoom} selected ghost timing={ghostTiming} />
+                      <ClipView clip={drag.clip} track={track} project={project} zoom={zoom} height={h} visible={visible} selected ghost timing={ghostTiming} />
                     )}
                   </div>
                 </div>
               );
             })}
-            {drag?.moved && drag.target === null && clipKind(project, drag.clip) === "audio" && <div className="ml-[132px] h-0.5 bg-accent" />}
+            {drag?.moved && drag.target === null && dragKind === "audio" && <div className="ml-[132px] h-0.5 bg-accent" />}
           </div>
 
           {/* Ghost for a drag onto a new track follows the pointer row-less. */}
           {drag?.moved && drag.target === null && ghostTiming && (
             <div className="pointer-events-none absolute z-30" style={{ left: HEADER_W, top: RULER_H, height: 44, width: laneWidth }}>
-              <ClipView clip={drag.clip} track={project.tracks.find((t) => t.id === drag.trackId)!} project={project} zoom={zoom} selected ghost timing={ghostTiming} />
+              <ClipView
+                clip={drag.clip}
+                track={project.tracks.find((t) => t.id === drag.trackId)!}
+                project={project}
+                zoom={zoom}
+                height={44}
+                visible={visible}
+                selected
+                ghost
+                timing={ghostTiming}
+              />
             </div>
           )}
 
           {/* Snap guide */}
-          {drag?.moved && drag.snapUs !== null && (
-            <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn" style={{ left: HEADER_W + (drag.snapUs / US) * zoom }} />
-          )}
+          {drag?.moved && drag.snapUs !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn" style={{ left: HEADER_W + (drag.snapUs / US) * zoom }} />}
 
           {/* Drop position for media dragged from the panel */}
-          {dropTime !== null && (
-            <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent" style={{ left: HEADER_W + (dropTime / US) * zoom }} />
-          )}
+          {dropTime !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent" style={{ left: HEADER_W + (dropTime / US) * zoom }} />}
 
           {/* Playhead */}
           <div className="pointer-events-none absolute bottom-0 top-0 z-[45]" style={{ left: HEADER_W + (timeUs / US) * zoom }}>
@@ -609,15 +497,13 @@ export function Timeline() {
           </div>
 
           {drag?.moved && ghostTiming && (
-            <div
-              className="tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg"
-              style={{ left: HEADER_W + (ghostTiming.startUs / US) * zoom, top: 2 }}
-            >
+            <div className="tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg" style={{ left: HEADER_W + (ghostTiming.startUs / US) * zoom, top: 2 }}>
               {drag.mode === "move" ? formatTime(ghostTiming.startUs) : formatDuration(ghostTiming.durationUs)}
             </div>
           )}
         </div>
       </div>
+      {menu && <ClipMenu at={menu} onClose={closeMenu} />}
     </section>
   );
 }

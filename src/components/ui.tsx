@@ -1,4 +1,6 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { Check } from "lucide-react";
+import type { TextStyle } from "../lib/types";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -40,7 +42,7 @@ export function IconButton({
       aria-label={label}
       title={label}
       aria-pressed={active || undefined}
-      className={`inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35 disabled:active:translate-y-0 ${
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35 disabled:active:translate-y-0 ${
         active ? "bg-accent/20 text-accent" : "text-muted hover:bg-raised hover:text-fg"
       } ${className}`}
       {...rest}
@@ -55,12 +57,82 @@ export function Field({ label, children, hint }: { label: string; children: Reac
     <label className="flex flex-col gap-1.5">
       <span className="text-[12px] text-muted">{label}</span>
       {children}
-      {hint && <span className="text-[11px] text-subtle">{hint}</span>}
+      {hint && <span className="text-[11px] text-muted">{hint}</span>}
     </label>
   );
 }
 
-/** Slider with a numeric readout that can also be typed into. */
+/** Accepts "12,5", "50 %" and "-3" alike. */
+const parseNumber = (s: string) => Number(s.replace(",", ".").replace(/[^\d.+-]/g, "") || "x");
+
+/**
+ * Numeric field that keeps what you type until Enter or blur, so partial input like "-"
+ * or "1." is never rejected mid-typing. Esc restores the value; ↑/↓ step (Shift ×10).
+ */
+export function NumberInput({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  format,
+  parse = parseNumber,
+  disabled,
+  className = "w-14",
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  format: (v: number) => string;
+  parse?: (s: string) => number;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const cancel = useRef(false);
+  const clamp = (v: number) => Math.max(min, Math.min(max, v));
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") e.currentTarget.blur();
+    else if (e.key === "Escape") {
+      e.stopPropagation();
+      cancel.current = true;
+      e.currentTarget.blur();
+    } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      const base = draft !== null && Number.isFinite(parse(draft)) ? parse(draft) : value;
+      const next = clamp(base + (e.key === "ArrowUp" ? 1 : -1) * step * (e.shiftKey ? 10 : 1));
+      onChange(next);
+      setDraft(format(next));
+    }
+  };
+  return (
+    <input
+      aria-label={label}
+      inputMode="decimal"
+      disabled={disabled}
+      className={`tabular h-6 rounded border border-line bg-raised px-1.5 text-right text-[12px] text-fg focus:border-accent disabled:opacity-40 ${className}`}
+      value={draft ?? format(value)}
+      onFocus={(e) => {
+        setDraft(format(value));
+        e.currentTarget.select();
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const v = draft === null ? NaN : parse(draft);
+        if (!cancel.current && Number.isFinite(v) && format(clamp(v)) !== format(value)) onChange(clamp(v));
+        cancel.current = false;
+        setDraft(null);
+      }}
+      onKeyDown={onKeyDown}
+    />
+  );
+}
+
+/** Label, slider and a typeable value on one row, like CapCut's property rows. */
 export function Slider({
   label,
   value,
@@ -70,7 +142,9 @@ export function Slider({
   unit = "",
   onChange,
   format = (v) => String(Math.round(v * 100) / 100),
-  parse = Number,
+  parse,
+  disabled,
+  title,
 }: {
   label: string;
   value: number;
@@ -81,24 +155,12 @@ export function Slider({
   onChange: (v: number) => void;
   format?: (v: number) => string;
   parse?: (s: string) => number;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between">
-        <span className="text-[12px] text-muted">{label}</span>
-        <span className="flex items-center gap-1">
-          <input
-            aria-label={`${label} value`}
-            className="tabular h-6 w-14 rounded border border-line bg-raised px-1.5 text-right text-[12px] text-fg"
-            value={format(value)}
-            onChange={(e) => {
-              const v = parse(e.target.value);
-              if (Number.isFinite(v)) onChange(Math.max(min, Math.min(max, v)));
-            }}
-          />
-          {unit && <span className="w-3 text-[11px] text-subtle">{unit}</span>}
-        </span>
-      </div>
+    <div className="flex items-center gap-2" title={title}>
+      <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
       <input
         type="range"
         aria-label={label}
@@ -106,9 +168,14 @@ export function Slider({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full"
+        className="min-w-0 flex-1 disabled:opacity-40"
       />
+      <span className="flex shrink-0 items-center gap-0.5">
+        <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} />
+        <span className="w-3 text-[11px] text-muted">{unit}</span>
+      </span>
     </div>
   );
 }
@@ -116,9 +183,9 @@ export function Slider({
 export function Section({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
   return (
     <section className="flex flex-col gap-3 border-b border-line px-4 py-4 last:border-b-0">
-      <div className="flex items-center justify-between">
+      <div className="flex min-h-6 items-center justify-between gap-2">
         <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h3>
-        {actions}
+        {actions && <div className="flex items-center gap-0.5">{actions}</div>}
       </div>
       {children}
     </section>
@@ -130,7 +197,7 @@ export function ColorInput({ label, value, onChange }: { label: string; value: s
     <label className="flex items-center justify-between gap-2">
       <span className="text-[12px] text-muted">{label}</span>
       <span className="flex items-center gap-2">
-        <span className="tabular text-[12px] text-subtle">{value.slice(0, 7).toUpperCase()}</span>
+        <span className="tabular text-[12px] text-muted">{value.slice(0, 7).toUpperCase()}</span>
         <input
           type="color"
           aria-label={label}
@@ -143,20 +210,181 @@ export function ColorInput({ label, value, onChange }: { label: string; value: s
   );
 }
 
+export function Checkbox({
+  label,
+  checked,
+  onChange,
+  disabled,
+  title,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <label className={`flex items-center gap-2 ${disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`} title={title}>
+      <span className="relative inline-flex">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="peer absolute inset-0 m-0 h-full w-full cursor-[inherit] opacity-0"
+        />
+        <span
+          aria-hidden
+          className={`flex h-4 w-4 items-center justify-center rounded border transition-colors duration-[120ms] ease-out peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-accent ${
+            checked ? "border-accent bg-accent text-black" : "border-muted/60 bg-raised"
+          }`}
+        >
+          {checked && <Check size={12} strokeWidth={3} />}
+        </span>
+      </span>
+      <span className="text-[12px] text-fg">{label}</span>
+    </label>
+  );
+}
+
+/** Text tabs with an underline, arrow keys move between them. */
+export function TabBar<T extends string>({ tabs, value, onChange, label }: { tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void; label: string }) {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const i = tabs.findIndex((t) => t.id === value);
+    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+    onChange(next.id);
+    (e.currentTarget.querySelector(`[data-tab="${next.id}"]`) as HTMLElement | null)?.focus();
+  };
+  return (
+    <div role="tablist" aria-label={label} className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2" onKeyDown={onKeyDown}>
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role="tab"
+          data-tab={t.id}
+          aria-selected={t.id === value}
+          tabIndex={t.id === value ? 0 : -1}
+          onClick={() => onChange(t.id)}
+          className={`h-10 shrink-0 px-2 text-[13px] transition-colors duration-[120ms] ease-out ${
+            t.id === value ? "font-medium text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Small exclusive choice, e.g. animation In / Out or speed presets. */
+export function Segmented<T extends string | number>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { id: T; label: ReactNode; title?: string }[];
+  value: T | null;
+  onChange: (id: T) => void;
+  label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className="flex gap-1 rounded-md bg-bg p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          aria-pressed={o.id === value}
+          title={o.title}
+          onClick={() => onChange(o.id)}
+          className={`tabular h-7 flex-1 rounded px-2 text-[12px] transition-colors duration-[120ms] ease-out ${
+            o.id === value ? "bg-line font-medium text-fg" : "text-muted hover:text-fg"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Preset grid item: preview on top, label below; the selected one carries a check. */
+export function PresetTile({
+  label,
+  selected,
+  onClick,
+  disabled,
+  title,
+  children,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      disabled={disabled}
+      title={title ?? label}
+      onClick={onClick}
+      className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <span
+        className={`preset-tile relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
+          selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line group-enabled:group-hover:border-muted"
+        }`}
+      >
+        {children}
+        {selected && (
+          <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-black">
+            <Check size={11} strokeWidth={3} />
+          </span>
+        )}
+      </span>
+      <span className={`truncate text-[11px] ${selected ? "font-medium text-fg" : "text-muted"}`}>{label}</span>
+    </button>
+  );
+}
+
+/** Determinate when `value` is above 0, otherwise an indeterminate sweep. */
 export function ProgressBar({ value, className = "" }: { value: number; className?: string }) {
+  const known = value > 0;
   return (
     <div
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={Math.round(value * 100)}
+      aria-valuenow={known ? Math.round(value * 100) : undefined}
       className={`h-1.5 overflow-hidden rounded-full bg-raised ${className}`}
     >
-      <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${Math.max(2, value * 100)}%` }} />
+      {known ? (
+        <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${Math.max(2, value * 100)}%` }} />
+      ) : (
+        <div className="indeterminate h-full w-1/3 rounded-full bg-accent" />
+      )}
     </div>
   );
 }
 
-export function Kbd({ children }: { children: ReactNode }) {
-  return <kbd className="rounded border border-line bg-raised px-1 text-[10px] text-muted">{children}</kbd>;
+export function TextSwatch({ style, label }: { style: TextStyle; label: string }) {
+  return (
+    <span
+      className="inline-block max-w-full truncate rounded px-1.5 text-[15px] leading-6"
+      style={{
+        color: style.color,
+        fontWeight: style.bold ? 800 : 400,
+        background: style.background ?? undefined,
+        WebkitTextStroke: style.strokeWidth > 0 ? `${Math.min(2, style.strokeWidth / 4)}px ${style.strokeColor}` : undefined,
+        paintOrder: "stroke fill",
+      }}
+    >
+      {label}
+    </span>
+  );
 }
