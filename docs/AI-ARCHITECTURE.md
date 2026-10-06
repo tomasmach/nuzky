@@ -42,7 +42,7 @@ A run groups one agent turn. There is one linear history: a run is one entry in 
 
 ## Transcripts
 
-- A transcript belongs to a media file, not to a timeline: words with times in the file's own (source) time, stored once in `<data dir>/capopen/transcripts/<fingerprint>.json`. The fingerprint is the file size and a hash of its first and last MiB, so the same file in several projects is recognised once and a moved file keeps its transcript.
+- A transcript belongs to a media file, not to a timeline: words with times in the file's own (source) time, stored once in `<data dir>/capopen/transcripts/<fingerprint>.json`. The fingerprint hashes the file size, its first and last MiB, and 32 evenly spaced 64 KiB chunks. The same file in several projects is recognised once and a moved file keeps its transcript. Version 2 records also store duration_us; older records and duration differences over 1 ms are treated as missing.
 - What the timeline says is always derived: `engine::speech::map_words` maps the words of every heard clip (unmuted track, volume above 0, a video asset with sound, detached sound included) through its source range and speed. Cuts, slivers, speed, undo and redo are therefore always right, and a transcript never goes out of date; the only note left is "N clips not transcribed".
 - A cut made from words carries `expected_speech_key`, a hash of exactly what `map_words` reads. The session rejects it with `SPEECH_CHANGED` when the speech moved in the meantime, and accepts it after unrelated edits such as a caption restyle.
 - Tracks have `keep_in_place`; `RippleDeleteRanges` without `keep_track_ids` uses it, so agents cut the way the UI does and leave music alone.

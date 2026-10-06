@@ -24,7 +24,7 @@ pub fn check_media(project: &Project) -> Result<()> {
     Ok(())
 }
 
-pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>) -> Result<Vec<u8>> {
+pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_area: bool) -> Result<Vec<u8>> {
     ensure!(
         !times.is_empty() && times.len() <= MAX_FRAMES,
         "Provide 1..={MAX_FRAMES} frame times"
@@ -53,9 +53,10 @@ pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>) -> Re
     }
     let mut renderer = Renderer::new().context("Starting frame renderer")?;
     for (index, &time) in times.iter().enumerate() {
-        let rgba = renderer
+        let mut rgba = renderer
             .render(project, time, width, height, Wait::Exact, false)
             .context("Rendering contact sheet frame")?;
+        if safe_area { shade_unsafe(&mut rgba, width, height, &project.canvas); }
         let (x, y) = (
             index as u32 % columns * width,
             index as u32 / columns * (height + LABEL_HEIGHT),
@@ -125,5 +126,42 @@ fn label(pixels: &mut [u8], stride: u32, x: u32, y: u32, text: &str, available: 
                 }
             }
         }
+    }
+}
+
+fn shade_unsafe(pixels: &mut [u8], width: u32, height: u32, canvas: &capopen_engine::model::Canvas) {
+    let Some(area) = canvas.safe_area() else { return };
+    for y in 0..height {
+        for x in 0..width {
+            let cx = (x as f32 + 0.5) * canvas.width as f32 / width as f32;
+            let cy = (y as f32 + 0.5) * canvas.height as f32 / height as f32;
+            if cx < area.left || cx >= area.right || cy < area.top || cy >= area.bottom {
+                let offset = ((y * width + x) * 4) as usize;
+                for (channel, overlay) in [240u16, 80, 60].into_iter().enumerate() {
+                    pixels[offset + channel] = ((u16::from(pixels[offset + channel]) * 3 + overlay) / 4) as u8;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_area_shades_only_unsafe_vertical_margins() {
+        let mut canvas = Project::new("safe area").canvas;
+        canvas.width = 1080;
+        canvas.height = 1920;
+        let mut pixels = vec![100; 108 * 192 * 4];
+        shade_unsafe(&mut pixels, 108, 192, &canvas);
+        assert_eq!(&pixels[(80 * 108 + 54) * 4..][..4], &[100; 4]);
+        assert_eq!(&pixels[..4], &[135,95,90,100]);
+        canvas.width = 1920;
+        canvas.height = 1080;
+        let before = pixels.clone();
+        shade_unsafe(&mut pixels, 108, 192, &canvas);
+        assert_eq!(pixels, before);
     }
 }

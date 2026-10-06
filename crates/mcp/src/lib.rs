@@ -1,5 +1,4 @@
 //! Headless stdio MCP. No app IPC or network listener is started here.
-mod jobs;
 mod media;
 mod params;
 mod tools;
@@ -41,8 +40,8 @@ pub fn serve(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
         service.waiting().await.context("MCP transport")?;
         Ok(())
     });
-    let finish = backend.session.disconnect();
-    backend.jobs.shutdown();
+    let finish = backend.host.session.disconnect();
+    backend.host.jobs.shutdown();
     result.and(finish)
 }
 
@@ -52,16 +51,16 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<
         .as_object()
         .context("Tool schema must be an object")?
         .clone();
-    let read_only = matches!(name, "get_state" | "inspect_frames");
+    let read_only = matches!(name, "get_state" | "get_transcript" | "inspect_frames");
     let annotations = ToolAnnotations::new()
         .read_only(read_only)
         .destructive(matches!(
             name,
-            "apply_edits" | "end_run" | "undo_run" | "build_captions" | "resolve_recovery"
+            "apply_edits" | "edit_transcript" | "end_run" | "undo_run" | "build_captions" | "resolve_recovery"
         ))
         .idempotent(matches!(
             name,
-            "get_state" | "inspect_frames" | "apply_edits"
+            "get_state" | "get_transcript" | "inspect_frames" | "apply_edits"
         ))
         .open_world(false);
     Ok(Tool::new(name, description, object).with_annotations(annotations))
@@ -71,7 +70,7 @@ fn catalog() -> Result<Vec<Tool>> {
     Ok(vec![
         tool::<params::State>(
             "get_state",
-            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), speech_key, revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
+            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), timeline-layout speech_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
         )?,
         tool::<params::Begin>(
             "begin_run",
@@ -99,23 +98,31 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Inspect>(
             "inspect_frames",
-            "Render 1–16 timeline times_us (integer microseconds) with exact frames. Returns ONE PNG contact sheet with seconds.microseconds labels and snapshot revision. width is per-frame pixels (96–1280; default 320). Fails if referenced media is missing. Check captions, face framing and cut boundaries before exporting.",
+            "Render 1–16 timeline times_us as ONE PNG contact sheet with timestamp labels and revision. width is per-frame pixels (96–1280; default 320). safe_area=true overlays translucent unsafe margins on vertical canvases to check captions and faces. Missing media or times outside the timeline are errors.",
         )?,
         tool::<params::Analyze>(
             "analyze",
-            "Start a local analysis job for an asset. Poll job(get) for results. Returned ranges/cuts use SOURCE integer microseconds, not current timeline time. silences: padded quiet ranges; params threshold_db, min_silence_us (400000), pad_us (120000). loudness: RMS dBFS with window_us (100000), not LUFS. scenes: cuts with threshold (0.18), min_gap_us (300000). fillers: requires params.transcript_id from a completed asset transcription; suggestions need context review. Cancellation of analysis/transcription takes effect after the current engine operation.",
+            "Start local asset analysis. Poll job(get). Source microseconds. silences: threshold_db, min_silence_us (400000), pad_us (120000); loudness: window_us (100000), RMS dBFS; scenes: threshold (0.18), min_gap_us (300000); fillers: reads stored source words, transcribe first. Review filler suggestions in context.",
         )?,
         tool::<params::Transcribe>(
             "transcribe",
-            "Start LOCAL word-timestamp transcription; returns a job id. target is 'timeline' or an asset id. Prefer asset transcription before cutting: build_captions maps its words through the retained main-track source ranges and speed. Timeline transcripts become stale when timeline audio changes. language e.g. 'cs', 'en', 'auto'; model is an installed Whisper name or absolute local .bin path (Silero .bin alongside it). Poll job(get), spaced a few seconds apart; completed job id is transcript_id. Word times are integer microseconds in the target's coordinates. No automatic model download.",
+            "Recognise source files locally and store reusable word timestamps. Omit asset_ids to recognise every heard asset lacking a stored transcript (includes detached sound). Supply asset_ids to re-recognise them. language defaults to auto. model defaults to installed large-v3-turbo-q5_0, else small; an absolute local model path is accepted. No model download. Returns job_id; poll job with pauses. Result assets lists asset_id, words count, language. Then use get_transcript.",
+        )?,
+        tool::<params::GetTranscript>(
+            "get_transcript",
+            "Read derived timeline speech: speech_key, revision, words {i,start_us,end_us,text,p}, sentences {from,to,start_us,end_us,text}, pauses {after_word,gap_us}, untranscribed asset ids. i/from/to are global zero-based INCLUSIVE word indices valid for this speech_key; p is recognition probability. Sentences split at phrase punctuation or gaps >=600000 us; pauses include gaps >=300000 us. Optional range_us=[start,end) filters results without renumbering. Use word indices with edit_transcript; never map source times by hand.",
+        )?,
+        tool::<params::EditTranscript>(
+            "edit_transcript",
+            "Cut by INCLUSIVE zero-based word ranges [[from,to],...]. Requires run_id and the current get_transcript speech_key (includes recognition contents). Optional request_id: reuse it with identical arguments after a save failure to finish the original save without cutting again; omitted ids are generated. Supply delete OR keep; omit both to shorten pauses only. shorten_pauses_us defaults to 300000. Removed passages take surrounding silence, kept passages retain at most 80 ms before and 120 ms after a boundary word; internal long pauses lose their middle. No boundary lands inside a word. One ripple edit respects tracks kept in place. dry_run=true simulates without changing project/history. Returns duration_us {before,after}, removed_us, ranges (engine startUs/endUs), preview_text (first 400 characters), predicted/new speech_key, revision, dry_run. Apply using the ORIGINAL speech_key after checking the dry run. SPEECH_CHANGED rejects stale speech; overlapping speech may be rejected.",
         )?,
         tool::<params::Job>(
             "job",
-            "Read job progress/result or request cancellation. Results carry the snapshot revision and session_epoch. Transcription returns words and segments; its job_id is the transcript_id. Poll with pauses, not a tight loop. Cancellation is cooperative; cancel_requested can remain true while the current engine operation finishes. No cancelled transcript is published.",
+            "Read job progress/result or request cancellation. Includes owner, kind, snapshot revision and session_epoch. Poll with pauses. Cancellation is cooperative after the current engine operation; completed assets remain stored when a later asset is cancelled.",
         )?,
         tool::<params::Captions>(
             "build_captions",
-            "Group transcript words deterministically into caption clips inside the owning run. Defaults to CaptionGrouping defaults (2 words, 15 characters). A single longer word remains intact. Asset transcripts map SOURCE integer microseconds through current main-track cuts/speed. Timeline transcripts require unchanged audio. Adds one Captions track, or REPLACES that single track; other text tracks are untouched. Multiple Captions tracks require explicit replaceCaptions via apply_edits. After manual text corrections, check get_state.caption_stats again; corrections can exceed the original grouping limits. style is optional and uses canvas pixels. Default is the app Reel preset: size 95, white, regular weight, black stroke 7.5, no background, default Inter. Prefer it unless the user asks for another look. Inspect rendered frames.",
+            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
         )?,
         tool::<params::Export>(
             "export_video",

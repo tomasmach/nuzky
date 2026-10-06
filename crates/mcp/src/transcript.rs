@@ -1,29 +1,24 @@
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anyhow::{Context, Result, ensure};
-use capopen_analysis::{
-    AudioSource, CaptionGrouping, Transcript, Word, group_words, transcribe_words,
-};
+use capopen_analysis::{CaptionGrouping, group_words};
 use capopen_engine::{
     Project,
-    audio::{Mixer, ensure_pcm, has_audio, us_to_samples},
-    edit::{CaptionSegment, EditCmd},
+    edit::{EditCmd, TimeRange},
     model::{ClipContent, TextStyle, TrackKind},
+    speech::{TimelineWord, Word, is_heard, map_words},
 };
+use capopen_session::transcripts::TranscriptStore;
 use serde_json::{Value, json};
 
-use crate::{jobs::check_cancel, media::check_media};
-
-const AUDIO_CHUNK_FRAMES: usize = 48_000;
 const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";
-
-#[derive(Clone)]
-pub struct TranscriptRecord {
-    pub target: String,
-    pub transcript: Transcript,
-    pub project: Project,
-}
+pub const BEFORE_WORD_US: i64 = 80_000;
+pub const AFTER_WORD_US: i64 = 120_000;
+const SENTENCE_GAP_US: i64 = 600_000;
+const PAUSE_GAP_US: i64 = 300_000;
+pub const DEFAULT_PAUSE_US: i64 = 300_000;
 
 pub fn models(model: &str) -> Result<(PathBuf, PathBuf)> {
     let direct = PathBuf::from(model);
@@ -53,325 +48,403 @@ pub fn models(model: &str) -> Result<(PathBuf, PathBuf)> {
     Ok((path, vad))
 }
 
-pub fn transcribe(
-    project: Project,
-    target: String,
-    language: &str,
-    model: &Path,
-    vad: &Path,
-    cache: &Path,
-    cancel: &AtomicBool,
-) -> Result<TranscriptRecord> {
-    check_cancel(cancel)?;
-    let transcript = if target == "timeline" {
-        let audio = timeline_audio(&project, cache, cancel)?;
-        check_cancel(cancel)?;
-        transcribe_words(AudioSource::TimelineAudio(&audio), model, vad, language)?
+
+pub fn best_model() -> &'static str {
+    if capopen_analysis::models_dir().join("ggml-large-v3-turbo-q5_0.bin").is_file() {
+        "large-v3-turbo-q5_0"
     } else {
-        let asset = project
-            .asset(&target)
-            .context("UNKNOWN_ASSET: transcription target")?;
-        ensure!(
-            Path::new(&asset.path).is_file(),
-            "MEDIA_MISSING: {}",
-            asset.path
-        );
-        transcribe_words(AudioSource::Asset { asset, cache }, model, vad, language)?
+        "small"
+    }
+}
+
+pub fn heard_assets(project: &Project) -> HashSet<String> {
+    project.tracks.iter().flat_map(|track| track.clips.iter().filter_map(|clip| {
+        if is_heard(project, track, clip)
+            && let ClipContent::Media { asset_id, .. } = &clip.content
+        { Some(asset_id.clone()) } else { None }
+    })).collect()
+}
+
+pub struct Derived {
+    pub sources: HashMap<String, Vec<Word>>,
+    pub words: Vec<TimelineWord>,
+    pub untranscribed: Vec<String>,
+}
+
+pub fn derive(project: &Project, store: &TranscriptStore) -> Result<Derived> {
+    let mut sources = HashMap::new();
+    let mut untranscribed = Vec::new();
+    let heard = heard_assets(project);
+    for asset in project.assets.iter().filter(|a| heard.contains(&a.id)) {
+        match store.get(asset)? {
+            Some(record) => { sources.insert(asset.id.clone(), record.words); }
+            None => untranscribed.push(asset.id.clone()),
+        }
+    }
+    Ok(Derived { words: map_words(project, &sources), sources, untranscribed })
+}
+
+/// Word indices also change on re-recognition, even when the timeline layout stays put.
+pub fn word_key(project: &Project, words: &[TimelineWord]) -> String {
+    let mut hash = DefaultHasher::new();
+    for word in words {
+        (&word.asset_id, word.source_start_us, word.start_us, word.end_us, &word.text).hash(&mut hash);
+    }
+    format!("{}:{:016x}", capopen_engine::speech::speech_key(project), hash.finish())
+}
+
+pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
+    if let Some([start, end]) = range {
+        ensure!(start >= 0 && end > start, "INVALID_RANGE: expected [start_us,end_us)");
+    }
+    let visible = |start, end| range.is_none_or(|[a, b]| start < b && end > a);
+    let words = &derived.words;
+    let numbered: Vec<_> = words.iter().enumerate().filter(|(_, w)| visible(w.start_us, w.end_us))
+        .map(|(i, w)| json!({"i":i,"start_us":w.start_us,"end_us":w.end_us,"text":w.text,"p":w.probability})).collect();
+    let mut sentences = Vec::new();
+    let mut from = 0;
+    for (i, word) in words.iter().enumerate() {
+        if word.text.trim_end().ends_with(['.', ',', '!', '?', ';', ':', '…'])
+            || words.get(i + 1).is_none_or(|next| next.start_us - word.end_us >= SENTENCE_GAP_US)
+        {
+            let start = words[from].start_us;
+            if visible(start, word.end_us) {
+                sentences.push(json!({"from":from,"to":i,"start_us":start,"end_us":word.end_us,
+                    "text":words[from..=i].iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ")}));
+            }
+            from = i + 1;
+        }
+    }
+    let pauses: Vec<_> = words.windows(2).enumerate().filter_map(|(i, pair)| {
+        let gap = pair[1].start_us - pair[0].end_us;
+        (gap >= PAUSE_GAP_US && visible(pair[0].end_us, pair[1].start_us))
+            .then(|| json!({"after_word":i,"gap_us":gap}))
+    }).collect();
+    Ok(json!({"words":numbered,"sentences":sentences,"pauses":pauses,"untranscribed":derived.untranscribed}))
+}
+
+struct WordFragment {
+    timeline: TimeRange,
+    source_start: f64,
+    source_end: f64,
+    owner: Option<usize>,
+}
+
+/// Midpoint ownership numbers a word once; editing must also preserve its other audible pieces.
+fn editing_bounds(project: &Project, derived: &Derived) -> (Vec<TimelineWord>, Vec<TimeRange>) {
+    let mut bounds = derived.words.clone();
+    let mut unnumbered = Vec::new();
+    let owners: HashMap<_, _> = derived.words.iter().enumerate()
+        .map(|(i, w)| ((w.clip_id.as_str(), w.source_start_us, w.text.as_str()), i)).collect();
+    for (asset, words) in &derived.sources {
+        for word in words {
+            let mut fragments = Vec::new();
+            for track in &project.tracks {
+                for clip in track.clips.iter().filter(|c| is_heard(project, track, c)) {
+                    let ClipContent::Media { asset_id, source_in_us, speed, .. } = &clip.content else { continue };
+                    if asset_id != asset { continue; }
+                    let speed = f64::from(*speed);
+                    let source_start = (word.start_us as f64).max(*source_in_us as f64);
+                    let source_end = (word.end_us as f64).min(*source_in_us as f64 + clip.duration_us as f64 * speed);
+                    if source_end <= source_start { continue; }
+                    let map = |t: f64| clip.start_us + ((t - *source_in_us as f64) / speed).round() as i64;
+                    fragments.push(WordFragment {
+                        timeline: TimeRange { start_us: map(source_start).max(clip.start_us), end_us: map(source_end).min(clip.end_us()) },
+                        source_start, source_end,
+                        owner: owners.get(&(clip.id.as_str(), word.start_us, word.text.as_str())).copied(),
+                    });
+                }
+            }
+            fragments.sort_by_key(|f| (f.timeline.start_us, f.timeline.end_us));
+            let mut from = 0;
+            for i in 0..fragments.len() {
+                let current = &fragments[i];
+                if fragments.get(i + 1).is_none_or(|next|
+                    current.timeline.end_us != next.timeline.start_us || current.source_end != next.source_start)
+                {
+                    let interval = TimeRange { start_us: fragments[from].timeline.start_us, end_us: current.timeline.end_us };
+                    let mut numbered = false;
+                    for owner in fragments[from..=i].iter().filter_map(|f| f.owner) {
+                        bounds[owner].start_us = interval.start_us;
+                        bounds[owner].end_us = interval.end_us;
+                        numbered = true;
+                    }
+                    if !numbered { unnumbered.push(interval); }
+                    from = i + 1;
+                }
+            }
+        }
+    }
+    (bounds, unnumbered)
+}
+
+pub fn edit_ranges(
+    project: &Project, derived: &Derived, delete: Option<&[[usize; 2]]>,
+    keep: Option<&[[usize; 2]]>, pause: i64,
+) -> Result<Vec<TimeRange>> {
+    let (bounds, unnumbered) = editing_bounds(project, derived);
+    let mut ranges = deletion_ranges(&bounds, project.duration_us(), delete, keep, pause)?;
+    // A surviving fragment whose midpoint was cut away has no selectable index. Keep it audible.
+    for protected in unnumbered {
+        ranges = ranges.into_iter().flat_map(|range| {
+            if range.end_us <= protected.start_us || range.start_us >= protected.end_us { return vec![range]; }
+            let mut pieces = Vec::new();
+            if range.start_us < protected.start_us { pieces.push(TimeRange { start_us: range.start_us, end_us: protected.start_us }); }
+            if range.end_us > protected.end_us { pieces.push(TimeRange { start_us: protected.end_us, end_us: range.end_us }); }
+            pieces
+        }).collect();
+    }
+    Ok(ranges)
+}
+
+pub fn deletion_ranges(
+    words: &[TimelineWord], duration: i64, delete: Option<&[[usize; 2]]>,
+    keep: Option<&[[usize; 2]]>, pause: i64,
+) -> Result<Vec<TimeRange>> {
+    ensure!(delete.is_none() || keep.is_none(), "INVALID_SELECTION: use delete OR keep");
+    ensure!(pause >= 0, "INVALID_PAUSE: shorten_pauses_us must be nonnegative");
+    ensure!(!words.is_empty(), "NO_WORDS: transcribe heard assets before editing");
+    let mut kept = vec![keep.is_none(); words.len()];
+    for &[from, to] in delete.or(keep).unwrap_or(&[]) {
+        ensure!(from <= to && to < words.len(), "INVALID_WORD_RANGE: inclusive word indices out of bounds");
+        kept[from..=to].fill(keep.is_some());
+    }
+    let mut ranges = Vec::new();
+    let mut add = |start_us, end_us| {
+        if end_us > start_us { ranges.push(TimeRange { start_us, end_us }); }
     };
-    check_cancel(cancel)?;
-    Ok(TranscriptRecord {
-        target,
-        transcript,
-        project,
-    })
-}
-
-fn timeline_audio(project: &Project, cache: &Path, cancel: &AtomicBool) -> Result<Vec<f32>> {
-    check_media(project)?;
-    for asset in project.assets.iter().filter(|a| has_audio(a)) {
-        ensure_pcm(cache, asset, |_| {})?;
-        check_cancel(cancel)?;
+    let retained: Vec<_> = kept.iter().enumerate().filter_map(|(i, keep)| keep.then_some(i)).collect();
+    let Some(&first) = retained.first() else {
+        return Ok(vec![TimeRange { start_us: 0, end_us: duration }]);
+    };
+    let leading = if first == 0 { BEFORE_WORD_US.min(pause) } else {
+        BEFORE_WORD_US.min((words[first].start_us - words[first - 1].end_us).max(0) / 2)
+    };
+    add(0, words[first].start_us - leading);
+    for pair in retained.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (end, start) = (words[a].end_us, words[b].start_us);
+        if b == a + 1 {
+            if start - end > pause {
+                add(end + pause / 2, start - (pause - pause / 2));
+            }
+        } else {
+            let after = AFTER_WORD_US.min((words[a + 1].start_us - end).max(0) / 2);
+            let before = BEFORE_WORD_US.min((start - words[b - 1].end_us).max(0) / 2);
+            add(end + after, start - before);
+        }
     }
-    let frames = us_to_samples(project.duration_us());
-    ensure!(frames > 0, "EMPTY_TIMELINE: nothing to transcribe");
-    let capacity = usize::try_from(frames / 3).context("Timeline audio too large")?;
-    let mut mono = Vec::new();
-    mono.try_reserve(capacity)
-        .context("Allocating timeline audio")?;
-    let mut mixer = Mixer::new(cache.to_path_buf());
-    let mut chunk = vec![0.0; AUDIO_CHUNK_FRAMES * 2];
-    let mut start = 0;
-    while start < frames {
-        check_cancel(cancel)?;
-        let count = (frames - start).min(AUDIO_CHUNK_FRAMES as i64) as usize;
-        mixer.mix(project, start, &mut chunk[..count * 2]);
-        mono.extend(
-            chunk[..count * 2]
-                .chunks(6)
-                .map(|s| s.iter().sum::<f32>() / s.len() as f32),
-        );
-        start += count as i64;
+    if let Some(&last) = retained.last() {
+        let trailing = if last + 1 == words.len() { AFTER_WORD_US.min(pause) } else {
+            AFTER_WORD_US.min((words[last + 1].start_us - words[last].end_us).max(0) / 2)
+        };
+        add(words[last].end_us + trailing, duration);
     }
-    Ok(mono)
-}
-
-fn audio_layout(project: &Project) -> Value {
-    json!(project.tracks.iter().filter(|t| t.kind != TrackKind::Text).map(|t| {
-        json!({"id": t.id, "muted": t.muted, "clips": t.clips.iter().filter_map(|c| {
-            if let ClipContent::Media { asset_id, source_in_us, speed, volume, fade_in_us, fade_out_us, .. } = &c.content {
-                Some(json!([asset_id, project.asset(asset_id), c.start_us, c.duration_us, source_in_us, speed, volume, fade_in_us, fade_out_us, c.transition_in]))
-            } else { None }
-        }).collect::<Vec<_>>()})
-    }).collect::<Vec<_>>())
+    // Simultaneous speakers cannot always be cut independently by a global ripple edit.
+    for range in &ranges {
+        ensure!(words.iter().all(|w| ![range.start_us, range.end_us].iter()
+            .any(|t| w.start_us < *t && *t < w.end_us)),
+            "OVERLAPPING_SPEECH: requested cut would land inside a word");
+        ensure!(words.iter().zip(&kept).all(|(w, keep)| !keep || w.end_us <= range.start_us || w.start_us >= range.end_us),
+            "OVERLAPPING_SPEECH: requested cut would remove retained speech");
+    }
+    for (word, keep) in words.iter().zip(&kept) {
+        ensure!(*keep || ranges.iter().any(|r| r.start_us <= word.start_us && r.end_us >= word.end_us),
+            "OVERLAPPING_SPEECH: removed word overlaps retained speech");
+    }
+    Ok(ranges)
 }
 
 pub fn caption_edit(
-    record: &TranscriptRecord,
-    project: &Project,
-    style: TextStyle,
-    grouping: CaptionGrouping,
+    words: &[TimelineWord], project: &Project, style: TextStyle, grouping: CaptionGrouping,
 ) -> Result<(EditCmd, usize)> {
-    ensure!(
-        grouping.max_words > 0 && grouping.max_chars > 0,
-        "Caption limits must be positive"
-    );
-    let mut segments = if record.target == "timeline" {
-        ensure!(
-            audio_layout(&record.project) == audio_layout(project),
-            "STALE_TRANSCRIPT: timeline audio changed; transcribe again or use an asset transcript"
-        );
-        group_words(&record.transcript.words, grouping)
-    } else {
-        asset_captions(record, project, grouping)?
-    };
-    for segment in &mut segments {
-        segment.end_us = segment.end_us.min(project.duration_us());
+    ensure!(grouping.max_words > 0 && grouping.max_chars > 0, "INVALID_GROUPING: caption limits must be positive");
+    let mut segments = Vec::new();
+    let min_caption_us = project.frame_duration_us().ceil() as i64;
+    let mut by_clip: HashMap<&str, Vec<Word>> = HashMap::new();
+    for word in words {
+        by_clip.entry(&word.clip_id).or_default().push(Word {
+            start_us: word.start_us, end_us: word.end_us, text: word.text.clone(), probability: word.probability,
+        });
     }
-    segments.retain(|segment| segment.end_us > segment.start_us);
+    for clip in project.tracks.iter().flat_map(|t| &t.clips).filter(|c| c.duration_us >= min_caption_us) {
+        let Some(clip_words) = by_clip.get(clip.id.as_str()) else { continue };
+        let mut grouped = group_words(clip_words, grouping);
+        for segment in &mut grouped {
+            segment.end_us = segment.end_us.min(clip.end_us());
+            // The engine enforces a one-frame minimum; borrow time before a short tail word.
+            segment.start_us = segment.start_us.min(segment.end_us - min_caption_us).max(clip.start_us);
+        }
+        segments.extend(grouped.into_iter().filter(|s| s.end_us > s.start_us));
+    }
+    segments.sort_by_key(|s| s.start_us);
     let count = segments.len();
-    ensure!(
-        count > 0,
-        "NO_CAPTIONS: no transcript words in retained media"
-    );
-    let tracks: Vec<_> = project
-        .tracks
-        .iter()
-        .filter(|t| t.kind == TrackKind::Text && t.name == "Captions")
-        .collect();
-    ensure!(
-        tracks.len() <= 1,
-        "AMBIGUOUS_CAPTIONS: multiple caption tracks; use explicit ReplaceCaptions through apply_edits"
-    );
+    ensure!(count > 0, "NO_CAPTIONS: no transcript words in retained media");
+    let tracks: Vec<_> = project.tracks.iter().filter(|t| t.kind == TrackKind::Text && t.name == "Captions").collect();
+    ensure!(tracks.len() <= 1, "AMBIGUOUS_CAPTIONS: multiple caption tracks; use explicit replaceCaptions");
     let edit = match tracks.first() {
-        Some(track) => EditCmd::ReplaceCaptions {
-            track_id: track.id.clone(),
-            segments,
-            style,
-        },
+        Some(track) => EditCmd::ReplaceCaptions { track_id: track.id.clone(), segments, style },
         None => EditCmd::AddCaptions { segments, style },
     };
     Ok((edit, count))
 }
 
-fn asset_captions(
-    record: &TranscriptRecord,
-    project: &Project,
-    grouping: CaptionGrouping,
-) -> Result<Vec<CaptionSegment>> {
-    ensure!(
-        record.project.asset(&record.target) == project.asset(&record.target),
-        "STALE_TRANSCRIPT: source asset changed"
-    );
-    let main = project.tracks.first().context("No main track")?;
-    let mut segments = Vec::new();
-    for clip in &main.clips {
-        let ClipContent::Media {
-            asset_id,
-            source_in_us,
-            speed,
-            ..
-        } = &clip.content
-        else {
-            continue;
-        };
-        if asset_id != &record.target {
-            continue;
-        }
-        let source_end = *source_in_us as f64 + clip.duration_us as f64 * *speed as f64;
-        let words: Vec<_> = record
-            .transcript
-            .words
-            .iter()
-            .filter_map(|w| {
-                let midpoint = (w.start_us as f64 + w.end_us as f64) / 2.0;
-                if midpoint < *source_in_us as f64 || midpoint >= source_end {
-                    return None;
-                }
-                let map = |t| {
-                    clip.start_us
-                        + ((t as f64 - *source_in_us as f64) / *speed as f64).round() as i64
-                };
-                Some(Word {
-                    start_us: map(w.start_us).max(clip.start_us),
-                    end_us: map(w.end_us).min(clip.end_us()),
-                    ..w.clone()
-                })
-            })
-            .collect();
-        let mut grouped = group_words(&words, grouping);
-        for caption in &mut grouped {
-            caption.end_us = caption.end_us.min(clip.end_us());
-        }
-        segments.extend(grouped.into_iter().filter(|s| s.end_us > s.start_us));
-    }
-    Ok(segments)
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use capopen_engine::{
-        edit::TimeRange,
-        model::{Asset, AssetKind},
-    };
+    use capopen_engine::model::{Asset, AssetKind};
 
-    fn record() -> TranscriptRecord {
-        let mut p = Project::new("test");
-        p.apply(EditCmd::AddAssets {
-            assets: vec![Asset {
-                id: "a".into(),
-                name: "a".into(),
-                path: "a.mov".into(),
-                kind: AssetKind::Video,
-                duration_us: 10_000_000,
-                width: 1080,
-                height: 1920,
-                fps: 30.0,
-                has_audio: true,
-                rotation: 0,
-            }],
-        })
-        .unwrap();
-        p.apply(EditCmd::AddClip {
-            asset_id: "a".into(),
-            start_us: None,
-            track_id: None,
-        })
-        .unwrap();
-        let words = [
-            (1_000_000, "First"),
-            (4_000_000, "Removed"),
-            (7_000_000, "Last"),
-        ]
-        .into_iter()
-        .map(|(t, text)| Word {
-            start_us: t,
-            end_us: t + 400_000,
-            text: text.into(),
-            probability: 1.0,
-        })
-        .collect();
-        TranscriptRecord {
-            target: "a".into(),
-            transcript: Transcript {
-                language: "en".into(),
-                words,
-                segments: vec![],
-            },
-            project: p,
+    pub fn fixture() -> (Project, HashMap<String, Vec<Word>>) {
+        let mut project = Project::new("speech test");
+        project.apply(EditCmd::AddAssets { assets: vec![Asset {
+            id: "talk".into(), name: "talk".into(), path: "talk.mov".into(), kind: AssetKind::Video,
+            duration_us: 10_000_000, width: 1080, height: 1920, fps: 30.0, has_audio: true, rotation: 0,
+        }] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None }).unwrap();
+        let words = (0..8).map(|i| Word {
+            start_us: 500_000 + i * 1_000_000, end_us: 900_000 + i * 1_000_000,
+            text: format!("word{i}{}", if i % 3 == 2 { "." } else { "" }), probability: 0.95,
+        }).collect();
+        (project, HashMap::from([("talk".into(), words)]))
+    }
+
+    #[test]
+    fn every_selection_preserves_whole_words_and_keep_equals_delete() {
+        let (project, sources) = fixture();
+        let words = map_words(&project, &sources);
+        for mask in 0..256 {
+            let keep: Vec<_> = (0..8).filter(|i| mask & (1 << i) != 0).map(|i| [i,i]).collect();
+            let delete: Vec<_> = (0..8).filter(|i| mask & (1 << i) == 0).map(|i| [i,i]).collect();
+            let ranges = deletion_ranges(&words, project.duration_us(), None, Some(&keep), 300_000).unwrap();
+            let other = deletion_ranges(&words, project.duration_us(), Some(&delete), None, 300_000).unwrap();
+            assert_eq!(serde_json::to_value(&ranges).unwrap(), serde_json::to_value(other).unwrap());
+            for range in &ranges {
+                for boundary in [range.start_us, range.end_us] {
+                    assert!(words.iter().all(|w| boundary <= w.start_us || boundary >= w.end_us));
+                }
+            }
+            let mut result = project.clone();
+            result.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+            let actual = map_words(&result, &sources);
+            assert_eq!(actual.iter().map(|w| &w.text).collect::<Vec<_>>(), keep.iter().map(|r| &words[r[0]].text).collect::<Vec<_>>());
+            assert!(actual.iter().all(|w| w.end_us - w.start_us == 400_000));
         }
     }
-    fn style() -> TextStyle {
-        TextStyle {
-            font_family: None,
-            font_size: 64.0,
-            color: "#ffffff".into(),
-            bold: true,
-            stroke_width: 4.0,
-            stroke_color: "#000000".into(),
-            background: None,
-            max_width: None,
+
+    #[test]
+    fn shorten_pauses_and_trim_edges() {
+        let (mut project, sources) = fixture();
+        let words = map_words(&project, &sources);
+        let ranges = deletion_ranges(&words, project.duration_us(), None, None, 300_000).unwrap();
+        project.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+        let words = map_words(&project, &sources);
+        assert_eq!(words[0].start_us, BEFORE_WORD_US);
+        assert!(words.windows(2).all(|p| p[1].start_us - p[0].end_us == 300_000));
+        assert_eq!(project.duration_us() - words.last().unwrap().end_us, AFTER_WORD_US);
+    }
+
+    #[test]
+    fn get_transcript_and_captions_follow_cuts_speed_and_detached_sound() {
+        let (mut project, sources) = fixture();
+        project.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 3_000_000, end_us: 6_000_000 }], keep_track_ids: None }).unwrap();
+        let id = project.tracks[0].clips[1].id.clone();
+        project.apply(serde_json::from_value(json!({"type":"updateClip","clipId":id,"speed":2})).unwrap()).unwrap();
+        project.apply(EditCmd::DetachAudio { clip_id: id }).unwrap();
+        let words = map_words(&project, &sources);
+        assert_eq!(words.len(), 5);
+        assert_eq!(words[3].start_us, 3_250_000);
+        let data = summary(&Derived { sources, words: words.clone(), untranscribed: vec![] }, Some([3_000_000,5_000_000])).unwrap();
+        assert_eq!(data["words"][0]["i"], 3);
+        assert_eq!(data["words"][0]["text"], "word6");
+        let (edit, _) = caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping { max_words: 100, max_chars: 1000, ..CaptionGrouping::default() }).unwrap();
+        let EditCmd::AddCaptions { segments, .. } = edit else { panic!() };
+        for segment in segments {
+            assert!(project.tracks.iter().flat_map(|t| &t.clips).any(|c| {
+                words.iter().any(|w| w.clip_id == c.id) && segment.start_us >= c.start_us && segment.end_us <= c.end_us()
+            }));
+            assert!(!(segment.start_us < 3_000_000 && segment.end_us > 3_000_000));
         }
     }
+
     #[test]
-    fn source_captions_follow_ripple_and_speed_without_crossing_cuts() {
-        let r = record();
-        let mut p = r.project.clone();
-        p.apply(EditCmd::RippleDeleteRanges {
-            ranges: vec![TimeRange {
-                start_us: 3_000_000,
-                end_us: 6_000_000,
-            }],
-            keep_track_ids: Some(vec![]),
-        })
-        .unwrap();
-        let id = p.tracks[0].clips[1].id.clone();
-        let cmd: EditCmd =
-            serde_json::from_value(json!({"type":"updateClip","clipId":id,"speed":2})).unwrap();
-        p.apply(cmd).unwrap();
-        let (edit, count) = caption_edit(&r, &p, style(), CaptionGrouping::default()).unwrap();
-        assert_eq!(count, 2);
-        let EditCmd::AddCaptions { segments, .. } = edit else {
-            panic!()
-        };
-        assert_eq!(segments[0].text, "First");
-        assert_eq!(segments[1].text, "Last");
-        assert_eq!(segments[1].start_us, 3_500_000);
-        assert!(segments[0].end_us <= 3_000_000);
+    fn protect_word_fragments_at_clip_boundaries_and_speed() {
+        for speed in [1.0, 0.5, 2.0] {
+            for (word_start, word_end) in [(4_800_000, 5_400_000), (4_600_000, 5_200_000)] {
+            for edge in [false, true] {
+                let (mut project, mut sources) = fixture();
+                let id = project.tracks[0].clips[0].id.clone();
+                project.apply(EditCmd::SplitClip { clip_id: id, at_us: 5_000_000 }).unwrap();
+                for clip in project.tracks[0].clips.clone() {
+                    project.apply(serde_json::from_value(json!({"type":"updateClip","clipId":clip.id,"speed":speed})).unwrap()).unwrap();
+                }
+                let mut words = vec![Word { start_us: word_start, end_us: word_end, text: "whole".into(), probability: 1.0 }];
+                if !edge { words.insert(0, Word { start_us: 4_000_000, end_us: 4_400_000, text: "before".into(), probability: 1.0 }); }
+                sources.insert("talk".into(), words);
+                let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+                if word_start == 4_800_000 {
+                    assert_eq!(derived.words.last().unwrap().start_us, (5_000_000.0 / speed) as i64);
+                }
+                let ranges = edit_ranges(&project, &derived, None, None, DEFAULT_PAUSE_US).unwrap();
+                let protected = TimeRange { start_us: (word_start as f64 / speed) as i64, end_us: (word_end as f64 / speed) as i64 };
+                assert!(ranges.iter().all(|r| r.end_us <= protected.start_us || r.start_us >= protected.end_us), "{speed} {edge}: {ranges:?}");
+                project.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+                let audible_us: i64 = project.tracks[0].clips.iter().map(|c| {
+                    let ClipContent::Media { source_in_us, speed, .. } = c.content else { return 0 };
+                    let start = source_in_us.max(word_start);
+                    let end = (source_in_us + (c.duration_us as f64 * f64::from(speed)).round() as i64).min(word_end);
+                    (end - start).max(0)
+                }).sum();
+                assert_eq!(audible_us, 600_000);
+            }
+            }
+        }
     }
+
     #[test]
-    fn caption_replacement_preserves_other_text_and_stale_timeline_is_rejected() {
-        let mut r = record();
-        let mut p = r.project.clone();
-        p.apply(EditCmd::AddText {
-            start_us: 0,
-            text: "Title".into(),
-            style: style(),
-        })
-        .unwrap();
-        let (edit, _) = caption_edit(&r, &p, style(), CaptionGrouping::default()).unwrap();
-        p.apply(edit).unwrap();
-        let (edit, _) = caption_edit(&r, &p, style(), CaptionGrouping::default()).unwrap();
-        assert!(matches!(edit, EditCmd::ReplaceCaptions { .. }));
-        p.apply(edit).unwrap();
-        assert_eq!(p.tracks.iter().filter(|t| t.name == "Captions").count(), 1);
-        assert!(
-            p.tracks
-                .iter()
-                .flat_map(|t| &t.clips)
-                .any(|c| matches!(&c.content, ClipContent::Text { text, .. } if text == "Title"))
-        );
-        r.target = "timeline".into();
-        assert!(caption_edit(&r, &p, style(), CaptionGrouping::default()).is_ok());
-        p.apply(EditCmd::RippleDeleteRanges {
-            ranges: vec![TimeRange {
-                start_us: 0,
-                end_us: 1_000_000,
-            }],
-            keep_track_ids: Some(vec![]),
-        })
-        .unwrap();
-        assert!(
-            caption_edit(&r, &p, style(), CaptionGrouping::default())
-                .unwrap_err()
-                .to_string()
-                .contains("STALE_TRANSCRIPT")
-        );
+    fn subframe_caption_tails_stay_on_their_side_of_a_cut() {
+        let (mut project, mut sources) = fixture();
+        let id = project.tracks[0].clips[0].id.clone();
+        project.apply(EditCmd::SplitClip { clip_id: id, at_us: 5_000_000 }).unwrap();
+        sources.get_mut("talk").unwrap()[0].start_us = 4_999_000;
+        sources.get_mut("talk").unwrap()[0].end_us = 5_000_000;
+        sources.get_mut("talk").unwrap().truncate(1);
+        let words = map_words(&project, &sources);
+        let (edit, _) = caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping::default()).unwrap();
+        project.apply(edit).unwrap();
+        let caption = &project.tracks.iter().find(|t| t.name == "Captions").unwrap().clips[0];
+        assert_eq!(caption.end_us(), 5_000_000);
     }
+
     #[test]
-    fn timeline_caption_tail_does_not_extend_the_video() {
-        let mut r = record();
-        r.target = "timeline".into();
-        r.transcript.words = vec![Word {
-            start_us: 9_900_000,
-            end_us: 10_000_000,
-            text: "End".into(),
-            probability: 1.0,
-        }];
-        let (edit, _) = caption_edit(&r, &r.project, style(), CaptionGrouping::default()).unwrap();
-        let EditCmd::AddCaptions { segments, .. } = edit else {
-            panic!()
-        };
-        assert_eq!(segments[0].end_us, r.project.duration_us());
+    fn captions_group_by_clip_and_skip_subframe_clips() {
+        let (mut project, _) = fixture();
+        let mut short = project.tracks[0].clips[0].clone();
+        short.id = "short".into();
+        short.duration_us = 10_000;
+        project.tracks[0].clips[0].start_us = short.end_us();
+        project.tracks[0].clips.insert(0, short);
+        let words: Vec<_> = project.tracks[0].clips.iter().map(|clip| TimelineWord {
+            start_us: clip.start_us, end_us: clip.start_us + 5_000, text: clip.id.clone(),
+            probability: 1.0, clip_id: clip.id.clone(), asset_id: "talk".into(), source_start_us: 0,
+        }).collect();
+        let (edit, count) = caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping::default()).unwrap();
+        assert_eq!(count, 1);
+        let EditCmd::AddCaptions { segments, .. } = &edit else { panic!() };
+        assert_eq!(segments[0].text, words[1].text);
+        assert!(segments[0].start_us >= 10_000);
+        project.apply(edit).unwrap();
+        let captions = &project.tracks.iter().find(|t| t.name == "Captions").unwrap().clips;
+        assert_eq!(captions.len(), 1);
+        assert!(captions[0].start_us >= 10_000);
+        assert!(caption_edit(&words[..1], &project, crate::params::reel_style(), CaptionGrouping::default())
+            .unwrap_err().to_string().contains("NO_CAPTIONS"));
+    }
+
+    #[test]
+    fn reject_overlapping_speech_instead_of_cutting_a_word() {
+        let (project, sources) = fixture();
+        let mut words = map_words(&project, &sources);
+        words[0].end_us = words[1].start_us + 1;
+        assert!(deletion_ranges(&words, project.duration_us(), Some(&[[1,1]]), None, 300_000).unwrap_err().to_string().contains("OVERLAPPING_SPEECH"));
     }
 }

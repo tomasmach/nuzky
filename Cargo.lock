@@ -627,6 +627,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capopen-engine",
+ "dirs 6.0.0",
  "serde",
  "serde_json",
 ]

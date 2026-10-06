@@ -5,45 +5,32 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
+use crate::Stamp;
 use anyhow::{Context, Result, ensure};
 use capopen_engine::edit::new_id;
-use capopen_session::Stamp;
 use serde_json::{Value, json};
-
-use crate::transcript::TranscriptRecord;
 
 const MAX_ACTIVE: usize = 4;
 
-pub enum Output {
-    Json(Value),
-    Transcript(TranscriptRecord),
-}
-
 pub struct JobState {
     pub id: String,
+    pub owner: String,
     pub kind: &'static str,
     pub stamp: Stamp,
     pub status: &'static str,
     pub progress: Option<f32>,
     pub phase: &'static str,
-    pub result: Option<Output>,
+    pub result: Option<Value>,
     pub error: Option<String>,
     pub cancel: Arc<AtomicBool>,
 }
 
 impl JobState {
     fn json(&self) -> Value {
-        let result = match &self.result {
-            Some(Output::Json(v)) => v.clone(),
-            Some(Output::Transcript(record)) => {
-                json!({"transcript_id": self.id, "target": record.target, "transcript": record.transcript})
-            }
-            None => Value::Null,
-        };
         json!({"job_id": self.id, "kind": self.kind, "revision": self.stamp.revision,
             "session_epoch": self.stamp.session_epoch, "status": self.status,
             "progress": self.progress, "phase": self.phase, "cancel_requested": self.cancel.load(Ordering::Relaxed),
-            "result": result, "error": self.error})
+            "owner": self.owner, "result": self.result, "error": self.error})
     }
 }
 
@@ -66,9 +53,10 @@ pub struct Jobs {
 impl Jobs {
     pub fn start(
         &self,
+        owner: &str,
         kind: &'static str,
         stamp: Stamp,
-        work: impl FnOnce(Arc<AtomicBool>, Progress) -> Result<Output> + Send + 'static,
+        work: impl FnOnce(Arc<AtomicBool>, Progress) -> Result<Value> + Send + 'static,
     ) -> Result<Value> {
         let mut entries = self.entries.lock().unwrap();
         ensure!(
@@ -82,6 +70,7 @@ impl Jobs {
         let id = new_id();
         let state = Arc::new(Mutex::new(JobState {
             id: id.clone(),
+            owner: owner.into(),
             kind,
             stamp,
             status: "running",
@@ -100,7 +89,8 @@ impl Jobs {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     work(cancel.clone(), Progress(owned.clone()))
                 }));
-                let result = result.unwrap_or_else(|_| Err(anyhow::anyhow!("Worker panicked")));
+                let result =
+                    result.unwrap_or_else(|_| Err(anyhow::anyhow!("JOB_FAILED: worker panicked")));
                 let mut state = owned.lock().unwrap();
                 // An export that has already atomically published its file is complete.
                 if cancel.load(Ordering::Relaxed) && !(kind == "export" && result.is_ok()) {
@@ -122,7 +112,7 @@ impl Jobs {
                     }
                 }
             })
-            .context("Starting job thread")?;
+            .context("JOB_FAILED: starting thread")?;
         entries.insert(id, state);
         self.workers.lock().unwrap().push(worker);
         Ok(response)
@@ -141,16 +131,12 @@ impl Jobs {
         Ok(state.json())
     }
 
-    pub fn transcript(&self, id: &str) -> Result<TranscriptRecord> {
-        let entries = self.entries.lock().unwrap();
-        let state = entries
-            .get(id)
-            .context("UNKNOWN_TRANSCRIPT: use a completed transcription job id")?
-            .lock()
-            .unwrap();
-        match &state.result {
-            Some(Output::Transcript(record)) => Ok(record.clone()),
-            _ => anyhow::bail!("TRANSCRIPT_NOT_READY: job is {}", state.status),
+    pub fn cancel_owner(&self, owner: &str) {
+        for state in self.entries.lock().unwrap().values() {
+            let state = state.lock().unwrap();
+            if state.owner == owner && state.status == "running" {
+                state.cancel.store(true, Ordering::Relaxed);
+            }
         }
     }
 
@@ -165,7 +151,7 @@ impl Jobs {
 }
 
 pub fn check_cancel(cancel: &AtomicBool) -> Result<()> {
-    ensure!(!cancel.load(Ordering::Relaxed), "Job cancelled");
+    ensure!(!cancel.load(Ordering::Relaxed), "CANCELLED: job cancelled");
     Ok(())
 }
 
@@ -178,6 +164,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let started = jobs
             .start(
+                "client",
                 "test",
                 Stamp {
                     revision: 7,
@@ -185,7 +172,7 @@ mod tests {
                 },
                 move |_, _| {
                     rx.recv().unwrap();
-                    Ok(Output::Json(json!({"late":true})))
+                    Ok(json!({"late":true}))
                 },
             )
             .unwrap();
