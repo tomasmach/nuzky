@@ -15,9 +15,14 @@ const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
  * The engine's error ends with the reason, after "Cannot open <path>: ".
  */
 function importFailures(failed: { path: string; error: string }[]) {
-  const undecodable = (e: string) => /Invalid data found|has no video or audio/.test(e);
-  const bad = failed.filter((f) => undecodable(f.error)).map((f) => fileName(f.path));
-  const other = failed.filter((f) => !undecodable(f.error)).map((f) => `Could not import ${fileName(f.path)}: ${f.error.split(": ").pop()}`);
+  // The reason is what follows the path, so a file name such as "has no video.mp4" cannot match.
+  const reason = (f: { path: string; error: string }) => {
+    const at = f.error.lastIndexOf(f.path);
+    return (at >= 0 ? f.error.slice(at + f.path.length) : f.error).replace(/^:\s*/, "");
+  };
+  const undecodable = (f: { path: string; error: string }) => /Invalid data found|has no video or audio/.test(reason(f));
+  const bad = failed.filter(undecodable).map((f) => fileName(f.path));
+  const other = failed.filter((f) => !undecodable(f)).map((f) => `Could not import ${fileName(f.path)}: ${reason(f).split(": ").pop()}`);
   const lead = bad.length === 1 ? `${bad[0]} is not a video, audio or image file` : bad.length > 1 ? `${bad.join(", ")} are not video, audio or image files` : null;
   return [lead, ...other].filter(Boolean).join(". ");
 }

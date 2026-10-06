@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { api, errorText } from "./api";
 import { US } from "./time";
-import { rippleDelete, useEditor, whenIdle } from "./store";
+import { MAIN_TRACK, rippleDelete, useEditor, whenIdle } from "./store";
 import type { Project, TextStyle, TimeRange, TimelineTranscript, TranscriptWord } from "./types";
 
 /** Characters per caption when captions show 1–3 words, like reels. */
@@ -204,12 +204,14 @@ export type Token =
   | { kind: "pause"; startUs: number; endUs: number; gapUs: number };
 
 /**
- * Where pauses may be cut: clips recognition hears (the rule of `speechSig`) that hold at least one
+ * Where pauses may be cut: main-track clips recognition hears (the rule of `speechSig`) that hold at least one
  * word. B-roll without words, even with ambient sound, is never part of a pause.
  */
 export function speechRanges(project: Project, words: TranscriptWord[]): TimeRange[] {
+  // Main track only: a word's time alone cannot tell whether an overlapping overlay, such as B-roll
+  // with ambient sound, is where it was said.
   const heard = project.tracks
-    .filter((t) => t.kind === "video" && !t.muted)
+    .filter((t) => t.id === MAIN_TRACK && !t.muted)
     .flatMap((t) => t.clips)
     .filter((c) => {
       const m = c.content;
