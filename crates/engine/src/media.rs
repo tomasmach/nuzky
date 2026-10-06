@@ -1,0 +1,425 @@
+//! Probing, video decoding and audio extraction on top of FFmpeg.
+//!
+//! All media times are microseconds relative to the container start, so audio and
+//! video of the same file share one origin.
+
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Once};
+
+use anyhow::{Context as _, Result, anyhow, bail};
+use ffmpeg_next as ff;
+use ff::codec::packet::side_data::Type as SideDataType;
+use ff::format::stream::Disposition;
+use ff::software::{resampling, scaling};
+use ff::util::{color, format::Pixel, frame};
+
+use crate::model::{Asset, AssetKind, CHANNELS, SAMPLE_RATE};
+
+pub fn init() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        ff::init().expect("FFmpeg failed to initialise");
+        ff::util::log::set_level(ff::util::log::Level::Error);
+    });
+}
+
+fn origin_us(input: &ff::format::context::Input) -> i64 {
+    let start = unsafe { (*input.as_ptr()).start_time };
+    if start == ff::ffi::AV_NOPTS_VALUE { 0 } else { start }
+}
+
+fn is_image_format(input: &ff::format::context::Input) -> bool {
+    let format = input.format();
+    let name = format.name();
+    name == "image2" || name.ends_with("_pipe")
+}
+
+fn video_stream(input: &ff::format::context::Input) -> Option<ff::format::stream::Stream<'_>> {
+    input
+        .streams()
+        .filter(|s| s.parameters().medium() == ff::media::Type::Video)
+        .find(|s| !s.disposition().contains(Disposition::ATTACHED_PIC))
+}
+
+/// Clockwise rotation in degrees from the display matrix, snapped to 0/90/180/270.
+fn display_rotation(stream: &ff::format::stream::Stream) -> u32 {
+    for sd in stream.side_data() {
+        if sd.kind() == SideDataType::DisplayMatrix && sd.data().len() >= 36 {
+            let ccw = unsafe { ff::ffi::av_display_rotation_get(sd.data().as_ptr() as *const i32) };
+            if ccw.is_nan() {
+                return 0;
+            }
+            let cw = (-ccw).rem_euclid(360.0);
+            return ((cw / 90.0).round() as u32 % 4) * 90;
+        }
+    }
+    0
+}
+
+pub fn probe(path: &Path, id: String) -> Result<Asset> {
+    init();
+    let input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let is_image = is_image_format(&input);
+    let video = video_stream(&input);
+    let audio = input.streams().best(ff::media::Type::Audio);
+    if video.is_none() && audio.is_none() {
+        bail!("{} has no video or audio", path.display());
+    }
+
+    let mut asset = Asset {
+        id,
+        name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().into_owned(),
+        kind: if is_image {
+            AssetKind::Image
+        } else if video.is_some() {
+            AssetKind::Video
+        } else {
+            AssetKind::Audio
+        },
+        duration_us: if is_image { 0 } else { input.duration().max(0) },
+        width: 0,
+        height: 0,
+        fps: 0.0,
+        has_audio: audio.is_some() && !is_image,
+        rotation: 0,
+    };
+
+    if let Some(stream) = video {
+        let decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().video()?;
+        let rotation = display_rotation(&stream);
+        let (w, h) = (decoder.width(), decoder.height());
+        (asset.width, asset.height) = if rotation % 180 == 90 { (h, w) } else { (w, h) };
+        asset.rotation = rotation;
+        let rate = stream.avg_frame_rate();
+        let rate = if rate.denominator() == 0 || rate.numerator() == 0 { stream.rate() } else { rate };
+        asset.fps = if rate.denominator() == 0 { 0.0 } else { f64::from(rate) };
+    }
+    Ok(asset)
+}
+
+/// One decoded frame converted to tightly packed RGBA, in source orientation.
+#[derive(Clone)]
+pub struct RgbaFrame {
+    pub t_us: i64,
+    pub width: u32,
+    pub height: u32,
+    pub data: Arc<Vec<u8>>,
+}
+
+struct Scaler {
+    key: (Pixel, u32, u32, u32, u32),
+    ctx: scaling::Context,
+}
+
+// SwsContext is only touched by the thread that owns the decoder.
+unsafe impl Send for Scaler {}
+
+fn sws_colorspace(space: color::Space, height: u32) -> i32 {
+    use ff::ffi::*;
+    (match space {
+        color::Space::BT709 => SWS_CS_ITU709,
+        color::Space::BT2020NCL | color::Space::BT2020CL => SWS_CS_BT2020,
+        color::Space::SMPTE240M => SWS_CS_SMPTE240M,
+        color::Space::FCC => SWS_CS_FCC,
+        color::Space::BT470BG | color::Space::SMPTE170M => SWS_CS_ITU601,
+        _ if height >= 720 => SWS_CS_ITU709,
+        _ => SWS_CS_ITU601,
+    }) as i32
+}
+
+/// Sets the YUV matrix and range explicitly; swscale would otherwise assume BT.601.
+pub(crate) fn set_sws_colorspace(ctx: &mut scaling::Context, src_cs: i32, src_full: bool, dst_cs: i32, dst_full: bool) {
+    use ff::ffi::*;
+    unsafe {
+        let ptr = ctx.as_mut_ptr();
+        let (mut inv, mut table) = (std::ptr::null_mut(), std::ptr::null_mut());
+        let (mut sr, mut dr, mut b, mut c, mut s) = (0, 0, 0, 0, 0);
+        if sws_getColorspaceDetails(ptr, &mut inv, &mut sr, &mut table, &mut dr, &mut b, &mut c, &mut s) < 0 {
+            return;
+        }
+        sws_setColorspaceDetails(
+            ptr,
+            sws_getCoefficients(src_cs),
+            src_full as i32,
+            sws_getCoefficients(dst_cs),
+            dst_full as i32,
+            b,
+            c,
+            s,
+        );
+    }
+}
+
+fn is_full_range(f: &frame::Video) -> bool {
+    f.color_range() == color::Range::JPEG
+        || matches!(f.format(), Pixel::YUVJ420P | Pixel::YUVJ422P | Pixel::YUVJ444P | Pixel::YUVJ440P)
+}
+
+fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: u32) -> Result<RgbaFrame> {
+    let key = (f.format(), f.width(), f.height(), w, h);
+    if scaler.as_ref().map(|s| s.key) != Some(key) {
+        let mut ctx = scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
+        let src_cs = sws_colorspace(f.color_space(), f.height());
+        set_sws_colorspace(&mut ctx, src_cs, is_full_range(f), ff::ffi::SWS_CS_DEFAULT as i32, true);
+        *scaler = Some(Scaler { key, ctx });
+    }
+    let mut out = frame::Video::new(Pixel::RGBA, w, h);
+    scaler.as_mut().unwrap().ctx.run(f, &mut out)?;
+    let stride = out.stride(0);
+    let row = w as usize * 4;
+    let src = out.data(0);
+    let mut data = Vec::with_capacity(row * h as usize);
+    for y in 0..h as usize {
+        data.extend_from_slice(&src[y * stride..y * stride + row]);
+    }
+    Ok(RgbaFrame { t_us, width: w, height: h, data: Arc::new(data) })
+}
+
+/// Sequential decoder with exact seeking. Picks the last frame whose real timestamp is
+/// at or before the requested time, so variable frame rate footage stays exact.
+pub struct VideoDecoder {
+    input: ff::format::context::Input,
+    stream_index: usize,
+    decoder: ff::decoder::Video,
+    time_base: f64,
+    origin_us: i64,
+    sent_eof: bool,
+    eof: bool,
+    is_image: bool,
+    /// Last decoded frame and its time; frames are returned in display order.
+    scaler: Option<Scaler>,
+    pub rotation: u32,
+    pub frame_duration_us: i64,
+}
+
+unsafe impl Send for VideoDecoder {}
+
+impl VideoDecoder {
+    pub fn open(path: &Path) -> Result<Self> {
+        init();
+        let input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+        let is_image = is_image_format(&input);
+        let stream = video_stream(&input).ok_or_else(|| anyhow!("{} has no video", path.display()))?;
+        let stream_index = stream.index();
+        let rotation = display_rotation(&stream);
+        let time_base = f64::from(stream.time_base());
+        let rate = stream.avg_frame_rate();
+        let fps = if rate.numerator() > 0 && rate.denominator() > 0 { f64::from(rate) } else { 30.0 };
+        let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
+        ctx.set_threading(ff::codec::threading::Config { kind: ff::codec::threading::Type::Frame, count: 4 });
+        let decoder = ctx.decoder().video()?;
+        let origin_us = origin_us(&input);
+        Ok(Self {
+            input,
+            stream_index,
+            decoder,
+            time_base,
+            origin_us,
+            sent_eof: false,
+            eof: false,
+            is_image,
+            scaler: None,
+            rotation,
+            frame_duration_us: (1_000_000.0 / fps.clamp(1.0, 240.0)) as i64,
+        })
+    }
+
+    pub fn is_image(&self) -> bool {
+        self.is_image
+    }
+
+    pub fn source_size(&self) -> (u32, u32) {
+        (self.decoder.width(), self.decoder.height())
+    }
+
+    pub fn is_eof(&self) -> bool {
+        self.eof
+    }
+
+    /// Jumps to the keyframe at or before `t_us`. The next decoded frames start there.
+    pub fn seek(&mut self, t_us: i64) -> Result<()> {
+        let ts = t_us.max(0) + self.origin_us;
+        // Seeking images and tiny files can fail harmlessly; decoding restarts from the start.
+        if self.input.seek(ts, ..ts).is_err() {
+            self.input.seek(0, ..).ok();
+        }
+        self.decoder.flush();
+        self.sent_eof = false;
+        self.eof = false;
+        Ok(())
+    }
+
+    /// Decodes the next frame in display order. `None` at end of stream.
+    pub fn next_frame(&mut self) -> Result<Option<(i64, frame::Video)>> {
+        if self.eof {
+            return Ok(None);
+        }
+        let mut f = frame::Video::empty();
+        loop {
+            match self.decoder.receive_frame(&mut f) {
+                Ok(()) => {
+                    let pts = f.timestamp().or(f.pts()).unwrap_or(0);
+                    let t = (pts as f64 * self.time_base * 1e6).round() as i64 - self.origin_us;
+                    return Ok(Some((t, f)));
+                }
+                Err(ff::Error::Eof) => {
+                    self.eof = true;
+                    return Ok(None);
+                }
+                Err(ff::Error::Other { errno }) if errno == ff::error::EAGAIN => {}
+                Err(e) => return Err(e.into()),
+            }
+            if self.sent_eof {
+                self.eof = true;
+                return Ok(None);
+            }
+            loop {
+                match self.input.packets().next() {
+                    Some((stream, packet)) if stream.index() == self.stream_index => {
+                        if let Err(e) = self.decoder.send_packet(&packet) {
+                            log::warn!("Skipping corrupt packet: {e}");
+                        }
+                        break;
+                    }
+                    Some(_) => continue,
+                    None => {
+                        self.decoder.send_eof().ok();
+                        self.sent_eof = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn convert(&mut self, f: &frame::Video, t_us: i64, w: u32, h: u32) -> Result<RgbaFrame> {
+        to_rgba(&mut self.scaler, f, t_us, w.max(2), h.max(2))
+    }
+}
+
+/// Size to decode at so a layer shown at `display` pixels (after rotation) stays sharp
+/// without converting more pixels than needed. Returned in source orientation.
+pub fn decode_size(src: (u32, u32), rotation: u32, display: (f32, f32)) -> (u32, u32) {
+    let (dw, dh) = if rotation % 180 == 90 { (display.1, display.0) } else { display };
+    let scale = (dw / src.0 as f32).max(dh / src.1 as f32).min(1.0);
+    let even = |v: f32| ((v.round() as u32).max(2) + 1) & !1;
+    (even(src.0 as f32 * scale), even(src.1 as f32 * scale))
+}
+
+/// Decodes the whole audio stream to 48 kHz interleaved stereo f32 little-endian.
+/// The file starts at the container origin, padded with silence if audio starts late.
+pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Result<u64> {
+    init();
+    let mut input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let stream = input.streams().best(ff::media::Type::Audio).ok_or_else(|| anyhow!("No audio stream"))?;
+    let stream_index = stream.index();
+    let time_base = f64::from(stream.time_base());
+    let duration_us = input.duration().max(1) as f64;
+    let origin = origin_us(&input);
+    let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
+
+    let tmp = out.with_extension("part");
+    let mut writer = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
+    let mut written: u64 = 0; // sample frames
+    let mut resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))> = None;
+    let mut decoded = frame::Audio::empty();
+    let mut last_progress = 0.0;
+
+    let write_frame = |f: &frame::Audio,
+                           resampler: &mut Option<(resampling::Context, (ff::format::Sample, u64, u32))>,
+                           writer: &mut BufWriter<File>,
+                           written: &mut u64|
+     -> Result<()> {
+        let mut layout = f.channel_layout();
+        if layout.is_empty() {
+            layout = ff::ChannelLayout::default(f.channels() as i32);
+        }
+        let key = (f.format(), layout.bits(), f.rate());
+        if resampler.as_ref().map(|r| r.1) != Some(key) {
+            let ctx = resampling::Context::get(
+                f.format(),
+                layout,
+                f.rate(),
+                ff::format::Sample::F32(ff::format::sample::Type::Packed),
+                ff::ChannelLayout::STEREO,
+                SAMPLE_RATE,
+            )?;
+            *resampler = Some((ctx, key));
+        }
+        // Align the first samples with the container origin.
+        if *written == 0 {
+            if let Some(pts) = f.timestamp().or(f.pts()) {
+                let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
+                let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
+                let zeros = vec![0u8; pad as usize * CHANNELS * 4];
+                writer.write_all(&zeros)?;
+                *written += pad;
+            }
+        }
+        let mut f = f.clone();
+        f.set_channel_layout(layout);
+        let mut converted = frame::Audio::empty();
+        resampler.as_mut().unwrap().0.run(&f, &mut converted)?;
+        let n = converted.samples();
+        if n > 0 {
+            writer.write_all(&converted.data(0)[..n * CHANNELS * 4])?;
+            *written += n as u64;
+        }
+        Ok(())
+    };
+
+    for (s, packet) in input.packets() {
+        if s.index() != stream_index {
+            continue;
+        }
+        if decoder.send_packet(&packet).is_err() {
+            continue;
+        }
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            write_frame(&decoded, &mut resampler, &mut writer, &mut written)?;
+        }
+        if let Some(pts) = packet.pts() {
+            let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
+            if p - last_progress > 0.02 {
+                last_progress = p;
+                progress(p.clamp(0.0, 1.0));
+            }
+        }
+    }
+    decoder.send_eof().ok();
+    while decoder.receive_frame(&mut decoded).is_ok() {
+        write_frame(&decoded, &mut resampler, &mut writer, &mut written)?;
+    }
+    if let Some((ctx, _)) = resampler.as_mut() {
+        let mut tail = frame::Audio::empty();
+        if ctx.flush(&mut tail).is_ok() && tail.samples() > 0 {
+            writer.write_all(&tail.data(0)[..tail.samples() * CHANNELS * 4])?;
+            written += tail.samples() as u64;
+        }
+    }
+    writer.flush()?;
+    drop(writer);
+    std::fs::rename(&tmp, out)?;
+    progress(1.0);
+    Ok(written)
+}
+
+pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
+    cache_dir.join("pcm").join(format!("{}.f32", asset.id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_size_keeps_aspect_and_never_upscales() {
+        assert_eq!(decode_size((1920, 1080), 0, (960.0, 540.0)), (960, 540));
+        assert_eq!(decode_size((1920, 1080), 0, (4000.0, 3000.0)), (1920, 1080));
+        // Rotated portrait source shown 540 wide, 960 tall.
+        assert_eq!(decode_size((1920, 1080), 90, (540.0, 960.0)), (960, 540));
+    }
+}

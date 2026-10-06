@@ -1,0 +1,80 @@
+//! Headless CapOpen: inspect media, render single frames and export projects.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+
+use anyhow::{Context, Result, bail};
+use capopen_engine::edit::{EditCmd, new_id};
+use capopen_engine::export::{ExportOptions, export};
+use capopen_engine::media::probe;
+use capopen_engine::{Project, Renderer, Wait};
+
+const USAGE: &str = "Usage:
+  capopen probe <media>
+  capopen new <project.json> <media>...     main-track project from media files
+  capopen frame <project.json> <seconds> <out.png> [width]
+  capopen render <project.json> <out.mp4>";
+
+fn cache_dir() -> PathBuf {
+    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
+}
+
+fn load(path: &str) -> Result<Project> {
+    let json = std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
+    serde_json::from_str(&json).with_context(|| format!("{path} is not a valid project"))
+}
+
+fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
+    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut enc = png::Encoder::new(file, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.write_header()?.write_image_data(rgba)?;
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["probe", media] => {
+            println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
+        }
+        ["new", out, media @ ..] if !media.is_empty() => {
+            let mut project = Project::new("CLI project");
+            for m in media {
+                let asset = probe(Path::new(m), new_id())?;
+                let id = asset.id.clone();
+                project.apply(EditCmd::AddAssets { assets: vec![asset] })?;
+                project.apply(EditCmd::AddClip { asset_id: id, start_us: None, track_id: None })?;
+            }
+            std::fs::write(out, serde_json::to_string_pretty(&project)?)?;
+        }
+        ["frame", project, secs, out, rest @ ..] => {
+            let project = load(project)?;
+            let width: u32 = rest.first().map(|w| w.parse()).transpose()?.unwrap_or(project.canvas.width);
+            let height = (width as u64 * project.canvas.height as u64 / project.canvas.width as u64) as u32;
+            let t = (secs.parse::<f64>()? * 1e6) as i64;
+            let mut renderer = Renderer::new()?;
+            let start = Instant::now();
+            let rgba = renderer.render(&project, t, width, height, Wait::Exact, false)?;
+            eprintln!("Rendered {width}x{height} at {secs}s in {:?} on {}", start.elapsed(), renderer.adapter_name());
+            write_png(Path::new(out), width, height, &rgba)?;
+        }
+        ["render", project, out] => {
+            let project = load(project)?;
+            let start = Instant::now();
+            let cancel = AtomicBool::new(false);
+            let mut last = 0;
+            export(&project, &cache_dir(), Path::new(out), &ExportOptions::default(), &cancel, |p| {
+                let pct = p.frame * 100 / p.total_frames.max(1);
+                if pct >= last + 10 {
+                    last = pct;
+                    eprintln!("{pct}%  ({}/{} frames)", p.frame, p.total_frames);
+                }
+            })?;
+            eprintln!("Exported {out} in {:?}", start.elapsed());
+        }
+        _ => bail!("{USAGE}"),
+    }
+    Ok(())
+}

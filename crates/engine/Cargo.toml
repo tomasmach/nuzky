@@ -1,0 +1,18 @@
+[package]
+name = "capopen-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
+wgpu = "30.0.1"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+cosmic-text = "0.19.0"
+memmap2 = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
