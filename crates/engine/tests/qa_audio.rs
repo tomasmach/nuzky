@@ -136,6 +136,42 @@ fn late_audio_is_padded_to_video_container_origin() {
     assert!(samples[..22000 * 2].iter().all(|v| v.abs() < 0.001));
 }
 #[test]
+fn broken_audio_offset_is_rejected_without_writing_silence() {
+    if !available() {
+        return;
+    }
+    let d = dir("broken-lead");
+    let source = d.join("broken.mkv");
+    // The container reports 100 001 s, so its duration cannot bound the lead-in silence.
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:s=64x64:r=25:d=1.5",
+            "-itsoffset",
+            "100000",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=880:r=48000:d=1",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+        ],
+        &source,
+    );
+    let out = d.join("broken.pcm");
+    let _ = std::fs::remove_file(&out);
+    let error = extract_pcm(&source, &out, |_| {}).unwrap_err();
+    assert!(error.to_string().contains("timestamps look broken"), "{error}");
+    assert!(!out.exists());
+    let leftovers =
+        std::fs::read_dir(&d).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".part"));
+    assert_eq!(leftovers.count(), 0);
+}
+#[test]
 fn mp3_attached_picture_remains_audio_asset() {
     if !available() {
         return;

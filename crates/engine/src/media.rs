@@ -347,8 +347,6 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let stream_index = stream.index();
     let time_base = f64::from(stream.time_base());
     let duration_us = input.duration().max(1) as f64;
-    // Audio cannot start after the container ends; larger offsets are malformed timestamps.
-    let max_lead_us = if input.duration() > 0 { input.duration() } else { MAX_UNKNOWN_LEAD_US };
     let origin = origin_us(&input);
     let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
 
@@ -406,7 +404,11 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
             if *written == 0
                 && let Some(pts) = f.timestamp().or(f.pts())
             {
-                let start_us = ((pts as f64 * time_base * 1e6) as i64 - origin).clamp(0, max_lead_us);
+                let start_us = ((pts as f64 * time_base * 1e6) as i64).saturating_sub(origin).max(0);
+                // The container duration includes a broken offset, so it cannot bound the silence.
+                if start_us > MAX_AUDIO_LEAD_US {
+                    bail!("Audio starts {} s after the video; the file's timestamps look broken", start_us / 1_000_000);
+                }
                 let pad = (start_us as u64 * SAMPLE_RATE as u64) / 1_000_000;
                 std::io::copy(&mut std::io::repeat(0).take(pad * (CHANNELS * 4) as u64), writer)?;
                 *written += pad;
@@ -465,8 +467,8 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     result
 }
 
-/// Silence allowed before the first audio frame when the container has no duration.
-const MAX_UNKNOWN_LEAD_US: i64 = 3_600_000_000;
+/// Real recordings start audio within seconds of the video; longer leads are broken timestamps.
+const MAX_AUDIO_LEAD_US: i64 = 600_000_000;
 
 const PCM_FORMAT: ff::format::Sample = ff::format::Sample::F32(ff::format::sample::Type::Packed);
 
