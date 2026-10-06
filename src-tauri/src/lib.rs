@@ -114,6 +114,18 @@ impl OpenSession {
         self.listener.take();
     }
 
+    fn prepare_switch(&mut self) -> anyhow::Result<()> {
+        self.close_ipc();
+        if let Err(error) = self.host.session.disconnect() {
+            #[cfg(unix)] {
+                self.listener = Some(capopen_mcp::ipc::Listener::start(self.host.clone())
+                    .map_err(|restore| anyhow::anyhow!("{error:#}; restoring IPC failed: {restore:#}"))?);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn snapshot(&self, select: Vec<String>) -> CmdResult<Snapshot> {
         let (state, can_undo, can_redo) = self.host.session.view().map_err(err)?;
         Ok(Snapshot {
@@ -214,8 +226,7 @@ impl AppState {
     fn replace_project(&self, current: &mut OpenSession, path: PathBuf) -> CmdResult<Snapshot> {
         let (next, rx) = OpenSession::open(path).map_err(err)?;
         let snap = next.snapshot(Vec::new())?;
-        current.close_ipc();
-        current.host.session.disconnect().map_err(err)?;
+        current.prepare_switch().map_err(err)?;
         *current = next;
         // The startup picker uses modification time, including projects opened without edits.
         if let Err(error) = current.host.session.disconnect() {
@@ -567,6 +578,27 @@ mod ipc_lifecycle_tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    #[test]
+    fn refused_switch_restores_ipc_after_save_failure() {
+        let dir = std::env::temp_dir().join(format!("capopen-save-failure-{}", new_id()));
+        let path = dir.join("project.capopen");
+        store::create(&path, &Project::new("still open")).unwrap();
+        let (mut current, _) = OpenSession::open(path.clone()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(current.prepare_switch().unwrap_err().to_string().contains("SAVE_FAILED"));
+        assert!(current.listener.is_some());
+        let remote = capopen_mcp::ipc::Remote::connect(&path, false).unwrap().unwrap();
+        let result = remote.call("get_state".into(), serde_json::json!({})).unwrap();
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(result.structured_content.unwrap()["name"], "still open");
+        drop(remote);
+        std::fs::remove_dir(&path).unwrap();
+        current.host.session.disconnect().unwrap();
+        drop(current);
+    }
+
     #[test]
     fn pending_mutation_rejects_replaced_session_epoch() {
         let dir = std::env::temp_dir().join(format!("capopen-epoch-{}", new_id()));
@@ -613,8 +645,7 @@ mod ipc_lifecycle_tests {
             Ok(serde_json::json!({}))
         }).unwrap();
         let began = Instant::now();
-        current.close_ipc();
-        current.host.session.disconnect().unwrap();
+        current.prepare_switch().unwrap();
         current = next;
         let elapsed = began.elapsed();
         let locked = capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_err();
