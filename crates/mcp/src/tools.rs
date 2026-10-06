@@ -271,7 +271,7 @@ impl Backend {
                     capopen_analysis::AudioSource::Asset { asset: &asset, cache: &cache }, model, vad, &language,
                 )?;
                 check_cancel(&cancel)?;
-                let record = Record { version: VERSION, fingerprint, model: name.clone(), language: result.language,
+                let record = Record { version: VERSION, fingerprint, duration_us: asset.duration_us, model: name.clone(), language: result.language,
                     words: result.words, segments: result.segments.into_iter().map(|s| Segment {
                         start_us: s.start_us, end_us: s.end_us, text: s.text,
                     }).collect() };
@@ -514,7 +514,7 @@ mod transcript_tests {
         let path = dir.join("project.capopen");
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
         let store = capopen_session::transcripts::TranscriptStore::at(dir.join("transcripts")).unwrap();
-        store.put(&project.assets[0], &Record { version: VERSION,
+        store.put(&project.assets[0], &Record { version: VERSION, duration_us: project.assets[0].duration_us,
             fingerprint: store.fingerprint(&project.assets[0]).unwrap(), model: "fixture".into(), language: "en".into(),
             words: sources["talk"].clone(), segments: vec![],
         }).unwrap();
