@@ -7,7 +7,7 @@ use std::sync::Arc;
 use cosmic_text::{Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
 
 use crate::gpu::Image;
-use crate::model::{TextStyle, parse_color};
+use crate::model::{TextStyle, max_stroke_width, parse_color};
 
 // Physical raster limits also bound legacy files, zoomed text, many lines and cache retention.
 const MAX_GLYPH_PX: f32 = 2048.0;
@@ -151,7 +151,7 @@ impl TextRenderer {
         // Layout stays in canvas pixels; only glyph rasterisation uses the output scale.
         let scale = finite_clamp(scale, 0.01, MAX_RASTER_SCALE);
         let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / scale);
-        let stroke = finite_clamp(style.stroke_width, 0.0, size);
+        let stroke = finite_clamp(style.stroke_width, 0.0, max_stroke_width(size));
         let max_width = finite_clamp(max_width / scale, 1.0, MAX_LAYOUT_WIDTH);
         let pad_box = if style.background.is_some() { size * 0.3 } else { 0.0 };
         let pad = (stroke.ceil() + pad_box.ceil() + 2.0) as i32;

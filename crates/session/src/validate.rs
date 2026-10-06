@@ -4,8 +4,8 @@ use anyhow::{Result, ensure};
 use capopen_engine::{
     Project,
     model::{
-        AssetKind, Clip, ClipContent, MAX_FONT_HEIGHT_RATIO, MAX_STROKE_FONT_RATIO, MAX_TEXT_WIDTH_RATIO,
-        PROJECT_VERSION, TrackKind, Transform,
+        AssetKind, Clip, ClipContent, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TrackKind,
+        Transform, max_stroke_width,
     },
 };
 
@@ -120,7 +120,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                     && style.font_size <= MAX_FONT_HEIGHT_RATIO * project.canvas.height as f32
                     && style.stroke_width.is_finite()
                     && style.stroke_width >= 0.0
-                    && style.stroke_width <= MAX_STROKE_FONT_RATIO * style.font_size
+                    && style.stroke_width <= max_stroke_width(style.font_size)
                     && style.max_width.is_none_or(|width| width.is_finite()
                         && width > 0.0
                         && width <= MAX_TEXT_WIDTH_RATIO * project.canvas.width as f32),
@@ -181,6 +181,8 @@ mod tests {
             (3840.0, 3840.0, Some(4320.0), true),
             (3841.0, 0.0, None, false),
             (95.0, 96.0, None, false),
+            (12.0, 20.0, None, true),
+            (12.0, 20.5, None, false),
             (95.0, 0.0, Some(4321.0), false),
             (95.0, 0.0, Some(0.0), false),
             (0.0, 0.0, None, false),
