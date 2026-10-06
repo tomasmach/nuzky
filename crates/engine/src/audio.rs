@@ -113,9 +113,14 @@ impl Mixer {
                 let samples = pcm.samples();
                 let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
-                for i in from..to {
+                // PCM cannot hold an edge sample like video holds a frame.
+                let available_start = (origin - src0 / *speed as f64).ceil() as i64;
+                let available_end = (origin + (pcm.frames() as f64 - src0) / *speed as f64).ceil() as i64;
+                let begin = begin.max(available_start);
+                let finish = finish.min(available_end);
+                for i in from.max(begin)..to.min(finish) {
                     let src = src0 + (i as f64 - origin) * *speed as f64;
-                    let gain = volume * gain_at(i, begin, finish, 0, 0, incoming, outgoing)
+                    let gain = volume * gain_at(i, begin, finish, incoming, outgoing)
                         * fade_gain(i, c0, c1, us_to_samples(*fade_in_us), us_to_samples(*fade_out_us));
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
@@ -146,11 +151,10 @@ fn fade_gain(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64) -> f32 {
     ramp(i - start, fade_in) * ramp(end - 1 - i, fade_out)
 }
 
-fn gain_at(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64, incoming: Option<(i64, i64)>, outgoing: Option<(i64, i64)>) -> f32 {
+fn gain_at(i: i64, start: i64, end: i64, incoming: Option<(i64, i64)>, outgoing: Option<(i64, i64)>) -> f32 {
     if i < start || i >= end { return 0.0; }
     let ramp = |n: i64, d: i64| if d > 0 { (n as f32 / d as f32).clamp(0.0, 1.0) } else { 1.0 };
     let mut gain = ramp((i - start).min(end - 1 - i), EDGE_FADE);
-    gain *= fade_gain(i, start, end, fade_in, fade_out);
     for (window, entering) in [(incoming, true), (outgoing, false)] {
         if let Some((a, b)) = window {
             let p = ((i - a) as f64 / (b - a).max(1) as f64).clamp(0.0, 1.0);
@@ -164,6 +168,33 @@ fn gain_at(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64, incoming: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transition_without_source_handles_has_no_sample_step() {
+        use crate::model::{Clip, Transform, Transition, TransitionKind};
+        let cache = std::env::temp_dir().join(format!("capopen-audio-edges-{}", std::process::id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let mut project = Project::new("source edges");
+        for (id, value, speed, start) in [("a", 0.2f32, 2.0, 0), ("b", 0.4, 0.5, 1_000_000)] {
+            let asset = Asset { id: id.into(), name: id.into(), path: String::new(), kind: AssetKind::Video, duration_us: 2_000_000, width: 2, height: 2, fps: 30.0, has_audio: true, rotation: 0 };
+            std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&vec![value; 96000 * CHANNELS])).unwrap();
+            project.assets.push(asset);
+            let mut clip = Clip::new(id.into(), start, 1_000_000, ClipContent::Media {
+                asset_id: id.into(), source_in_us: 0, volume: 1.0, transform: Transform::default(), speed,
+                adjust: Default::default(), fade_in_us: 0, fade_out_us: 0,
+            });
+            if id == "b" { clip.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 400_000 }); }
+            project.tracks[0].clips.push(clip);
+        }
+        let mut mixer = Mixer::new(cache.clone());
+        let mut out = vec![0.0; 1000 * CHANNELS];
+        mixer.mix(&project, 47500, &mut out);
+        let max_step = out.chunks_exact(CHANNELS).map(|f| f[0]).collect::<Vec<_>>()
+            .windows(2).map(|p| (p[1] - p[0]).abs()).fold(0.0f32, f32::max);
+        drop(mixer);
+        std::fs::remove_dir_all(cache).unwrap();
+        assert!(max_step < 0.002, "sample step: {max_step}");
+    }
 
     #[test]
     fn mixer_speed_and_crossfade_are_independent_of_buffer_boundaries() {
@@ -212,14 +243,14 @@ mod tests {
 
     #[test]
     fn fades_multiply_and_transition_is_equal_power() {
-        assert_eq!(gain_at(0, 0, 48000, 4800, 4800, None, None), 0.0);
-        assert_eq!(gain_at(2400, 0, 48000, 4800, 4800, None, None), 0.5);
-        assert_eq!(gain_at(45599, 0, 48000, 4800, 4800, None, None), 0.5);
-        assert_eq!(gain_at(47999, 0, 48000, 0, 0, None, None), 0.0);
-        assert!((gain_at(120, 0, 48000, 4800, 0, None, None) - 0.0125).abs() < 1e-6);
+        assert_eq!(fade_gain(0, 0, 48000, 4800, 4800), 0.0);
+        assert_eq!(fade_gain(2400, 0, 48000, 4800, 4800), 0.5);
+        assert_eq!(fade_gain(45599, 0, 48000, 4800, 4800), 0.5);
+        assert_eq!(gain_at(47999, 0, 48000, None, None), 0.0);
+        assert!((fade_gain(120, 0, 48000, 4800, 0) - 0.025).abs() < 1e-6);
         for i in [12000, 18000, 24000] {
-            let a = gain_at(i, 0, 36000, 0, 0, None, Some((12000, 24000)));
-            let b = gain_at(i, 0, 36000, 0, 0, Some((12000, 24000)), None);
+            let a = gain_at(i, 0, 36000, None, Some((12000, 24000)));
+            let b = gain_at(i, 0, 36000, Some((12000, 24000)), None);
             assert!((a * a + b * b - 1.0).abs() < 1e-6);
             if i == 18000 { assert!((a * 0.2 + b * 0.4 - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6); }
         }

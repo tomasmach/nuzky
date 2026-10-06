@@ -70,14 +70,18 @@ pub fn export(
     }
 }
 
-fn output_size(project: &Project, options: &ExportOptions) -> Result<(u32, u32)> {
+fn output_size(project: &Project, options: &ExportOptions, max_dimension: u32) -> Result<(u32, u32)> {
     let (w, h) = (project.canvas.width, project.canvas.height);
     if w < 2 || h < 2 { bail!("Canvas dimensions must be at least 2 pixels"); }
     let short = options.resolution.unwrap_or(w.min(h));
     if short < 2 || short > 7680 { bail!("Export resolution must be between 2 and 7680"); }
     let scale = short as f64 / w.min(h) as f64;
-    let even = |v: u32| ((v as f64 * scale / 2.0).round() as u32).max(1) * 2;
-    Ok((even(w), even(h)))
+    let even = |v: u32| (v as f64 * scale / 2.0).round().max(1.0) * 2.0;
+    let (w, h) = (even(w), even(h));
+    if w > max_dimension as f64 || h > max_dimension as f64 {
+        bail!("This resolution is larger than your GPU supports (max {max_dimension} px)");
+    }
+    Ok((w as u32, h as u32))
 }
 
 fn encode(
@@ -92,7 +96,8 @@ fn encode(
 
     let fps = options.fps.unwrap_or(project.canvas.fps);
     if fps == 0 || fps > 240 { bail!("Export frame rate must be between 1 and 240"); }
-    let (w, h) = output_size(project, options)?;
+    let mut renderer = Renderer::new()?;
+    let (w, h) = output_size(project, options, renderer.max_texture_dimension())?;
     let total_frames = ((duration as i128 * fps as i128 + 999_999) / 1_000_000) as u64;
 
     let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
@@ -154,7 +159,6 @@ fn encode(
     let vtb = octx.stream(vindex).unwrap().time_base();
     let atb = octx.stream(aindex).unwrap().time_base();
 
-    let mut renderer = Renderer::new()?;
     let mut mixer = Mixer::new(cache_dir.to_path_buf());
     let mut scaler = scaling::Context::get(Pixel::RGBA, w, h, Pixel::YUV420P, w, h, scaling::Flags::BICUBIC)?;
     set_sws_colorspace(&mut scaler, ff::ffi::SWS_CS_DEFAULT as i32, true, ff::ffi::SWS_CS_ITU709 as i32, false);
@@ -237,16 +241,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn oversized_portrait_export_returns_error() {
+        let project = Project::new("oversized");
+        let options = ExportOptions { resolution: Some(7680), ..ExportOptions::default() };
+        let result = output_size(&project, &options, 8192);
+        assert!(result.is_err(), "7680 x 13654 exceeds the 8192 px device limit");
+        assert_eq!(result.unwrap_err().to_string(), "This resolution is larger than your GPU supports (max 8192 px)");
+    }
+
+    #[test]
     fn output_resolution_keeps_aspect_and_even_dimensions() {
         let mut project = Project::new("size");
         let options = ExportOptions { resolution: Some(720), ..ExportOptions::default() };
-        assert_eq!(output_size(&project, &options).unwrap(), (720, 1280));
+        assert_eq!(output_size(&project, &options, 8192).unwrap(), (720, 1280));
         project.canvas.width = 1920;
         project.canvas.height = 1080;
-        assert_eq!(output_size(&project, &options).unwrap(), (1280, 720));
+        assert_eq!(output_size(&project, &options, 8192).unwrap(), (1280, 720));
         project.canvas.width = 1001;
         project.canvas.height = 777;
-        let (w, h) = output_size(&project, &options).unwrap();
+        let (w, h) = output_size(&project, &options, 8192).unwrap();
         assert_eq!((w % 2, h % 2, h), (0, 0, 720));
         assert!((w as f64 / h as f64 - 1001.0 / 777.0).abs() < 0.002);
     }

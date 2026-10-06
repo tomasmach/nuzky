@@ -1,5 +1,19 @@
 use crate::model::{AnimationKind, Clip, ClipContent, Track, Transform, Transition};
 
+const ZOOM_MAX_SCALE: f32 = 1.5;
+const POP_MAX_SCALE: f32 = 1.1;
+
+pub fn max_animation_scale(clip: &Clip) -> f32 {
+    [(clip.anim_in, false), (clip.anim_out, true)].into_iter().map(|(animation, exiting)| {
+        match animation.filter(|a| a.duration_us > 0).map(|a| a.kind) {
+            Some(AnimationKind::ZoomIn) if exiting => ZOOM_MAX_SCALE,
+            Some(AnimationKind::ZoomOut) if !exiting => ZOOM_MAX_SCALE,
+            Some(AnimationKind::Pop) => POP_MAX_SCALE,
+            _ => 1.0,
+        }
+    }).product()
+}
+
 pub fn source_time(clip: &Clip, t_us: i64) -> i64 {
     match clip.content {
         ClipContent::Media { source_in_us, speed, .. } => source_in_us + ((t_us - clip.start_us).max(0) as f64 * speed as f64).round() as i64,
@@ -74,14 +88,14 @@ fn animate(t: &mut Transform, kind: AnimationKind, p: f32, exiting: bool) {
     let visible = if exiting { 1.0 - p } else { p };
     t.opacity *= visible;
     let scale = match kind {
-        ZoomIn => if exiting { 1.0 + 0.5 * p } else { 0.5 + 0.5 * p },
-        ZoomOut => if exiting { 1.0 - 0.5 * p } else { 1.5 - 0.5 * p },
+        ZoomIn => if exiting { 1.0 + (ZOOM_MAX_SCALE - 1.0) * p } else { 0.5 + 0.5 * p },
+        ZoomOut => if exiting { 1.0 - 0.5 * p } else { ZOOM_MAX_SCALE - (ZOOM_MAX_SCALE - 1.0) * p },
         Pop => if p < 0.7 {
             let start = if exiting { 1.0 } else { 0.0 };
-            start + (1.1 - start) * p / 0.7
+            start + (POP_MAX_SCALE - start) * p / 0.7
         } else {
             let end = if exiting { 0.0 } else { 1.0 };
-            1.1 + (end - 1.1) * (p - 0.7) / 0.3
+            POP_MAX_SCALE + (end - POP_MAX_SCALE) * (p - 0.7) / 0.3
         },
         _ => 1.0,
     };
@@ -106,6 +120,18 @@ mod tests {
             asset_id: "a".into(), source_in_us: 500_000, speed: 2.0, volume: 1.0,
             transform: Transform::default(), adjust: Default::default(), fade_in_us: 0, fade_out_us: 0,
         })
+    }
+
+    #[test]
+    fn decode_scale_ignores_zero_length_animations() {
+        let mut c = clip();
+        c.anim_in = Some(Animation { kind: AnimationKind::ZoomOut, duration_us: 0 });
+        c.anim_out = Some(Animation { kind: AnimationKind::Pop, duration_us: 0 });
+        assert_eq!(max_animation_scale(&c), 1.0);
+        c.anim_in.as_mut().unwrap().duration_us = 1_000_000;
+        assert_eq!(max_animation_scale(&c), ZOOM_MAX_SCALE);
+        c.anim_out.as_mut().unwrap().duration_us = 1_000_000;
+        assert_eq!(max_animation_scale(&c), ZOOM_MAX_SCALE * POP_MAX_SCALE);
     }
 
     #[test]

@@ -31,6 +31,7 @@ pub struct AppState {
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     thumbs: Mutex<HashMap<String, String>>,
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
+    preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
 }
 
@@ -88,6 +89,9 @@ impl AppState {
 
     /// Pushes the current project to the preview and schedules an autosave.
     fn commit(&self, editor: &Editor, select: Vec<String>) -> Snapshot {
+        self.thumbs.lock().unwrap().retain(|id, _| editor.project.asset(id).is_some());
+        self.filmstrips.lock().unwrap().retain(|id, _| editor.project.asset(id).is_some());
+        self.preview_locks.lock().unwrap().retain(|id, _| editor.project.asset(id).is_some());
         self.engine.send(Msg::Project(Arc::new(editor.project.clone())));
         let path = self.project_path.lock().unwrap().clone();
         self.saver.schedule(path, editor.project.clone(), editor.revision);
@@ -100,9 +104,33 @@ impl AppState {
         Ok(self.commit(&editor, select))
     }
 
+    fn asset_preview<T: Clone>(&self, asset_id: &str, cache: &Mutex<HashMap<String, T>>, decode: impl FnOnce(&capopen_engine::model::Asset) -> anyhow::Result<Option<T>>) -> CmdResult<Option<T>> {
+        let (asset, lock) = {
+            let editor = self.editor.lock().unwrap();
+            let Some(asset) = editor.project.asset(asset_id).cloned() else { return Ok(None) };
+            let lock = self.preview_locks.lock().unwrap().entry(asset_id.into()).or_default().clone();
+            (asset, lock)
+        };
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let _editor = self.editor.lock().unwrap();
+            if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) { return Ok(None); }
+            if let Some(value) = cache.lock().unwrap().get(asset_id) { return Ok(Some(value.clone())); }
+        }
+        let value = decode(&asset).map_err(err)?;
+        let _editor = self.editor.lock().unwrap();
+        // Removal or replacement invalidates in-flight decodes, even if the ID is reused.
+        if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) { return Ok(None); }
+        if let Some(value) = &value { cache.lock().unwrap().insert(asset_id.into(), value.clone()); }
+        Ok(value)
+    }
+
     fn replace_project(&self, project: Project, path: PathBuf) -> Snapshot {
         let mut editor = self.editor.lock().unwrap();
         *editor = Editor::new(project);
+        self.thumbs.lock().unwrap().clear();
+        self.filmstrips.lock().unwrap().clear();
+        self.preview_locks.lock().unwrap().clear();
         *self.project_path.lock().unwrap() = path;
         self.engine.send(Msg::Seek(0));
         let snap = self.commit(&editor, Vec::new());
@@ -170,17 +198,10 @@ async fn import_media(app: AppHandle, paths: Vec<String>) -> CmdResult<ImportRes
 
 #[tauri::command]
 async fn thumbnail(app: AppHandle, asset_id: String) -> CmdResult<Option<String>> {
-    let state = app.state::<AppState>();
-    if let Some(t) = state.thumbs.lock().unwrap().get(&asset_id) {
-        return Ok(Some(t.clone()));
-    }
-    let asset = state.editor.lock().unwrap().project.asset(&asset_id).cloned();
-    let Some(asset) = asset else { return Ok(None) };
-    let url = tauri::async_runtime::spawn_blocking(move || thumbs::thumbnail(&asset)).await.map_err(err)?.map_err(err)?;
-    if let Some(u) = &url {
-        state.thumbs.lock().unwrap().insert(asset_id, u.clone());
-    }
-    Ok(url)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.asset_preview(&asset_id, &state.thumbs, thumbs::thumbnail)
+    }).await.map_err(err)?
 }
 
 #[tauri::command]
@@ -281,17 +302,10 @@ async fn layer_bounds(app: AppHandle, t_us: i64) -> CmdResult<Vec<LayerBounds>> 
 
 #[tauri::command]
 async fn filmstrip(app: AppHandle, asset_id: String) -> CmdResult<Option<Filmstrip>> {
-    let state = app.state::<AppState>();
-    if let Some(strip) = state.filmstrips.lock().unwrap().get(&asset_id) {
-        return Ok(Some(strip.clone()));
-    }
-    let asset = state.editor.lock().unwrap().project.asset(&asset_id).cloned();
-    let Some(asset) = asset else { return Ok(None) };
-    let strip = tauri::async_runtime::spawn_blocking(move || thumbs::filmstrip(&asset)).await.map_err(err)?.map_err(err)?;
-    if let Some(strip) = &strip {
-        state.filmstrips.lock().unwrap().insert(asset_id, strip.clone());
-    }
-    Ok(strip)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.asset_preview(&asset_id, &state.filmstrips, thumbs::filmstrip)
+    }).await.map_err(err)?
 }
 
 #[tauri::command]
@@ -332,6 +346,7 @@ pub fn run() {
                 jobs: Mutex::new(HashMap::new()),
                 thumbs: Mutex::new(HashMap::new()),
                 filmstrips: Mutex::new(HashMap::new()),
+                preview_locks: Mutex::new(HashMap::new()),
                 bounds_text: Mutex::new(None),
             };
             let project = state.editor.lock().unwrap().project.clone();

@@ -178,6 +178,8 @@ fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: 
     Ok(RgbaFrame { t_us, width: w, height: h, data: Arc::new(data) })
 }
 
+pub type DecodedFrame = (i64, frame::Video);
+
 /// Sequential decoder with exact seeking. Picks the last frame whose real timestamp is
 /// at or before the requested time, so variable frame rate footage stays exact.
 pub struct VideoDecoder {
@@ -291,6 +293,22 @@ impl VideoDecoder {
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    /// Returns the frame covering `want` and the next frame, if decoded.
+    /// Pass the previous pair when decoding forward; after seeking pass `[None, None]`.
+    pub fn frame_covering(&mut self, want: i64, [mut covering, mut next]: [Option<DecodedFrame>; 2]) -> Result<[Option<DecodedFrame>; 2]> {
+        loop {
+            let decoded = match next.take() {
+                Some(frame) => Some(frame),
+                None => self.next_frame()?,
+            };
+            match decoded {
+                Some((t, f)) if t == want => return Ok([Some((t, f)), None]),
+                Some((t, f)) if t < want || covering.is_none() && self.is_image() => covering = Some((t, f)),
+                next => return Ok([covering, next]),
             }
         }
     }
@@ -440,6 +458,27 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires the local tmp-test media fixtures"]
+    fn covering_frames_match_sequential_decode() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test");
+        for name in ["wide.mp4", "phone_hevc_vfr.mov"] {
+            let mut reference = VideoDecoder::open(&root.join(name)).unwrap();
+            let mut times = Vec::new();
+            while let Some((t, _)) = reference.next_frame().unwrap() { times.push(t); }
+            let mut decoder = VideoDecoder::open(&root.join(name)).unwrap();
+            let mut pair = [None, None];
+            for target in [0, 1, 33_333, 500_001, 900_005, 1_000_000, 2_333_333, 10_000_000] {
+                pair = decoder.frame_covering(target, pair).unwrap();
+                let expected = times.iter().copied().filter(|t| *t <= target).last();
+                assert_eq!(pair[0].as_ref().map(|f| f.0), expected, "{name} at {target}");
+                decoder.seek(target).unwrap();
+                pair = decoder.frame_covering(target, [None, None]).unwrap();
+                assert_eq!(pair[0].as_ref().map(|f| f.0), expected, "seek {name} at {target}");
+            }
+        }
+    }
 
     #[test]
     fn decode_size_keeps_aspect_and_never_upscales() {

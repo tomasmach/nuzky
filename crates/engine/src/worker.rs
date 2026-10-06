@@ -213,31 +213,17 @@ enum Step {
     Next(Option<RgbaFrame>),
 }
 
-/// Seeks and decodes until the frame covering `want` and the one after it are known.
-/// Only those two get converted, so seeking through a long GOP stays cheap.
+/// Seeks to the frame covering `want`, keeping any decoded successor.
+/// Only those frames get converted, so seeking through a long GOP stays cheap.
 fn seek_to(decoder: &mut VideoDecoder, want: i64, size: (u32, u32)) -> anyhow::Result<Step> {
     decoder.seek(want)?;
-    let mut candidate = None;
-    loop {
-        match decoder.next_frame()? {
-            Some((t, f)) if t <= want || candidate.is_none() && decoder.is_image() => candidate = Some((t, f)),
-            Some((t, f)) => {
-                let mut frames = Vec::with_capacity(2);
-                if let Some((ct, cf)) = candidate {
-                    frames.push(decoder.convert(&cf, ct, size.0, size.1)?);
-                }
-                frames.push(decoder.convert(&f, t, size.0, size.1)?);
-                return Ok(Step::Seeked { frames, eof: false });
-            }
-            None => {
-                let frames = match candidate {
-                    Some((ct, cf)) => vec![decoder.convert(&cf, ct, size.0, size.1)?],
-                    None => Vec::new(),
-                };
-                return Ok(Step::Seeked { frames, eof: true });
-            }
-        }
+    let [covering, next] = decoder.frame_covering(want, [None, None])?;
+    let eof = decoder.is_eof();
+    let mut frames = Vec::with_capacity(2);
+    for (t, frame) in [covering, next].into_iter().flatten() {
+        frames.push(decoder.convert(&frame, t, size.0, size.1)?);
     }
+    Ok(Step::Seeked { frames, eof })
 }
 
 fn decode_next(decoder: &mut VideoDecoder, size: (u32, u32)) -> anyhow::Result<Step> {

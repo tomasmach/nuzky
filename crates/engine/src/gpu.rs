@@ -111,12 +111,19 @@ struct Target {
     padded_row: u32,
 }
 
+struct TransitionTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    uniform: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
 pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     additive: wgpu::RenderPipeline,
-    transitions: Vec<(u32, u32, wgpu::Texture)>,
+    transitions: Vec<TransitionTarget>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target: Option<Target>,
@@ -222,6 +229,10 @@ impl Gpu {
         Ok(Self { device, queue, pipeline, additive, transitions: Vec::new(), layout, sampler, target: None, textures: HashMap::new(), adapter_name })
     }
 
+    pub fn max_texture_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     fn target(&mut self, w: u32, h: u32) -> &Target {
         if self.target.as_ref().map(|t| t.size) != Some((w, h)) {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -301,12 +312,16 @@ impl Gpu {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let view = tex.create_view(&Default::default());
+        self.bind_group(&buffer, &view)
+    }
+
+    fn bind_group(&self, buffer: &wgpu::Buffer, view: &wgpu::TextureView) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("layer"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         })
@@ -339,6 +354,10 @@ impl Gpu {
 
     /// Composites the layers bottom to top over `background` and returns tight RGBA rows.
     pub fn render(&mut self, w: u32, h: u32, background: [f32; 4], layers: &[Draw]) -> Result<Vec<u8>> {
+        let max = self.max_texture_dimension();
+        if w > max || h > max {
+            anyhow::bail!("This resolution is larger than your GPU supports (max {max} px)");
+        }
         let mut used = Vec::new();
         let mut bind_groups = Vec::new();
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -357,31 +376,36 @@ impl Gpu {
                         used.push(Arc::as_ptr(&layer.image.data) as usize);
                         groups.push(self.bind(layer, &tex, w, h, false));
                     }
-                    if self.transitions.get(transition_index).map(|(tw, th, _)| (*tw, *th)) != Some((w, h)) {
+                    if self.transitions.get(transition_index).map(|t| (t.texture.width(), t.texture.height())) != Some((w, h)) {
                         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                             label: Some("transition"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                             mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
                             format: wgpu::TextureFormat::Rgba8Unorm,
                             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
                         });
+                        let view = texture.create_view(&Default::default());
+                        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("transition"), size: std::mem::size_of::<LayerUniform>() as u64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                        });
+                        let bind_group = self.bind_group(&uniform, &view);
+                        let target = TransitionTarget { texture, view, uniform, bind_group };
                         if transition_index == self.transitions.len() {
-                            self.transitions.push((w, h, texture));
+                            self.transitions.push(target);
                         } else {
-                            self.transitions[transition_index] = (w, h, texture);
+                            self.transitions[transition_index] = target;
                         }
                     }
-                    let (_, _, texture) = &self.transitions[transition_index];
+                    let target = &self.transitions[transition_index];
                     transition_index += 1;
-                    let view = texture.create_view(&Default::default());
-                    self.draw_pass(&mut encoder, &view, [0.0; 4], &groups, true);
-                    let mut layer = pair[0].clone();
-                    layer.corners = [[0.0, 0.0], [w as f32, 0.0], [w as f32, h as f32], [0.0, h as f32]];
-                    layer.opacity = 1.0;
-                    layer.uv_rotation = 0;
-                    layer.adjust = Adjust::default();
-                    layer.blur = 0.0;
-                    layer.clip = None;
-                    bind_groups.push(self.bind(&layer, texture, w, h, true));
+                    self.draw_pass(&mut encoder, &target.view, [0.0; 4], &groups, true);
+                    let uniform = LayerUniform {
+                        corners: [[-1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [-1.0, -1.0, 0.0, 1.0], [1.0, -1.0, 1.0, 1.0]],
+                        opacity: [1.0, 0.0, 0.0, 0.0], adjust: [0.0; 4], effects: [0.0, 0.0, 1.0, 0.0],
+                        clip: [0.0, 0.0, w as f32, h as f32],
+                    };
+                    self.queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
+                    bind_groups.push(target.bind_group.clone());
                 }
             }
         }
@@ -433,6 +457,27 @@ impl Gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transition_resources_reuse_and_resize() {
+        let mut gpu = Gpu::new().unwrap();
+        let layer = Layer {
+            image: Image { width: 1, height: 1, data: Arc::new(vec![80, 100, 120, 255]) },
+            corners: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]],
+            uv_rotation: 0, opacity: 0.5, adjust: Adjust::default(), blur: 0.0, clip: None,
+        };
+        let draws = [Draw::Transition([layer.clone(), layer])];
+        let first = gpu.render(2, 2, [0.0; 4], &draws).unwrap();
+        let group = gpu.transitions[0].bind_group.clone();
+        assert_eq!(gpu.render(2, 2, [0.0; 4], &draws).unwrap(), first);
+        assert_eq!(gpu.transitions[0].bind_group, group);
+        let resized = gpu.render(4, 4, [0.0; 4], &draws).unwrap();
+        assert_ne!(gpu.transitions[0].bind_group, group);
+        assert!(resized.chunks_exact(4).all(|p| p == &first[..4]));
+        let max = gpu.max_texture_dimension();
+        assert_eq!(gpu.render(max + 1, 2, [0.0; 4], &[]).unwrap_err().to_string(),
+            format!("This resolution is larger than your GPU supports (max {max} px)"));
+    }
 
     #[test]
     fn zero_adjust_preserves_pixels_and_crossfade_preserves_colour() {
