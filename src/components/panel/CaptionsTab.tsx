@@ -66,7 +66,10 @@ export function CaptionsTab() {
       </div>
       <div className="flex flex-col gap-1.5">
         <span className="text-[12px] text-muted">{hasCaptions ? "Font · applies to all captions" : "Font"}</span>
-        <FontPicker value={font} onChange={pickFont} disabled={busy} disabledReason="Wait for speech recognition to finish" />
+        {/* A row, so the picker's flex-1 fills the width instead of collapsing the column. */}
+        <div className="flex">
+          <FontPicker value={font} onChange={pickFont} disabled={busy} disabledReason="Wait for speech recognition to finish" />
+        </div>
       </div>
       {running ? (
         <SpeechJobCard job={running} />
