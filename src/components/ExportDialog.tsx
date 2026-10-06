@@ -85,7 +85,11 @@ export function ExportDialog() {
 
   const ready = open && options !== null;
   useEffect(() => {
-    if (ready) dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    if (!ready) return;
+    // Closing returns focus to what opened the dialog: Export, the top bar job or a toast.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    return () => opener?.focus();
   }, [ready]);
 
   useEffect(() => {
