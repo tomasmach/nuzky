@@ -4,6 +4,7 @@ mod jobs;
 mod preview_server;
 mod store;
 mod thumbs;
+mod transcripts;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,7 +37,6 @@ pub struct AppState {
     preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
     fonts: OnceLock<FontFamilies>,
-    transcript: Mutex<Option<jobs::CachedTranscript>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -487,7 +487,6 @@ pub fn run() {
                 preview_locks: Mutex::new(HashMap::new()),
                 bounds_text: Mutex::new(None),
                 fonts: OnceLock::new(),
-                transcript: Mutex::new(None),
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
@@ -523,7 +522,9 @@ pub fn run() {
             jobs::start_captions,
             jobs::caption_models,
             jobs::start_transcript,
-            jobs::get_transcript,
+            transcripts::transcript_view,
+            transcripts::cut_words,
+            transcripts::remove_pauses,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CapOpen")
