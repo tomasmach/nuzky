@@ -32,7 +32,7 @@ Hovering or focusing a media or audio item shows `+` (add at playhead) and a tra
 - **Move**: drag the clip body. A ghost follows the pointer and snaps within 8 px to the playhead and clip edges; a vertical line shows the snap. Dropping on an occupied spot creates a new track. `Esc` cancels the drag.
 - **Main track**: magnetic. Clips sit back to back; moving reorders, deleting closes the gap.
 - **Trim**: drag a clip edge. A tooltip shows the new duration. The handle stops at the end of the source media, taking the clip's speed into account.
-- **Split**: `S`, the Split button or the context menu, at the playhead. Disabled with the reason when no selected clip is under the playhead.
+- **Split**: at the playhead. `S` and the Split button split the selected clips under the playhead, else the main-track clip under it, and are disabled with the reason when there is none; the context menu splits the clicked clip.
 - **Delete left / right**: `Q` and `W` or the buttons next to Split remove the part of the clip left or right of the playhead, CapCut's fast way to cut a talking head. They act on the selected clips under the playhead, else the main-track clip under it. On the main track the time is cut from every track, so captions, titles and overlays stay in sync; audio tracks set to keep in place (see Transcript) are left alone. A clip on another track is trimmed instead. After `Q` the playhead sits on the cut. Each press is one undo step.
 - **Duplicate**: `Ctrl+D`, the Duplicate button or the context menu. The copy goes right after the original and is selected.
 - **Delete**: `Delete`, `Backspace`, the toolbar button or the context menu; all of them show a toast with Undo. With a transition selected they remove the transition.
@@ -53,7 +53,7 @@ The Filters tab applies a preset (None, Vivid, Warm, Cool, Mono, Fade, Moody, Pu
 `Space` plays and pauses; it also drops focus from the focused control so that control is not pressed. A focused checkbox or menu item keeps Space for itself. Clicking or dragging the ruler scrubs. `←`/`→` step one frame, with `Shift` one second. `Home`/`End` jump to the ends. A focused slider keeps its own arrow, Home and End keys. The sound card drives the clock, so picture and sound stay in sync.
 
 ### Preview
-Clicking the paused preview selects the top-most visible layer under the pointer; clicking where no layer is clears the selection. The selected layer gets a box: drag inside it to move, drag a corner to scale uniformly, drag the round handle to rotate (`Shift` snaps to 15°). The box of a layer larger than the frame is cut off at the edge of the preview area, and handles that would leave it stay on that edge, so they can always be grabbed. While moving, the layer centre snaps to the canvas centre lines within 6 px and a guide shows. Each gesture is one undo step. If the clip has keyframes, the gesture writes the keyframe at the playhead. Ratio, right of the transport, switches the canvas between 9:16, 16:9, 1:1 and 4:5.
+Clicking the paused preview selects the top-most visible layer under the pointer; clicking where no layer is clears the selection. The selected layer gets a box: drag inside it to move, drag a corner to scale uniformly, drag the round handle to rotate (`Shift` snaps to 15°). The box of a layer larger than the frame is cut off at the edge of the preview area, and handles that would leave it stay on that edge, so they can always be grabbed. While moving, the layer centre snaps to the canvas centre lines within 6 px and a guide shows. Each gesture is one undo step. If the clip has keyframes, the gesture writes the keyframe at the playhead. Ratio, right of the transport, switches the canvas between 9:16, 16:9, 1:1 and 4:5; in its menu ↑/↓ move, and choosing or Esc returns focus to Ratio.
 
 ### Inspector
 Shows the selected clip with CapCut's tabs, remembering the last tab per clip kind:
@@ -95,7 +95,7 @@ Text-based editing, as in CapCut. Transcribe timeline recognises each video file
 - **Keep in place while cutting**: one checkbox per audio track, saved with the project and undoable. Tracks made for music and sound files start checked and keep playing across cuts; sound detached from a video starts unchecked, so it is cut with the picture. The setting also applies to `Q`/`W`.
 
 ### Export
-`Ctrl+E` or Export opens a dialog: resolution (720p, 1080p, 1440p, 4K, with the resulting pixel size for the canvas), frame rate (24–60, default the project's), quality (High, Recommended, Smaller file) with an estimated file size. Resolution and quality are remembered. Export… asks where to save. The dialog can be closed at any time; a running export shows its percentage in the top bar and clicking it reopens the dialog. Progress shows percentage and time left, with Cancel. Success offers Show in folder, in the dialog or, when it is closed, in a toast. Failure shows the reason and Retry (same file); with the dialog closed a toast offers Details. Export is disabled with a reason while the timeline is empty.
+`Ctrl+E` or Export opens a dialog: resolution (720p, 1080p, 1440p, 4K, with the resulting pixel size for the canvas), frame rate (24–60, default the project's), quality (High, Recommended, Smaller file) with an estimated file size. Resolution and quality are remembered. Export… asks where to save. The dialog can be closed at any time, and focus returns to what opened it; a running export shows its percentage in the top bar and clicking it reopens the dialog. Progress shows percentage and time left, with Cancel. Success offers Show in folder, in the dialog or, when it is closed, in a toast. Failure shows the reason and Retry (same file); with the dialog closed a toast offers Details. Export is disabled with a reason while the timeline is empty.
 
 ### Saving
 Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text. An action that changes nothing, such as a failed import, leaves the status as it was.
@@ -105,7 +105,7 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | Key | Action |
 |---|---|
 | `Space` | Play / pause |
-| `S` | Split selected clip at playhead |
+| `S` | Split the selected clips under the playhead, else the main-track clip |
 | `Q` / `W` | Delete the part of the clip left / right of the playhead |
 | `Ctrl+D` | Duplicate selection |
 | `Delete`, `Backspace` | Delete selection or the selected transition |
@@ -121,4 +121,4 @@ Shortcuts are ignored while typing in a text field and while the export dialog i
 
 ## Interrupted AI edits
 
-Opening a project with an unfinished AI checkpoint blocks the editor with “An AI edit didn't finish”. “Keep changes” keeps the saved edits. “Restore previous version” restores the checkpoint as one undoable step and offers Undo in a toast. The dialog cannot be dismissed before choosing; a failed recovery keeps it open with the error. While an AI run is open, user edits report RUN_ACTIVE through the existing error toast.
+Opening a project with an unfinished AI checkpoint blocks the editor with “An AI edit didn't finish”. “Keep changes” keeps the saved edits. “Restore previous version” restores the checkpoint as one undoable step and offers Undo in a toast. The dialog cannot be dismissed before choosing; a failed recovery keeps it open with the error. While an AI run is open, a user edit is refused (RUN_ACTIVE) and an info toast says “AI is editing. Stop it to edit yourself.” with Stop and edit.
