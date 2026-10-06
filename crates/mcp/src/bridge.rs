@@ -29,7 +29,7 @@ impl Target {
                 let result = tokio::task::spawn_blocking(move || remote.call(name, args)).await;
                 match result {
                     Ok(Ok(result)) => result,
-                    Ok(Err(e)) => CallToolResult::error(vec![ContentBlock::text(format!("{e:#}"))]),
+                    Ok(Err(e)) => CallToolResult::error(vec![ContentBlock::text(tools::error_message(format!("{e:#}")))]),
                     Err(e) => {
                         CallToolResult::error(vec![ContentBlock::text(format!("IPC_FAILED: {e}"))])
                     }

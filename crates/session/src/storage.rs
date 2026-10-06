@@ -45,7 +45,7 @@ pub fn lock_project(path: &Path, exclusive: bool) -> Result<File> {
     let result = if exclusive { lock.try_lock() } else { lock.try_lock_shared() };
     match result {
         Ok(()) => Ok(lock),
-        Err(TryLockError::WouldBlock) => bail!("PROJECT_BUSY: {} is held by another session", path.display()),
+        Err(TryLockError::WouldBlock) => bail!("PROJECT_BUSY: This project is open in another CapOpen window or an AI agent is editing it. Close it there first."),
         Err(TryLockError::Error(error)) => Err(error).context("Acquiring project lock"),
     }
 }

@@ -79,7 +79,7 @@ pub struct ImportFailure {
 type CmdResult<T> = Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
-    e.to_string()
+    format!("{e:#}")
 }
 
 struct OpenSession {

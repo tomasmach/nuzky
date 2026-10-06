@@ -320,7 +320,7 @@ fn run_speech_job(
     let derived = transcript::derive(&view.project, &current.host.transcripts)?;
     anyhow::ensure!(!derived.words.is_empty(), "No speech was recognised.");
     let Some(captions) = &request.captions else {
-        return Ok(Some(format!("{} words", derived.words.len())));
+        return Ok(Some(count_label(derived.words.len(), "word", "words")));
     };
     anyhow::ensure!(derived.untranscribed.is_empty(), "A clip was added during recognition. Generate the captions again.");
     rep.progress(1.0, Some("Grouping captions"));
@@ -331,7 +331,7 @@ fn run_speech_job(
     if let Ok(snap) = current.snapshot(Vec::new()) {
         app.emit("project-changed", snap).ok();
     }
-    Ok(Some(format!("{count} captions")))
+    Ok(Some(count_label(count, "caption", "captions")))
 }
 
 /// Recognises each file once, in its own time, storing every transcript as soon as it is ready.
@@ -395,7 +395,7 @@ fn download(url: &str, path: &Path, cancel: &AtomicBool, rep: &mut Reporter, pha
         if cancel.load(Ordering::Relaxed) {
             drop(file);
             std::fs::remove_file(&tmp).ok();
-            anyhow::bail!("cancelled");
+            anyhow::bail!("CANCELLED: job cancelled");
         }
         let n = reader.read(&mut buf).context("Reading model download")?;
         if n == 0 {
@@ -414,8 +414,12 @@ fn download(url: &str, path: &Path, cancel: &AtomicBool, rep: &mut Reporter, pha
     Ok(path)
 }
 
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
 fn check_cancelled(cancel: &AtomicBool) -> anyhow::Result<()> {
-    anyhow::ensure!(!cancel.load(Ordering::Relaxed), "cancelled");
+    anyhow::ensure!(!cancel.load(Ordering::Relaxed), "CANCELLED: job cancelled");
     Ok(())
 }
 

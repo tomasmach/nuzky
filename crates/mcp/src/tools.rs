@@ -195,7 +195,7 @@ impl Backend {
         if let Some(range) = args.range {
             ensure!(
                 range.start_us >= 0 && range.end_us > range.start_us,
-                "Invalid half-open timeline range"
+                "INVALID_RANGE: invalid half-open timeline range"
             );
         }
         let mut project = state.project.clone();
@@ -227,7 +227,7 @@ impl Backend {
 
     fn import(&self, args: Import, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
-        ensure!(!args.paths.is_empty(), "No paths to import");
+        ensure!(!args.paths.is_empty(), "INVALID_ARGUMENTS: no paths to import");
         let assets = args
             .paths
             .iter()
@@ -256,7 +256,7 @@ impl Backend {
         let mut asset = state
             .project
             .asset(&args.asset_id)
-            .context("UNKNOWN_ASSET")?
+            .with_context(|| format!("UNKNOWN_ASSET: {}", args.asset_id))?
             .clone();
         asset.path = self.resolve(&asset.path).to_string_lossy().into_owned();
         ensure!(
@@ -293,7 +293,7 @@ impl Backend {
         let mut assets = Vec::new();
         if let Some(ids) = args.asset_ids {
             for id in ids {
-                let asset = project.asset(&id).context("UNKNOWN_ASSET: transcription source")?;
+                let asset = project.asset(&id).with_context(|| format!("UNKNOWN_ASSET: {id}"))?;
                 if !assets.iter().any(|a: &capopen_engine::model::Asset| a.id == id) {
                     assets.push(asset.clone());
                 }
@@ -484,11 +484,20 @@ pub async fn call(backend: Arc<Backend>, name: String, arguments: Value) -> Call
     match tokio::task::spawn_blocking(move || backend.call(&name, arguments)).await {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => tool_error(&errors, format!("{error:#}")),
-        Err(error) => tool_error(&errors, format!("Tool worker failed: {error}")),
+        Err(error) => tool_error(&errors, format!("TOOL_FAILED: worker failed: {error}")),
+    }
+}
+
+pub(crate) fn error_message(message: String) -> String {
+    if message.split_once(": ").is_some_and(|(code, _)| !code.is_empty() && code.bytes().all(|c| c.is_ascii_uppercase() || c == b'_')) {
+        message
+    } else {
+        format!("TOOL_FAILED: {message}")
     }
 }
 
 pub(crate) fn tool_error(backend: &Backend, message: String) -> CallToolResult {
+    let message = error_message(message);
     match backend.host.session.state() {
         Ok(state) => CallToolResult::structured_error(json!({
             "error": message, "revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,

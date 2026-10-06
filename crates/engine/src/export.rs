@@ -113,7 +113,7 @@ fn check_source_path(project: &Project, path: &Path) -> Result<()> {
 
 fn publish(tmp: &Path, out: &Path, replace_existing: bool, cancel: &AtomicBool) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
-        bail!("Export cancelled");
+        bail!("CANCELLED: export cancelled");
     }
     if replace_existing {
         std::fs::rename(tmp, out).with_context(|| format!("Cannot write {}", out.display()))?;
@@ -258,7 +258,7 @@ fn encode(
 
     for i in 0..total_frames {
         if cancel.load(Ordering::Relaxed) {
-            bail!("Export cancelled");
+            bail!("CANCELLED: export cancelled");
         }
         let t = frame_time_us(i, fps);
         let pixels = renderer.render(project, t, w, h, Wait::Exact, true)?;
