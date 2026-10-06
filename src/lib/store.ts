@@ -360,11 +360,15 @@ export function canSplitClip(clip: Clip, timeUs: number, fps: number) {
   return timeUs > clip.startUs + min && timeUs < clip.startUs + clip.durationUs - min;
 }
 
-/** Selected clips under the playhead, or the main-track clip under it when none is selected. */
+/**
+ * Selected clips under the playhead, or the main-track clip under it when no selected clip is.
+ * A selected clip that the playhead only touches at its edge keeps the action on itself, so it
+ * does nothing rather than cutting the main track instead.
+ */
 export function splitTargets(project: Project, selection: string[], timeUs: number): Clip[] {
+  const touched = allClips(project).filter((c) => selection.includes(c.id) && timeUs >= c.startUs && timeUs <= c.startUs + c.durationUs);
   const under = (c: Clip) => canSplitClip(c, timeUs, project.canvas.fps);
-  const sel = allClips(project).filter((c) => selection.includes(c.id) && under(c));
-  return sel.length > 0 ? sel : mainClips(project).filter(under);
+  return (touched.length > 0 ? touched : mainClips(project)).filter(under);
 }
 
 export async function splitAtPlayhead() {

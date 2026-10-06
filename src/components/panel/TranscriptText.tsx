@@ -63,8 +63,10 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
   const playing = useEditor((s) => s.playing);
   const paras = useMemo(() => paragraphs(tokens), [tokens]);
   const active = disabled ? -1 : tokenAt(tokens, timeUs);
-  const lo = sel ? Math.min(sel.anchor, sel.focus) : -1;
-  const hi = sel ? Math.max(sel.anchor, sel.focus) : -1;
+  // Fewer tokens can arrive before the effect below clears the selection.
+  const live = sel && sel.anchor < tokens.length && sel.focus < tokens.length ? sel : null;
+  const lo = live ? Math.min(live.anchor, live.focus) : -1;
+  const hi = live ? Math.max(live.anchor, live.focus) : -1;
 
   // Indices change with the words or the pause length.
   useEffect(() => setSel(null), [tokens, disabled]);
@@ -92,7 +94,7 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
     if (i === null) return;
     e.preventDefault();
     dragging.current = true;
-    if (e.shiftKey && sel) setSel({ anchor: sel.anchor, focus: i });
+    if (e.shiftKey && live) setSel({ anchor: live.anchor, focus: i });
     else {
       setSel({ anchor: i, focus: i });
       seekTo(i);
@@ -100,33 +102,36 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
   };
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current || !(e.buttons & 1) || !sel) return;
+    if (!dragging.current || !(e.buttons & 1) || !live) return;
     const i = indexAt(e.target);
-    if (i !== null && i !== sel.focus) setSel({ anchor: sel.anchor, focus: i });
+    if (i !== null && i !== live.focus) setSel({ anchor: live.anchor, focus: i });
   };
 
   const remove = async () => {
     if (lo >= 0 && (await onDelete(lo, hi))) setSel(null);
   };
 
+  /** Delete cuts the words and never falls through to deleting the selected timeline clips. */
+  const onDeleteKey = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key !== "Delete" && e.key !== "Backspace") return false;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disabled) remove();
+    return true;
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (onDeleteKey(e)) return;
     const key = e.key;
-    if (key === "Delete" || key === "Backspace") {
-      // Never falls through to deleting the selected timeline clips, also not while out of date.
-      e.preventDefault();
-      e.stopPropagation();
-      if (!disabled) remove();
-      return;
-    }
     if (disabled || tokens.length === 0) return;
     if (key === "ArrowRight" || key === "ArrowLeft" || key === "Home" || key === "End") {
       // Word by word here; the playhead's frame keys apply elsewhere.
       e.preventDefault();
       e.stopPropagation();
       const n = tokens.length;
-      const from = sel?.focus ?? (active >= 0 ? active : key === "ArrowRight" ? -1 : n);
+      const from = live?.focus ?? (active >= 0 ? active : key === "ArrowRight" ? -1 : n);
       const to = key === "Home" ? 0 : key === "End" ? n - 1 : Math.max(0, Math.min(n - 1, from + (key === "ArrowRight" ? 1 : -1)));
-      setSel(e.shiftKey && sel ? { anchor: sel.anchor, focus: to } : { anchor: to, focus: to });
+      setSel(e.shiftKey && live ? { anchor: live.anchor, focus: to } : { anchor: to, focus: to });
       if (!e.shiftKey) seekTo(to);
       box.current?.querySelector(`[data-t="${to}"]`)?.scrollIntoView({ block: "nearest" });
     } else if (key === " ") {
@@ -134,12 +139,12 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
       e.preventDefault();
       e.stopPropagation();
       useEditor.getState().togglePlay();
-    } else if (key === "Escape" && sel) {
+    } else if (key === "Escape" && live) {
       e.stopPropagation();
       setSel(null);
-    } else if (key === "Enter" && sel) {
+    } else if (key === "Enter" && live) {
       e.preventDefault();
-      seekTo(sel.focus);
+      seekTo(live.focus);
     }
   };
 
@@ -156,7 +161,7 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
         aria-label="Transcript"
         aria-multiselectable
         aria-disabled={disabled || undefined}
-        aria-activedescendant={sel ? optionId(sel.focus) : undefined}
+        aria-activedescendant={live ? optionId(live.focus) : undefined}
         tabIndex={disabled ? -1 : 0}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -176,7 +181,7 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
         ))}
       </div>
       {lo >= 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2">
+        <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatSeconds(lengthUs)}
           </span>
