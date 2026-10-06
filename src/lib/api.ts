@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, LayerBounds, ProjectSummary, Snapshot, TextStyle } from "./types";
+import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TimelineTranscript } from "./types";
 
 export const api = {
   boot: () => invoke<Boot>("boot"),
@@ -24,8 +24,13 @@ export const api = {
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   captionModels: () => invoke<CaptionModel[]>("caption_models"),
-  startCaptions: (model: string, language: string, style: TextStyle) =>
-    invoke<string>("start_captions", { request: { model, language, style } }),
+  /** `maxWords`/`maxChars` null keep whole phrases. */
+  startCaptions: (model: string, language: string, style: TextStyle, maxWords: number | null, maxChars: number | null) =>
+    invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars } }),
+  startTranscript: (model: string, language: string) => invoke<string>("start_transcript", { model, language }),
+  /** Null unless the stored transcript belongs to the current project revision. */
+  getTranscript: () => invoke<TimelineTranscript | null>("get_transcript"),
+  listFonts: () => invoke<FontFamilies>("list_fonts"),
 };
 
 export function errorText(e: unknown): string {

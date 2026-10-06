@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } from "lucide-react";
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
 import { CAPTION_Y, DEFAULT_TRANSFORM } from "../../lib/presets";
 import { editClip, isCaptionTrack, setClipTransform, useEditor } from "../../lib/store";
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
-import { Button, IconButton, Section, Slider } from "../ui";
+import { Button, IconButton, NumberInput, Section, Slider } from "../ui";
 
 function KeyframeControls({ clip, offset, inside, atIndex }: { clip: Clip; offset: number; inside: boolean; atIndex: number }) {
   const { seek } = useEditor.getState();
@@ -42,6 +43,55 @@ function KeyframeControls({ clip, offset, inside, atIndex }: { clip: Clip; offse
         <ChevronRight size={14} />
       </IconButton>
     </>
+  );
+}
+
+/**
+ * Punch-in or pull-out across the whole clip: a keyframe at the start and one at the end, with
+ * the position and rotation at the playhead. Shows the first and last keyframe when there are
+ * some, otherwise the current scale to 20 points more.
+ */
+function ZoomOverClip({ clip, scale }: { clip: Clip; scale: number }) {
+  const [from, setFrom] = useState<number | null>(null);
+  const [to, setTo] = useState<number | null>(null);
+  const ks = clip.keyframes;
+  const start = from ?? Math.round((ks.length > 0 ? ks[0].transform.scale : scale) * 100);
+  const end = to ?? (ks.length > 1 ? Math.round(ks[ks.length - 1].transform.scale * 100) : start + 20);
+  const apply = async () => {
+    const replaced = clip.keyframes.length;
+    const { timeUs, toast, undo } = useEditor.getState();
+    const done = await editClip(clip.id, (c) => {
+      const base = transformAt(c, c.content.transform, clipOffset(c, timeUs));
+      return {
+        type: "setKeyframes",
+        clipId: c.id,
+        keyframes: [
+          { tUs: 0, transform: { ...base, scale: start / 100 } },
+          { tUs: c.durationUs, transform: { ...base, scale: end / 100 } },
+        ],
+      };
+    });
+    if (!done) return;
+    // From now on the fields show the keyframes just written.
+    setFrom(null);
+    setTo(null);
+    if (replaced > 0) toast({ kind: "info", text: `Replaced ${replaced} keyframe${replaced === 1 ? "" : "s"} with the zoom`, action: { label: "Undo", run: undo } });
+  };
+  const pct = (v: number) => String(Math.round(v));
+  return (
+    <div className="flex items-center gap-1.5 border-t border-line pt-3">
+      <span className="shrink-0 text-[12px] text-muted">Zoom over clip</span>
+      <span className="flex-1" />
+      <NumberInput label="Zoom start scale" value={start} min={10} max={400} step={1} format={pct} onChange={setFrom} className="w-11" />
+      <span className="text-[12px] text-muted" aria-hidden>
+        to
+      </span>
+      <NumberInput label="Zoom end scale" value={end} min={10} max={400} step={1} format={pct} onChange={setTo} className="w-11" />
+      <span className="text-[11px] text-muted">%</span>
+      <Button className="h-7 px-2" title={`Keyframes at the clip's start (${start} %) and end (${end} %)`} onClick={apply}>
+        Apply
+      </Button>
+    </div>
   );
 }
 
@@ -100,6 +150,7 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
       <Slider label="Position Y" value={transform.y * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => set({ y: v / 100 }, "y")} />
       <Slider label="Rotation" value={transform.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => set({ rotation: v }, "rot")} />
       <Slider label="Opacity" value={transform.opacity * 100} min={0} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => set({ opacity: v / 100 }, "opacity")} />
+      <ZoomOverClip clip={clip} scale={transform.scale} />
     </Section>
   );
 }

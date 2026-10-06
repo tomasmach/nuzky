@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AudioLines, Blend, Captions, Copy, Film, Image as ImageIcon, Trash2, Type } from "lucide-react";
+import { AudioLines, Blend, Captions, Film, Image as ImageIcon, Type } from "lucide-react";
 import { TRANSITIONS } from "../../lib/presets";
-import { deleteSelection, duplicateSelection, findClip, isCaptionTrack, mainCuts, useEditor } from "../../lib/store";
+import { findClip, isCaptionTrack, mainCuts, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
 import type { Asset, Clip } from "../../lib/types";
 import { TransitionSettings } from "../panel/TransitionsTab";
-import { Button, Section, TabBar } from "../ui";
+import { TabBar } from "../ui";
 import { AnimationSection } from "./AnimationSection";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
+import { MultiInspector } from "./MultiInspector";
 import { ProjectSection } from "./ProjectSection";
 import { TextSection } from "./TextSection";
 import { TransformSection } from "./TransformSection";
@@ -100,21 +101,6 @@ function CutInspector({ clipId }: { clipId: string }) {
   );
 }
 
-function MultiInspector({ count }: { count: number }) {
-  return (
-    <Section title={`${count} clips selected`}>
-      <div className="grid grid-cols-2 gap-2">
-        <Button onClick={duplicateSelection} title="Duplicate (Ctrl+D)">
-          <Copy size={14} /> Duplicate
-        </Button>
-        <Button variant="danger" onClick={deleteSelection} title="Delete (Delete)">
-          <Trash2 size={14} /> Delete
-        </Button>
-      </div>
-    </Section>
-  );
-}
-
 export function Inspector() {
   const project = useEditor((s) => s.snap?.project);
   const selection = useEditor((s) => s.selection);
@@ -126,7 +112,7 @@ export function Inspector() {
   let body;
   if (!project) body = null;
   else if (cut) body = <CutInspector clipId={cut} />;
-  else if (selection.length > 1) body = <MultiInspector count={selection.length} />;
+  else if (selection.length > 1) body = <MultiInspector ids={selection} />;
   else if (!found) body = <ProjectSection />;
   else {
     const { clip, track } = found;

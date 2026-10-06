@@ -1,4 +1,4 @@
-import { Blend, Captions, Film, Music, Palette, Type } from "lucide-react";
+import { Blend, Captions, Film, Music, Palette, ScrollText, Type } from "lucide-react";
 import { useEditor, type PanelTab } from "../../lib/store";
 import { tabListKeys } from "../ui";
 import { AudioTab } from "./AudioTab";
@@ -6,6 +6,7 @@ import { CaptionsTab } from "./CaptionsTab";
 import { FiltersTab } from "./FiltersTab";
 import { MediaTab } from "./MediaTab";
 import { TextTab } from "./TextTab";
+import { TranscriptTab } from "./TranscriptTab";
 import { TransitionsTab } from "./TransitionsTab";
 
 // CapCut's order.
@@ -14,6 +15,7 @@ const TABS: { id: PanelTab; label: string; icon: typeof Film }[] = [
   { id: "audio", label: "Audio", icon: Music },
   { id: "text", label: "Text", icon: Type },
   { id: "captions", label: "Captions", icon: Captions },
+  { id: "transcript", label: "Transcript", icon: ScrollText },
   { id: "transitions", label: "Transitions", icon: Blend },
   { id: "filters", label: "Filters", icon: Palette },
 ];
@@ -36,7 +38,7 @@ export function LeftPanel() {
             aria-selected={tab === t.id}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
-            className={`flex flex-auto flex-col items-center gap-0.5 px-1.5 py-2 text-[11px] whitespace-nowrap transition-colors duration-[120ms] ${
+            className={`flex flex-auto flex-col items-center gap-0.5 px-1 py-2 text-[11px] whitespace-nowrap transition-colors duration-[120ms] ${
               tab === t.id ? "text-accent shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg"
             }`}
           >
@@ -49,6 +51,7 @@ export function LeftPanel() {
       {tab === "audio" && <AudioTab />}
       {tab === "text" && <TextTab />}
       {tab === "captions" && <CaptionsTab />}
+      {tab === "transcript" && <TranscriptTab />}
       {tab === "transitions" && <TransitionsTab />}
       {tab === "filters" && <FiltersTab />}
     </aside>

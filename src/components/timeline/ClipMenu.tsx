@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Copy, Scissors, Trash2, Unlink } from "lucide-react";
-import { canSplitClip, deleteSelection, detachAudio, detachBlocker, duplicateSelection, findClip, useEditor } from "../../lib/store";
+import { Copy, ListChecks, Scissors, Trash2, Unlink } from "lucide-react";
+import { canSplitClip, deleteSelection, detachAudio, detachBlocker, duplicateSelection, findClip, selectTrack, useEditor } from "../../lib/store";
 
 export interface MenuAt {
   clipId: string;
@@ -93,6 +93,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
       />
       <Item icon={<Copy size={14} />} label="Duplicate" shortcut="Ctrl+D" onSelect={run(duplicateSelection)} />
       <Item icon={<Unlink size={14} />} label="Detach audio" disabled={!!blocker} reason={blocker} onSelect={run(() => detachAudio(clip.id))} />
+      <Item icon={<ListChecks size={14} />} label="Select all on track" onSelect={run(() => selectTrack(clip.id))} />
       <div className="my-1 h-px bg-line" />
       <Item icon={<Trash2 size={14} />} label="Delete" shortcut="Del" onSelect={run(deleteSelection)} />
     </div>

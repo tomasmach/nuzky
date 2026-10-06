@@ -144,12 +144,12 @@ function ProjectMenu() {
   );
 }
 
-/** Background work. Export shows first and reopens its dialog; captions open their tab. */
+/** Background work. Export shows first and reopens its dialog; captions and transcripts open their tab. */
 function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
   const running = Object.values(jobs).filter((j) => j.status === "running");
   if (running.length === 0) return null;
-  const j = running.find((x) => x.kind === "export") ?? running.find((x) => x.kind === "captions") ?? running[0];
+  const j = running.find((x) => x.kind === "export") ?? running.find((x) => x.kind === "captions" || x.kind === "transcript") ?? running[0];
   const pct = j.progress > 0 ? `${Math.round(j.progress * 100)}%` : null;
   const body = (
     <>
@@ -170,8 +170,8 @@ function JobIndicator() {
     <button
       type="button"
       role="status"
-      title={j.kind === "export" ? "Show export progress" : "Show captions"}
-      onClick={() => (j.kind === "export" ? useEditor.setState({ exportOpen: true }) : useEditor.setState({ panelTab: "captions" }))}
+      title={j.kind === "export" ? "Show export progress" : j.kind === "transcript" ? "Show transcript" : "Show captions"}
+      onClick={() => (j.kind === "export" ? useEditor.setState({ exportOpen: true }) : useEditor.setState({ panelTab: j.kind === "transcript" ? "transcript" : "captions" }))}
       className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg hover:bg-raised"
     >
       {body}
