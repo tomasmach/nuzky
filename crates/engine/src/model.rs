@@ -209,11 +209,18 @@ pub struct Transition {
     pub duration_us: i64,
 }
 
-/// Colour adjustments, all 0 by default (no change). Ranges are -1..=1 except vignette 0..=1.
+/// Colour adjustments, all 0 by default (no change). Ranges are -1..=1 except fade and vignette 0..=1.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Adjust {
+    /// Linear-light exposure, -2 to +2 stops.
+    pub exposure: f32,
+    /// Negative shifts green, positive shifts magenta.
+    pub tint: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub fade: f32,
     pub brightness: f32,
     pub contrast: f32,
     pub saturation: f32,

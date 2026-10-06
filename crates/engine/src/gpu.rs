@@ -14,6 +14,7 @@ struct Layer {
     opacity: vec4<f32>,
     adjust: vec4<f32>,
     effects: vec4<f32>,
+    grading: vec4<f32>, // exposure, tint, highlights, shadows
     clip: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> layer: Layer;
@@ -34,6 +35,14 @@ fn vs(@builtin(vertex_index) i: u32) -> VsOut {
     return out;
 }
 
+fn srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
+    return select(pow((rgb + 0.055) / 1.055, vec3<f32>(2.4)), rgb / 12.92, rgb <= vec3<f32>(0.04045));
+}
+
+fn linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(rgb, vec3<f32>(1.0 / 2.4)) - 0.055, rgb * 12.92, rgb <= vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     if in.pos.x < layer.clip.x || in.pos.y < layer.clip.y || in.pos.x >= layer.clip.z || in.pos.y >= layer.clip.w {
@@ -50,12 +59,32 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
     var rgb = c.rgb;
-    if any(layer.adjust != vec4<f32>(0.0)) || layer.effects.x != 0.0 {
-        rgb += layer.adjust.x * 0.4;
-        rgb = (rgb - 0.5) * (1.0 + layer.adjust.y * 0.8) + 0.5;
-        let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        rgb = mix(vec3<f32>(luma), rgb, 1.0 + layer.adjust.z);
+    if any(layer.adjust != vec4<f32>(0.0)) || any(layer.grading != vec4<f32>(0.0)) || layer.effects.x != 0.0 || layer.effects.w != 0.0 {
+        const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
+        const EXPOSURE_STOPS = 2.0;
+        const TONE_STRENGTH = 0.25;
+        const FADE_BLACK = 0.25;
+        const FADE_WHITE = 0.05;
+        if layer.grading.x != 0.0 {
+            // Exposure multiplies linear light by 2^stops; skipping zero avoids a lossy round-trip.
+            rgb = linear_to_srgb(srgb_to_linear(rgb) * exp2(layer.grading.x * EXPOSURE_STOPS));
+        }
         rgb += vec3<f32>(0.15, 0.025, -0.15) * layer.adjust.w;
+        // Tint opposes green to equal red/blue shifts, with the temperature control's strength.
+        rgb += vec3<f32>(0.075, -0.15, 0.075) * layer.grading.y;
+        let tone_luma = dot(rgb, LUMA);
+        // Highlights smoothly approach white/black only above mid-grey; the bounded mix avoids hard clipping.
+        let highlights = smoothstep(0.5, 1.0, tone_luma) * layer.grading.z * TONE_STRENGTH;
+        rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, highlights > 0.0)), abs(highlights));
+        // Shadows use the mirrored mask below mid-grey; 0.25 keeps the grey ramp monotonic even at full strength.
+        let shadows = (1.0 - smoothstep(0.0, 0.5, tone_luma)) * layer.grading.w * TONE_STRENGTH;
+        rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, shadows > 0.0)), abs(shadows));
+        rgb = (rgb - 0.5) * (1.0 + layer.adjust.y * 0.8) + 0.5;
+        rgb += layer.adjust.x * 0.4;
+        let luma = dot(rgb, LUMA);
+        rgb = mix(vec3<f32>(luma), rgb, 1.0 + layer.adjust.z);
+        // Fade maps black to 0.25 and white to 0.95 at full strength, without changing hue.
+        rgb = rgb * (1.0 - layer.effects.w * (FADE_BLACK + FADE_WHITE)) + layer.effects.w * FADE_BLACK;
         let edge = smoothstep(0.2, 0.72, distance(in.uv, vec2<f32>(0.5)));
         rgb *= 1.0 - edge * layer.effects.x * 0.85;
         rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -73,6 +102,7 @@ struct LayerUniform {
     opacity: [f32; 4],
     adjust: [f32; 4],
     effects: [f32; 4],
+    grading: [f32; 4],
     clip: [f32; 4],
 }
 
@@ -303,7 +333,8 @@ impl Gpu {
         let uniform = LayerUniform {
             corners, opacity: [layer.opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             adjust: [a.brightness, a.contrast, a.saturation, a.temperature],
-            effects: [a.vignette, layer.blur, premult as u8 as f32, 0.0],
+            effects: [a.vignette, layer.blur, premult as u8 as f32, a.fade],
+            grading: [a.exposure, a.tint, a.highlights, a.shadows],
             clip: layer.clip.unwrap_or([0.0, 0.0, w as f32, h as f32]),
         };
         let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -401,7 +432,7 @@ impl Gpu {
                     self.draw_pass(&mut encoder, &target.view, [0.0; 4], &groups, true);
                     let uniform = LayerUniform {
                         corners: [[-1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [-1.0, -1.0, 0.0, 1.0], [1.0, -1.0, 1.0, 1.0]],
-                        opacity: [1.0, 0.0, 0.0, 0.0], adjust: [0.0; 4], effects: [0.0, 0.0, 1.0, 0.0],
+                        opacity: [1.0, 0.0, 0.0, 0.0], adjust: [0.0; 4], effects: [0.0, 0.0, 1.0, 0.0], grading: [0.0; 4],
                         clip: [0.0, 0.0, w as f32, h as f32],
                     };
                     self.queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));

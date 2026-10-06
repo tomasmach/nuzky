@@ -36,8 +36,13 @@ export interface TextStyle {
   maxWidth?: number | null;
 }
 
-/** All 0 = unchanged. -1..1, vignette 0..1. */
+/** All 0 = unchanged. -1..1, fade and vignette 0..1. */
 export interface Adjust {
+  exposure: number;
+  tint: number;
+  highlights: number;
+  shadows: number;
+  fade: number;
   brightness: number;
   contrast: number;
   saturation: number;

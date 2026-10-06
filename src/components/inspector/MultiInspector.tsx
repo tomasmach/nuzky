@@ -79,10 +79,15 @@ function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }
 }
 
 const ADJUST_ROWS: { key: keyof Adjust; label: string; min: number }[] = [
+  { key: "exposure", label: "Exposure", min: -100 },
   { key: "brightness", label: "Brightness", min: -100 },
   { key: "contrast", label: "Contrast", min: -100 },
+  { key: "highlights", label: "Highlights", min: -100 },
+  { key: "shadows", label: "Shadows", min: -100 },
   { key: "saturation", label: "Saturation", min: -100 },
   { key: "temperature", label: "Temperature", min: -100 },
+  { key: "tint", label: "Tint", min: -100 },
+  { key: "fade", label: "Fade", min: 0 },
   { key: "vignette", label: "Vignette", min: 0 },
 ];
 

@@ -68,6 +68,8 @@ Shows the selected clip with CapCut's tabs, remembering the last tab per clip ki
 | Nothing | Project: format (opens Ratio) and frame rate, background colour or blur with strength |
 | Several clips | Duplicate, Delete, and the controls they all share: Transform, Font (text), Adjust (video, images), Audio volume (clips with sound) |
 
+Adjust offers Exposure, Brightness, Contrast, Highlights, Shadows, Saturation, Temperature, Tint, Fade, and Vignette for single or multiple media clips.
+
 Number fields keep what you type until Enter or blur, so "-" or "1," is never rejected mid-typing; Esc restores the value, ↑/↓ step (`Shift` ×10), commas work as decimal points. Changes preview live.
 
 - **Keyframes**: the diamond in the Transform header adds a keyframe with the current values at the playhead, or removes the one there (filled diamond). Arrows jump to the previous and next keyframe. Once a clip has keyframes, every transform change updates or creates the keyframe at the playhead. Removing the last keyframe keeps its values. Reset clears the transform and all keyframes.

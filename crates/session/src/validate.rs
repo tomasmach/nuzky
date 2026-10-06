@@ -148,6 +148,11 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             );
             ensure!(
                 [
+                    adjust.exposure,
+                    adjust.tint,
+                    adjust.highlights,
+                    adjust.shadows,
+                    adjust.fade,
                     adjust.brightness,
                     adjust.contrast,
                     adjust.saturation,
@@ -198,4 +203,41 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use capopen_engine::{edit::EditCmd, model::{Adjust, Asset}};
+
+    #[test]
+    fn new_color_adjustments_reject_non_finite_values() {
+        let mut project = Project::new("color validation");
+        project.assets.push(Asset {
+            id: "ramp".into(), name: "Ramp".into(), path: "ramp.ppm".into(),
+            kind: AssetKind::Image, duration_us: 0, width: 256, height: 16,
+            fps: 0.0, has_audio: false, rotation: 0,
+        });
+        project.apply(EditCmd::AddClip {
+            asset_id: "ramp".into(), start_us: None, track_id: None,
+        }).unwrap();
+        validate(&project).unwrap();
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, 0.5, 1.0] {
+            for candidate in [
+                Adjust { exposure: value, ..Adjust::default() },
+                Adjust { tint: value, ..Adjust::default() },
+                Adjust { highlights: value, ..Adjust::default() },
+                Adjust { shadows: value, ..Adjust::default() },
+                Adjust { fade: value, ..Adjust::default() },
+            ] {
+                let ClipContent::Media { adjust, .. } = &mut project.tracks[0].clips[0].content else { panic!() };
+                *adjust = candidate;
+                let result = validate(&project);
+                assert_eq!(result.is_ok(), value.is_finite(), "{candidate:?}: {result:?}");
+                if let Err(error) = result {
+                    assert!(error.to_string().contains("non-finite adjustment"));
+                }
+            }
+        }
+    }
 }

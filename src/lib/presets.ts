@@ -14,7 +14,7 @@ export function formatLabel(width: number, height: number) {
 export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
 /** Where the engine places generated captions (CAPTION_Y in crates/engine edit.rs). */
 export const CAPTION_Y = 0.15;
-export const NO_ADJUST: Adjust = { brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
+export const NO_ADJUST: Adjust = { exposure: 0, tint: 0, highlights: 0, shadows: 0, fade: 0, brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
 
 export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = [
   { name: "Classic", text: "Your text", style: { fontSize: 84, color: "#ffffff", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
@@ -80,8 +80,8 @@ export const FILTERS: { id: string; label: string; adjust: Adjust }[] = [
   { id: "warm", label: "Warm", adjust: { ...NO_ADJUST, saturation: 0.1, temperature: 0.35 } },
   { id: "cool", label: "Cool", adjust: { ...NO_ADJUST, brightness: 0.02, temperature: -0.35 } },
   { id: "mono", label: "Mono", adjust: { ...NO_ADJUST, contrast: 0.15, saturation: -1 } },
-  { id: "fade", label: "Fade", adjust: { ...NO_ADJUST, brightness: 0.08, contrast: -0.3, saturation: -0.2 } },
-  { id: "moody", label: "Moody", adjust: { brightness: -0.12, contrast: 0.2, saturation: -0.25, temperature: -0.1, vignette: 0.45 } },
+  { id: "fade", label: "Fade", adjust: { ...NO_ADJUST, fade: 0.5, contrast: -0.1, saturation: -0.2 } },
+  { id: "moody", label: "Moody", adjust: { ...NO_ADJUST, shadows: -0.25, brightness: -0.06, contrast: 0.2, saturation: -0.25, temperature: -0.1, vignette: 0.45 } },
   { id: "punch", label: "Punch", adjust: { ...NO_ADJUST, contrast: 0.35, saturation: 0.25, vignette: 0.25 } },
 ];
 
@@ -91,8 +91,16 @@ export function sameAdjust(a: Adjust, b: Adjust) {
 
 /** Rough CSS approximation of an Adjust, for preset tiles only. The engine does the real grading. */
 export function adjustCss(a: Adjust): { filter: string; tint: string | null; vignette: number } {
-  const filter = `brightness(${1 + a.brightness}) contrast(${1 + a.contrast}) saturate(${1 + a.saturation})`;
-  const tint = a.temperature === 0 ? null : a.temperature > 0 ? `rgba(255,150,40,${a.temperature * 0.9})` : `rgba(40,130,255,${-a.temperature * 0.9})`;
+  const light = (1 + a.brightness) * 2 ** a.exposure + a.highlights * 0.1 + a.shadows * 0.1;
+  const contrast = (1 + a.contrast + a.highlights * 0.1 - a.shadows * 0.1) * (1 - a.fade * 0.3);
+  const filter = `brightness(${Math.max(0, light)}) contrast(${Math.max(0, contrast)}) saturate(${1 + a.saturation})`;
+  const temperature = Math.abs(a.temperature);
+  const magenta = Math.abs(a.tint);
+  const weight = temperature + magenta;
+  const warm = a.temperature > 0 ? [255, 150, 40] : [40, 130, 255];
+  const cast = a.tint > 0 ? [255, 40, 255] : [40, 255, 40];
+  const rgb = warm.map((v, i) => Math.round((v * temperature + cast[i] * magenta) / (weight || 1)));
+  const tint = weight === 0 ? null : `rgba(${rgb.join(",")},${Math.min(weight * 0.9, 0.9)})`;
   return { filter, tint, vignette: a.vignette };
 }
 
