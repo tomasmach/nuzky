@@ -47,8 +47,11 @@ interface Gesture {
  * Selection box over the preview frame: click selects the top-most layer under the pointer,
  * dragging moves it, corners scale it, the top handle rotates it (Shift snaps to 15°).
  * Draws nothing while the engine reports no layer bounds.
+ *
+ * `bleed` is how far the visible preview area reaches past the frame on each side. The box may
+ * extend past the frame; handles that would leave the visible area are pinned to its edge.
  */
-export function LayerOverlay({ width, height }: { width: number; height: number }) {
+export function LayerOverlay({ width, height, bleed }: { width: number; height: number; bleed: { x: number; y: number } }) {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   const revision = useEditor((s) => s.snap!.revision);
   const selection = useEditor((s) => s.selection);
@@ -57,7 +60,11 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
   const ref = useRef<HTMLDivElement>(null);
   const [bounds, setBounds] = useState<LayerBounds[]>([]);
   const [live, setLive] = useState<{ corners: Pt[]; guideX: boolean; guideY: boolean } | null>(null);
+  // Ends the running gesture's window listeners and frame request; also called on unmount.
+  const stop = useRef<(() => void) | null>(null);
   const k = width / canvas.width;
+
+  useEffect(() => () => stop.current?.(), []);
 
   useEffect(() => {
     if (playing) return;
@@ -76,8 +83,8 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
     return [(x - r.left) / k, (y - r.top) / k];
   };
 
-  /** Transform and box for the pointer at `p` during gesture `g`. */
-  const solve = (g: Gesture, p: Pt, shift: boolean) => {
+  /** Changed transform fields and box for the pointer at `p` during gesture `g`. */
+  const solve = (g: Gesture, p: Pt, shift: boolean): { patch: Partial<Transform>; corners: Pt[]; guideX: boolean; guideY: boolean } => {
     const c = centreOf(g.corners);
     const t = { ...g.base };
     let corners = g.corners;
@@ -111,42 +118,60 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
       t.rotation = Math.round(rot * 10) / 10;
       corners = g.corners.map((q) => rotateAbout(q, c, t.rotation - g.base.rotation));
     }
-    return { t, corners, guideX, guideY };
+    const patch = g.mode === "move" ? { x: t.x, y: t.y } : g.mode === "scale" ? { scale: t.scale } : { rotation: t.rotation };
+    return { patch, corners, guideX, guideY };
   };
 
   const run = (g: Gesture, initial: { x: number; y: number; shift: boolean }) => {
+    stop.current?.();
     let latest = initial;
     let raf = 0;
     let lastEdit: Promise<unknown> | null = null;
     const apply = () => {
       raf = 0;
-      const { t, corners, guideX, guideY } = solve(g, toCanvas(latest.x, latest.y), latest.shift);
+      if (!ref.current) return;
+      const { patch, corners, guideX, guideY } = solve(g, toCanvas(latest.x, latest.y), latest.shift);
       setLive({ corners, guideX, guideY });
-      // Re-read the clip so a keyframe written earlier in this gesture is updated, not duplicated.
-      const found = findClip(useEditor.getState().snap!.project, g.clipId);
-      if (found) lastEdit = setClipTransform(found.clip, t, g.key);
+      // The store builds the edit from the latest confirmed clip, so a keyframe written earlier
+      // in this gesture is updated, not duplicated, and other fields are never reverted.
+      lastEdit = setClipTransform(g.clipId, patch, g.key);
     };
     const move = (e: PointerEvent) => {
       latest = { x: e.clientX, y: e.clientY, shift: e.shiftKey };
       if (!raf) raf = requestAnimationFrame(apply);
     };
-    const up = () => {
+    const detach = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      if (raf) {
-        cancelAnimationFrame(raf);
-        apply();
-      }
-      if (!lastEdit) return;
+      window.removeEventListener("pointercancel", cancel);
+      cancelAnimationFrame(raf);
+      raf = 0;
+      stop.current = null;
+    };
+    const settle = () => {
+      if (!lastEdit) return setLive(null);
       // Keep the live box until the engine reports where the layer ended up, so it never jumps back.
       lastEdit
         .then(() => api.layerBounds(useEditor.getState().timeUs))
-        .then(setBounds)
+        .then((b) => ref.current && setBounds(b))
         .catch(() => undefined)
-        .finally(() => setLive(null));
+        .finally(() => ref.current && setLive(null));
+    };
+    const up = () => {
+      const pending = raf !== 0;
+      detach();
+      if (pending) apply();
+      settle();
+    };
+    // The system took the pointer (e.g. a touch turned into a scroll): keep what was applied.
+    const cancel = () => {
+      detach();
+      settle();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    stop.current = detach;
   };
 
   const begin = (mode: Mode, clipId: string, corners: Pt[], e: { clientX: number; clientY: number }) => {
@@ -163,16 +188,27 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
     let released = false;
     const track = (ev: PointerEvent) => (latest = { x: ev.clientX, y: ev.clientY, shift: ev.shiftKey });
     const release = () => (released = true);
+    const detach = () => {
+      window.removeEventListener("pointermove", track);
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      stop.current = null;
+    };
+    stop.current?.();
     window.addEventListener("pointermove", track);
     window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    stop.current = detach;
     let list: LayerBounds[] = [];
     try {
       list = await api.layerBounds(useEditor.getState().timeUs);
     } catch {
       /* no bounds: nothing to select */
     }
-    window.removeEventListener("pointermove", track);
-    window.removeEventListener("pointerup", release);
+    // Unmounted or replaced by another gesture while waiting.
+    if (stop.current !== detach) return;
+    detach();
+    if (!ref.current) return;
     setBounds(list);
     if (list.length === 0) return;
     const p = toCanvas(down.clientX, down.clientY);
@@ -197,8 +233,16 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
   const selected = selection.length === 1 ? bounds.find((b) => b.clipId === selection[0]) : undefined;
   const corners = live?.corners ?? (selected?.corners as Pt[] | undefined);
   const screen = corners?.map(([x, y]) => [x * k, y * k] as Pt);
+  // Visible preview area in overlay coordinates; the preview clips everything outside it.
+  const pad = HANDLE / 2 + 1;
+  const visible = (p: Pt) => p[0] >= -bleed.x + pad && p[0] <= width + bleed.x - pad && p[1] >= -bleed.y + pad && p[1] <= height + bleed.y - pad;
+  const pin = (p: Pt): Pt => [
+    Math.max(-bleed.x + pad, Math.min(width + bleed.x - pad, p[0])),
+    Math.max(-bleed.y + pad, Math.min(height + bleed.y - pad, p[1])),
+  ];
   // Rotation handle sits above the middle of the top edge, along the box's own "up". When that
-  // would leave the frame (a layer filling the canvas), it moves just inside the edge instead.
+  // would leave the visible area (a layer filling the canvas), it moves just inside the edge
+  // instead, and as a last resort it is pinned to the edge like the corner handles.
   const top = screen && ([(screen[0][0] + screen[1][0]) / 2, (screen[0][1] + screen[1][1]) / 2] as Pt);
   const c = screen && centreOf(screen);
   const up =
@@ -206,25 +250,29 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
     c &&
     (() => {
       const len = Math.hypot(top[0] - c[0], top[1] - c[1]) || 1;
-      const out: Pt = [top[0] + ((top[0] - c[0]) / len) * ROTATE_GAP, top[1] + ((top[1] - c[1]) / len) * ROTATE_GAP];
-      const fits = out[0] > -HANDLE && out[0] < width + HANDLE && out[1] > -HANDLE && out[1] < height + HANDLE;
-      return fits ? out : ([top[0] - ((top[0] - c[0]) / len) * ROTATE_GAP, top[1] - ((top[1] - c[1]) / len) * ROTATE_GAP] as Pt);
+      const dir: Pt = [(top[0] - c[0]) / len, (top[1] - c[1]) / len];
+      const out: Pt = [top[0] + dir[0] * ROTATE_GAP, top[1] + dir[1] * ROTATE_GAP];
+      if (visible(out)) return out;
+      const inside: Pt = [top[0] - dir[0] * ROTATE_GAP, top[1] - dir[1] * ROTATE_GAP];
+      return visible(inside) ? inside : pin(inside);
     })();
+  const guide = "pointer-events-none absolute bg-warn shadow-[0_0_0_1px_rgba(0,0,0,0.55)]";
 
   return (
     <div ref={ref} className="absolute inset-0" style={{ cursor: selected ? "move" : "default" }} onPointerDown={onPointerDown} data-testid="layer-overlay">
-      {live?.guideX && <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-warn" />}
-      {live?.guideY && <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-warn" />}
+      {live?.guideX && <div className={`${guide} inset-y-0 left-1/2 w-px`} />}
+      {live?.guideY && <div className={`${guide} inset-x-0 top-1/2 h-px`} />}
       {screen && selected && !playing && top && up && (
         <>
           <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height}>
             <polygon points={screen.map((p) => p.join(",")).join(" ")} fill="none" stroke="var(--color-fg)" strokeWidth={1.5} />
             <line x1={top[0]} y1={top[1]} x2={up[0]} y2={up[1]} stroke="var(--color-fg)" strokeWidth={1.5} />
           </svg>
-          {screen.map(([x, y], i) => (
+          {screen.map(pin).map(([x, y], i) => (
             <div
               key={i}
               role="presentation"
+              data-handle="scale"
               onPointerDown={onHandle("scale", selected.clipId, selected.corners as Pt[])}
               className="absolute rounded-[2px] border border-black/60 bg-fg"
               style={{ left: x - HANDLE / 2, top: y - HANDLE / 2, width: HANDLE, height: HANDLE, cursor: i % 2 === 0 ? "nwse-resize" : "nesw-resize" }}
@@ -233,6 +281,7 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
           <div
             role="presentation"
             title="Rotate (Shift snaps to 15°)"
+            data-handle="rotate"
             onPointerDown={onHandle("rotate", selected.clipId, selected.corners as Pt[])}
             className="absolute rounded-full border border-black/60 bg-fg"
             style={{ left: up[0] - 6, top: up[1] - 6, width: 12, height: 12, cursor: "grab" }}

@@ -4,7 +4,7 @@ import { MAIN_TRACK, allClips, deleteSelection, displayTracks, duplicateSelectio
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
-import { IconButton } from "../ui";
+import { IconButton, RangeInput } from "../ui";
 import { ClipMenu, type MenuAt } from "./ClipMenu";
 import { ClipView, EDGE, clipAsset } from "./ClipView";
 import { CutMarkers } from "./CutMarkers";
@@ -40,12 +40,16 @@ interface Drag {
   speed: number;
 }
 
-/** Clip timing while a drag is in progress. */
+/**
+ * Clip timing while a drag is in progress. Every value is whole microseconds (the engine takes
+ * integers), rounded towards the inside of the source the same way the engine clamps a trim.
+ */
 function dragResult(d: Drag, minUs: number): { startUs: number; durationUs: number } {
   const { clip } = d;
   if (d.mode === "move") return { startUs: Math.max(0, clip.startUs + d.dxUs), durationUs: clip.durationUs };
   if (d.mode === "trimL") {
-    const lower = d.sourceInUs !== null ? -d.sourceInUs / d.speed : -clip.startUs;
+    // The left edge stops where the source starts, at this clip's speed.
+    const lower = d.sourceInUs !== null ? Math.ceil(-d.sourceInUs / d.speed) : -clip.startUs;
     const delta = Math.min(Math.max(d.dxUs, lower, -clip.startUs), clip.durationUs - minUs);
     return { startUs: clip.startUs + delta, durationUs: clip.durationUs - delta };
   }
@@ -178,8 +182,8 @@ export function Timeline({ height }: { height: number }) {
     const asset = clipAsset(project, clip);
     const media = clip.content.type === "media" ? clip.content : null;
     const sourceInUs = media && asset?.kind !== "image" ? media.sourceInUs : null;
-    // The right edge stops where the source ends, at this clip's speed.
-    const maxDurUs = sourceInUs !== null && asset && media ? (asset.durationUs - sourceInUs) / media.speed : null;
+    // The right edge stops where the source ends, at this clip's speed (floored like the engine).
+    const maxDurUs = sourceInUs !== null && asset && media ? Math.floor((asset.durationUs - sourceInUs) / media.speed) : null;
     const candidates = [0, useEditor.getState().timeUs];
     for (const c of allClips(project)) if (c.id !== clip.id) candidates.push(c.startUs, c.startUs + c.durationUs);
     setDrag({ clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 });
@@ -255,7 +259,7 @@ export function Timeline({ height }: { height: number }) {
         if (trackId === d.trackId && r.startUs === d.clip.startUs) return;
         edit({ type: "moveClip", clipId: d.clip.id, trackId, startUs: r.startUs });
       } else {
-        const sourceInUs = d.mode === "trimL" && d.sourceInUs !== null ? d.sourceInUs + Math.round((r.startUs - d.clip.startUs) * d.speed) : null;
+        const sourceInUs = d.mode === "trimL" && d.sourceInUs !== null ? Math.max(0, d.sourceInUs + Math.round((r.startUs - d.clip.startUs) * d.speed)) : null;
         edit({ type: "trimClip", clipId: d.clip.id, startUs: r.startUs, durationUs: r.durationUs, sourceInUs });
       }
       select([d.clip.id]);
@@ -341,16 +345,7 @@ export function Timeline({ height }: { height: number }) {
         <IconButton label="Zoom out (-)" onClick={() => setZoom(zoom / 1.3)}>
           <ZoomOut size={16} />
         </IconButton>
-        <input
-          type="range"
-          aria-label="Timeline zoom"
-          min={Math.log(4)}
-          max={Math.log(600)}
-          step={0.01}
-          value={Math.log(zoom)}
-          onChange={(e) => setZoom(Math.exp(Number(e.target.value)))}
-          className="w-28"
-        />
+        <RangeInput label="Timeline zoom" min={Math.log(4)} max={Math.log(600)} step={0.01} value={Math.log(zoom)} onChange={(v) => setZoom(Math.exp(v))} className="w-28" />
         <IconButton label="Zoom in (+)" onClick={() => setZoom(zoom * 1.3)}>
           <ZoomIn size={16} />
         </IconButton>
@@ -397,7 +392,8 @@ export function Timeline({ height }: { height: number }) {
                   <div className="sticky left-0 z-20 flex shrink-0 items-center gap-1 border-r border-line bg-panel pl-2 pr-1" style={{ width: HEADER_W }}>
                     <KindIcon size={13} className="shrink-0 text-muted" />
                     <span className={`flex-1 truncate text-[12px] ${isMain ? "font-medium text-fg" : "text-muted"}`}>{track.name || track.kind}</span>
-                    {track.kind !== "audio" && (
+                    {/* Fixed columns: eye, then speaker; a spacer keeps the column when a toggle does not apply. */}
+                    {track.kind !== "audio" ? (
                       <TrackToggle
                         off={track.hidden}
                         label={track.hidden ? `Show ${track.name}` : `Hide ${track.name}`}
@@ -405,8 +401,10 @@ export function Timeline({ height }: { height: number }) {
                         offIcon={<EyeOff size={14} />}
                         onClick={() => edit({ type: "updateTrack", trackId: track.id, hidden: !track.hidden })}
                       />
+                    ) : (
+                      <span className="w-7 shrink-0" aria-hidden />
                     )}
-                    {track.kind !== "text" && (
+                    {track.kind !== "text" ? (
                       <TrackToggle
                         off={track.muted}
                         label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`}
@@ -414,6 +412,8 @@ export function Timeline({ height }: { height: number }) {
                         offIcon={<VolumeX size={14} />}
                         onClick={() => edit({ type: "updateTrack", trackId: track.id, muted: !track.muted })}
                       />
+                    ) : (
+                      <span className="w-7 shrink-0" aria-hidden />
                     )}
                   </div>
                   <div
@@ -485,7 +485,9 @@ export function Timeline({ height }: { height: number }) {
           )}
 
           {/* Snap guide */}
-          {drag?.moved && drag.snapUs !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn" style={{ left: HEADER_W + (drag.snapUs / US) * zoom }} />}
+          {drag?.moved && drag.snapUs !== null && (
+            <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn shadow-[0_0_0_1px_rgba(0,0,0,0.55)]" style={{ left: HEADER_W + (drag.snapUs / US) * zoom }} />
+          )}
 
           {/* Drop position for media dragged from the panel */}
           {dropTime !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent" style={{ left: HEADER_W + (dropTime / US) * zoom }} />}

@@ -1,17 +1,39 @@
 import { useState } from "react";
 import { Ban } from "lucide-react";
 import { ANIMATIONS } from "../../lib/presets";
-import { useEditor } from "../../lib/store";
+import { editClip, useEditor } from "../../lib/store";
 import { US } from "../../lib/time";
 import type { AnimationKind, Clip } from "../../lib/types";
 import { PresetTile, Section, Segmented, Slider } from "../ui";
 
 const DEFAULT_US = 500_000;
 
+/** Loop length of `.pv` in index.css. */
+const PREVIEW_S = 1.4;
+
+/**
+ * Point of the loop each tile rests on, chosen so no two tiles look alike when still: Fade half
+ * see-through, zooms clearly small or large, slides half way in, Pop at its overshoot,
+ * Typewriter part-typed.
+ */
+const REST: Record<AnimationKind, number> = {
+  fade: 0.42,
+  zoomIn: 0.4,
+  zoomOut: 0.4,
+  slideUp: 0.45,
+  slideDown: 0.45,
+  slideLeft: 0.45,
+  slideRight: 0.45,
+  pop: 0.55,
+  typewriter: 0.5,
+};
+
 function AnimationPreview({ kind, out, thumb, text }: { kind: AnimationKind; out: boolean; thumb: string | null; text: boolean }) {
+  // Out plays the loop reversed, so the same moment sits at the mirrored point.
+  const rest = out ? 1 - REST[kind] : REST[kind];
   return (
     <span className="absolute inset-0 flex items-center justify-center overflow-hidden">
-      <span className={`pv ${out ? "pv-out" : ""} ${kind === "typewriter" ? "a-typewriter" : ""}`} style={{ animationName: `a-${kind}` }}>
+      <span className={`pv ${out ? "pv-out" : ""} ${kind === "typewriter" ? "a-typewriter" : ""}`} style={{ animationName: `a-${kind}`, animationDelay: `${-rest * PREVIEW_S}s` }}>
         {text ? (
           <span className="block text-[16px] font-extrabold leading-none text-fg">Text</span>
         ) : (
@@ -67,7 +89,16 @@ export function AnimationSection({ clip }: { clip: Clip }) {
         format={(v) => v.toFixed(1)}
         disabled={!current}
         title={current ? undefined : "Pick an animation first"}
-        onChange={(v) => current && edit({ type: "setAnimation", clipId: clip.id, slot, animation: { ...current, durationUs: Math.round(v * US) } }, `${clip.id}:anim-${slot}`)}
+        onChange={(v) =>
+          editClip(
+            clip.id,
+            (c) => {
+              const anim = slot === "in" ? c.animIn : c.animOut;
+              return anim ? { type: "setAnimation", clipId: c.id, slot, animation: { ...anim, durationUs: Math.round(v * US) } } : null;
+            },
+            `${clip.id}:anim-${slot}`,
+          )
+        }
       />
     </Section>
   );

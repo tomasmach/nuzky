@@ -23,6 +23,13 @@ function isTyping(el: HTMLElement | null) {
   return el.tagName === "INPUT" && TEXT_INPUTS.has((el as HTMLInputElement).type);
 }
 
+/** Controls whose own Space action (toggle, pick a menu item) wins over play and pause. */
+function usesSpace(el: HTMLElement | null) {
+  if (!(el instanceof Element)) return false;
+  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) return true;
+  return /^(checkbox|radio|switch|menuitem|menuitemradio|menuitemcheckbox|option)$/.test(el.getAttribute("role") ?? "");
+}
+
 function DragChip() {
   const drag = useEditor((s) => s.assetDrag);
   const asset = useEditor((s) => s.snap?.project.assets.find((a) => a.id === s.assetDrag?.assetId));
@@ -46,6 +53,7 @@ function useShortcuts() {
       // A focused slider keeps its own arrow, Home and End keys.
       const onRange = target instanceof HTMLInputElement && target.type === "range";
       if (key === " ") {
+        if (usesSpace(target)) return;
         e.preventDefault();
         // Otherwise the focused button would also be clicked when Space is released.
         (document.activeElement as HTMLElement | null)?.blur();

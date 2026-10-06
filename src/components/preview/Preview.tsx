@@ -102,7 +102,8 @@ export function Preview() {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Preview">
-      <div ref={boxRef} className="relative m-3 mb-0 min-h-0 flex-1">
+      {/* Clips the selection box of a layer scaled or rotated past the frame to the preview area. */}
+      <div ref={boxRef} className="relative m-3 mb-0 min-h-0 flex-1 overflow-hidden">
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="relative" style={{ width: fit.w, height: fit.h }}>
             <div className="absolute inset-0 overflow-hidden rounded-sm bg-black shadow-[0_0_0_1px_var(--color-line)]">
@@ -122,7 +123,7 @@ export function Preview() {
               )}
             </div>
             {/* Outside the clipped frame so handles of a layer larger than the canvas stay reachable. */}
-            {!empty && !engineError && canvas && fit.w > 0 && <LayerOverlay width={fit.w} height={fit.h} />}
+            {!empty && !engineError && canvas && fit.w > 0 && <LayerOverlay width={fit.w} height={fit.h} bleed={{ x: (box.w - fit.w) / 2, y: (box.h - fit.h) / 2 }} />}
           </div>
         </div>
       </div>

@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Copy, Scissors, Trash2, Unlink } from "lucide-react";
-import { deleteSelection, detachAudio, detachBlocker, duplicateSelection, findClip, useEditor } from "../../lib/store";
-import { US } from "../../lib/time";
+import { canSplitClip, deleteSelection, detachAudio, detachBlocker, duplicateSelection, findClip, useEditor } from "../../lib/store";
 
 export interface MenuAt {
   clipId: string;
@@ -57,8 +56,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
 
   if (!found) return null;
   const { clip } = found;
-  const min = US / project.canvas.fps;
-  const splittable = timeUs > clip.startUs + min && timeUs < clip.startUs + clip.durationUs - min;
+  const splittable = canSplitClip(clip, timeUs, project.canvas.fps);
   const blocker = detachBlocker(project, clip);
   const run = (fn: () => unknown) => () => {
     onClose();

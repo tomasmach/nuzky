@@ -1,6 +1,6 @@
 import { RotateCcw, Unlink } from "lucide-react";
 import { MAX_SPEED, MIN_SPEED, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
-import { detachAudio, detachBlocker, findClip, useEditor } from "../../lib/store";
+import { detachAudio, detachBlocker, editClip, findClip, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
 import { Button, IconButton, Section, Segmented, Slider } from "../ui";
@@ -18,7 +18,9 @@ const ADJUST_ROWS: { key: keyof Adjust; label: string; min: number }[] = [
 export function AdjustSection({ clip, content }: { clip: Clip; content: Media }) {
   const edit = useEditor((s) => s.edit);
   const adjust = content.adjust;
-  const set = (key: keyof Adjust, v: number) => edit({ type: "updateClip", clipId: clip.id, adjust: { ...adjust, [key]: v / 100 } }, `${clip.id}:adjust:${key}`);
+  // Built from the latest confirmed values, so a second slider never overwrites the first.
+  const set = (key: keyof Adjust, v: number) =>
+    editClip(clip.id, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, adjust: { ...c.content.adjust, [key]: v / 100 } } : null), `${clip.id}:adjust:${key}`);
   return (
     <Section
       title="Adjust"

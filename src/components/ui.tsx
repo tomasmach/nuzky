@@ -1,4 +1,4 @@
-import { useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import type { TextStyle } from "../lib/types";
 
@@ -132,6 +132,55 @@ export function NumberInput({
   );
 }
 
+const THUMB = 14;
+
+/**
+ * Range input with a filled track. One-sided ranges fill from the left; two-sided ones
+ * (min < 0 < max, e.g. temperature or rotation) fill from 0 to the thumb and mark 0 with a tick.
+ */
+export function RangeInput({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  disabled,
+  className = "",
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const frac = (v: number) => (max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0);
+  const twoSided = min < 0 && max > 0;
+  const origin = twoSided ? frac(0) : 0;
+  const at = (f: number) => `calc(${THUMB / 2}px + ${f} * (100% - ${THUMB}px))`;
+  const [lo, hi] = [Math.min(origin, frac(value)), Math.max(origin, frac(value))];
+  return (
+    <span className={`relative flex h-4 items-center ${className}`}>
+      {twoSided && <span aria-hidden className="pointer-events-none absolute top-0.5 h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted" style={{ left: at(origin) }} />}
+      <input
+        type="range"
+        aria-label={label}
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="range relative w-full disabled:opacity-40"
+        style={{ "--fill-from": at(lo), "--fill-to": at(hi) } as CSSProperties}
+      />
+    </span>
+  );
+}
+
 /** Label, slider and a typeable value on one row, like CapCut's property rows. */
 export function Slider({
   label,
@@ -161,17 +210,7 @@ export function Slider({
   return (
     <div className="flex items-center gap-2" title={title}>
       <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
-      <input
-        type="range"
-        aria-label={label}
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="min-w-0 flex-1 disabled:opacity-40"
-      />
+      <RangeInput label={label} value={value} min={min} max={max} step={step} onChange={onChange} disabled={disabled} className="min-w-0 flex-1" />
       <span className="flex shrink-0 items-center gap-0.5">
         <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} />
         <span className="w-3 text-[11px] text-muted">{unit}</span>
@@ -247,15 +286,31 @@ export function Checkbox({
   );
 }
 
+/**
+ * Keyboard for a tablist: ←/→ move to the previous/next tab (wrapping), Home/End to the first/last,
+ * and focus follows. The keys stop here, so they never also move the playhead.
+ * Tabs carry `data-tab={id}`.
+ */
+export function tabListKeys<T extends string>(ids: readonly T[], value: T, onChange: (id: T) => void) {
+  return (e: KeyboardEvent<HTMLElement>) => {
+    const i = ids.indexOf(value);
+    const n = ids.length;
+    const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i + n - 1) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onChange(ids[to]);
+    e.currentTarget.querySelector<HTMLElement>(`[data-tab="${ids[to]}"]`)?.focus();
+  };
+}
+
 /** Text tabs with an underline, arrow keys move between them. */
 export function TabBar<T extends string>({ tabs, value, onChange, label }: { tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void; label: string }) {
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    const i = tabs.findIndex((t) => t.id === value);
-    const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
-    onChange(next.id);
-    (e.currentTarget.querySelector(`[data-tab="${next.id}"]`) as HTMLElement | null)?.focus();
-  };
+  const onKeyDown = tabListKeys(
+    tabs.map((t) => t.id),
+    value,
+    onChange,
+  );
   return (
     <div role="tablist" aria-label={label} className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2" onKeyDown={onKeyDown}>
       {tabs.map((t) => (

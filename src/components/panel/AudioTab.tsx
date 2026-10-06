@@ -45,7 +45,7 @@ function AudioItem({ asset }: { asset: Asset }) {
         aria-label={`Add ${asset.name} at playhead`}
         title="Add at playhead"
         onClick={() => addAtPlayhead(asset.id)}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-black hover:bg-accent-strong"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
       >
         <Plus size={16} />
       </button>
