@@ -114,7 +114,7 @@ pub fn export(
     result
 }
 
-fn check_source_path(project: &Project, path: &Path) -> Result<()> {
+pub fn check_source_path(project: &Project, path: &Path) -> Result<()> {
     if let Ok(target) = std::fs::canonicalize(path)
         && project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target))
     {

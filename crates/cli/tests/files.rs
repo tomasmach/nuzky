@@ -1,5 +1,5 @@
 use capopen_engine::{Project, edit::new_id};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn fixture() -> (PathBuf, PathBuf, Vec<u8>) {
@@ -11,27 +11,63 @@ fn fixture() -> (PathBuf, PathBuf, Vec<u8>) {
     (dir, path, bytes)
 }
 
+/// `render` and `frame` take the same output checks; `frame` also needs a time.
+fn write_output(command: &str, project: &Path, out: &Path) -> std::process::Output {
+    let mut cli = Command::new(env!("CARGO_BIN_EXE_capopen"));
+    cli.arg(command).arg(project);
+    if command == "frame" {
+        cli.arg("0");
+    }
+    cli.arg(out).output().unwrap()
+}
+
 #[test]
-fn render_refuses_project_and_sidecars_including_symlinks() {
+fn render_and_frame_refuse_project_and_sidecars_including_symlinks() {
     let (dir, project, bytes) = fixture();
-    for suffix in ["", ".lock", ".checkpoint.json", ".tmp"] {
-        let out = dir.join(format!("project.capopen{suffix}"));
-        let result =
-            Command::new(env!("CARGO_BIN_EXE_capopen")).arg("render").arg(&project).arg(&out).output().unwrap();
-        assert!(!result.status.success());
-        assert!(String::from_utf8_lossy(&result.stderr).contains("Output would overwrite"));
-        #[cfg(unix)]
-        {
-            let alias = dir.join("alias.mp4");
-            std::os::unix::fs::symlink(&out, &alias).unwrap();
-            let result =
-                Command::new(env!("CARGO_BIN_EXE_capopen")).arg("render").arg(&project).arg(&alias).output().unwrap();
-            assert!(!result.status.success());
+    for command in ["render", "frame"] {
+        for suffix in ["", ".lock", ".checkpoint.json", ".tmp"] {
+            let out = dir.join(format!("project.capopen{suffix}"));
+            let result = write_output(command, &project, &out);
+            assert!(!result.status.success(), "{command} {suffix}");
             assert!(String::from_utf8_lossy(&result.stderr).contains("Output would overwrite"));
-            std::fs::remove_file(alias).unwrap();
+            #[cfg(unix)]
+            {
+                let alias = dir.join("alias.mp4");
+                std::os::unix::fs::symlink(&out, &alias).unwrap();
+                let result = write_output(command, &project, &alias);
+                assert!(!result.status.success(), "{command} alias {suffix}");
+                assert!(String::from_utf8_lossy(&result.stderr).contains("Output would overwrite"));
+                std::fs::remove_file(alias).unwrap();
+            }
         }
     }
     assert_eq!(std::fs::read(&project).unwrap(), bytes);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn frame_refuses_project_media_and_keeps_hard_links_intact() {
+    let (dir, project, _) = fixture();
+    let source = dir.join("source.mp4");
+    std::fs::write(&source, b"source media").unwrap();
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&project).unwrap()).unwrap();
+    json["assets"] = serde_json::json!([{
+        "id": "a", "name": "source.mp4", "path": source, "kind": "video", "durationUs": 1_000_000,
+        "width": 64, "height": 64, "fps": 25.0, "hasAudio": false
+    }]);
+    std::fs::write(&project, serde_json::to_vec(&json).unwrap()).unwrap();
+    let result = write_output("frame", &project, &source);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("is used in this project"));
+    // A hard link is another name for the media; the frame replaces the name, not the file.
+    let link = dir.join("link.png");
+    std::fs::hard_link(&source, &link).unwrap();
+    let empty = dir.join("empty.capopen");
+    std::fs::write(&empty, serde_json::to_vec(&Project::new("empty")).unwrap()).unwrap();
+    let result = write_output("frame", &empty, &link);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert_eq!(std::fs::read(&source).unwrap(), b"source media");
+    assert!(std::fs::read(&link).unwrap().starts_with(b"\x89PNG"));
     std::fs::remove_dir_all(dir).unwrap();
 }
 

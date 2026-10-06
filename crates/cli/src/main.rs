@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use capopen_engine::edit::{EditCmd, new_id};
-use capopen_engine::export::{ExportOptions, export};
+use capopen_engine::export::{ExportOptions, check_source_path, export};
 use capopen_engine::media::probe;
 use capopen_engine::{Project, Renderer, Wait};
 
@@ -29,11 +29,17 @@ fn load(path: &str) -> Result<Project> {
 }
 
 fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
-    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let mut enc = png::Encoder::new(file, w, h);
+    let mut bytes = Vec::new();
+    let mut enc = png::Encoder::new(&mut bytes, w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.write_header()?.write_image_data(rgba)?;
-    Ok(())
+    // Renaming over the destination leaves a hard-linked source file untouched.
+    let tmp = path.with_file_name(format!(".capopen-frame-{}.png", new_id()));
+    let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.with_context(|| format!("Cannot write {}", path.display()))
 }
 
 fn resolved_path(path: &Path) -> Result<PathBuf> {
@@ -132,7 +138,9 @@ fn main() -> Result<()> {
             publish_new_project(out, &project)?;
         }
         ["frame", project, secs, out, rest @ ..] => {
+            check_render_output(Path::new(project), Path::new(out))?;
             let project = load(project)?;
+            check_source_path(&project, Path::new(out))?;
             let width: u32 = rest.first().map(|w| w.parse()).transpose()?.unwrap_or(project.canvas.width);
             let height = (width as u64 * project.canvas.height as u64 / project.canvas.width as u64) as u32;
             let t = (secs.parse::<f64>()? * 1e6) as i64;
