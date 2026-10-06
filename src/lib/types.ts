@@ -94,6 +94,12 @@ export interface Filmstrip {
   count: number;
 }
 
+/** Corners tl, tr, br, bl in canvas pixels; list is bottom to top. */
+export interface LayerBounds {
+  clipId: string;
+  corners: [number, number][];
+}
+
 export interface ExportRequest {
   /** Short side in px: 720, 1080, 1440, 2160 */
   resolution: number;

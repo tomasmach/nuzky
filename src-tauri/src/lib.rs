@@ -255,6 +255,23 @@ pub struct Filmstrip {
     count: u32,
 }
 
+/// Where a visual layer sits on the canvas at a given time, for selecting and dragging
+/// layers directly in the preview.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerBounds {
+    clip_id: String,
+    /// Top-left, top-right, bottom-right, bottom-left in canvas pixels.
+    corners: [[f32; 2]; 4],
+}
+
+/// Layers visible at `t_us`, bottom to top, with animations and keyframes applied.
+#[tauri::command]
+fn layer_bounds(_state: State<'_, AppState>, _t_us: i64) -> Vec<LayerBounds> {
+    // Contract stub: implemented by the backend workstream.
+    Vec::new()
+}
+
 #[tauri::command]
 async fn filmstrip(_app: AppHandle, _asset_id: String) -> CmdResult<Option<Filmstrip>> {
     // Contract stub: implemented by the backend workstream.
@@ -323,6 +340,7 @@ pub fn run() {
             open_project,
             start_export,
             filmstrip,
+            layer_bounds,
             cancel_job,
             jobs::start_captions,
             jobs::caption_models,
