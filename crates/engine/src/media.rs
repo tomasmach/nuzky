@@ -327,9 +327,33 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let mut resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))> = None;
     let mut decoded = frame::Audio::empty();
     let mut last_progress = 0.0;
+    let mut mono = false;
+
+    // Writes resampled audio as stereo. Mono sources are resampled as mono and duplicated,
+    // so they keep their level instead of FFmpeg's -3 dB pan.
+    let write_out = |out: &frame::Audio, mono: bool, writer: &mut BufWriter<File>, written: &mut u64| -> Result<()> {
+        let n = out.samples();
+        if n == 0 {
+            return Ok(());
+        }
+        if mono {
+            let src: &[f32] = &bytemuck_slice(out.data(0))[..n];
+            let mut buf = Vec::with_capacity(n * CHANNELS * 4);
+            for s in src {
+                buf.extend_from_slice(&s.to_le_bytes());
+                buf.extend_from_slice(&s.to_le_bytes());
+            }
+            writer.write_all(&buf)?;
+        } else {
+            writer.write_all(&out.data(0)[..n * CHANNELS * 4])?;
+        }
+        *written += n as u64;
+        Ok(())
+    };
 
     let write_frame = |f: &frame::Audio,
                            resampler: &mut Option<(resampling::Context, (ff::format::Sample, u64, u32))>,
+                           mono: &mut bool,
                            writer: &mut BufWriter<File>,
                            written: &mut u64|
      -> Result<()> {
@@ -339,14 +363,9 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
         }
         let key = (f.format(), layout.bits(), f.rate());
         if resampler.as_ref().map(|r| r.1) != Some(key) {
-            let ctx = resampling::Context::get(
-                f.format(),
-                layout,
-                f.rate(),
-                ff::format::Sample::F32(ff::format::sample::Type::Packed),
-                ff::ChannelLayout::STEREO,
-                SAMPLE_RATE,
-            )?;
+            *mono = layout.channels() == 1;
+            let dst = if *mono { ff::ChannelLayout::MONO } else { ff::ChannelLayout::STEREO };
+            let ctx = resampling::Context::get(f.format(), layout, f.rate(), PCM_FORMAT, dst, SAMPLE_RATE)?;
             *resampler = Some((ctx, key));
         }
         // Align the first samples with the container origin.
@@ -354,21 +373,19 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
             if let Some(pts) = f.timestamp().or(f.pts()) {
                 let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
                 let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
-                let zeros = vec![0u8; pad as usize * CHANNELS * 4];
-                writer.write_all(&zeros)?;
+                writer.write_all(&vec![0u8; pad as usize * CHANNELS * 4])?;
                 *written += pad;
             }
         }
         let mut f = f.clone();
         f.set_channel_layout(layout);
-        let mut converted = frame::Audio::empty();
-        resampler.as_mut().unwrap().0.run(&f, &mut converted)?;
-        let n = converted.samples();
-        if n > 0 {
-            writer.write_all(&converted.data(0)[..n * CHANNELS * 4])?;
-            *written += n as u64;
-        }
-        Ok(())
+        let (ctx, _) = resampler.as_mut().unwrap();
+        // ffmpeg-next sizes the output like the input, which drops samples when upsampling
+        // (22.05 or 44.1 kHz to 48 kHz). Allocate for the converted length instead.
+        let capacity = f.samples() * SAMPLE_RATE as usize / f.rate().max(1) as usize + 256;
+        let mut out = frame::Audio::new(PCM_FORMAT, capacity, ctx.output().channel_layout);
+        ctx.run(&f, &mut out)?;
+        write_out(&out, *mono, writer, written)
     };
 
     for (s, packet) in input.packets() {
@@ -379,7 +396,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
             continue;
         }
         while decoder.receive_frame(&mut decoded).is_ok() {
-            write_frame(&decoded, &mut resampler, &mut writer, &mut written)?;
+            write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
         }
         if let Some(pts) = packet.pts() {
             let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
@@ -391,13 +408,15 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     }
     decoder.send_eof().ok();
     while decoder.receive_frame(&mut decoded).is_ok() {
-        write_frame(&decoded, &mut resampler, &mut writer, &mut written)?;
+        write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
     }
     if let Some((ctx, _)) = resampler.as_mut() {
-        let mut tail = frame::Audio::empty();
-        if ctx.flush(&mut tail).is_ok() && tail.samples() > 0 {
-            writer.write_all(&tail.data(0)[..tail.samples() * CHANNELS * 4])?;
-            written += tail.samples() as u64;
+        loop {
+            let mut tail = frame::Audio::new(PCM_FORMAT, 4096, ctx.output().channel_layout);
+            if ctx.flush(&mut tail).is_err() || tail.samples() == 0 {
+                break;
+            }
+            write_out(&tail, mono, &mut writer, &mut written)?;
         }
     }
     writer.flush()?;
@@ -407,8 +426,15 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     Ok(written)
 }
 
+const PCM_FORMAT: ff::format::Sample = ff::format::Sample::F32(ff::format::sample::Type::Packed);
+
+fn bytemuck_slice(bytes: &[u8]) -> &[f32] {
+    bytemuck::cast_slice(&bytes[..bytes.len() / 4 * 4])
+}
+
 pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
-    cache_dir.join("pcm").join(format!("{}.f32", asset.id))
+    // The version suffix invalidates caches written before the resampler fix.
+    cache_dir.join("pcm").join(format!("{}.v2.f32", asset.id))
 }
 
 #[cfg(test)]
@@ -421,5 +447,37 @@ mod tests {
         assert_eq!(decode_size((1920, 1080), 0, (4000.0, 3000.0)), (1920, 1080));
         // Rotated portrait source shown 540 wide, 960 tall.
         assert_eq!(decode_size((1920, 1080), 90, (540.0, 960.0)), (960, 540));
+    }
+
+    /// Upsampled sources used to lose their tail; mono sources came out 3 dB quieter.
+    #[test]
+    fn pcm_keeps_full_length_and_level_when_upsampling() {
+        let dir = std::env::temp_dir().join(format!("capopen-pcm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (rate, layout) in [(22_050, "mono"), (44_100, "stereo")] {
+            let src = dir.join(format!("tone_{rate}.wav"));
+            let ok = std::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+                .arg(format!("sine=frequency=440:sample_rate={rate}:duration=3"))
+                .args(["-af", &format!("aformat=channel_layouts={layout}"), "-ar", &rate.to_string()])
+                .arg(&src)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                eprintln!("ffmpeg CLI not available, skipping");
+                return;
+            }
+            let out = dir.join(format!("tone_{rate}.f32"));
+            let frames = extract_pcm(&src, &out, |_| {}).unwrap();
+            assert!((frames as i64 - 3 * SAMPLE_RATE as i64).abs() < 2_000, "{rate} Hz gave {frames} frames");
+            let bytes = std::fs::read(&out).unwrap();
+            let samples: &[f32] = bytemuck::cast_slice(&bytes);
+            let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+            // FFmpeg's sine source peaks at 1/8 of full scale; its own stereo upmix is -3 dB.
+            let expected = if layout == "mono" { 0.125 } else { 0.125 * std::f32::consts::FRAC_1_SQRT_2 };
+            assert!((peak - expected).abs() < 0.01, "{rate} Hz {layout} peak {peak}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

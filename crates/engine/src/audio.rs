@@ -46,9 +46,13 @@ pub fn has_audio(asset: &Asset) -> bool {
     asset.has_audio && asset.kind != AssetKind::Image
 }
 
-/// Extracts the PCM cache for `asset` unless it already exists.
+/// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
+/// same file (import, export and captions) wait for one extraction instead of racing.
 pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32)) -> Result<PathBuf> {
+    static LOCKS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Arc<std::sync::Mutex<()>>>>> = std::sync::OnceLock::new();
     let path = pcm_path(cache_dir, asset);
+    let lock = LOCKS.get_or_init(Default::default).lock().unwrap().entry(path.clone()).or_default().clone();
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     if !path.exists() {
         std::fs::create_dir_all(path.parent().unwrap())?;
         extract_pcm(Path::new(&asset.path), &path, progress)?;

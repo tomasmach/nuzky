@@ -281,8 +281,9 @@ pub fn run() {
                 thumbs: Mutex::new(HashMap::new()),
             };
             let project = state.editor.lock().unwrap().project.clone();
-            jobs::ensure_audio(&state, &project);
+            // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
+            jobs::ensure_audio(&app.state::<AppState>(), &project);
             app.emit("ready", ()).ok();
             Ok(())
         })

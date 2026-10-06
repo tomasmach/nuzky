@@ -144,9 +144,6 @@ pub fn start_export(app: &AppHandle, out: PathBuf) -> Result<String, String> {
             }))
             .unwrap_or_else(|p| Err(anyhow::anyhow!("Export crashed: {}", panic_text(&p))));
             let cancelled = cancel.load(Ordering::Relaxed);
-            if result.is_err() {
-                std::fs::remove_file(&out).ok();
-            }
             rep.finish(result.map(|_| Some(out.to_string_lossy().into_owned())), cancelled);
             unregister(&app, &job_id);
         })
@@ -201,6 +198,7 @@ pub fn start_captions(app: AppHandle, request: CaptionRequest) -> Result<String,
     }
     let state = app.state::<AppState>();
     let project = state.editor.lock().unwrap().project.clone();
+    let project_path = state.project_path.lock().unwrap().clone();
     let has_speech = project
         .tracks
         .iter()
@@ -226,10 +224,12 @@ pub fn start_captions(app: AppHandle, request: CaptionRequest) -> Result<String,
                 if count == 0 {
                     anyhow::bail!("No speech was recognised.");
                 }
-                let snap = app2
-                    .state::<AppState>()
-                    .apply(EditCmd::AddCaptions { segments, style: request.style.clone() }, None)
-                    .map_err(anyhow::Error::msg)?;
+                let state = app2.state::<AppState>();
+                // The user may have opened another project while recognition ran.
+                if *state.project_path.lock().unwrap() != project_path {
+                    anyhow::bail!("Another project was opened, so the captions were not added.");
+                }
+                let snap = state.apply(EditCmd::AddCaptions { segments, style: request.style.clone() }, None).map_err(anyhow::Error::msg)?;
                 app2.emit("project-changed", &snap).ok();
                 Ok(Some(format!("{count} captions")))
             });
@@ -350,8 +350,6 @@ fn run_captions(
     params.set_print_special(false);
     params.set_print_timestamps(false);
     params.set_suppress_nst(true);
-    params.set_vad_model_path(Some(&vad));
-    params.enable_vad(true);
     let (app, mut event) = (rep.app.clone(), rep.event.clone());
     params.set_progress_callback_safe(move |p: i32| {
         event.progress = p as f32 / 100.0;
@@ -362,23 +360,82 @@ fn run_captions(
     params.set_abort_callback_safe(move || abort.load(Ordering::Relaxed));
     rep.progress(0.0, Some("Recognising speech"));
 
-    state.full(params, &audio).map_err(|e| anyhow::anyhow!("Speech recognition failed: {e}"))?;
+    // whisper.cpp's built-in VAD loses the original timestamps, so detect speech here,
+    // transcribe only the speech and map times back ourselves.
+    let regions = speech_regions(&vad, &audio)?;
+    log::debug!("speech regions (s): {:?}", regions.iter().map(|(a, b)| (*a as f32 / 16000.0, *b as f32 / 16000.0)).collect::<Vec<_>>());
+    if regions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (speech, table) = compact(&audio, &regions);
+    state.full(params, &speech).map_err(|e| anyhow::anyhow!("Speech recognition failed: {e}"))?;
     if cancel.load(Ordering::Relaxed) {
         anyhow::bail!("cancelled");
     }
     let mut segments = Vec::new();
     for seg in state.as_iter() {
         let text = seg.to_str_lossy().map(|s| s.trim().to_string()).unwrap_or_default();
+        log::debug!("segment {}..{} cs, no_speech {:.2}: {text}", seg.start_timestamp(), seg.end_timestamp(), seg.no_speech_probability());
         if text.is_empty() || is_annotation(&text) || seg.no_speech_probability() > 0.6 {
             continue;
         }
-        segments.push(CaptionSegment { start_us: seg.start_timestamp() * 10_000, end_us: seg.end_timestamp() * 10_000, text });
+        let at = |cs: i64| to_original(&table, (cs.max(0) as usize) * CS) as i64 * 1_000_000 / SPEECH_RATE as i64;
+        segments.push(CaptionSegment { start_us: at(seg.start_timestamp()), end_us: at(seg.end_timestamp()), text });
     }
     Ok(segments)
 }
 
 fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into())
+}
+
+const SPEECH_RATE: usize = 16_000;
+/// Samples per Whisper centisecond.
+const CS: usize = SPEECH_RATE / 100;
+const GAP: usize = SPEECH_RATE * 2 / 5;
+
+/// Speech regions as sample ranges, padded and merged when they nearly touch.
+fn speech_regions(vad_model: &str, audio: &[f32]) -> anyhow::Result<Vec<(usize, usize)>> {
+    use whisper_rs::{WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
+    let mut ctx = WhisperVadContext::new(vad_model, WhisperVadContextParams::new())
+        .map_err(|e| anyhow::anyhow!("Cannot load the voice detector: {e}"))?;
+    let mut params = WhisperVadParams::new();
+    params.set_speech_pad(200);
+    params.set_min_silence_duration(300);
+    let segments = ctx.segments_from_samples(params, audio).map_err(|e| anyhow::anyhow!("Voice detection failed: {e}"))?;
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for seg in segments {
+        let start = ((seg.start.max(0.0) as usize) * CS).min(audio.len());
+        let end = ((seg.end.max(0.0) as usize) * CS).min(audio.len());
+        if end <= start {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if start <= last.1 + GAP => last.1 = last.1.max(end),
+            _ => out.push((start, end)),
+        }
+    }
+    Ok(out)
+}
+
+/// Joins the speech regions with short silences. The table maps each region's offset in
+/// the joined audio (`compact_start`) to its timeline offset (`original_start`, `len`).
+fn compact(audio: &[f32], regions: &[(usize, usize)]) -> (Vec<f32>, Vec<(usize, usize, usize)>) {
+    let mut joined = Vec::new();
+    let mut table = Vec::new();
+    for &(start, end) in regions {
+        if !joined.is_empty() {
+            joined.extend(std::iter::repeat_n(0.0, GAP));
+        }
+        table.push((joined.len(), start, end - start));
+        joined.extend_from_slice(&audio[start..end]);
+    }
+    (joined, table)
+}
+
+fn to_original(table: &[(usize, usize, usize)], t: usize) -> usize {
+    let Some(&(cs, os, len)) = table.iter().rev().find(|(cs, ..)| *cs <= t).or(table.first()) else { return t };
+    os + t.saturating_sub(cs).min(len)
 }
 
 /// Whisper marks non-speech as "[Music]", "(laughs)", "*applause*" or "♪".
@@ -397,5 +454,18 @@ mod tests {
         }
         assert!(!super::is_annotation("Ahoj (jak se máš)"));
         assert!(!super::is_annotation("Dnes si ukážeme střih."));
+    }
+
+    #[test]
+    fn maps_compacted_speech_back_to_the_timeline() {
+        let audio = vec![0.5f32; 16_000 * 10];
+        // Speech at 2–3 s and 7–8 s.
+        let (joined, table) = super::compact(&audio, &[(32_000, 48_000), (112_000, 128_000)]);
+        assert_eq!(joined.len(), 16_000 + super::GAP + 16_000);
+        assert_eq!(super::to_original(&table, 0), 32_000);
+        assert_eq!(super::to_original(&table, 8_000), 40_000);
+        // Inside the inserted gap: clamps to the end of the first region.
+        assert_eq!(super::to_original(&table, 16_000 + 100), 48_000);
+        assert_eq!(super::to_original(&table, 16_000 + super::GAP + 4_000), 116_000);
     }
 }

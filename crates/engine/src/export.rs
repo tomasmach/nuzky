@@ -46,9 +46,35 @@ pub fn export(
     if duration <= 0 {
         bail!("The timeline is empty");
     }
+    if let Ok(target) = std::fs::canonicalize(out) {
+        if project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target)) {
+            bail!("{} is used in this project. Choose another file name.", out.display());
+        }
+    }
     for asset in project.assets.iter().filter(|a| has_audio(a)) {
         ensure_pcm(cache_dir, asset, |_| {})?;
     }
+    // Render into a temporary file so a failed export never touches an existing file.
+    let tmp = out.with_extension("capopen-part.mp4");
+    let result = encode(project, cache_dir, &tmp, options, cancel, &mut progress, duration);
+    match result {
+        Ok(()) => std::fs::rename(&tmp, out).with_context(|| format!("Cannot write {}", out.display())),
+        Err(e) => {
+            std::fs::remove_file(&tmp).ok();
+            Err(e)
+        }
+    }
+}
+
+fn encode(
+    project: &Project,
+    cache_dir: &Path,
+    out: &Path,
+    options: &ExportOptions,
+    cancel: &AtomicBool,
+    progress: &mut impl FnMut(ExportProgress),
+    duration: i64,
+) -> Result<()> {
 
     let fps = project.canvas.fps.max(1);
     let (w, h) = (project.canvas.width & !1, project.canvas.height & !1);

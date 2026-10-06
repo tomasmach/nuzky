@@ -88,17 +88,24 @@ impl Saver {
         std::thread::Builder::new()
             .name("autosave".into())
             .spawn(move || {
-                while let Ok(mut job) = rx.recv() {
-                    // Keep only the newest version once edits stop for a moment.
-                    while let Ok(newer) = rx.recv_timeout(DEBOUNCE) {
-                        job = newer;
-                    }
-                    let (path, project, revision) = job;
+                let write = |(path, project, revision): (PathBuf, Project, u64)| {
                     let error = save(&path, &project).err().map(|e| format!("{e:#}"));
                     if let Some(e) = &error {
                         log::error!("Autosave failed: {e}");
                     }
                     app.emit("saved", SavedEvent { revision, error }).ok();
+                };
+                while let Ok(mut job) = rx.recv() {
+                    // Keep only the newest version once edits stop for a moment, but write a
+                    // pending project right away when another one takes its place.
+                    while let Ok(newer) = rx.recv_timeout(DEBOUNCE) {
+                        if newer.0 != job.0 {
+                            write(std::mem::replace(&mut job, newer));
+                        } else {
+                            job = newer;
+                        }
+                    }
+                    write(job);
                 }
             })
             .expect("spawn autosave");

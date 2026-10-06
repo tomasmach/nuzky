@@ -122,15 +122,17 @@ impl Project {
         })
     }
 
-    /// Lays out main-track clips back to back in the order of `order_key`.
+    /// Lays out main-track clips back to back. Existing clips keep their order; a clip
+    /// that was moved or added goes before the first clip whose middle is past `start`.
     fn pack_main(&mut self, moved: Option<(&str, i64)>) {
         let Some(main) = self.track_index(MAIN_TRACK) else { return };
         let clips = &mut self.tracks[main].clips;
-        let key = |c: &Clip| match moved {
-            Some((id, start)) if c.id == id => start,
-            _ => c.start_us + c.duration_us / 2,
-        };
-        clips.sort_by_key(|c| key(c));
+        let moved_clip = moved.and_then(|(id, _)| clips.iter().position(|c| c.id == id)).map(|i| clips.remove(i));
+        clips.sort_by_key(|c| c.start_us);
+        if let (Some(clip), Some((_, start))) = (moved_clip, moved) {
+            let at = clips.iter().position(|c| c.start_us + c.duration_us / 2 > start).unwrap_or(clips.len());
+            clips.insert(at, clip);
+        }
         let mut t = 0;
         for c in clips.iter_mut() {
             c.start_us = t;
@@ -392,7 +394,14 @@ impl Editor {
     /// typing) form a single undo step.
     pub fn apply(&mut self, cmd: EditCmd, coalesce: Option<String>) -> Result<EditOutcome> {
         let before = self.project.clone();
-        let outcome = self.project.apply(cmd)?;
+        let outcome = match self.project.apply(cmd) {
+            Ok(o) => o,
+            Err(e) => {
+                // A rejected edit may have changed the project halfway.
+                self.project = before;
+                return Err(e);
+            }
+        };
         if self.project == before {
             return Ok(outcome);
         }
@@ -545,6 +554,33 @@ mod tests {
         assert_eq!((c.start_us, c.duration_us), (0, 2_000_000));
         let ClipContent::Media { source_in_us, .. } = &c.content else { panic!() };
         assert_eq!(*source_in_us, 1_000_000);
+    }
+
+    #[test]
+    fn extending_a_main_clip_keeps_the_order() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }).unwrap();
+        let a = p.tracks[0].clips[0].id.clone();
+        p.apply(EditCmd::TrimClip { clip_id: a.clone(), start_us: 0, duration_us: 2_000_000, source_in_us: None }).unwrap();
+        p.apply(EditCmd::TrimClip { clip_id: a.clone(), start_us: 0, duration_us: 5_000_000, source_in_us: None }).unwrap();
+        assert_eq!(p.tracks[0].clips[0].id, a);
+        assert_eq!(main_layout(&p), vec![(0, 5000), (5000, 3000)]);
+    }
+
+    #[test]
+    fn rejected_edit_leaves_the_project_untouched() {
+        let mut e = Editor::new(project());
+        e.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }, None).unwrap();
+        let track = e.project.tracks[1].id.clone();
+        let first = e.project.tracks[1].clips[0].id.clone();
+        e.apply(EditCmd::TrimClip { clip_id: first.clone(), start_us: 0, duration_us: 5_000_000, source_in_us: None }, None).unwrap();
+        e.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(10_000_000), track_id: Some(track) }, None).unwrap();
+        assert_eq!(e.project.tracks[1].clips.len(), 2);
+        let before = e.project.clone();
+        let overlap = EditCmd::TrimClip { clip_id: first, start_us: 0, duration_us: 15_000_000, source_in_us: None };
+        assert!(e.apply(overlap, None).is_err());
+        assert_eq!(e.project, before);
     }
 
     #[test]
