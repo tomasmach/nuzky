@@ -358,7 +358,6 @@ fn recognise(
         rep.progress(i as f32 / assets.len() as f32, Some("Recognising speech"));
         transcript::recognise(store, asset, cache, &request.model, &models, &request.language, cancel)
             .with_context(|| format!("Transcribing {}", asset.name))?;
-        rep.app.emit("transcripts-changed", ()).ok();
     }
     Ok(())
 }

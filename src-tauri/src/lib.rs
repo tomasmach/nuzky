@@ -143,6 +143,7 @@ impl OpenSession {
                 let current = state.session.lock().unwrap();
                 if stopped.load(Ordering::Acquire) || !session.ptr_eq(&Arc::downgrade(&current.host)) { break; }
                 match event {
+                    SessionEvent::TranscriptsChanged => { app.emit("transcripts-changed", ()).ok(); }
                     SessionEvent::Changed { origin, .. } => {
                         if let Ok(snap) = current.snapshot(Vec::new()) {
                             state.publish_project(&snap.project);

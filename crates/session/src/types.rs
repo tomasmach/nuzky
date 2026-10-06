@@ -90,6 +90,7 @@ pub enum Origin {
 
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
+    TranscriptsChanged,
     Changed {
         revision: u64,
         origin: Origin,

@@ -44,6 +44,7 @@ struct CachedFingerprint {
 #[derive(Clone)]
 pub struct TranscriptStore {
     directory: PathBuf,
+    events: Option<std::sync::mpsc::Sender<crate::SessionEvent>>,
     fingerprints: Arc<Mutex<HashMap<PathBuf, CachedFingerprint>>>,
 }
 
@@ -58,8 +59,14 @@ impl TranscriptStore {
             .context("STORE_UNAVAILABLE: creating transcript directory")?;
         Ok(Self {
             directory,
+            events: None,
             fingerprints: Arc::default(),
         })
+    }
+
+    pub(crate) fn with_events(mut self, events: Option<std::sync::mpsc::Sender<crate::SessionEvent>>) -> Self {
+        self.events = events;
+        self
     }
 
     pub fn fingerprint(&self, asset: &Asset) -> Result<String> {
@@ -137,7 +144,9 @@ impl TranscriptStore {
             "INVALID_TRANSCRIPT: invalid word timing or probability"
         );
         crate::storage::save(&self.directory.join(format!("{fingerprint}.json")), record)
-            .context("STORE_WRITE_FAILED: publishing transcript")
+            .context("STORE_WRITE_FAILED: publishing transcript")?;
+        if let Some(events) = &self.events { let _ = events.send(crate::SessionEvent::TranscriptsChanged); }
+        Ok(())
     }
 }
 

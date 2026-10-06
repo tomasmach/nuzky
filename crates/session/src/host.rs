@@ -39,10 +39,11 @@ impl Host {
     }
 
     pub fn new(session: ProjectSession, cache_dir: PathBuf) -> Result<Self> {
+        let transcripts = TranscriptStore::open()?.with_events(session.inner.lock().unwrap().events.clone());
         Ok(Self {
             session,
             jobs: Jobs::default(),
-            transcripts: TranscriptStore::open()?,
+            transcripts,
             cache_dir,
         })
     }
@@ -61,6 +62,37 @@ mod tests {
     use capopen_engine::{Project, edit::new_id};
     use serde_json::json;
     use std::sync::mpsc;
+
+    #[test]
+    fn transcript_publication_notifies_host_from_cloned_store() {
+        use crate::transcripts::{Record, VERSION};
+        use capopen_engine::model::{Asset, AssetKind};
+        let dir = std::env::temp_dir().join(format!("host-transcripts-{}", new_id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("p.capopen");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("events")).unwrap()).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut host = Host::new(ProjectSession::open(&path, Mode::Write, Some(tx.clone())).unwrap(), dir.join("cache")).unwrap();
+        // Keep test records out of the user's transcript store, retaining its host event channel.
+        host.transcripts = TranscriptStore::at(dir.join("transcripts")).unwrap().with_events(host.session.inner.lock().unwrap().events.clone());
+        let source = dir.join("source");
+        std::fs::write(&source, b"source").unwrap();
+        let asset = Asset { id: "source".into(), name: "source".into(), path: source.to_string_lossy().into(),
+            kind: AssetKind::Audio, duration_us: 1_000_000, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 };
+        let store = host.transcripts.clone();
+        let mut record = Record { version: VERSION, fingerprint: store.fingerprint(&asset).unwrap(),
+            duration_us: asset.duration_us, model: "test".into(), language: "en".into(), words: vec![], segments: vec![] };
+        for _ in 0..2 {
+            store.put(&asset, &record).unwrap();
+            assert!(matches!(rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(), crate::SessionEvent::TranscriptsChanged));
+            assert_eq!(host.transcripts.get(&asset).unwrap(), Some(record.clone()));
+        }
+        record.version = 0;
+        assert!(store.put(&asset, &record).is_err());
+        assert!(rx.try_recv().is_err());
+        drop(host);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn stop_cancels_jobs_even_when_saving_fails() {
