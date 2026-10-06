@@ -41,7 +41,7 @@ interface SpeechState {
 export const useSpeech = create<SpeechState>(() => ({
   model: "large-v3-turbo-q5_0",
   language: "cs",
-  captionWords: 3,
+  captionWords: 2,
   captionStyle: 0,
   captionFont: null,
   versions: [],

@@ -8,8 +8,8 @@ import { JobError, SpeechFields, SpeechJobCard, useSpeechJobs } from "./SpeechCo
 
 const WORDS = [
   { id: 1, label: "1", title: "One word at a time" },
-  { id: 2, label: "2", title: "Up to two words" },
-  { id: 3, label: "3", title: "Up to three words, at most 15 characters, like reels" },
+  { id: 2, label: "2", title: "Up to two words, at most 15 characters, like reels" },
+  { id: 3, label: "3", title: "Up to three words, at most 15 characters" },
   { id: 0, label: "Phrases", title: "Whole phrases" },
 ];
 
