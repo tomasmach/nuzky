@@ -59,8 +59,22 @@ pub enum EditCmd {
     DetachAudio { clip_id: String },
     UpdateTrack { track_id: String, muted: Option<bool>, hidden: Option<bool> },
     SetCanvas { width: u32, height: u32, background: Option<String>, background_blur: Option<f32> },
+    /// Adds a new captions track; existing tracks are left alone.
     AddCaptions { segments: Vec<CaptionSegment>, style: TextStyle },
+    /// Replaces the clips of an existing captions track.
+    ReplaceCaptions { track_id: String, segments: Vec<CaptionSegment>, style: TextStyle },
+    /// Cuts the timeline ranges out of every track except `keep_track_ids` and closes the
+    /// gaps, so video, overlays, audio and captions stay in sync.
+    RippleDeleteRanges { ranges: Vec<TimeRange>, keep_track_ids: Vec<String> },
     RenameProject { name: String },
+}
+
+/// Timeline range `[start_us, end_us)`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeRange {
+    pub start_us: i64,
+    pub end_us: i64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -161,6 +175,49 @@ impl Project {
             c.start_us = t;
             t += c.duration_us;
         }
+    }
+
+    /// Splits a clip at `at_us` (strictly inside it) and returns the index of the second half.
+    fn split_clip(&mut self, ti: usize, ci: usize, at_us: i64) -> usize {
+        let clip = &mut self.tracks[ti].clips[ci];
+        let offset = at_us - clip.start_us;
+        let mut second = clip.clone();
+        second.id = new_id();
+        second.start_us = at_us;
+        second.duration_us = clip.end_us() - at_us;
+        if let ClipContent::Media { source_in_us, speed, .. } = &mut second.content {
+            *source_in_us += (offset as f64 * *speed as f64).round() as i64;
+        }
+        // The first half keeps the entry animation, the second the exit.
+        clip.anim_out = None;
+        second.anim_in = None;
+        second.transition_in = None;
+        for k in &mut second.keyframes {
+            k.t_us -= offset;
+        }
+        clip.duration_us = offset;
+        self.tracks[ti].clips.insert(ci + 1, second);
+        ci + 1
+    }
+
+    /// Removes `range` from one track: clips are cut at its edges, the inside goes, later
+    /// clips move left. Pieces shorter than `min` are dropped rather than kept as slivers.
+    fn ripple_delete_track(&mut self, ti: usize, range: TimeRange, min: i64) {
+        for at in [range.start_us, range.end_us] {
+            if let Some(ci) = self.tracks[ti].clips.iter().position(|c| c.start_us < at && at < c.end_us()) {
+                self.split_clip(ti, ci, at);
+            }
+        }
+        let length = range.end_us - range.start_us;
+        let clips = &mut self.tracks[ti].clips;
+        clips.retain(|c| !(c.start_us >= range.start_us && c.end_us() <= range.end_us) && c.duration_us >= min);
+        for c in clips.iter_mut().filter(|c| c.start_us >= range.end_us) {
+            c.start_us -= length;
+        }
+    }
+
+    fn caption_track(&mut self, track_id: &str) -> Result<usize> {
+        self.track_index(track_id).filter(|&i| self.tracks[i].kind == TrackKind::Text).ok_or_else(|| anyhow!("Unknown captions track"))
     }
 
     fn tidy(&mut self) {
@@ -301,28 +358,22 @@ impl Project {
             }
             EditCmd::SplitClip { clip_id, at_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                let clip = &mut self.tracks[ti].clips[ci];
+                let clip = &self.tracks[ti].clips[ci];
                 if at_us < clip.start_us + min || at_us > clip.end_us() - min {
                     bail!("Move the playhead inside the clip to split it");
                 }
-                let mut second = clip.clone();
-                let offset = at_us - clip.start_us;
-                second.id = new_id();
-                second.start_us = at_us;
-                second.duration_us = clip.end_us() - at_us;
-                if let ClipContent::Media { source_in_us, speed, .. } = &mut second.content {
-                    *source_in_us += (offset as f64 * *speed as f64).round() as i64;
+                let second = self.split_clip(ti, ci, at_us);
+                out.select.push(self.tracks[ti].clips[second].id.clone());
+            }
+            EditCmd::RippleDeleteRanges { ranges, keep_track_ids } => {
+                // Later ranges first, so earlier coordinates stay valid while cutting.
+                for range in merge_ranges(ranges).into_iter().rev() {
+                    for ti in 0..self.tracks.len() {
+                        if !keep_track_ids.contains(&self.tracks[ti].id) {
+                            self.ripple_delete_track(ti, range, min);
+                        }
+                    }
                 }
-                // The first half keeps the entry animation, the second the exit.
-                clip.anim_out = None;
-                second.anim_in = None;
-                second.transition_in = None;
-                for k in &mut second.keyframes {
-                    k.t_us -= offset;
-                }
-                clip.duration_us = offset;
-                out.select.push(second.id.clone());
-                self.tracks[ti].clips.insert(ci + 1, second);
             }
             EditCmd::DeleteClips { clip_ids } => {
                 for t in &mut self.tracks {
@@ -459,30 +510,15 @@ impl Project {
                 }
             }
             EditCmd::AddCaptions { segments, style } => {
-                self.tracks.retain(|t| !(t.kind == TrackKind::Text && t.name == "Captions"));
-                let clips: Vec<Clip> = segments
-                    .into_iter()
-                    .filter(|s| s.end_us > s.start_us && !s.text.trim().is_empty())
-                    .map(|s| {
-                        Clip::new(new_id(), s.start_us.max(0), (s.end_us - s.start_us).max(min), ClipContent::Text {
-                            text: s.text.trim().to_string(),
-                            style: style.clone(),
-                            transform: Transform { y: 0.28, ..Transform::default() },
-                        })
-                    })
-                    .collect();
-                // Whisper segments can overlap by a few ms; trim each to the next start.
-                let mut clips = clips;
-                clips.sort_by_key(|c| c.start_us);
-                for i in 1..clips.len() {
-                    let next = clips[i].start_us;
-                    let prev = &mut clips[i - 1];
-                    if prev.end_us() > next {
-                        prev.duration_us = (next - prev.start_us).max(1);
-                    }
-                }
+                let clips = caption_clips(segments, &style, min);
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks.push(Track { id: new_id(), kind: TrackKind::Text, name: "Captions".into(), muted: false, hidden: false, clips });
+            }
+            EditCmd::ReplaceCaptions { track_id, segments, style } => {
+                let ti = self.caption_track(&track_id)?;
+                let clips = caption_clips(segments, &style, min);
+                out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
+                self.tracks[ti].clips = clips;
             }
             EditCmd::RenameProject { name } => {
                 let name = name.trim();
@@ -495,6 +531,52 @@ impl Project {
         self.tidy();
         Ok(out)
     }
+}
+
+/// Sorted, non-empty, non-overlapping ranges.
+fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
+    ranges.retain(|r| r.end_us > r.start_us.max(0));
+    ranges.sort_by_key(|r| r.start_us);
+    let mut out: Vec<TimeRange> = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        let r = TimeRange { start_us: r.start_us.max(0), ..r };
+        match out.last_mut() {
+            Some(last) if r.start_us <= last.end_us => last.end_us = last.end_us.max(r.end_us),
+            _ => out.push(r),
+        }
+    }
+    out
+}
+
+/// One text clip per segment, sorted and never overlapping: a segment starting inside the
+/// previous one ends it there, and one starting within a frame of it is merged into it.
+fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, min: i64) -> Vec<Clip> {
+    segments.retain(|s| s.end_us > s.start_us && !s.text.trim().is_empty());
+    segments.sort_by_key(|s| s.start_us);
+    let mut merged: Vec<CaptionSegment> = Vec::with_capacity(segments.len());
+    for s in segments {
+        let text = s.text.trim().to_string();
+        let start_us = s.start_us.max(0);
+        match merged.last_mut() {
+            Some(prev) if start_us < prev.start_us + min => {
+                prev.text = format!("{} {text}", prev.text);
+                prev.end_us = prev.end_us.max(s.end_us);
+            }
+            Some(prev) => {
+                prev.end_us = prev.end_us.min(start_us);
+                merged.push(CaptionSegment { start_us, end_us: s.end_us, text });
+            }
+            None => merged.push(CaptionSegment { start_us, end_us: s.end_us, text }),
+        }
+    }
+    merged
+        .into_iter()
+        .map(|s| {
+            let transform = Transform { y: 0.28, ..Transform::default() };
+            let content = ClipContent::Text { text: s.text, style: style.clone(), transform };
+            Clip::new(new_id(), s.start_us, (s.end_us - s.start_us).max(min), content)
+        })
+        .collect()
 }
 
 /// Owns the current project and its undo history.
@@ -808,9 +890,74 @@ mod tests {
         let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into() };
         p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_200_000, "Ahoj"), seg(1_000_000, 2_000_000, "světe")], style: style.clone() })
             .unwrap();
-        p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_000_000, "Znovu")], style }).unwrap();
+        let track = p.tracks.iter().find(|t| t.name == "Captions").unwrap().id.clone();
+        p.apply(EditCmd::ReplaceCaptions { track_id: track, segments: vec![seg(0, 1_000_000, "Znovu")], style: style.clone() }).unwrap();
         let caption_tracks: Vec<_> = p.tracks.iter().filter(|t| t.name == "Captions").collect();
         assert_eq!(caption_tracks.len(), 1);
         assert_eq!(caption_tracks[0].clips.len(), 1);
+        // Adding never removes an existing captions track.
+        p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_000_000, "Druhá")], style }).unwrap();
+        assert_eq!(p.tracks.iter().filter(|t| t.name == "Captions").count(), 2);
+    }
+
+    #[test]
+    fn captions_with_equal_starts_merge_instead_of_overlapping() {
+        let style = TextStyle {
+            font_size: 40.0,
+            color: "#fff".into(),
+            bold: false,
+            stroke_width: 0.0,
+            stroke_color: "#000".into(),
+            background: None,
+        };
+        let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into() };
+        let clips = caption_clips(vec![seg(0, 1_000_000, "first"), seg(0, 2_000_000, "second"), seg(1_500_000, 3_000_000, "third")], &style, 33_334);
+        let spans: Vec<_> = clips.iter().map(|c| (c.start_us, c.end_us())).collect();
+        assert_eq!(spans, vec![(0, 1_500_000), (1_500_000, 3_000_000)]);
+        let ClipContent::Text { text, .. } = &clips[0].content else { panic!() };
+        assert_eq!(text, "first second");
+    }
+
+    #[test]
+    fn ripple_delete_keeps_all_tracks_in_sync() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
+        let style = TextStyle { font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None };
+        p.apply(EditCmd::AddText { start_us: 2_000_000, text: "hi".into(), style }).unwrap();
+        let music = p.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().id.clone();
+        let ranges = vec![
+            TimeRange { start_us: 3_000_000, end_us: 3_500_000 },
+            TimeRange { start_us: 1_000_000, end_us: 2_000_000 },
+            TimeRange { start_us: 1_500_000, end_us: 2_000_000 },
+        ];
+        p.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: vec![music.clone()] }).unwrap();
+        // Main: 5 s minus 1.5 s, cut into three pieces with continuous source.
+        assert_eq!(main_layout(&p), vec![(0, 1000), (1000, 1000), (2000, 1500)]);
+        let sources: Vec<i64> = p.tracks[0]
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Media { source_in_us, .. } => *source_in_us / 1000,
+                _ => -1,
+            })
+            .collect();
+        assert_eq!(sources, vec![0, 2000, 3500]);
+        // The text clip [2 s, 5 s) loses [3, 3.5) and moves left by the 1 s cut before it.
+        let text = p.tracks.iter().find(|t| t.kind == TrackKind::Text).unwrap();
+        let spans: Vec<_> = text.clips.iter().map(|c| (c.start_us / 1000, c.end_us() / 1000)).collect();
+        assert_eq!(spans, vec![(1000, 2000), (2000, 3500)]);
+        // Kept music is untouched.
+        let music = p.tracks.iter().find(|t| t.id == music).unwrap();
+        assert_eq!((music.clips[0].start_us, music.clips[0].duration_us), (0, 20_000_000));
+    }
+
+    #[test]
+    fn ripple_delete_drops_slivers_shorter_than_a_frame() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        // Leaves 10 ms of the clip before the cut, less than one 30 fps frame.
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 10_000, end_us: 1_000_000 }], keep_track_ids: vec![] }).unwrap();
+        assert_eq!(main_layout(&p), vec![(0, 4000)]);
     }
 }

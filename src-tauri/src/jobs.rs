@@ -250,7 +250,14 @@ pub fn start_captions(app: AppHandle, request: CaptionRequest) -> Result<String,
                 if *state.project_path.lock().unwrap() != project_path {
                     anyhow::bail!("Another project was opened, so the captions were not added.");
                 }
-                let snap = state.apply(EditCmd::AddCaptions { segments, style: request.style.clone() }, None).map_err(anyhow::Error::msg)?;
+                // Regenerating replaces the previous captions instead of stacking another track.
+                let existing = state.editor.lock().unwrap().project.tracks.iter().find(|t| t.name == "Captions").map(|t| t.id.clone());
+                let style = request.style.clone();
+                let cmd = match existing {
+                    Some(track_id) => EditCmd::ReplaceCaptions { track_id, segments, style },
+                    None => EditCmd::AddCaptions { segments, style },
+                };
+                let snap = state.apply(cmd, None).map_err(anyhow::Error::msg)?;
                 app2.emit("project-changed", &snap).ok();
                 Ok(Some(format!("{count} captions")))
             });
