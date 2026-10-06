@@ -673,21 +673,58 @@ impl Editor {
     /// Applies every command or none of them, as one undo step. The outcome selects
     /// everything the commands selected, e.g. every second half of a multi-clip split.
     pub fn apply_batch(&mut self, cmds: Vec<EditCmd>, coalesce: Option<String>) -> Result<EditOutcome> {
+        self.apply_batch_checked(cmds, coalesce, |_| Ok(()))
+    }
+
+    /// Validates the result before committing history. Rejection or unwinding restores the
+    /// project while preserving the current coalesce key and both history stacks.
+    pub fn apply_batch_checked(
+        &mut self,
+        cmds: Vec<EditCmd>,
+        coalesce: Option<String>,
+        check: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<EditOutcome> {
         let before = self.project.clone();
-        let mut outcome = EditOutcome::default();
-        for cmd in cmds {
-            match self.project.apply(cmd) {
-                Ok(o) => outcome.select.extend(o.select),
-                Err(e) => {
-                    // A rejected edit may have changed the project halfway.
-                    self.project = before;
-                    return Err(e);
-                }
+        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut outcome = EditOutcome::default();
+            for cmd in cmds {
+                outcome.select.extend(self.project.apply(cmd)?.select);
             }
-        }
+            check(&self.project)?;
+            Ok(outcome)
+        }));
+        let mut outcome = match applied {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => {
+                self.project = before;
+                return Err(error);
+            }
+            Err(panic) => {
+                self.project = before;
+                std::panic::resume_unwind(panic);
+            }
+        };
         (outcome.created, outcome.removed) = clip_changes(&before, &self.project);
+        self.commit_project(before, coalesce);
+        Ok(outcome)
+    }
+
+    /// Replaces a validated project as one undo step, using the same grouping as batches.
+    pub fn replace_project_checked(
+        &mut self,
+        project: Project,
+        coalesce: Option<String>,
+        check: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        check(&project)?;
+        let before = std::mem::replace(&mut self.project, project);
+        self.commit_project(before, coalesce);
+        Ok(())
+    }
+
+    fn commit_project(&mut self, before: Project, coalesce: Option<String>) {
         if self.project == before {
-            return Ok(outcome);
+            return;
         }
         let merge = coalesce.is_some() && coalesce == self.coalesce;
         if !merge {
@@ -699,7 +736,6 @@ impl Editor {
         self.coalesce = coalesce;
         self.redo.clear();
         self.revision += 1;
-        Ok(outcome)
     }
 
     pub fn undo(&mut self) -> bool {
@@ -785,6 +821,92 @@ mod tests {
 
     fn main_layout(p: &Project) -> Vec<(i64, i64)> {
         p.tracks[0].clips.iter().map(|c| (c.start_us / 1000, c.duration_us / 1000)).collect()
+    }
+
+    #[test]
+    fn checked_batch_rejection_preserves_project_history_and_coalescing() {
+        let mut editor = Editor::new(Project::new("original"));
+        let rename = |name: &str| EditCmd::RenameProject { name: name.into() };
+        editor.apply(rename("first"), Some("gesture".into())).unwrap();
+        let before = editor.project.clone();
+        assert!(editor.apply_batch_checked(vec![rename("rejected")], None, |_| bail!("invalid")).is_err());
+        assert_eq!(editor.project, before);
+        assert_eq!(editor.revision, 1);
+        editor.apply(rename("second"), Some("gesture".into())).unwrap();
+        editor.undo();
+        assert_eq!(editor.project.name, "original");
+        assert!(!editor.can_undo());
+        assert!(editor.apply_batch_checked(vec![rename("rejected")], None, |_| bail!("invalid")).is_err());
+        assert!(editor.can_redo());
+        editor.redo();
+        assert_eq!(editor.project.name, "second");
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            editor.apply_batch_checked(vec![rename("panic")], None, |_| panic!("validator"))
+        }));
+        assert!(panic.is_err());
+        assert_eq!(editor.project.name, "second");
+        assert_eq!(editor.revision, 4);
+    }
+
+    #[test]
+    fn checked_replacement_shares_batch_history_and_coalescing() {
+        let original = Project::new("original");
+        let mut editor = Editor::new(original.clone());
+        editor.apply(EditCmd::RenameProject { name: "first".into() }, Some("gesture".into())).unwrap();
+        let replacement = project();
+        editor.replace_project_checked(replacement.clone(), Some("gesture".into()), |_| Ok(())).unwrap();
+        assert_eq!(editor.project, replacement);
+        assert_eq!(editor.revision, 2);
+        assert_eq!(editor.last_key(), Some("gesture"));
+        assert!(editor.undo());
+        assert_eq!(editor.project, original);
+        assert!(!editor.can_undo());
+        assert!(editor.redo());
+        assert_eq!(editor.project, replacement);
+        assert_eq!(editor.revision, 4);
+        editor.seal();
+        let next = Project::new("next");
+        editor.replace_project_checked(next.clone(), Some("gesture".into()), |_| Ok(())).unwrap();
+        assert!(editor.undo());
+        assert_eq!(editor.project, replacement);
+        editor.replace_project_checked(next.clone(), None, |_| Ok(())).unwrap();
+        assert!(!editor.can_redo());
+        assert_eq!(editor.revision, 7);
+        assert!(editor.undo());
+        assert_eq!(editor.project, replacement);
+        assert!(editor.redo());
+        assert_eq!(editor.project, next);
+    }
+
+    #[test]
+    fn checked_replacement_rejection_and_noop_preserve_history() {
+        let original = Project::new("original");
+        let mut editor = Editor::new(original.clone());
+        editor.replace_project_checked(original.clone(), None, |_| Ok(())).unwrap();
+        assert_eq!(editor.revision, 0);
+        assert!(!editor.can_undo());
+        editor.apply(EditCmd::RenameProject { name: "first".into() }, Some("gesture".into())).unwrap();
+        let before = editor.project.clone();
+        assert!(editor.replace_project_checked(project(), None, |_| bail!("invalid")).is_err());
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            editor.replace_project_checked(project(), None, |_| panic!("validator"))
+        }));
+        assert!(panic.is_err());
+        assert_eq!(editor.project, before);
+        assert_eq!(editor.revision, 1);
+        editor.replace_project_checked(before, None, |_| Ok(())).unwrap();
+        let replacement = project();
+        editor.replace_project_checked(replacement.clone(), Some("gesture".into()), |_| Ok(())).unwrap();
+        assert!(editor.undo());
+        assert_eq!(editor.project, original);
+        assert!(!editor.can_undo());
+        assert!(editor.replace_project_checked(project(), None, |_| bail!("invalid")).is_err());
+        editor.replace_project_checked(original, None, |_| Ok(())).unwrap();
+        assert_eq!(editor.revision, 3);
+        assert!(!editor.can_undo());
+        assert!(editor.can_redo());
+        assert!(editor.redo());
+        assert_eq!(editor.project, replacement);
     }
 
     #[test]

@@ -158,9 +158,9 @@ mod tests {
         let path = dir.join("project.capopen");
         let project = Project::new("Lock test");
         let created_lock = create(&path, &project).unwrap();
-        assert!(ProjectSession::open(&path, Mode::Write).err().unwrap().to_string().contains("PROJECT_BUSY"));
+        assert!(ProjectSession::open(&path, Mode::Write, None).err().unwrap().to_string().contains("PROJECT_BUSY"));
         drop(created_lock);
-        let agent = ProjectSession::open(&path, Mode::Write).unwrap();
+        let agent = ProjectSession::open(&path, Mode::Write, None).unwrap();
         assert_eq!(open(&path).unwrap_err().to_string(), "An AI agent is editing this project outside CapOpen. Close it there first.");
         assert_eq!(load(&path).unwrap(), project);
         drop(agent);
@@ -169,15 +169,15 @@ mod tests {
         let listed = list_in(&dir);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, project.name);
-        for mode in [Mode::Write, Mode::ReadOnly] {
-            assert!(ProjectSession::open(&path, mode).err().unwrap().to_string().contains("PROJECT_BUSY"));
-        }
+        assert!(ProjectSession::open(&path, Mode::Write, None).err().unwrap().to_string().contains("PROJECT_BUSY"));
+        // Read-only agents take no lock, so they never block the app.
+        assert!(ProjectSession::open(&path, Mode::ReadOnly, None).is_ok());
         let pending_save_lock = app_lock.clone();
         drop(app_lock);
-        assert!(ProjectSession::open(&path, Mode::Write).is_err());
+        assert!(ProjectSession::open(&path, Mode::Write, None).is_err());
         save(&path, &loaded).unwrap();
         drop(pending_save_lock);
-        drop(ProjectSession::open(&path, Mode::Write).unwrap());
+        drop(ProjectSession::open(&path, Mode::Write, None).unwrap());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

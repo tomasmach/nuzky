@@ -10,7 +10,7 @@ use capopen_engine::{
     export::{ExportOptions, export},
     media::probe,
 };
-use capopen_session::{Mode, ProjectSession, SessionState};
+use capopen_session::{Expect, Mode, ProjectSession, SessionState};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -45,6 +45,7 @@ impl Backend {
             } else {
                 Mode::ReadOnly
             },
+            None,
         )?;
         std::fs::create_dir_all(&cache).context("Creating media cache")?;
         Ok(Self {
@@ -102,7 +103,7 @@ impl Backend {
                     &a.run_id,
                     &a.request_id,
                     a.edits,
-                    a.expected_revision,
+                    Expect { revision: a.expected_revision, speech_key: a.expected_speech_key },
                 )?)?)
             }
             "end_run" => {
@@ -187,7 +188,7 @@ impl Backend {
             &args.run_id,
             &new_id(),
             vec![EditCmd::AddAssets { assets }],
-            Some(state.stamp.revision),
+            Expect { revision: Some(state.stamp.revision), speech_key: None },
         )?;
         Ok(
             json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "asset_ids": ids}),
@@ -272,7 +273,7 @@ impl Backend {
             &args.run_id,
             &new_id(),
             vec![edit],
-            Some(state.stamp.revision),
+            Expect { revision: Some(state.stamp.revision), speech_key: None },
         )?;
         Ok(
             json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "caption_count": result.outcome.created.len(), "created": result.outcome.created, "removed": result.outcome.removed}),

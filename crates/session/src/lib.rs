@@ -1,143 +1,66 @@
-//! One headless editing authority. The mutex serializes edits and disk writes together.
+//! One editing authority for user edits and agent runs, with ordered background saves.
+mod changes;
+mod recovery;
+mod run;
 mod storage;
+mod types;
 mod validate;
+mod writer;
 
 pub use storage::lock_project;
+pub use types::*;
 pub use validate::validate;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc::Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use capopen_engine::{
     Project,
-    edit::{EditCmd, EditOutcome, Editor, new_id},
-    model::Clip,
+    edit::{EditCmd, Editor, new_id},
+    speech::speech_key,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use changes::changes;
+use run::Run;
+use writer::Writer;
+
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-const HISTORY_LIMIT: usize = 200;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    ReadOnly,
-    Write,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EndAction {
-    Keep,
-    Discard,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum RecoveryAction {
-    Keep,
-    Restore,
-}
-
-#[derive(Deserialize)]
-struct RecoveryCheckpoint {
-    project: Project,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Stamp {
-    pub revision: u64,
-    pub session_epoch: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct RunInfo {
-    pub run_id: String,
-    pub label: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SessionState {
-    pub project: Project,
-    #[serde(flatten)]
-    pub stamp: Stamp,
-    pub open_run: Option<RunInfo>,
-    pub recovery_checkpoint: Option<PathBuf>,
-    pub selection: Vec<String>,
-    pub playhead_us: i64,
-    pub undo_run_id: Option<String>,
-    pub read_only: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ClipChange {
-    pub track_id: String,
-    #[serde(flatten)]
-    pub clip: Clip,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct EditResult {
-    #[serde(flatten)]
-    pub stamp: Stamp,
-    #[serde(flatten)]
-    pub outcome: EditOutcome,
-    pub changed: Vec<String>,
-    /// Actual positions after magnetic packing, for created and changed clips.
-    pub clips: Vec<ClipChange>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct RunResult {
-    #[serde(flatten)]
-    pub stamp: Stamp,
-    pub run_id: String,
-}
-
-#[derive(Serialize)]
-struct Checkpoint<'a> {
-    run_id: &'a str,
-    label: &'a str,
-    session_epoch: &'a str,
-    revision: u64,
-    project: &'a Project,
-}
-
-struct Run {
-    info: RunInfo,
-    before: Project,
-    selection: Vec<String>,
-    touched: Instant,
-}
-
-struct History {
-    run_id: String,
-    before: Project,
-    selection: Vec<String>,
-}
+/// Matches the desktop autosave quiet period in src-tauri/src/store.rs.
+pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(800);
 
 struct Request {
     content: Value,
-    expected_revision: Option<u64>,
+    expect: Expect,
     result: EditResult,
 }
 
+#[derive(Default)]
+struct UiContext {
+    selection: Vec<String>,
+    playhead_us: i64,
+}
+
 struct Inner {
-    _lock: File,
+    // Writer joins before the exclusive lock is released.
+    writer: Option<Writer>,
+    _lock: Option<File>,
     path: PathBuf,
     mode: Mode,
-    project: Project,
-    stamp: Stamp,
+    editor: Editor,
+    epoch: String,
     run: Option<Run>,
-    history: Vec<History>,
+    stopped_runs: HashSet<String>,
     requests: HashMap<(String, String), Request>,
     recovery: Option<PathBuf>,
-    selection: Vec<String>,
+    ui: UiContext,
     timeout: Duration,
+    events: Option<Sender<SessionEvent>>,
 }
 
 pub struct ProjectSession {
@@ -147,359 +70,201 @@ pub struct ProjectSession {
 }
 
 impl ProjectSession {
-    pub fn open(path: impl AsRef<Path>, mode: Mode) -> Result<Self> {
-        Self::open_with_idle_timeout(path, mode, IDLE_TIMEOUT)
+    pub fn open(
+        path: impl AsRef<Path>,
+        mode: Mode,
+        events: Option<Sender<SessionEvent>>,
+    ) -> Result<Self> {
+        Self::open_with_idle_timeout(path, mode, IDLE_TIMEOUT, events)
     }
 
     pub fn open_with_idle_timeout(
         path: impl AsRef<Path>,
         mode: Mode,
         timeout: Duration,
+        events: Option<Sender<SessionEvent>>,
     ) -> Result<Self> {
         ensure!(!timeout.is_zero(), "Idle timeout must be positive");
         let path = fs::canonicalize(path.as_ref()).context("Resolving project path")?;
-        let lock = lock_project(&path, mode == Mode::Write)?;
-        let project = serde_json::from_slice(&fs::read(&path).context("Reading project")?)
-            .context("Parsing project")?;
-        validate(&project)?;
+        let lock = if mode == Mode::Write { Some(lock_project(&path, true)?) } else { None };
+        let project = load(&path)?;
         let checkpoint = storage::sidecar(&path, ".checkpoint.json");
+        let writer = if mode == Mode::Write { Some(Writer::start(path.clone(), events.clone())?) } else { None };
         let inner = Arc::new(Mutex::new(Inner {
+            writer,
             _lock: lock,
             path,
             mode,
-            project,
-            stamp: Stamp {
-                revision: 0,
-                session_epoch: format!("{}{}", new_id(), new_id()),
-            },
+            editor: Editor::new(project),
+            epoch: format!("{}{}", new_id(), new_id()),
             run: None,
-            history: Vec::new(),
+            stopped_runs: HashSet::new(),
             requests: HashMap::new(),
             recovery: checkpoint.exists().then_some(checkpoint),
-            selection: Vec::new(),
+            ui: UiContext::default(),
             timeout,
+            events,
         }));
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
-        let worker = spawn_idle_worker(&inner, &stop, timeout)?;
-        Ok(Self {
-            inner,
-            stop,
-            worker: Some(worker),
-        })
+        let worker = if mode == Mode::Write { Some(spawn_idle_worker(&inner, &stop, timeout)?) } else { None };
+        Ok(Self { inner, stop, worker })
     }
 
     pub fn state(&self) -> Result<SessionState> {
         let mut inner = self.inner.lock().unwrap();
         inner.touch()?;
+        if inner.mode == Mode::ReadOnly {
+            let project = load(&inner.path)?;
+            if inner.editor.project != project {
+                inner.editor.project = project;
+                inner.editor.revision += 1;
+            }
+            let checkpoint = storage::sidecar(&inner.path, ".checkpoint.json");
+            inner.recovery = checkpoint.exists().then_some(checkpoint);
+        }
         Ok(SessionState {
-            project: inner.project.clone(),
-            stamp: inner.stamp.clone(),
+            project: inner.editor.project.clone(),
+            speech_key: speech_key(&inner.editor.project),
+            stamp: inner.stamp(),
             open_run: inner.run.as_ref().map(|r| r.info.clone()),
             recovery_checkpoint: inner.recovery.clone(),
-            selection: inner.selection.clone(),
-            playhead_us: 0,
-            undo_run_id: inner.history.last().map(|h| h.run_id.clone()),
+            selection: inner.ui.selection.clone(),
+            playhead_us: inner.ui.playhead_us,
+            undo_run_id: inner.editor.last_key().and_then(|key| key.strip_prefix("run:")).map(str::to_owned),
             read_only: inner.mode == Mode::ReadOnly,
         })
     }
 
-    pub fn resolve_recovery(&self, action: RecoveryAction) -> Result<Stamp> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.writable()?;
-        ensure!(inner.run.is_none(), "RUN_BUSY: end the open run before recovery");
-        let path = inner.recovery.as_ref().context("NO_RECOVERY: no leftover checkpoint")?.clone();
-        if matches!(action, RecoveryAction::Restore) {
-            let checkpoint: RecoveryCheckpoint = serde_json::from_slice(
-                &fs::read(&path).context("Reading recovery checkpoint")?,
-            ).context("Parsing recovery checkpoint")?;
-            validate(&checkpoint.project)?;
-            storage::save(&inner.path, &checkpoint.project)?;
-            if inner.project != checkpoint.project {
-                inner.stamp.revision += 1;
-            }
-            inner.project = checkpoint.project;
-        }
-        // If cleanup fails, disk and memory agree and recovery remains retryable.
-        fs::remove_file(&path).context("Removing recovery checkpoint")?;
-        inner.recovery = None;
-        Ok(inner.stamp.clone())
+    pub fn set_ui_context(&self, selection: Vec<String>, playhead_us: i64) {
+        self.inner.lock().unwrap().ui = UiContext { selection, playhead_us };
     }
 
-    pub fn begin_run(&self, label: String) -> Result<RunResult> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.touch()?;
-        inner.writable()?;
-        ensure!(inner.run.is_none(), "RUN_BUSY: a run is already open");
-        ensure!(
-            inner.recovery.is_none(),
-            "RECOVERY_PENDING: inspect and resolve the leftover checkpoint before editing"
-        );
-        let run_id = new_id();
-        let checkpoint = Checkpoint {
-            run_id: &run_id,
-            label: &label,
-            session_epoch: &inner.stamp.session_epoch,
-            revision: inner.stamp.revision,
-            project: &inner.project,
-        };
-        storage::save(
-            &storage::sidecar(&inner.path, ".checkpoint.json"),
-            &checkpoint,
-        )?;
-        inner.run = Some(Run {
-            info: RunInfo {
-                run_id: run_id.clone(),
-                label,
-            },
-            before: inner.project.clone(),
-            selection: inner.selection.clone(),
-            touched: Instant::now(),
-        });
-        Ok(RunResult {
-            run_id,
-            stamp: inner.stamp.clone(),
-        })
-    }
-
-    pub fn apply_edits(
+    pub fn edit(
         &self,
-        run_id: &str,
-        request_id: &str,
-        edits: Vec<EditCmd>,
-        expected_revision: Option<u64>,
+        cmds: Vec<EditCmd>,
+        coalesce: Option<String>,
+        expect: Expect,
     ) -> Result<EditResult> {
         let mut inner = self.inner.lock().unwrap();
-        inner.touch()?;
-        inner.writable()?;
-        ensure!(
-            !request_id.is_empty(),
-            "INVALID_REQUEST: request_id cannot be empty"
-        );
-        inner.owns_run(run_id)?;
-        let key = (run_id.to_owned(), request_id.to_owned());
-        let content = serde_json::to_value(&edits).context("Serializing edit request")?;
-        if let Some(previous) = inner.requests.get(&key) {
-            ensure!(
-                previous.content == content
-                    && previous.expected_revision == expected_revision,
-                "REQUEST_CONFLICT: request_id was used with different content"
-            );
-            return Ok(previous.result.clone());
-        }
-        if let Some(expected) = expected_revision {
-            ensure!(
-                expected == inner.stamp.revision,
-                "STALE_REVISION: expected {expected}, current {}",
-                inner.stamp.revision
-            );
-        }
-        let mut editor = Editor::new(inner.project.clone());
-        // Untrusted numeric inputs can overflow inside an engine command before validation.
-        // Keep that failure inside the disposable editor, without poisoning the session mutex.
-        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            editor.apply_batch(edits, None)
-        }))
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "EDIT_REJECTED: engine failed while applying the batch; project unchanged"
-            )
-        })?;
-        let mut outcome = applied.context("EDIT_REJECTED")?;
-        validate(&editor.project)?;
-        outcome.select.retain(|id| {
-            editor
-                .project
-                .tracks
-                .iter()
-                .any(|t| t.clips.iter().any(|c| &c.id == id))
-        });
-        storage::save(&inner.path, &editor.project)?;
-        let (changed, clips) = changes(&inner.project, &editor.project, &outcome);
-        if inner.project != editor.project {
-            inner.stamp.revision += 1;
-        }
-        inner.project = editor.project;
-        inner.selection = outcome.select.clone();
-        let result = EditResult {
-            stamp: inner.stamp.clone(),
-            outcome,
-            changed,
-            clips,
-        };
-        inner.requests.insert(
-            key,
-            Request {
-                content,
-                expected_revision,
-                result: result.clone(),
-            },
-        );
+        inner.user_editable()?;
+        ensure!(!coalesce.as_deref().is_some_and(|key| key.starts_with("run:")),
+            "INVALID_REQUEST: run: coalesce keys are reserved");
+        inner.check_expect(&expect)?;
+        let result = inner.apply(cmds, coalesce, Origin::User)?;
+        inner.schedule()?;
         Ok(result)
     }
 
-    pub fn end_run(&self, run_id: &str, action: EndAction) -> Result<RunResult> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.touch()?;
-        inner.writable()?;
-        inner.owns_run(run_id)?;
-        inner.finish(action)?;
-        Ok(RunResult {
-            run_id: run_id.into(),
-            stamp: inner.stamp.clone(),
-        })
+    pub fn undo(&self) -> Result<Stamp> {
+        self.history(false)
     }
 
-    pub fn undo_run(&self, run_id: &str) -> Result<RunResult> {
+    pub fn redo(&self) -> Result<Stamp> {
+        self.history(true)
+    }
+
+    fn history(&self, redo: bool) -> Result<Stamp> {
         let mut inner = self.inner.lock().unwrap();
-        inner.touch()?;
-        inner.writable()?;
-        ensure!(
-            inner.run.is_none(),
-            "RUN_BUSY: end the open run before undo"
-        );
-        let last = inner
-            .history
-            .last()
-            .context("UNDO_UNAVAILABLE: no history")?;
-        ensure!(
-            last.run_id == run_id,
-            "UNDO_UNAVAILABLE: run is not the last history entry"
-        );
-        storage::save(&inner.path, &last.before)?;
-        let changed = inner.project != last.before;
-        inner.project = last.before.clone();
-        inner.selection = inner
-            .history
-            .last()
-            .map(|h| h.selection.clone())
-            .unwrap_or_default();
-        inner.history.pop();
-        inner.requests.clear();
+        inner.user_editable()?;
+        let changed = if redo { inner.editor.redo() } else { inner.editor.undo() };
         if changed {
-            inner.stamp.revision += 1;
+            inner.changed(if redo { Origin::Redo } else { Origin::Undo });
+            inner.schedule()?;
         }
-        Ok(RunResult {
-            run_id: run_id.into(),
-            stamp: inner.stamp.clone(),
-        })
+        Ok(inner.stamp())
     }
 
-    /// A clean transport disconnect keeps edits as one undoable run.
+    /// A clean transport disconnect keeps edits as one undoable run and drains autosave.
     pub fn disconnect(&self) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         if inner.run.is_some() {
             inner.finish(EndAction::Keep)?;
+        } else if inner.mode == Mode::Write {
+            inner.flush()?;
         }
         Ok(())
     }
 }
 
 impl Inner {
+    fn stamp(&self) -> Stamp {
+        Stamp { revision: self.editor.revision, session_epoch: self.epoch.clone() }
+    }
+
+    fn emit(&self, event: SessionEvent) {
+        if let Some(events) = &self.events {
+            let _ = events.send(event);
+        }
+    }
+
+    fn changed(&self, origin: Origin) {
+        self.emit(SessionEvent::Changed { revision: self.editor.revision, origin });
+    }
+
     fn writable(&self) -> Result<()> {
-        ensure!(
-            self.mode == Mode::Write,
-            "READ_ONLY: restart with --allow-write to edit"
-        );
+        ensure!(self.mode == Mode::Write, "READ_ONLY: restart with --allow-write to edit");
         Ok(())
     }
 
-    fn owns_run(&self, id: &str) -> Result<()> {
-        ensure!(
-            self.run.as_ref().is_some_and(|r| r.info.run_id == id),
-            "INVALID_RUN: run is not open or has ended"
-        );
+    fn recovered(&self) -> Result<()> {
+        ensure!(self.recovery.is_none(), "RECOVERY_PENDING: inspect and resolve the leftover checkpoint before editing");
         Ok(())
     }
 
-    fn expire(&mut self) -> Result<()> {
-        if self
-            .run
-            .as_ref()
-            .is_some_and(|r| r.touched.elapsed() >= self.timeout)
-        {
-            self.finish(EndAction::Keep)?;
+    fn user_editable(&mut self) -> Result<()> {
+        self.touch()?;
+        self.writable()?;
+        ensure!(self.run.is_none(), "RUN_ACTIVE: stop the open run before editing");
+        self.recovered()
+    }
+
+    fn check_expect(&self, expect: &Expect) -> Result<()> {
+        if let Some(expected) = expect.revision {
+            ensure!(expected == self.editor.revision, "STALE_REVISION: expected {expected}, current {}", self.editor.revision);
+        }
+        if let Some(expected) = &expect.speech_key {
+            ensure!(expected == &speech_key(&self.editor.project), "SPEECH_CHANGED: timeline speech changed");
         }
         Ok(())
     }
 
-    fn touch(&mut self) -> Result<()> {
-        self.expire()?;
-        if let Some(run) = &mut self.run {
-            run.touched = Instant::now();
+    fn apply(
+        &mut self,
+        cmds: Vec<EditCmd>,
+        coalesce: Option<String>,
+        origin: Origin,
+    ) -> Result<EditResult> {
+        let before = self.editor.project.clone();
+        let mut outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.editor.apply_batch_checked(cmds, coalesce, validate)
+        }))
+        .map_err(|_| anyhow::anyhow!("EDIT_REJECTED: engine failed while applying the batch; project unchanged"))?
+        .map_err(|error| anyhow::anyhow!("EDIT_REJECTED: {error:#}"))?;
+        outcome.select.retain(|id| {
+            self.editor.project.tracks.iter().any(|t| t.clips.iter().any(|c| &c.id == id))
+        });
+        let (changed, clips) = changes(&before, &self.editor.project, &outcome);
+        if self.editor.project != before {
+            self.changed(origin);
         }
-        Ok(())
+        Ok(EditResult { stamp: self.stamp(), outcome, changed, clips })
     }
 
-    fn finish(&mut self, action: EndAction) -> Result<()> {
-        let run = self.run.as_ref().context("INVALID_RUN: no open run")?;
-        let project = match action {
-            EndAction::Keep => &self.project,
-            EndAction::Discard => &run.before,
-        };
-        storage::save(&self.path, project)?;
-        // Do not acknowledge completion unless the recovery marker can be removed.
-        if let Err(error) = fs::remove_file(storage::sidecar(&self.path, ".checkpoint.json")) {
-            // A failed discard must leave disk and memory on the same live revision.
-            if matches!(action, EndAction::Discard) {
-                storage::save(&self.path, &self.project)
-                    .context("Restoring live project after checkpoint cleanup failed")?;
-            }
-            return Err(error).context("Removing run checkpoint");
-        }
-        let run = self.run.take().context("INVALID_RUN: no open run")?;
-        match action {
-            EndAction::Keep => {
-                self.history.push(History {
-                    run_id: run.info.run_id,
-                    before: run.before,
-                    selection: run.selection,
-                });
-                if self.history.len() > HISTORY_LIMIT {
-                    self.history.remove(0);
-                }
-            }
-            EndAction::Discard => {
-                if self.project != run.before {
-                    self.stamp.revision += 1;
-                }
-                self.project = run.before;
-                self.selection = run.selection;
-            }
-        }
-        self.requests.clear();
-        Ok(())
+    fn schedule(&self) -> Result<()> {
+        self.writer.as_ref().context("READ_ONLY: no writer")?
+            .schedule(&self.editor.project, self.editor.revision)
+    }
+
+    fn flush(&self) -> Result<()> {
+        self.writer.as_ref().context("READ_ONLY: no writer")?
+            .flush(&self.editor.project, self.editor.revision)
     }
 }
 
-fn changes(
-    before: &Project,
-    after: &Project,
-    outcome: &EditOutcome,
-) -> (Vec<String>, Vec<ClipChange>) {
-    let old: HashMap<_, _> = before
-        .tracks
-        .iter()
-        .flat_map(|t| t.clips.iter().map(move |c| (&c.id, (&t.id, c))))
-        .collect();
-    let mut changed = Vec::new();
-    let mut clips = Vec::new();
-    for track in &after.tracks {
-        for clip in &track.clips {
-            let differs = old
-                .get(&clip.id)
-                .is_some_and(|(track_id, c)| *track_id != &track.id || *c != clip);
-            if differs {
-                changed.push(clip.id.clone());
-            }
-            if differs || outcome.created.contains(&clip.id) {
-                clips.push(ClipChange {
-                    track_id: track.id.clone(),
-                    clip: clip.clone(),
-                });
-            }
-        }
-    }
-    (changed, clips)
+fn load(path: &Path) -> Result<Project> {
+    let project = serde_json::from_slice(&fs::read(path).context("Reading project")?).context("Parsing project")?;
+    validate(&project)?;
+    Ok(project)
 }
 
 fn spawn_idle_worker(

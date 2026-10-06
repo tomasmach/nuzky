@@ -71,7 +71,7 @@ fn catalog() -> Result<Vec<Tool>> {
     Ok(vec![
         tool::<params::State>(
             "get_state",
-            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
+            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), speech_key, revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
         )?,
         tool::<params::Begin>(
             "begin_run",
@@ -79,19 +79,19 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Recovery>(
             "resolve_recovery",
-            "Resolve get_state.recovery_checkpoint after a crash. Ask the user before choosing: keep preserves the current project file; restore validates and saves the checkpoint project. Both remove the checkpoint. Requires --allow-write and no open run. Revision changes only if the project changes.",
+            "Resolve get_state.recovery_checkpoint after a crash. Ask the user before choosing: keep preserves the current project file; restore validates and saves the checkpoint project as an undoable edit. Both remove the checkpoint. Requires --allow-write and no open run. Revision changes only if the project changes.",
         )?,
         tool::<params::Apply>(
             "apply_edits",
-            "Atomically apply EditCmd JSON (camelCase fields and type tags). All times are integer microseconds. Supply a unique request_id within this run; retry identical content with the same id while the run is open for the stored result. Ended runs reject retries with INVALID_RUN. expected_revision rejects stale edits. Main track is magnetic and repacks after edits. rippleDeleteRanges removes the union of half-open timeline ranges from every track except keepTrackIds, then closes gaps; omit keepTrackIds to leave the tracks marked keepInPlace (music) alone; ranges refer to the timeline BEFORE this command. Source analysis times must first be mapped through sourceInUs, startUs and speed. addCaptions creates a new track; replaceCaptions replaces only the named caption track. Batch failures roll back everything. Result contains created/changed/removed ids and actual resulting clip times.",
+            "Atomically apply EditCmd JSON (camelCase fields and type tags). All times are integer microseconds. Supply a unique request_id within this run; retry identical content with the same id while the run is open for the stored result. Ended runs reject retries with INVALID_RUN; runs stopped by the user return RUN_STOPPED. expected_revision rejects stale edits; expected_speech_key rejects moved speech with SPEECH_CHANGED while allowing unrelated caption restyles. Main track is magnetic and repacks after edits. rippleDeleteRanges removes the union of half-open timeline ranges from every track except keepTrackIds, then closes gaps; omit keepTrackIds to leave the tracks marked keepInPlace (music) alone; ranges refer to the timeline BEFORE this command. Source analysis times must first be mapped through sourceInUs, startUs and speed. addCaptions creates a new track; replaceCaptions replaces only the named caption track. Rejected commands or validation leave the project and history unchanged. Successful batches are saved before returning. A save failure reports an error but keeps the live edit; retry the identical request to retry saving without applying it twice. Result contains created/changed/removed ids and actual resulting clip times.",
         )?,
         tool::<params::End>(
             "end_run",
-            "End the owning run: keep saves all its edits as ONE undo entry; discard restores and saves the checkpoint. The run id is then revoked. A clean disconnect keeps changes too. Keep leaves revision unchanged; discard increments it only if the project changes.",
+            "End the owning run: keep saves all its edits as ONE undo entry; discard drops the run entry and saves its previous state without a redo entry. The run id is then revoked. A clean disconnect keeps changes too. Keep leaves revision unchanged; discard increments it only if the project changes.",
         )?,
         tool::<params::Undo>(
             "undo_run",
-            "Restore the state before this run only if it is the LAST history entry and no run is open. Saves the restored project. History belongs to this session epoch. Revision increments only if the project changes.",
+            "Undo this whole run only if it is the LAST entry in the shared user/run history and no run is open. Saves the restored project. The UI can redo the whole run. History belongs to this session epoch. Revision increments only if the project changes.",
         )?,
         tool::<params::Import>(
             "import_media",

@@ -24,6 +24,7 @@ pub struct Apply {
     pub request_id: String,
     pub edits: Vec<EditCmd>,
     pub expected_revision: Option<u64>,
+    pub expected_speech_key: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

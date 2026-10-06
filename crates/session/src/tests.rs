@@ -1,5 +1,5 @@
 use super::*;
-use capopen_engine::model::{Adjust, Asset, AssetKind, ClipContent, Transform};
+use capopen_engine::model::{Adjust, Asset, AssetKind, Clip, ClipContent, Transform};
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -11,7 +11,7 @@ impl Fixture {
         Self(path)
     }
     fn open(&self) -> ProjectSession {
-        ProjectSession::open(&self.0, Mode::Write).unwrap()
+        ProjectSession::open(&self.0, Mode::Write, None).unwrap()
     }
     fn disk(&self) -> Project {
         serde_json::from_slice(&fs::read(&self.0).unwrap()).unwrap()
@@ -27,37 +27,36 @@ fn rename(name: &str) -> Vec<EditCmd> {
 }
 fn apply(session: &ProjectSession, run: &str, name: &str) {
     session
-        .apply_edits(run, &new_id(), rename(name), None)
+        .apply_edits(run, &new_id(), rename(name), Expect::default())
         .unwrap();
 }
 
 #[test]
-fn lock_excludes_readers_and_writers_and_releases_on_drop() {
+fn lock_excludes_writers_and_releases_on_drop() {
     let f = Fixture::new();
     let s = f.open();
-    for mode in [Mode::ReadOnly, Mode::Write] {
-        assert!(
-            format!("{:#}", ProjectSession::open(&f.0, mode).err().unwrap())
-                .contains("PROJECT_BUSY")
-        );
-    }
+    assert!(ProjectSession::open(&f.0, Mode::Write, None).err().unwrap().to_string().contains("PROJECT_BUSY"));
     drop(s);
-    assert!(ProjectSession::open(&f.0, Mode::Write).is_ok());
+    assert!(ProjectSession::open(&f.0, Mode::Write, None).is_ok());
 }
 
 #[test]
 fn readonly_refuses_all_mutations() {
     let f = Fixture::new();
-    let s = ProjectSession::open(&f.0, Mode::ReadOnly).unwrap();
+    let s = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
     assert!(
         s.begin_run("test".into())
             .unwrap_err()
             .to_string()
             .contains("READ_ONLY")
     );
-    assert!(s.apply_edits("a", "b", rename("changed"), None).is_err());
+    assert!(s.apply_edits("a", "b", rename("changed"), Expect::default()).is_err());
     assert!(s.end_run("a", EndAction::Keep).is_err());
     assert!(s.undo_run("a").is_err());
+    assert!(s.edit(rename("Bad"), None, Expect::default()).unwrap_err().to_string().contains("READ_ONLY"));
+    assert!(s.undo().unwrap_err().to_string().contains("READ_ONLY"));
+    assert!(s.redo().unwrap_err().to_string().contains("READ_ONLY"));
+    assert!(s.stop_run().unwrap_err().to_string().contains("READ_ONLY"));
     assert_eq!(f.disk().name, "Original");
 }
 
@@ -123,11 +122,11 @@ fn retries_are_idempotent_and_conflicting_content_is_rejected() {
     let run = s.begin_run("a".into()).unwrap();
     let rev = Some(run.stamp.revision);
     let first = s
-        .apply_edits(&run.run_id, "req", rename("First"), rev)
+        .apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_key: None })
         .unwrap();
     apply(&s, &run.run_id, "Second");
     let retry = s
-        .apply_edits(&run.run_id, "req", rename("First"), rev)
+        .apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_key: None })
         .unwrap();
     assert_eq!(
         serde_json::to_value(first).unwrap(),
@@ -135,14 +134,14 @@ fn retries_are_idempotent_and_conflicting_content_is_rejected() {
     );
     assert_eq!(f.disk().name, "Second");
     assert!(
-        s.apply_edits(&run.run_id, "req", rename("Other"), rev)
+        s.apply_edits(&run.run_id, "req", rename("Other"), Expect { revision: rev, speech_key: None })
             .unwrap_err()
             .to_string()
             .contains("REQUEST_CONFLICT")
     );
     s.end_run(&run.run_id, EndAction::Keep).unwrap();
     assert!(
-        s.apply_edits(&run.run_id, "req", rename("First"), rev)
+        s.apply_edits(&run.run_id, "req", rename("First"), Expect { revision: rev, speech_key: None })
             .unwrap_err().to_string().contains("INVALID_RUN")
     );
 }
@@ -153,14 +152,14 @@ fn stale_revision_and_wrong_or_expired_run_do_not_mutate() {
     let s = f.open();
     let r = s.begin_run("a".into()).unwrap();
     assert!(
-        s.apply_edits(&r.run_id, "a", rename("Bad"), Some(r.stamp.revision + 1))
+        s.apply_edits(&r.run_id, "a", rename("Bad"), Expect { revision: Some(r.stamp.revision + 1), speech_key: None })
             .unwrap_err()
             .to_string()
             .contains("STALE_REVISION")
     );
-    assert!(s.apply_edits("wrong", "a", rename("Bad"), None).is_err());
+    assert!(s.apply_edits("wrong", "a", rename("Bad"), Expect::default()).is_err());
     s.end_run(&r.run_id, EndAction::Keep).unwrap();
-    assert!(s.apply_edits(&r.run_id, "a", rename("Bad"), None).is_err());
+    assert!(s.apply_edits(&r.run_id, "a", rename("Bad"), Expect::default()).is_err());
     assert_eq!(f.disk().name, "Original");
 }
 
@@ -174,7 +173,7 @@ fn batch_and_post_validation_errors_roll_back_memory_disk_and_revision() {
         clip_id: "missing".into(),
         at_us: 1,
     });
-    assert!(s.apply_edits(&r.run_id, "fail", edits, None).is_err());
+    assert!(s.apply_edits(&r.run_id, "fail", edits, Expect::default()).is_err());
     let mut a = asset();
     a.duration_us = -1;
     assert!(
@@ -182,19 +181,19 @@ fn batch_and_post_validation_errors_roll_back_memory_disk_and_revision() {
             &r.run_id,
             "fail",
             vec![EditCmd::AddAssets { assets: vec![a] }],
-            None
+            Expect::default()
         )
         .is_err()
     );
     assert_eq!(s.state().unwrap().project, f.disk());
     assert_eq!(s.state().unwrap().stamp.revision, r.stamp.revision);
     assert_eq!(f.disk().name, "Original");
-    s.apply_edits(&r.run_id, "fail", rename("retry"), None)
+    s.apply_edits(&r.run_id, "fail", rename("retry"), Expect::default())
         .unwrap();
 }
 
 #[test]
-fn save_failure_does_not_commit_or_remember_request() {
+fn save_failure_keeps_live_commit_and_retry_does_not_reapply() {
     let f = Fixture::new();
     let s = f.open();
     let r = s.begin_run("a".into()).unwrap();
@@ -202,20 +201,21 @@ fn save_failure_does_not_commit_or_remember_request() {
     fs::rename(&f.0, &backup).unwrap();
     fs::create_dir(&f.0).unwrap();
     assert!(
-        s.apply_edits(&r.run_id, "retry", rename("Changed"), None)
+        s.apply_edits(&r.run_id, "retry", rename("Changed"), Expect::default())
             .is_err()
     );
-    assert_eq!(s.state().unwrap().project.name, "Original");
+    assert_eq!(s.state().unwrap().project.name, "Changed");
+    assert_eq!(s.state().unwrap().stamp.revision, 1);
     fs::remove_dir(&f.0).unwrap();
     fs::rename(backup, &f.0).unwrap();
-    s.apply_edits(&r.run_id, "retry", rename("Changed"), None)
+    s.apply_edits(&r.run_id, "retry", rename("Changed"), Expect::default())
         .unwrap();
 }
 
 #[test]
 fn idle_timeout_and_disconnect_keep_edits() {
     let f = Fixture::new();
-    let s = ProjectSession::open_with_idle_timeout(&f.0, Mode::Write, Duration::from_millis(30))
+    let s = ProjectSession::open_with_idle_timeout(&f.0, Mode::Write, Duration::from_millis(30), None)
         .unwrap();
     let r = s.begin_run("a".into()).unwrap();
     apply(&s, &r.run_id, "Changed");
@@ -328,7 +328,7 @@ fn result_reports_created_changed_removed_and_actual_magnetic_positions() {
                     track_id: None,
                 },
             ],
-            None,
+            Expect::default(),
         )
         .unwrap();
     assert_eq!(result.outcome.created.len(), 1);
@@ -342,7 +342,7 @@ fn result_reports_created_changed_removed_and_actual_magnetic_positions() {
                 clip_id: id.clone(),
                 at_us: 5_000_000,
             }],
-            None,
+            Expect::default(),
         )
         .unwrap();
     assert_eq!(result.changed, vec![id.clone()]);
@@ -354,7 +354,7 @@ fn result_reports_created_changed_removed_and_actual_magnetic_positions() {
             vec![EditCmd::DeleteClips {
                 clip_ids: vec![id.clone()],
             }],
-            None,
+            Expect::default(),
         )
         .unwrap();
     assert_eq!(result.outcome.removed, vec![id]);
@@ -373,7 +373,7 @@ fn checkpoint_cleanup_failure_leaves_discard_consistent_and_retryable() {
     fs::create_dir(&checkpoint).unwrap();
     assert!(s.end_run(&run, EndAction::Discard).is_err());
     assert_eq!(s.state().unwrap().project, f.disk());
-    assert_eq!(f.disk().name, "Changed");
+    assert_eq!(f.disk().name, "Original");
     fs::remove_dir(&checkpoint).unwrap();
     fs::write(&checkpoint, saved).unwrap();
     s.end_run(&run, EndAction::Discard).unwrap();
@@ -399,7 +399,7 @@ fn selection_does_not_retain_clips_removed_later_in_the_batch() {
                     track_id: None,
                 },
             ],
-            None,
+            Expect::default(),
         )
         .unwrap();
     let id = result.outcome.created[0].clone();
@@ -415,7 +415,7 @@ fn selection_does_not_retain_clips_removed_later_in_the_batch() {
                 },
                 EditCmd::DeleteClips { clip_ids: vec![id] },
             ],
-            None,
+            Expect::default(),
         )
         .unwrap();
     assert!(result.outcome.select.is_empty());
@@ -445,7 +445,7 @@ fn extreme_times_cannot_poison_session_or_partially_commit() {
                 track_id: None,
             },
         ],
-        None,
+        Expect::default(),
     );
     assert!(result.is_err());
     assert_eq!(s.state().unwrap().project, f.disk());
@@ -473,7 +473,7 @@ fn trim_preserves_valid_keyframes_outside_clip_bounds() {
                     track_id: None,
                 },
             ],
-            None,
+            Expect::default(),
         )
         .unwrap();
     let id = result.outcome.created[0].clone();
@@ -510,7 +510,7 @@ fn trim_preserves_valid_keyframes_outside_clip_bounds() {
                 source_in_us: Some(1_000_000),
             },
         ],
-        None,
+        Expect::default(),
     )
     .unwrap();
     let project = s.state().unwrap().project;
@@ -521,15 +521,17 @@ fn trim_preserves_valid_keyframes_outside_clip_bounds() {
 }
 
 #[test]
-fn readers_share_lock_and_exclude_writers() {
+fn readonly_sessions_take_no_lock_and_reload_writer_changes() {
     let f = Fixture::new();
-    let a = ProjectSession::open(&f.0, Mode::ReadOnly).unwrap();
-    let b = ProjectSession::open(&f.0, Mode::ReadOnly).unwrap();
-    assert!(ProjectSession::open(&f.0, Mode::Write).err().unwrap().to_string().contains("PROJECT_BUSY"));
-    drop(a);
-    assert!(ProjectSession::open(&f.0, Mode::Write).is_err());
-    drop(b);
-    assert!(ProjectSession::open(&f.0, Mode::Write).is_ok());
+    let reader = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
+    let writer = f.open();
+    let second_reader = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
+    let run = writer.begin_run("writer".into()).unwrap();
+    apply(&writer, &run.run_id, "Written");
+    assert_eq!(reader.state().unwrap().project, writer.state().unwrap().project);
+    assert_eq!(second_reader.state().unwrap().project, f.disk());
+    assert_eq!(reader.state().unwrap().stamp.revision, 1);
+    assert_eq!(reader.state().unwrap().stamp.revision, 1);
 }
 
 #[test]
@@ -538,16 +540,16 @@ fn requests_are_scoped_to_open_run_and_cleared_on_finish_and_undo() {
     let s = f.open();
     for action in [EndAction::Keep, EndAction::Discard] {
         let a = s.begin_run("first".into()).unwrap().run_id;
-        s.apply_edits(&a, "same", rename("First"), None).unwrap();
+        s.apply_edits(&a, "same", rename("First"), Expect::default()).unwrap();
         s.end_run(&a, action).unwrap();
         assert!(s.inner.lock().unwrap().requests.is_empty());
         let b = s.begin_run("second".into()).unwrap().run_id;
-        assert!(s.apply_edits(&a, "same", rename("First"), None).unwrap_err().to_string().contains("INVALID_RUN"));
-        s.apply_edits(&b, "same", rename("Second"), None).unwrap();
+        assert!(s.apply_edits(&a, "same", rename("First"), Expect::default()).unwrap_err().to_string().contains("INVALID_RUN"));
+        s.apply_edits(&b, "same", rename("Second"), Expect::default()).unwrap();
         s.end_run(&b, EndAction::Keep).unwrap();
         s.undo_run(&b).unwrap();
         assert!(s.inner.lock().unwrap().requests.is_empty());
-        assert!(s.apply_edits(&b, "same", rename("Second"), None).unwrap_err().to_string().contains("INVALID_RUN"));
+        assert!(s.apply_edits(&b, "same", rename("Second"), Expect::default()).unwrap_err().to_string().contains("INVALID_RUN"));
     }
 }
 
@@ -558,7 +560,7 @@ fn revision_tracks_project_changes_only() {
     let a = s.begin_run("empty".into()).unwrap();
     assert_eq!(a.stamp.revision, 0);
     assert_eq!(s.end_run(&a.run_id, EndAction::Keep).unwrap().stamp.revision, 0);
-    assert_eq!(s.undo_run(&a.run_id).unwrap().stamp.revision, 0);
+    assert!(s.undo_run(&a.run_id).is_err());
     let a = s.begin_run("discard empty".into()).unwrap();
     assert_eq!(s.end_run(&a.run_id, EndAction::Discard).unwrap().stamp.revision, 0);
     let a = s.begin_run("edit".into()).unwrap();
@@ -614,7 +616,7 @@ fn recovery_refuses_readonly_open_run_missing_and_invalid_checkpoint() {
     let mut invalid = Project::new("Invalid");
     invalid.canvas.fps = 0;
     let path = checkpoint(&f, &invalid);
-    let s = ProjectSession::open(&f.0, Mode::ReadOnly).unwrap();
+    let s = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
     for action in [RecoveryAction::Keep, RecoveryAction::Restore] {
         assert!(s.resolve_recovery(action).unwrap_err().to_string().contains("READ_ONLY"));
     }
@@ -651,4 +653,273 @@ fn add_short_video_validates_one_frame_source_overrun() {
     validate(&editor.project).unwrap();
     editor.project.tracks[0].clips[0].duration_us = 43_335;
     assert!(validate(&editor.project).is_err());
+}
+
+#[test]
+fn user_run_user_share_history_and_redo_restores_whole_run() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("User before"), Some("typing".into()), Expect::default()).unwrap();
+    let run = s.begin_run("AI".into()).unwrap().run_id;
+    apply(&s, &run, "AI first");
+    apply(&s, &run, "AI last");
+    s.end_run(&run, EndAction::Keep).unwrap();
+    s.edit(rename("User after"), Some("typing".into()), Expect::default()).unwrap();
+    assert!(s.undo_run(&run).is_err());
+    for expected in ["AI last", "User before", "Original"] {
+        s.undo().unwrap();
+        assert_eq!(s.state().unwrap().project.name, expected);
+    }
+    s.redo().unwrap();
+    s.redo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "AI last");
+    assert_eq!(s.state().unwrap().undo_run_id, Some(run.clone()));
+    s.undo_run(&run).unwrap();
+    assert_eq!(f.disk().name, "User before");
+    s.redo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "AI last");
+    s.redo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "User after");
+}
+
+#[test]
+fn discard_preserves_user_history_and_has_no_redo() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("User"), None, Expect::default()).unwrap();
+    let run = s.begin_run("AI".into()).unwrap().run_id;
+    apply(&s, &run, "AI");
+    s.end_run(&run, EndAction::Discard).unwrap();
+    assert_eq!(f.disk(), s.state().unwrap().project);
+    let revision = s.state().unwrap().stamp.revision;
+    assert_eq!(s.redo().unwrap().revision, revision);
+    assert_eq!(s.state().unwrap().project.name, "User");
+    s.undo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Original");
+}
+
+#[test]
+fn active_run_blocks_user_edits_undo_redo_and_stop_revokes_late_calls() {
+    let f = Fixture::new();
+    let s = f.open();
+    let run = s.begin_run("AI".into()).unwrap().run_id;
+    assert!(s.edit(rename("Bad"), None, Expect::default()).unwrap_err().to_string().contains("RUN_ACTIVE"));
+    assert!(s.undo().unwrap_err().to_string().contains("RUN_ACTIVE"));
+    assert!(s.redo().unwrap_err().to_string().contains("RUN_ACTIVE"));
+    apply(&s, &run, "AI");
+    s.stop_run().unwrap();
+    assert_eq!(f.disk(), s.state().unwrap().project);
+    let next = s.begin_run("Next".into()).unwrap().run_id;
+    assert!(s.apply_edits(&run, "late", rename("Bad"), Expect::default()).unwrap_err().to_string().contains("RUN_STOPPED"));
+    s.end_run(&next, EndAction::Keep).unwrap();
+    s.undo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Original");
+}
+
+#[test]
+fn speech_expectation_allows_caption_restyle_but_rejects_moved_speech() {
+    let f = Fixture::new();
+    let mut project = f.disk();
+    project.assets.push(asset());
+    project.tracks[0].clips.push(media_clip());
+    storage::save(&f.0, &project).unwrap();
+    let s = f.open();
+    let key = s.state().unwrap().speech_key;
+    let caption: EditCmd = serde_json::from_value(serde_json::json!({
+        "type": "addText", "startUs": 0, "text": "Caption",
+        "style": {"fontSize": 64, "color": "#ffffff", "bold": false, "strokeWidth": 0, "strokeColor": "#000000"}
+    })).unwrap();
+    let id = s.edit(vec![caption], None, Expect::default()).unwrap().outcome.created[0].clone();
+    let restyle = serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": id,
+        "style": {"fontSize": 80, "color": "#ffffff", "bold": true, "strokeWidth": 0, "strokeColor": "#000000"}
+    })).unwrap();
+    s.edit(vec![restyle], None, Expect { revision: None, speech_key: Some(key.clone()) }).unwrap();
+    let run = s.begin_run("speech".into()).unwrap().run_id;
+    s.apply_edits(&run, "caption", rename("Unrelated"), Expect { revision: None, speech_key: Some(key.clone()) }).unwrap();
+    let speed = serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": "c", "speed": 2})).unwrap();
+    s.apply_edits(&run, "speed", vec![speed], Expect { revision: None, speech_key: Some(key.clone()) }).unwrap();
+    assert!(s.apply_edits(&run, "stale", rename("Bad"), Expect { revision: None, speech_key: Some(key.clone()) }).unwrap_err().to_string().contains("SPEECH_CHANGED"));
+    s.end_run(&run, EndAction::Keep).unwrap();
+    assert!(s.edit(rename("Bad"), None, Expect { revision: None, speech_key: Some(key) }).unwrap_err().to_string().contains("SPEECH_CHANGED"));
+}
+
+#[test]
+fn user_validation_failure_preserves_history_redo_revision_and_coalescing() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("First"), Some("typing".into()), Expect::default()).unwrap();
+    let before = s.state().unwrap();
+    let mut bad = asset();
+    bad.duration_us = -1;
+    let invalid = vec![EditCmd::AddAssets { assets: vec![bad] }];
+    assert!(s.edit(invalid.clone(), None, Expect::default()).is_err());
+    assert_eq!(s.state().unwrap().project, before.project);
+    assert_eq!(s.state().unwrap().stamp.revision, before.stamp.revision);
+    s.edit(rename("Second"), Some("typing".into()), Expect::default()).unwrap();
+    s.undo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Original");
+    assert!(s.edit(invalid, None, Expect::default()).is_err());
+    s.redo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Second");
+}
+
+#[test]
+fn user_autosave_debounces_and_events_follow_commits_with_origins() {
+    use std::sync::mpsc;
+    let f = Fixture::new();
+    let (tx, rx) = mpsc::channel();
+    let s = ProjectSession::open(&f.0, Mode::Write, Some(tx)).unwrap();
+    s.edit(rename("User first"), Some("typing".into()), Expect::default()).unwrap();
+    s.edit(rename("User last"), Some("typing".into()), Expect::default()).unwrap();
+    assert_eq!(f.disk().name, "Original");
+    for revision in [1, 2] {
+        assert!(matches!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), SessionEvent::Changed { revision: r, origin: Origin::User } if r == revision));
+    }
+    assert!(matches!(rx.recv_timeout(SAVE_DEBOUNCE + Duration::from_secs(2)).unwrap(), SessionEvent::Saved { revision: 2, error: None }));
+    assert_eq!(f.disk(), s.state().unwrap().project);
+    let run = s.begin_run("AI".into()).unwrap().run_id;
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Run(Some(info)) if info.run_id == run && info.label == "AI"));
+    apply(&s, &run, "AI");
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { revision: 3, origin: Origin::Run { run_id, label } } if run_id == run && label == "AI"));
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 3, error: None }));
+    assert_eq!(f.disk(), s.state().unwrap().project);
+    s.end_run(&run, EndAction::Keep).unwrap();
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 3, error: None }));
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Run(None)));
+    s.undo_run(&run).unwrap();
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { revision: 4, origin: Origin::Undo }));
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 4, error: None }));
+    s.redo().unwrap();
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { revision: 5, origin: Origin::Redo }));
+}
+
+#[test]
+fn agent_outcomes_never_replace_ui_context() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.set_ui_context(vec!["user-selection".into()], 123_000);
+    let run = s.begin_run("AI".into()).unwrap().run_id;
+    s.apply_edits(&run, "clip", vec![EditCmd::AddAssets { assets: vec![asset()] },
+        EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }], Expect::default()).unwrap();
+    s.end_run(&run, EndAction::Discard).unwrap();
+    let state = s.state().unwrap();
+    assert_eq!(state.selection, vec!["user-selection"]);
+    assert_eq!(state.playhead_us, 123_000);
+}
+
+#[test]
+fn autosave_failure_emits_error_and_next_change_retries() {
+    let f = Fixture::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s = ProjectSession::open(&f.0, Mode::Write, Some(tx)).unwrap();
+    fs::remove_file(&f.0).unwrap();
+    fs::create_dir(&f.0).unwrap();
+    s.edit(rename("First"), None, Expect::default()).unwrap();
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { .. }));
+    assert!(matches!(rx.recv_timeout(SAVE_DEBOUNCE + Duration::from_secs(2)).unwrap(), SessionEvent::Saved { revision: 1, error: Some(_) }));
+    fs::remove_dir(&f.0).unwrap();
+    s.edit(rename("Second"), None, Expect::default()).unwrap();
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { .. }));
+    assert!(matches!(rx.recv_timeout(SAVE_DEBOUNCE + Duration::from_secs(2)).unwrap(), SessionEvent::Saved { revision: 2, error: None }));
+    assert_eq!(f.disk(), s.state().unwrap().project);
+}
+
+#[test]
+fn failed_run_flush_retries_created_clip_without_duplicates() {
+    let f = Fixture::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s = ProjectSession::open(&f.0, Mode::Write, Some(tx)).unwrap();
+    let run = s.begin_run("retry".into()).unwrap().run_id;
+    let edits = vec![EditCmd::AddAssets { assets: vec![asset()] },
+        EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }];
+    fs::remove_file(&f.0).unwrap();
+    fs::create_dir(&f.0).unwrap();
+    assert!(s.apply_edits(&run, "clip", edits.clone(), Expect::default()).is_err());
+    let committed = s.state().unwrap();
+    assert_eq!(committed.project.tracks[0].clips.len(), 1);
+    assert_eq!(committed.stamp.revision, 1);
+    assert!(rx.try_iter().any(|event| matches!(event, SessionEvent::Saved { revision: 1, error: Some(_) })));
+    fs::remove_dir(&f.0).unwrap();
+    let result = s.apply_edits(&run, "clip", edits, Expect::default()).unwrap();
+    assert_eq!(result.outcome.created, vec![committed.project.tracks[0].clips[0].id.clone()]);
+    assert_eq!(result.stamp.revision, 1);
+    assert_eq!(f.disk(), committed.project);
+    assert_eq!(s.state().unwrap().project, committed.project);
+}
+
+#[test]
+fn failed_discard_blocks_more_batches_and_retry_cannot_change_its_action() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("User"), None, Expect::default()).unwrap();
+    let run = s.begin_run("discard".into()).unwrap().run_id;
+    apply(&s, &run, "AI");
+    fs::remove_file(&f.0).unwrap();
+    fs::create_dir(&f.0).unwrap();
+    assert!(s.end_run(&run, EndAction::Discard).is_err());
+    assert_eq!(s.state().unwrap().project.name, "User");
+    assert!(s.apply_edits(&run, "late", rename("Bad"), Expect::default()).unwrap_err().to_string().contains("RUN_ENDING"));
+    fs::remove_dir(&f.0).unwrap();
+    s.end_run(&run, EndAction::Keep).unwrap();
+    assert_eq!(f.disk().name, "User");
+    s.redo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "User");
+    s.undo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Original");
+}
+
+#[test]
+fn stale_user_revision_and_reserved_run_key_do_not_commit() {
+    let f = Fixture::new();
+    let s = f.open();
+    assert!(s.edit(rename("Bad"), None, Expect { revision: Some(1), speech_key: None }).unwrap_err().to_string().contains("STALE_REVISION"));
+    assert!(s.edit(rename("Bad"), Some("run:spoof".into()), Expect::default()).unwrap_err().to_string().contains("INVALID_REQUEST"));
+    assert_eq!(s.state().unwrap().stamp.revision, 0);
+    assert_eq!(s.state().unwrap().project, f.disk());
+}
+
+#[test]
+fn recovery_restore_is_undoable_and_emits_recovery_before_saved() {
+    let f = Fixture::new();
+    checkpoint(&f, &Project::new("Before run"));
+    let original = f.disk();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s = ProjectSession::open(&f.0, Mode::Write, Some(tx)).unwrap();
+    assert!(s.edit(rename("Bad"), None, Expect::default()).unwrap_err().to_string().contains("RECOVERY_PENDING"));
+    s.resolve_recovery(RecoveryAction::Restore).unwrap();
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { revision: 1, origin: Origin::Recovery }));
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 1, error: None }));
+    assert_eq!(f.disk(), s.state().unwrap().project);
+    assert_eq!(f.disk().name, "Before run");
+    s.undo().unwrap();
+    assert_eq!(s.state().unwrap().project, original);
+    s.redo().unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Before run");
+}
+
+#[test]
+fn recovery_save_retry_preserves_one_undo_step_and_checkpoint() {
+    let f = Fixture::new();
+    let original = f.disk();
+    let mut restored = Project::new("Before run");
+    restored.assets.push(asset());
+    restored.tracks[0].clips.push(media_clip());
+    let checkpoint_path = checkpoint(&f, &restored);
+    let s = f.open();
+    fs::remove_file(&f.0).unwrap();
+    fs::create_dir(&f.0).unwrap();
+    assert!(s.resolve_recovery(RecoveryAction::Restore).unwrap_err().to_string().contains("SAVE_FAILED"));
+    assert_eq!(s.state().unwrap().project, restored);
+    assert_eq!(s.state().unwrap().stamp.revision, 1);
+    assert!(checkpoint_path.exists());
+    assert!(s.undo().unwrap_err().to_string().contains("RECOVERY_PENDING"));
+    fs::remove_dir(&f.0).unwrap();
+    assert_eq!(s.resolve_recovery(RecoveryAction::Restore).unwrap().revision, 1);
+    assert!(!checkpoint_path.exists());
+    assert_eq!(f.disk(), restored);
+    assert_eq!(s.undo().unwrap().revision, 2);
+    assert_eq!(s.state().unwrap().project, original);
+    assert_eq!(s.undo().unwrap().revision, 2);
+    assert_eq!(s.redo().unwrap().revision, 3);
+    assert_eq!(s.state().unwrap().project, restored);
 }
