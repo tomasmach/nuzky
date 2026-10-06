@@ -38,14 +38,13 @@ export function CaptionsTab() {
 
   return (
     <div className="flex flex-col gap-4 overflow-y-auto p-3">
-      <p className="text-[12px] text-muted">Speech is recognised on this computer. Nothing is uploaded.</p>
       <SpeechFields disabled={busy} />
       <div className="flex flex-col gap-1.5">
         <span className="text-[12px] text-muted">{hasCaptions ? "Words per caption · applies when you regenerate" : "Words per caption"}</span>
         <Segmented label="Words per caption" value={captionWords} onChange={(n) => useSpeech.setState({ captionWords: n })} options={WORDS} />
       </div>
       <div className="flex flex-col gap-1.5">
-        <span className="text-[12px] text-muted">{hasCaptions ? "Style · applies to all captions" : "Style"}</span>
+        <span className="text-[12px] text-muted">Style</span>
         <div className="grid grid-cols-3 gap-2">
           {CAPTION_STYLES.map((s, i) => (
             <button
@@ -65,7 +64,7 @@ export function CaptionsTab() {
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
-        <span className="text-[12px] text-muted">{hasCaptions ? "Font · applies to all captions" : "Font"}</span>
+        <span className="text-[12px] text-muted">Font</span>
         {/* A row, so the picker's flex-1 fills the width instead of collapsing the column. */}
         <div className="flex">
           <FontPicker value={font} onChange={pickFont} disabled={busy} disabledReason="Wait for speech recognition to finish" />
@@ -78,7 +77,6 @@ export function CaptionsTab() {
           <Captions size={15} /> {hasCaptions ? "Regenerate captions" : "Generate captions"}
         </Button>
       )}
-      {!running && hasCaptions && <p className="-mt-2 text-[12px] text-muted">Regenerating replaces the current Captions track.</p>}
       {!running && <JobError job={last} />}
     </div>
   );
