@@ -20,7 +20,7 @@ Defined in `src/index.css` as Tailwind theme variables.
 | `danger` | `#f05252` | Errors, destructive |
 | `warn` | `#f5a524` | Warnings, snap guides (timeline and preview), always with a dark 1 px outline so they stay visible on bright footage |
 
-Clip tokens. They always come with an icon and a label, never colour alone. Do not name a token `clip-text`: Tailwind already has `bg-clip-text` (background-clip: text) and the clip would render hollow.
+Clip tokens. They always come with an icon and a label, never colour alone; caption clips show only their text, as the Captions track header carries the icon. Do not name a token `clip-text`: Tailwind already has `bg-clip-text` (background-clip: text) and the clip would render hollow.
 
 | Token | Value | Clip |
 |---|---|---|

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { AudioLines, Captions, Film, Gauge, Image as ImageIcon, Type } from "lucide-react";
+import { AudioLines, Film, Gauge, Image as ImageIcon, Type } from "lucide-react";
 import { isCaptionTrack, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Asset, Clip, Filmstrip, Project, Track } from "../../lib/types";
@@ -100,7 +100,7 @@ export function ClipView({
   const innerH = height - 8;
   const isCaption = c.type === "text" && isCaptionTrack(track);
   const bg = c.type === "text" ? (isCaption ? "bg-clip-captions" : "bg-clip-title") : sound ? "bg-clip-audio" : asset?.kind === "image" ? "bg-clip-image" : "bg-clip-video";
-  const Icon = c.type === "text" ? (isCaption ? Captions : Type) : sound ? AudioLines : asset?.kind === "image" ? ImageIcon : Film;
+  const Icon = c.type === "text" ? Type : sound ? AudioLines : asset?.kind === "image" ? ImageIcon : Film;
   const label = c.type === "text" ? c.text : (asset?.name ?? "Missing media");
   const speed = c.type === "media" ? c.speed : 1;
   const soundStrip = visual && c.type === "media" && asset.kind === "video" && asset.hasAudio && c.volume > 0;
@@ -135,7 +135,8 @@ export function ClipView({
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-1 px-2.5 pt-1 text-[11px] text-fg">
         <span className={`flex min-w-0 items-center gap-1 rounded-sm px-1 ${visual ? "bg-black/60" : ""}`}>
-          <Icon size={11} className="shrink-0" />
+          {/* Caption clips are short; the track header carries their icon, so the text gets the room. */}
+          {!isCaption && <Icon size={11} className="shrink-0" />}
           <span className="truncate">{label}</span>
           {width > 110 && <span className="tabular shrink-0 pl-1 text-fg/80">{formatDuration(durationUs)}</span>}
         </span>
