@@ -15,7 +15,7 @@ interface SpeechState {
   language: string;
   /** 1–3 words per caption, or 0 for whole phrases. */
   captionWords: number;
-  /** Look for new captions while none are on the timeline: preset index and font. */
+  /** Appearance of new captions while none are on the timeline: preset index and font. */
   captionStyle: number;
   captionFont: string | null;
   /** Pauses longer than this are shown in the transcript and can be removed. */
@@ -34,7 +34,7 @@ export const useSpeech = create<SpeechState>(() => ({
   stored: 0,
 }));
 
-/** Why the timeline cannot be transcribed, or null; the same check as the backend. */
+/** Why the timeline cannot be transcribed, or null. */
 export function speechBlocker(project: Project): string | null {
   const heard = project.tracks.some(
     (t) =>

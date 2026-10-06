@@ -33,7 +33,7 @@ export const api = {
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   captionModels: () => invoke<CaptionModel[]>("caption_models"),
-  /** `maxWords`/`maxChars` null keep whole phrases. */
+  /** `maxWords`/`maxChars` null group by phrase, capped at 12 words and 42 characters. */
   startCaptions: (model: string, language: string, style: TextStyle, maxWords: number | null, maxChars: number | null, epoch: Epoch) =>
     invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars }, expectEpoch: epoch }),
   /** Recognises the heard media without a transcript, or all of it with `refresh`. */
