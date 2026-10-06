@@ -70,7 +70,7 @@ fn catalog() -> Result<Vec<Tool>> {
     Ok(vec![
         tool::<params::State>(
             "get_state",
-            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), speech_key, revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
+            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), timeline-layout speech_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
         )?,
         tool::<params::Begin>(
             "begin_run",
@@ -114,7 +114,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::EditTranscript>(
             "edit_transcript",
-            "Cut by INCLUSIVE zero-based word ranges [[from,to],...]. Requires run_id and current speech_key. Supply delete OR keep; omit both to shorten pauses only. shorten_pauses_us defaults to 300000. Removed passages take surrounding silence, kept passages retain at most 80 ms before and 120 ms after a boundary word; internal long pauses lose their middle. No boundary lands inside a word. One ripple edit respects tracks kept in place. dry_run=true simulates without changing project/history. Returns duration_us {before,after}, removed_us, ranges (engine startUs/endUs), preview_text (first 400 characters), predicted/new speech_key, revision, dry_run. Apply using the ORIGINAL speech_key after checking the dry run. SPEECH_CHANGED rejects stale speech; overlapping speech may be rejected.",
+            "Cut by INCLUSIVE zero-based word ranges [[from,to],...]. Requires run_id and the current get_transcript speech_key (includes recognition contents). Supply delete OR keep; omit both to shorten pauses only. shorten_pauses_us defaults to 300000. Removed passages take surrounding silence, kept passages retain at most 80 ms before and 120 ms after a boundary word; internal long pauses lose their middle. No boundary lands inside a word. One ripple edit respects tracks kept in place. dry_run=true simulates without changing project/history. Returns duration_us {before,after}, removed_us, ranges (engine startUs/endUs), preview_text (first 400 characters), predicted/new speech_key, revision, dry_run. Apply using the ORIGINAL speech_key after checking the dry run. SPEECH_CHANGED rejects stale speech; overlapping speech may be rejected.",
         )?,
         tool::<params::Job>(
             "job",

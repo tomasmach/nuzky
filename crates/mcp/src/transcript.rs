@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anyhow::{Context, Result, ensure};
 use capopen_analysis::{CaptionGrouping, group_words};
@@ -17,6 +18,7 @@ pub const BEFORE_WORD_US: i64 = 80_000;
 pub const AFTER_WORD_US: i64 = 120_000;
 const SENTENCE_GAP_US: i64 = 600_000;
 const PAUSE_GAP_US: i64 = 300_000;
+pub const DEFAULT_PAUSE_US: i64 = 300_000;
 
 pub fn models(model: &str) -> Result<(PathBuf, PathBuf)> {
     let direct = PathBuf::from(model);
@@ -80,6 +82,15 @@ pub fn derive(project: &Project, store: &TranscriptStore) -> Result<Derived> {
         }
     }
     Ok(Derived { words: map_words(project, &sources), sources, untranscribed })
+}
+
+/// Word indices also change on re-recognition, even when the timeline layout stays put.
+pub fn word_key(project: &Project, words: &[TimelineWord]) -> String {
+    let mut hash = DefaultHasher::new();
+    for word in words {
+        (&word.asset_id, word.source_start_us, word.start_us, word.end_us, &word.text).hash(&mut hash);
+    }
+    format!("{}:{:016x}", capopen_engine::speech::speech_key(project), hash.finish())
 }
 
 pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
@@ -175,12 +186,17 @@ pub fn caption_edit(
 ) -> Result<(EditCmd, usize)> {
     ensure!(grouping.max_words > 0 && grouping.max_chars > 0, "INVALID_GROUPING: caption limits must be positive");
     let mut segments = Vec::new();
+    let min_caption_us = project.frame_duration_us().ceil() as i64;
     for clip in project.tracks.iter().flat_map(|t| &t.clips) {
         let clip_words: Vec<_> = words.iter().filter(|w| w.clip_id == clip.id).map(|w| Word {
             start_us: w.start_us, end_us: w.end_us, text: w.text.clone(), probability: w.probability,
         }).collect();
         let mut grouped = group_words(&clip_words, grouping);
-        for segment in &mut grouped { segment.end_us = segment.end_us.min(clip.end_us()); }
+        for segment in &mut grouped {
+            segment.end_us = segment.end_us.min(clip.end_us());
+            // The engine enforces a one-frame minimum; borrow time before a short tail word.
+            segment.start_us = segment.start_us.min(segment.end_us - min_caption_us).max(clip.start_us);
+        }
         segments.extend(grouped.into_iter().filter(|s| s.end_us > s.start_us));
     }
     segments.sort_by_key(|s| s.start_us);
@@ -270,6 +286,21 @@ pub(crate) mod tests {
             }));
             assert!(!(segment.start_us < 3_000_000 && segment.end_us > 3_000_000));
         }
+    }
+
+    #[test]
+    fn subframe_caption_tails_stay_on_their_side_of_a_cut() {
+        let (mut project, mut sources) = fixture();
+        let id = project.tracks[0].clips[0].id.clone();
+        project.apply(EditCmd::SplitClip { clip_id: id, at_us: 5_000_000 }).unwrap();
+        sources.get_mut("talk").unwrap()[0].start_us = 4_999_000;
+        sources.get_mut("talk").unwrap()[0].end_us = 5_000_000;
+        sources.get_mut("talk").unwrap().truncate(1);
+        let words = map_words(&project, &sources);
+        let (edit, _) = caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping::default()).unwrap();
+        project.apply(edit).unwrap();
+        let caption = &project.tracks.iter().find(|t| t.name == "Captions").unwrap().clips[0];
+        assert_eq!(caption.end_us(), 5_000_000);
     }
 
     #[test]

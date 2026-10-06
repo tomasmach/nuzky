@@ -144,3 +144,24 @@ fn shade_unsafe(pixels: &mut [u8], width: u32, height: u32, canvas: &capopen_eng
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_area_shades_only_unsafe_vertical_margins() {
+        let mut canvas = Project::new("safe area").canvas;
+        canvas.width = 1080;
+        canvas.height = 1920;
+        let mut pixels = vec![100; 108 * 192 * 4];
+        shade_unsafe(&mut pixels, 108, 192, &canvas);
+        assert_eq!(&pixels[(80 * 108 + 54) * 4..][..4], &[100; 4]);
+        assert_eq!(&pixels[..4], &[135,95,90,100]);
+        canvas.width = 1920;
+        canvas.height = 1080;
+        let before = pixels.clone();
+        shade_unsafe(&mut pixels, 108, 192, &canvas);
+        assert_eq!(pixels, before);
+    }
+}

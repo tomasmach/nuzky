@@ -21,6 +21,8 @@ use crate::{
     transcript,
 };
 
+const PREVIEW_CHARS: usize = 400;
+
 pub struct Backend {
     pub host: Host,
     client_id: String,
@@ -283,18 +285,19 @@ impl Backend {
     fn get_transcript(&self, args: GetTranscript, state: &SessionState) -> Result<Value> {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         let mut result = transcript::summary(&derived, args.range_us)?;
-        result["speech_key"] = json!(state.speech_key);
+        result["speech_key"] = json!(transcript::word_key(&state.project, &derived.words));
         Ok(result)
     }
 
     fn edit_transcript(&self, args: EditTranscript, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
-        ensure!(args.speech_key == state.speech_key, "SPEECH_CHANGED: timeline speech changed");
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
+        ensure!(args.speech_key == transcript::word_key(&state.project, &derived.words),
+            "SPEECH_CHANGED: timeline speech or recognised words changed");
         let before = state.project.duration_us();
         let ranges = transcript::deletion_ranges(&derived.words, before, args.delete.as_deref(),
-            args.keep.as_deref(), args.shorten_pauses_us.unwrap_or(300_000))?;
+            args.keep.as_deref(), args.shorten_pauses_us.unwrap_or(transcript::DEFAULT_PAUSE_US))?;
         let edit = EditCmd::RippleDeleteRanges { ranges: ranges.clone(), keep_track_ids: None };
         let mut preview = state.project.clone();
         preview.apply(edit.clone()).context("EDIT_REJECTED: preview failed")?;
@@ -306,17 +309,17 @@ impl Backend {
             ids
         };
         let retained: Vec<_> = derived.words.iter().filter(|w| !ranges.iter()
-            .any(|r| r.start_us <= w.start_us && r.end_us >= w.end_us)).cloned().collect();
+            .any(|r| r.start_us <= w.start_us && r.end_us >= w.end_us && w.start_us < r.end_us)).cloned().collect();
         ensure!(identities(&words) == identities(&retained),
             "UNSAFE_CUT: kept tracks or sub-frame fragments would change the selected words");
-        let preview_text: String = words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(400).collect();
+        let preview_text: String = words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(PREVIEW_CHARS).collect();
         let revision = if args.dry_run { state.stamp.revision } else {
             self.host.session.apply_edits(&args.run_id, &new_id(), vec![edit],
-                Expect { revision: Some(state.stamp.revision), speech_key: Some(args.speech_key) })?.stamp.revision
+                Expect { revision: Some(state.stamp.revision), speech_key: Some(state.speech_key.clone()) })?.stamp.revision
         };
         Ok(json!({"duration_us":{"before":before,"after":preview.duration_us()},
             "removed_us":before-preview.duration_us(),"ranges":ranges,"preview_text":preview_text,
-            "speech_key":capopen_engine::speech::speech_key(&preview),"revision":revision,"dry_run":args.dry_run}))
+            "speech_key":transcript::word_key(&preview, &words),"revision":revision,"dry_run":args.dry_run}))
     }
 
     fn captions(&self, args: Captions, state: &SessionState) -> Result<Value> {
@@ -523,7 +526,8 @@ mod transcript_tests {
         };
         let run = backend.host.session.begin_run("remove slips".into()).unwrap();
         let state = backend.host.session.state().unwrap();
-        let args = json!({"run_id":run.run_id,"speech_key":state.speech_key,"delete":[[1,2],[6,6]],"dry_run":true});
+        let initial = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap();
+        let args = json!({"run_id":run.run_id,"speech_key":initial["speech_key"],"delete":[[1,2],[6,6]],"dry_run":true});
         let preview = backend.dispatch("edit_transcript", args.clone(), &state).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, project);
         assert_eq!(backend.host.session.state().unwrap().stamp.revision, state.stamp.revision);
@@ -533,13 +537,20 @@ mod transcript_tests {
         assert_eq!(preview["duration_us"], result["duration_us"]);
         assert_eq!(preview["preview_text"], result["preview_text"]);
         let changed = backend.host.session.state().unwrap();
-        assert_eq!(result["speech_key"], changed.speech_key);
+        assert_eq!(result["speech_key"], backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap()["speech_key"]);
         assert!(backend.dispatch("edit_transcript", apply, &changed).unwrap_err().to_string().contains("SPEECH_CHANGED"));
         let transcript = backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap();
         assert_eq!(transcript["words"].as_array().unwrap().len(), 5);
         backend.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep).unwrap();
         backend.host.session.undo_run(&run.run_id).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, project);
+        let mut record = backend.host.transcripts.get(&project.assets[0]).unwrap().unwrap();
+        record.words.remove(0);
+        backend.host.transcripts.put(&project.assets[0], &record).unwrap();
+        let new_run = backend.host.session.begin_run("stale recognition".into()).unwrap();
+        let current = backend.host.session.state().unwrap();
+        let stale = json!({"run_id":new_run.run_id,"speech_key":initial["speech_key"],"delete":[[0,0]],"dry_run":true});
+        assert!(backend.dispatch("edit_transcript", stale, &current).unwrap_err().to_string().contains("SPEECH_CHANGED"));
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
     }
