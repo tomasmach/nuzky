@@ -8,7 +8,7 @@ mod thumbs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use capopen_engine::edit::{EditCmd, EditOutcome, new_id};
 use capopen_engine::media::probe;
@@ -33,6 +33,8 @@ pub struct AppState {
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
     preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
+    fonts: OnceLock<FontFamilies>,
+    transcript: Mutex<Option<jobs::CachedTranscript>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -251,6 +253,23 @@ fn list_projects() -> Vec<ProjectSummary> {
     store::list()
 }
 
+#[derive(Serialize, Clone)]
+pub struct FontFamilies {
+    bundled: Vec<String>,
+    system: Vec<String>,
+}
+
+#[tauri::command]
+fn list_fonts(state: State<'_, AppState>) -> FontFamilies {
+    state.fonts.get_or_init(|| {
+        use capopen_engine::text::{BUNDLED_FONT_FAMILIES, TextRenderer};
+        let mut renderer = state.bounds_text.lock().unwrap();
+        let families = renderer.get_or_insert_with(TextRenderer::new).font_families();
+        let (bundled, system) = families.into_iter().partition(|name| BUNDLED_FONT_FAMILIES.contains(&name.as_str()));
+        FontFamilies { bundled, system }
+    }).clone()
+}
+
 #[tauri::command]
 fn new_project(state: State<'_, AppState>, width: u32, height: u32) -> CmdResult<Snapshot> {
     let mut project = Project::new("Untitled project");
@@ -356,6 +375,8 @@ pub fn run() {
                 filmstrips: Mutex::new(HashMap::new()),
                 preview_locks: Mutex::new(HashMap::new()),
                 bounds_text: Mutex::new(None),
+                fonts: OnceLock::new(),
+                transcript: Mutex::new(None),
             };
             let project = state.editor.lock().unwrap().project.clone();
             // Jobs look the state up from their threads, so it must be managed first.
@@ -378,6 +399,7 @@ pub fn run() {
             seek,
             set_preview_box,
             list_projects,
+            list_fonts,
             new_project,
             open_project,
             start_export,
@@ -386,6 +408,8 @@ pub fn run() {
             cancel_job,
             jobs::start_captions,
             jobs::caption_models,
+            jobs::start_transcript,
+            jobs::get_transcript,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CapOpen");

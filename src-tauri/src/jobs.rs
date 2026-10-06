@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
+use capopen_analysis::{AudioSource, CaptionGrouping, Transcript, group_words, transcribe_words};
 use capopen_engine::audio::{Mixer, ensure_pcm, has_audio, us_to_samples};
 use capopen_engine::edit::{CaptionSegment, EditCmd, new_id};
 use capopen_engine::export::{ExportOptions, export};
@@ -79,14 +81,20 @@ impl Reporter {
     }
 }
 
-/// Registers a cancellable job. Export and captions run one at a time, so for them any
-/// running job of the same kind (the prefix before ':') blocks a new one.
+/// Exports run one at a time; captions and transcripts share one recognition slot.
 fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
     let state = app.state::<AppState>();
     let mut jobs = state.jobs.lock().unwrap();
     let kind = id.split(':').next().unwrap_or(id);
-    let exclusive = matches!(kind, "export" | "captions");
-    if jobs.contains_key(id) || (exclusive && jobs.keys().any(|k| k.split(':').next() == Some(kind))) {
+    let conflicts = |running: &str| {
+        let running = running.split(':').next().unwrap_or(running);
+        match kind {
+            "export" => running == "export",
+            "captions" | "transcript" => matches!(running, "captions" | "transcript"),
+            _ => false,
+        }
+    };
+    if jobs.contains_key(id) || jobs.keys().any(|id| conflicts(id)) {
         return None;
     }
     let flag = Arc::new(AtomicBool::new(false));
@@ -213,65 +221,198 @@ pub struct CaptionRequest {
     /// Most words on screen at once (reels use 1–3); `None` keeps whole phrases.
     #[serde(default)]
     pub max_words: Option<u8>,
-    /// Most characters per caption; `None` means no limit.
+    /// Most characters per caption; `None` uses the phrase limit of 42.
     #[serde(default)]
     pub max_chars: Option<u8>,
 }
 
+const PHRASE_MAX_WORDS: usize = 12;
+const PHRASE_MAX_CHARS: usize = 42;
+
+impl CaptionRequest {
+    fn grouping(&self) -> CaptionGrouping {
+        CaptionGrouping {
+            max_words: self.max_words.map(usize::from).unwrap_or(PHRASE_MAX_WORDS),
+            max_chars: self.max_chars.map(usize::from).unwrap_or(PHRASE_MAX_CHARS),
+            ..CaptionGrouping::default()
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SpeechSnapshot {
+    project: Project,
+    path: PathBuf,
+    revision: u64,
+}
+
+pub struct CachedTranscript {
+    source: SpeechSnapshot,
+    model: String,
+    requested_language: String,
+    transcript: Transcript,
+}
+
+impl CachedTranscript {
+    fn matches(&self, source: &SpeechSnapshot, model: &str, language: &str) -> bool {
+        self.source.path == source.path && self.source.revision == source.revision
+            // Opening a project resets its revision; compare content as well.
+            && self.source.project == source.project
+            && self.model == model && self.requested_language == language
+    }
+
+    fn view(&self) -> TimelineTranscript {
+        TimelineTranscript {
+            revision: self.source.revision,
+            language: self.transcript.language.clone(),
+            words: self.transcript.words.iter().map(|word| TimelineWord {
+                start_us: word.start_us, end_us: word.end_us,
+                text: word.text.clone(), probability: word.probability,
+            }).collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineWord {
+    start_us: i64,
+    end_us: i64,
+    text: String,
+    probability: f32,
+}
+
+#[derive(Serialize)]
+pub struct TimelineTranscript {
+    revision: u64,
+    language: String,
+    words: Vec<TimelineWord>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptReady {
+    job_id: String,
+    transcript: TimelineTranscript,
+}
+
+#[tauri::command]
+pub fn get_transcript(state: tauri::State<'_, AppState>) -> Option<TimelineTranscript> {
+    let editor = state.editor.lock().unwrap();
+    let path = state.project_path.lock().unwrap();
+    let stored = state.transcript.lock().unwrap();
+    let cached = stored.as_ref()?;
+    if cached.source.path != *path || cached.source.revision != editor.revision
+        || cached.source.project != editor.project {
+        return None;
+    }
+    Some(cached.view())
+}
+
 #[tauri::command]
 pub fn start_captions(app: AppHandle, request: CaptionRequest) -> Result<String, String> {
-    if !MODELS.iter().any(|(id, ..)| *id == request.model) {
-        return Err("Unknown caption model".into());
+    start_speech(app, request.model.clone(), request.language.clone(), Some(request))
+}
+
+#[tauri::command]
+pub fn start_transcript(app: AppHandle, model: String, language: String) -> Result<String, String> {
+    start_speech(app, model, language, None)
+}
+
+fn start_speech(app: AppHandle, model: String, language: String, captions: Option<CaptionRequest>) -> Result<String, String> {
+    if !MODELS.iter().any(|(id, ..)| *id == model) {
+        return Err("Unknown speech model".into());
+    }
+    if language != "auto" && (language.contains('\0') || whisper_rs::get_lang_id(&language).is_none()) {
+        return Err(format!("Unknown language: {language}"));
     }
     let state = app.state::<AppState>();
-    let project = state.editor.lock().unwrap().project.clone();
-    let project_path = state.project_path.lock().unwrap().clone();
-    let has_speech = project
-        .tracks
-        .iter()
+    let source = {
+        let editor = state.editor.lock().unwrap();
+        SpeechSnapshot { project: editor.project.clone(), revision: editor.revision, path: state.project_path.lock().unwrap().clone() }
+    };
+    let has_speech = source.project.tracks.iter()
         .filter(|t| t.kind == TrackKind::Video && !t.muted)
         .flat_map(|t| &t.clips)
-        .any(|c| matches!(&c.content, capopen_engine::model::ClipContent::Media { asset_id, .. } if project.asset(asset_id).is_some_and(has_audio)));
+        .any(|c| matches!(&c.content, capopen_engine::model::ClipContent::Media { asset_id, .. } if source.project.asset(asset_id).is_some_and(has_audio)));
     if !has_speech {
-        return Err("No video clip with sound on the timeline to caption.".into());
+        return Err("No video clip with sound on the timeline to transcribe.".into());
     }
-    let id = format!("captions:{}", new_id());
-    let cancel = register(&app, &id).ok_or("Captions are already being generated")?;
-    let (app2, cache, job_id) = (app.clone(), state.cache_dir.clone(), id.clone());
-    std::thread::Builder::new()
-        .name("captions".into())
-        .spawn(move || {
-            let mut rep = Reporter::new(&app2, &job_id, "captions", "Auto captions".into());
-            // A panic inside whisper.cpp bindings must still end the job, not leave it running forever.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_captions(&project, &cache, &request, &cancel, &mut rep)))
-                .unwrap_or_else(|p| Err(anyhow::anyhow!("Speech recognition crashed: {}", panic_text(&p))));
-            let cancelled = cancel.load(Ordering::Relaxed);
-            let result = result.and_then(|segments| {
-                let count = segments.len();
-                if count == 0 {
-                    anyhow::bail!("No speech was recognised.");
-                }
-                let state = app2.state::<AppState>();
-                // The user may have opened another project while recognition ran.
-                if *state.project_path.lock().unwrap() != project_path {
-                    anyhow::bail!("Another project was opened, so the captions were not added.");
-                }
-                // Regenerating replaces the previous captions instead of stacking another track.
-                let existing = state.editor.lock().unwrap().project.tracks.iter().find(|t| t.name == "Captions").map(|t| t.id.clone());
-                let style = request.style.clone();
-                let cmd = match existing {
-                    Some(track_id) => EditCmd::ReplaceCaptions { track_id, segments, style },
-                    None => EditCmd::AddCaptions { segments, style },
-                };
-                let snap = state.apply(cmd, None).map_err(anyhow::Error::msg)?;
-                app2.emit("project-changed", &snap).ok();
-                Ok(Some(format!("{count} captions")))
-            });
-            rep.finish(result, cancelled);
-            unregister(&app2, &job_id);
-        })
-        .map_err(|e| e.to_string())?;
+    let kind = if captions.is_some() { "captions" } else { "transcript" };
+    let id = format!("{kind}:{}", new_id());
+    let cancel = register(&app, &id).ok_or("Speech recognition is already running")?;
+    let (worker_app, job_id) = (app.clone(), id.clone());
+    let spawn = std::thread::Builder::new().name(kind.into()).spawn(move || {
+        let label = if captions.is_some() { "Auto captions" } else { "Timeline transcript" };
+        let mut rep = Reporter::new(&worker_app, &job_id, kind, label.into());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_speech_job(&source, &model, &language, captions.as_ref(), &cancel, &mut rep)
+        })).unwrap_or_else(|p| Err(anyhow::anyhow!("Speech recognition crashed: {}", panic_text(&p))));
+        rep.finish(result, cancel.load(Ordering::Relaxed));
+        unregister(&worker_app, &job_id);
+    });
+    if let Err(error) = spawn {
+        unregister(&app, &id);
+        return Err(format!("Starting speech recognition: {error}"));
+    }
     Ok(id)
+}
+
+fn run_speech_job(
+    source: &SpeechSnapshot,
+    model: &str,
+    language: &str,
+    captions: Option<&CaptionRequest>,
+    cancel: &AtomicBool,
+    rep: &mut Reporter,
+) -> anyhow::Result<Option<String>> {
+    let app = rep.app.clone();
+    let state = app.state::<AppState>();
+    let cached = state.transcript.lock().unwrap().as_ref()
+        .filter(|cached| cached.matches(source, model, language))
+        .map(|cached| cached.transcript.clone());
+    let transcript = match cached {
+        Some(transcript) => {
+            rep.progress(1.0, Some("Using timeline transcript"));
+            transcript
+        }
+        None => {
+            let model_path = download_model(model, cancel, rep)?;
+            let vad = download_vad(cancel, rep)?;
+            transcribe_timeline(&source.project, &state.cache_dir, &model_path, &vad, language, cancel,
+                |progress, phase| rep.progress(progress, Some(phase)))?
+        }
+    };
+    check_cancelled(cancel)?;
+    anyhow::ensure!(!transcript.words.is_empty(), "No speech was recognised.");
+    let cached = CachedTranscript { source: source.clone(), model: model.into(), requested_language: language.into(), transcript };
+    let mut editor = state.editor.lock().unwrap();
+    anyhow::ensure!(*state.project_path.lock().unwrap() == source.path,
+        "Another project was opened, so the speech recognition result was not applied.");
+    check_cancelled(cancel)?;
+    let result = if let Some(request) = captions {
+        rep.progress(1.0, Some("Grouping captions"));
+        let segments = group_words(&cached.transcript.words, request.grouping());
+        let count = segments.len();
+        let cmd = caption_edit(&editor.project, segments, request.style.clone());
+        let outcome = editor.apply(cmd, None).context("Applying captions")?;
+        let snap = state.commit(&editor, outcome.select);
+        app.emit("project-changed", &snap).ok();
+        format!("{count} captions")
+    } else {
+        format!("{} words", cached.transcript.words.len())
+    };
+    let ready = TranscriptReady { job_id: rep.event.id.clone(), transcript: cached.view() };
+    *state.transcript.lock().unwrap() = Some(cached);
+    app.emit("transcript-ready", &ready).ok();
+    Ok(Some(result))
+}
+
+fn caption_edit(project: &Project, segments: Vec<CaptionSegment>, style: TextStyle) -> EditCmd {
+    match project.tracks.iter().find(|track| track.name == "Captions") {
+        Some(track) => EditCmd::ReplaceCaptions { track_id: track.id.clone(), segments, style },
+        None => EditCmd::AddCaptions { segments, style },
+    }
 }
 
 const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";
@@ -289,16 +430,18 @@ fn download_vad(cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathB
 }
 
 fn download(url: &str, path: &Path, cancel: &AtomicBool, rep: &mut Reporter, phase: &str) -> anyhow::Result<PathBuf> {
+    check_cancelled(cancel)?;
     let path = path.to_path_buf();
     if path.exists() {
         return Ok(path);
     }
-    std::fs::create_dir_all(models_dir())?;
-    let response = ureq::get(url).call()?;
+    rep.progress(0.0, Some(phase));
+    std::fs::create_dir_all(models_dir()).context("Creating speech model directory")?;
+    let response = ureq::get(url).call().with_context(|| format!("{phase}: requesting model"))?;
     let total: u64 = response.headers().get("content-length").and_then(|v| v.to_str().ok()?.parse().ok()).unwrap_or(0);
     let mut reader = response.into_body().into_reader();
     let tmp = path.with_extension("part");
-    let mut file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&tmp).context("Creating model download")?);
     let mut buf = vec![0u8; 1 << 16];
     let mut done: u64 = 0;
     loop {
@@ -307,27 +450,29 @@ fn download(url: &str, path: &Path, cancel: &AtomicBool, rep: &mut Reporter, pha
             std::fs::remove_file(&tmp).ok();
             anyhow::bail!("cancelled");
         }
-        let n = reader.read(&mut buf)?;
+        let n = reader.read(&mut buf).context("Reading model download")?;
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n])?;
+        file.write_all(&buf[..n]).context("Writing model download")?;
         done += n as u64;
         if total > 0 {
             rep.progress(done as f32 / total as f32, Some(phase));
         }
     }
-    file.flush()?;
+    file.flush().context("Flushing model download")?;
     drop(file);
-    std::fs::rename(&tmp, &path)?;
+    check_cancelled(cancel)?;
+    std::fs::rename(&tmp, &path).context("Installing downloaded model")?;
     Ok(path)
 }
 
 /// Mixes the sound of video tracks (music tracks would confuse recognition) and
 /// downsamples it to 16 kHz mono for Whisper.
-fn speech_audio(project: &Project, cache: &Path) -> anyhow::Result<Vec<f32>> {
+fn speech_audio(project: &Project, cache: &Path, cancel: &AtomicBool) -> anyhow::Result<Vec<f32>> {
     for asset in project.assets.iter().filter(|a| has_audio(a)) {
-        ensure_pcm(cache, asset, |_| {})?;
+        check_cancelled(cancel)?;
+        ensure_pcm(cache, asset, |_| {}).with_context(|| format!("Preparing audio for {}", asset.name))?;
     }
     let mut speech = project.clone();
     for t in &mut speech.tracks {
@@ -342,6 +487,7 @@ fn speech_audio(project: &Project, cache: &Path) -> anyhow::Result<Vec<f32>> {
     let mut buf = vec![0f32; chunk * CHANNELS];
     let mut pos = 0i64;
     while pos < total {
+        check_cancelled(cancel)?;
         mixer.mix(&speech, pos, &mut buf);
         let frames = (chunk as i64).min(total - pos) as usize;
         for tri in buf[..frames * CHANNELS].chunks(3 * CHANNELS) {
@@ -353,153 +499,154 @@ fn speech_audio(project: &Project, cache: &Path) -> anyhow::Result<Vec<f32>> {
     Ok(out)
 }
 
-fn run_captions(
+fn transcribe_timeline(
     project: &Project,
     cache: &Path,
-    request: &CaptionRequest,
-    cancel: &Arc<AtomicBool>,
-    rep: &mut Reporter,
-) -> anyhow::Result<Vec<CaptionSegment>> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+    model: &Path,
+    vad: &Path,
+    language: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(f32, &str),
+) -> anyhow::Result<Transcript> {
+    check_cancelled(cancel)?;
+    progress(0.0, "Preparing audio");
+    let audio = speech_audio(project, cache, cancel)?;
+    check_cancelled(cancel)?;
+    progress(0.0, "Recognising speech");
+    // The analysis API has no abort callback; cancelled results must never be applied.
+    let transcript = transcribe_words(AudioSource::TimelineAudio(&audio), model, vad, language)
+        .context("Transcribing timeline audio")?;
+    check_cancelled(cancel)?;
+    progress(1.0, "Speech recognised");
+    Ok(transcript)
+}
 
-    let model = download_model(&request.model, cancel, rep)?;
-    let vad = download_vad(cancel, rep)?.to_string_lossy().into_owned();
-    rep.progress(0.0, Some("Preparing audio"));
-    let audio = speech_audio(project, cache)?;
-    rep.progress(0.0, Some("Loading speech model"));
-    let ctx = WhisperContext::new_with_params(&model, WhisperContextParameters::default())
-        .map_err(|e| anyhow::anyhow!("Cannot load the speech model: {e}"))?;
-    let mut state = ctx.create_state().map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16) as i32;
-    params.set_n_threads(threads);
-    let language = if request.language == "auto" { None } else { Some(request.language.as_str()) };
-    params.set_language(language);
-    params.set_token_timestamps(true);
-    params.set_max_len(36);
-    params.set_split_on_word(true);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_special(false);
-    params.set_print_timestamps(false);
-    params.set_suppress_nst(true);
-    let (app, mut event) = (rep.app.clone(), rep.event.clone());
-    params.set_progress_callback_safe(move |p: i32| {
-        event.progress = p as f32 / 100.0;
-        event.phase = Some("Recognising speech".into());
-        app.emit("job", &event).ok();
-    });
-    let abort = cancel.clone();
-    params.set_abort_callback_safe(move || abort.load(Ordering::Relaxed));
-    rep.progress(0.0, Some("Recognising speech"));
-
-    // whisper.cpp's built-in VAD loses the original timestamps, so detect speech here,
-    // transcribe only the speech and map times back ourselves.
-    let regions = speech_regions(&vad, &audio)?;
-    log::debug!("speech regions (s): {:?}", regions.iter().map(|(a, b)| (*a as f32 / 16000.0, *b as f32 / 16000.0)).collect::<Vec<_>>());
-    if regions.is_empty() {
-        return Ok(Vec::new());
-    }
-    let (speech, table) = compact(&audio, &regions);
-    state.full(params, &speech).map_err(|e| anyhow::anyhow!("Speech recognition failed: {e}"))?;
-    if cancel.load(Ordering::Relaxed) {
-        anyhow::bail!("cancelled");
-    }
-    let mut segments = Vec::new();
-    for seg in state.as_iter() {
-        let text = seg.to_str_lossy().map(|s| s.trim().to_string()).unwrap_or_default();
-        log::debug!("segment {}..{} cs, no_speech {:.2}: {text}", seg.start_timestamp(), seg.end_timestamp(), seg.no_speech_probability());
-        if text.is_empty() || is_annotation(&text) || seg.no_speech_probability() > 0.6 {
-            continue;
-        }
-        let at = |cs: i64| to_original(&table, (cs.max(0) as usize) * CS) as i64 * 1_000_000 / SPEECH_RATE as i64;
-        segments.push(CaptionSegment { start_us: at(seg.start_timestamp()), end_us: at(seg.end_timestamp()), text });
-    }
-    Ok(segments)
+fn check_cancelled(cancel: &AtomicBool) -> anyhow::Result<()> {
+    anyhow::ensure!(!cancel.load(Ordering::Relaxed), "cancelled");
+    Ok(())
 }
 
 fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
     p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into())
 }
-
-const SPEECH_RATE: usize = 16_000;
-/// Samples per Whisper centisecond.
-const CS: usize = SPEECH_RATE / 100;
-const GAP: usize = SPEECH_RATE * 2 / 5;
-
-/// Speech regions as sample ranges, padded and merged when they nearly touch.
-fn speech_regions(vad_model: &str, audio: &[f32]) -> anyhow::Result<Vec<(usize, usize)>> {
-    use whisper_rs::{WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
-    let mut ctx = WhisperVadContext::new(vad_model, WhisperVadContextParams::new())
-        .map_err(|e| anyhow::anyhow!("Cannot load the voice detector: {e}"))?;
-    let mut params = WhisperVadParams::new();
-    params.set_speech_pad(200);
-    params.set_min_silence_duration(300);
-    let segments = ctx.segments_from_samples(params, audio).map_err(|e| anyhow::anyhow!("Voice detection failed: {e}"))?;
-    let mut out: Vec<(usize, usize)> = Vec::new();
-    for seg in segments {
-        let start = ((seg.start.max(0.0) as usize) * CS).min(audio.len());
-        let end = ((seg.end.max(0.0) as usize) * CS).min(audio.len());
-        if end <= start {
-            continue;
-        }
-        match out.last_mut() {
-            Some(last) if start <= last.1 + GAP => last.1 = last.1.max(end),
-            _ => out.push((start, end)),
-        }
-    }
-    Ok(out)
-}
-
-/// Joins the speech regions with short silences. The table maps each region's offset in
-/// the joined audio (`compact_start`) to its timeline offset (`original_start`, `len`).
-fn compact(audio: &[f32], regions: &[(usize, usize)]) -> (Vec<f32>, Vec<(usize, usize, usize)>) {
-    let mut joined = Vec::new();
-    let mut table = Vec::new();
-    for &(start, end) in regions {
-        if !joined.is_empty() {
-            joined.extend(std::iter::repeat_n(0.0, GAP));
-        }
-        table.push((joined.len(), start, end - start));
-        joined.extend_from_slice(&audio[start..end]);
-    }
-    (joined, table)
-}
-
-fn to_original(table: &[(usize, usize, usize)], t: usize) -> usize {
-    let Some(&(cs, os, len)) = table.iter().rev().find(|(cs, ..)| *cs <= t).or(table.first()) else { return t };
-    os + t.saturating_sub(cs).min(len)
-}
-
-/// Whisper marks non-speech as "[Music]", "(laughs)", "*applause*" or "♪".
-fn is_annotation(text: &str) -> bool {
-    let t = text.trim_matches(|c: char| c.is_whitespace() || c == '.');
-    let wrapped = |a: char, b: char| t.starts_with(a) && t.ends_with(b);
-    wrapped('[', ']') || wrapped('(', ')') || wrapped('*', '*') || t.chars().all(|c| c == '♪' || c.is_whitespace())
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn filters_non_speech_annotations() {
-        for t in ["[Music]", "(Zvukáží)", "*potlesk*", "♪ ♪", " (smích). "] {
-            assert!(super::is_annotation(t), "{t}");
-        }
-        assert!(!super::is_annotation("Ahoj (jak se máš)"));
-        assert!(!super::is_annotation("Dnes si ukážeme střih."));
+    use super::*;
+    use capopen_analysis::Word;
+    use capopen_engine::Editor;
+
+    fn request(max_words: Option<u8>, max_chars: Option<u8>) -> CaptionRequest {
+        CaptionRequest { model: "small".into(), language: "cs".into(), max_words, max_chars,
+            style: TextStyle { font_family: Some("Inter".into()), font_size: 95.0, color: "#ffffff".into(),
+                bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None } }
+    }
+
+    fn transcript() -> Transcript {
+        Transcript { language: "cs".into(), segments: Vec::new(), words: vec![
+            Word { start_us: 2_000_000, end_us: 2_400_000, text: "Ahoj".into(), probability: 0.9 },
+            Word { start_us: 2_400_000, end_us: 2_800_000, text: "světe.".into(), probability: 0.8 },
+        ] }
     }
 
     #[test]
-    fn maps_compacted_speech_back_to_the_timeline() {
-        let audio = vec![0.5f32; 16_000 * 10];
-        // Speech at 2–3 s and 7–8 s.
-        let (joined, table) = super::compact(&audio, &[(32_000, 48_000), (112_000, 128_000)]);
-        assert_eq!(joined.len(), 16_000 + super::GAP + 16_000);
-        assert_eq!(super::to_original(&table, 0), 32_000);
-        assert_eq!(super::to_original(&table, 8_000), 40_000);
-        // Inside the inserted gap: clamps to the end of the first region.
-        assert_eq!(super::to_original(&table, 16_000 + 100), 48_000);
-        assert_eq!(super::to_original(&table, 16_000 + super::GAP + 4_000), 116_000);
+    fn caption_request_selects_reels_or_phrases() {
+        let reels = request(Some(3), Some(15)).grouping();
+        assert_eq!((reels.max_words, reels.max_chars), (3, 15));
+        let phrases = request(None, None).grouping();
+        assert_eq!((phrases.max_words, phrases.max_chars), (12, 42));
+        assert_eq!(phrases.break_gap_us, CaptionGrouping::default().break_gap_us);
+        assert_eq!(request(Some(1), None).grouping().max_chars, 42);
+        assert_eq!(request(None, Some(15)).grouping().max_words, 12);
+    }
+
+    #[test]
+    fn transcript_reuse_requires_same_project_revision_model_and_language() {
+        let source = SpeechSnapshot { project: Project::new("Test"), path: "test.json".into(), revision: 3 };
+        let cached = CachedTranscript { source: source.clone(), model: "small".into(), requested_language: "cs".into(), transcript: transcript() };
+        assert!(cached.matches(&source, "small", "cs"));
+        assert!(!cached.matches(&source, "base", "cs"));
+        assert!(!cached.matches(&source, "small", "auto"));
+        let mut changed = source.clone();
+        changed.revision += 1;
+        assert!(!cached.matches(&changed, "small", "cs"));
+        changed = source.clone();
+        changed.path = "other.json".into();
+        assert!(!cached.matches(&changed, "small", "cs"));
+        changed = source.clone();
+        changed.project.name = "Reopened different content".into();
+        assert!(!cached.matches(&changed, "small", "cs"));
+        let view = serde_json::to_value(cached.view()).unwrap();
+        assert_eq!(view["revision"], 3);
+        assert_eq!(view["words"][0]["startUs"], 2_000_000);
+        assert_eq!(view["words"][0]["endUs"], 2_400_000);
+        assert_eq!(view["words"][0]["text"], "Ahoj");
+    }
+
+    #[test]
+    fn captions_keep_timeline_times_after_edits_and_replace_previous_track() {
+        let mut editor = Editor::new(Project::new("Test"));
+        let request = request(Some(3), Some(15));
+        let segments = group_words(&transcript().words, request.grouping());
+        editor.apply(EditCmd::RenameProject { name: "Edited during recognition".into() }, None).unwrap();
+        let cmd = caption_edit(&editor.project, segments.clone(), request.style.clone());
+        assert!(matches!(cmd, EditCmd::AddCaptions { .. }));
+        editor.apply(cmd, None).unwrap();
+        let cmd = caption_edit(&editor.project, segments, request.style);
+        assert!(matches!(cmd, EditCmd::ReplaceCaptions { .. }));
+        editor.apply(cmd, None).unwrap();
+        let tracks: Vec<_> = editor.project.tracks.iter().filter(|t| t.name == "Captions").collect();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].clips.len(), 1);
+        assert_eq!(tracks[0].clips[0].start_us, 2_000_000);
+        assert_eq!(editor.revision, 3);
+    }
+
+    #[test]
+    fn cancelled_transcription_stops_before_reading_media_or_models() {
+        let cancel = AtomicBool::new(true);
+        let absent = Path::new("does-not-exist");
+        let result = transcribe_timeline(&Project::new("Test"), absent, absent, absent, "cs", &cancel, |_, _| panic!("Must stop first"));
+        assert_eq!(result.unwrap_err().to_string(), "cancelled");
+    }
+
+    #[test]
+    #[ignore = "requires tmp-test/talk.mp4 and downloaded small + Silero models"]
+    fn real_timeline_transcription_groups_talk_into_reel_captions() -> anyhow::Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tmp-test");
+        let out = root.join("fonts");
+        std::fs::create_dir_all(&out)?;
+        let asset = capopen_engine::media::probe(&root.join("talk.mp4"), "talk".into())?;
+        let mut project = Project::new("Speech test");
+        project.apply(EditCmd::AddAssets { assets: vec![asset] })?;
+        project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None })?;
+        // A leading gap proves the recogniser returns timeline rather than asset time.
+        project.tracks[0].clips[0].start_us = 2_000_000;
+        let cancel = AtomicBool::new(false);
+        let cache = out.join("cache");
+        let mixed = speech_audio(&project, &cache, &cancel)?;
+        assert!(mixed[..32_000].iter().all(|sample| *sample == 0.0));
+        let mut music = project.tracks[0].clone();
+        music.id = "music".into();
+        music.kind = TrackKind::Audio;
+        project.tracks.push(music);
+        assert_eq!(speech_audio(&project, &cache, &cancel)?, mixed);
+        let models = root.join("xdg/data/capopen/models");
+        let transcript = transcribe_timeline(&project, &cache, &models.join("ggml-small.bin"),
+            &models.join(VAD_MODEL), "cs", &cancel, |p, phase| eprintln!("{phase}: {p:.0}"))?;
+        std::fs::write(out.join("talk-transcript.json"), serde_json::to_vec_pretty(&transcript)?)?;
+        assert!(!transcript.words.is_empty());
+        // VAD padding and estimated token times can precede the first audible sample.
+        assert!((1_800_000..2_500_000).contains(&transcript.words[0].start_us));
+        assert!(transcript.words.iter().all(|word| word.end_us >= word.start_us));
+        assert!(transcript.words.last().unwrap().end_us > 11_000_000);
+        let captions = group_words(&transcript.words, request(Some(3), Some(15)).grouping());
+        for caption in &captions {
+            assert!((1..=3).contains(&caption.text.split_whitespace().count()));
+            assert!(caption.text.chars().count() <= 15, "{}", caption.text);
+            assert!(caption.end_us > caption.start_us);
+            println!("{:.3}–{:.3}  {}", caption.start_us as f64 / 1e6, caption.end_us as f64 / 1e6, caption.text);
+        }
+        std::fs::write(out.join("talk-captions.json"), serde_json::to_vec_pretty(&captions)?)?;
+        Ok(())
     }
 }
