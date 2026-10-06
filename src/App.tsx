@@ -5,7 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./lib/api";
 import { useSpeech } from "./lib/speech";
-import { deleteSelection, deleteSide, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
+import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, findClip, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
 import { US } from "./lib/time";
 import type { JobEvent, Snapshot, Transport } from "./lib/types";
 import { ExportDialog } from "./components/ExportDialog";
@@ -203,7 +203,7 @@ function RecoveryDialog() {
     setBusy(true);
     setError(null);
     try {
-      const snap = await api.resolveRecovery(action);
+      const snap = await api.resolveRecovery(action, currentEpoch());
       useEditor.getState().setSnap(snap, true);
       useEditor.setState({ saveState: "saved" });
       if (action === "restore") useEditor.getState().toast({ kind: "success", text: "Previous version restored", action: { label: "Undo", run: () => void useEditor.getState().undo() } });

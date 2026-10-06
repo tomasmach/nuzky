@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Film, Image as ImageIcon } from "lucide-react";
 import { api, errorText } from "../../lib/api";
-import { MAIN_TRACK, findClip, useEditor } from "../../lib/store";
+import { MAIN_TRACK, currentEpoch, findClip, useEditor } from "../../lib/store";
 import type { Asset } from "../../lib/types";
 import { Button } from "../ui";
 
@@ -31,11 +31,13 @@ function importFailures(failed: { path: string; error: string }[]) {
 export async function importPaths(paths: string[], place?: { trackId: string | null; startUs: number | null }) {
   const { setSnap, toast, edit } = useEditor.getState();
   if (paths.length === 0) return;
+  const epoch = currentEpoch();
   try {
-    const res = await api.importMedia(paths);
+    const res = await api.importMedia(paths, epoch);
     setSnap(res.snapshot);
     if (res.failed.length > 0) toast({ kind: "error", text: importFailures(res.failed) });
-    if (place) {
+    // Placing waits for the import; another project may have opened meanwhile.
+    if (place && currentEpoch() === epoch) {
       for (const id of res.added) await edit({ type: "addClip", assetId: id, startUs: place.startUs, trackId: place.trackId });
     }
   } catch (e) {

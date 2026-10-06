@@ -5,7 +5,7 @@ import { videoDir, join } from "@tauri-apps/api/path";
 import { AlertCircle, CheckCircle2, Download, FolderOpen, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { formatLabel } from "../lib/presets";
-import { projectDuration, useEditor } from "../lib/store";
+import { currentEpoch, projectDuration, useEditor } from "../lib/store";
 import { US, formatTime } from "../lib/time";
 import type { Canvas, ExportRequest } from "../lib/types";
 import { Button, IconButton, ProgressBar, Segmented } from "./ui";
@@ -112,7 +112,7 @@ export function ExportDialog() {
     lastPath.current = path;
     try {
       startedAt.current = Date.now();
-      useEditor.setState({ exportJobId: await api.startExport(path, options) });
+      useEditor.setState({ exportJobId: await api.startExport(path, options, currentEpoch()) });
     } catch (e) {
       setError(errorText(e));
     }

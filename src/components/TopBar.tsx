@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { FORMATS } from "../lib/presets";
-import { openExport, projectDuration, stopAiRun, useEditor } from "../lib/store";
+import { openExport, projectDuration, stopAiRun, switchProject, useEditor } from "../lib/store";
 import { formatDuration } from "../lib/time";
 import type { ProjectSummary, Snapshot } from "../lib/types";
 import { Button, IconButton, ProgressBar } from "./ui";
@@ -72,7 +72,7 @@ function ProjectMenu() {
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const current = useEditor((s) => s.snap?.path);
-  const { setSnap, toast } = useEditor.getState();
+  const { toast } = useEditor.getState();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,7 +91,7 @@ function ProjectMenu() {
   const run = async (fn: () => Promise<Snapshot>) => {
     setOpen(false);
     try {
-      setSnap(await fn(), false, true);
+      await switchProject(fn);
       useEditor.setState({ timeUs: 0, thumbs: {}, filmstrips: {}, waveforms: {} });
     } catch (e) {
       toast({ kind: "error", text: errorText(e) });

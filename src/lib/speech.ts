@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errorText } from "./api";
 import { US } from "./time";
-import { enqueue, useEditor, whenIdle } from "./store";
+import { currentEpoch, enqueue, useEditor, whenIdle } from "./store";
 import type { Project, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
 /** Characters per caption when captions show 1–3 words, like reels. */
@@ -83,8 +83,8 @@ export async function startSpeech(captions: { style: TextStyle } | null, refresh
   try {
     if (captions) {
       const words = captionWords || null;
-      await api.startCaptions(model, language, captions.style, words, words ? SHORT_CAPTION_CHARS : null);
-    } else await api.startTranscript(model, language, refresh);
+      await api.startCaptions(model, language, captions.style, words, words ? SHORT_CAPTION_CHARS : null, currentEpoch());
+    } else await api.startTranscript(model, language, refresh, currentEpoch());
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });
   }
@@ -94,19 +94,19 @@ export async function startSpeech(captions: { style: TextStyle } | null, refresh
  * Runs a transcript cut after the edits queued before it, as one undo step, and offers Undo.
  * `what` describes it from the time removed. Resolves to null when nothing was cut.
  */
-async function cut(run: () => Promise<TranscriptCut>, what: (removedUs: number) => string): Promise<TranscriptCut | null> {
+async function cut(run: (epoch: string | undefined) => Promise<TranscriptCut>, what: (removedUs: number) => string): Promise<TranscriptCut | null> {
   const out: { done?: TranscriptCut } = {};
-  await enqueue(async () => (out.done = await run()).snapshot);
+  await enqueue(async (epoch) => (out.done = await run(epoch)).snapshot);
   if (!out.done) return null;
   const { toast, undo } = useEditor.getState();
   toast({ kind: "info", text: `Removed ${what(out.done.removedUs)}`, action: { label: "Undo", run: undo } });
   return out.done;
 }
 
-export const cutWords = (key: string, ranges: [number, number][], what: (removedUs: number) => string) => cut(() => api.cutWords(key, ranges), what);
+export const cutWords = (key: string, ranges: [number, number][], what: (removedUs: number) => string) => cut((epoch) => api.cutWords(key, ranges, epoch), what);
 
 export const removePauses = (key: string, pauseUs: number, only: number[] | null, what: (removedUs: number) => string) =>
-  cut(() => api.removePauses(key, pauseUs, only), what);
+  cut((epoch) => api.removePauses(key, pauseUs, only, epoch), what);
 
 export type Token =
   | { kind: "word"; i: number; startUs: number; endUs: number; text: string }

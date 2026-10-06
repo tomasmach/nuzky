@@ -81,20 +81,26 @@ const pending = new Set<string>();
  * would merge into one undo step anyway, so a fast slider drag never builds a backlog.
  */
 interface QueuedEdit {
-  run: () => Promise<Snapshot | null>;
+  run: (epoch: string | undefined) => Promise<Snapshot | null>;
   key: string | null;
+  /** The session open when the change was made; the backend refuses it once another is open. */
+  epoch: string | undefined;
   waiters: ((snap: Snapshot | null) => void)[];
 }
 const queue: QueuedEdit[] = [];
 let draining = false;
 
-export function enqueue(run: () => Promise<Snapshot | null>, key: string | null = null): Promise<Snapshot | null> {
+/** The open project's session, for commands that change it. */
+export const currentEpoch = () => useEditor.getState().snap?.sessionEpoch;
+
+export function enqueue(run: (epoch: string | undefined) => Promise<Snapshot | null>, key: string | null = null): Promise<Snapshot | null> {
   return new Promise((resolve) => {
+    const epoch = currentEpoch();
     const last = queue[queue.length - 1];
-    if (key && last?.key === key) {
+    if (key && last?.key === key && last.epoch === epoch) {
       last.run = run;
       last.waiters.push(resolve);
-    } else queue.push({ run, key, waiters: [resolve] });
+    } else queue.push({ run, key, epoch, waiters: [resolve] });
     void drain();
   });
 }
@@ -106,10 +112,12 @@ async function drain() {
     const item = queue.shift()!;
     let snap: Snapshot | null = null;
     try {
-      snap = await item.run();
+      snap = await item.run(item.epoch);
       if (snap) useEditor.getState().setSnap(snap);
     } catch (e) {
       const text = errorText(e);
+      // Made for the project open before; that project is gone from the editor, so is the change.
+      if (text.startsWith("EPOCH_CHANGED")) continue;
       if (text.startsWith("RUN_ACTIVE")) useEditor.getState().toast({ kind: "info", text: "AI is editing. Stop it to edit yourself.", action: { label: "Stop and edit", run: stopAiRun } });
       else useEditor.getState().toast({ kind: "error", text });
     }
@@ -121,10 +129,19 @@ async function drain() {
 /** Ends the agent's run with its changes kept, so the user can edit; Undo then removes the whole run. */
 export async function stopAiRun() {
   try {
-    useEditor.getState().setSnap(await api.stopRun());
+    useEditor.getState().setSnap(await api.stopRun(currentEpoch()));
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });
   }
+}
+
+/**
+ * Opens another project once the changes queued for this one are done, so none of them lands in
+ * the new project; changes made while it opens are refused by the backend.
+ */
+export async function switchProject(open: () => Promise<Snapshot>) {
+  await whenIdle();
+  useEditor.getState().setSnap(await open(), false, true);
 }
 
 /** Resolves once every edit queued before it has been confirmed. */
@@ -185,20 +202,20 @@ export const useEditor = create<EditorState>((set, get) => ({
   edit: (input, coalesce) => {
     // Keys are scoped to a gesture: one drag or one focus session is one undo step.
     const key = coalesce ? `${coalesce}#${gesture}` : null;
-    return enqueue(async () => {
+    return enqueue(async (epoch) => {
       const project = get().snap?.project;
       const cmd = typeof input === "function" ? (project ? input(project) : null) : input;
       if (!cmd || (Array.isArray(cmd) && cmd.length === 0)) return null;
-      return Array.isArray(cmd) ? api.applyEdits(cmd, key ?? undefined) : api.applyEdit(cmd, key ?? undefined);
+      return Array.isArray(cmd) ? api.applyEdits(cmd, key, epoch) : api.applyEdit(cmd, key, epoch);
     }, key);
   },
 
   undo: async () => {
-    await enqueue(async () => (get().snap?.canUndo ? api.undo() : null));
+    await enqueue(async (epoch) => (get().snap?.canUndo ? api.undo(epoch) : null));
   },
 
   redo: async () => {
-    await enqueue(async () => (get().snap?.canRedo ? api.redo() : null));
+    await enqueue(async (epoch) => (get().snap?.canRedo ? api.redo(epoch) : null));
   },
 
   select: (ids) => set({ selection: ids, cut: null }),
