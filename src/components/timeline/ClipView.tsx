@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { AudioLines, Captions, Film, Gauge, Image as ImageIcon, Type } from "lucide-react";
-import { isCaptionTrack, useEditor } from "../../lib/store";
+import { AudioLines, Film, Gauge, Image as ImageIcon, Type } from "lucide-react";
+import { MAIN_TRACK, isCaptionTrack, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Asset, Clip, Filmstrip, Project, Track } from "../../lib/types";
 import { Waveform } from "./Waveform";
@@ -100,7 +100,7 @@ export function ClipView({
   const innerH = height - 8;
   const isCaption = c.type === "text" && isCaptionTrack(track);
   const bg = c.type === "text" ? (isCaption ? "bg-clip-captions" : "bg-clip-title") : sound ? "bg-clip-audio" : asset?.kind === "image" ? "bg-clip-image" : "bg-clip-video";
-  const Icon = c.type === "text" ? (isCaption ? Captions : Type) : sound ? AudioLines : asset?.kind === "image" ? ImageIcon : Film;
+  const Icon = c.type === "text" ? Type : sound ? AudioLines : asset?.kind === "image" ? ImageIcon : Film;
   const label = c.type === "text" ? c.text : (asset?.name ?? "Missing media");
   const speed = c.type === "media" ? c.speed : 1;
   const soundStrip = visual && c.type === "media" && asset.kind === "video" && asset.hasAudio && c.volume > 0;
@@ -135,7 +135,8 @@ export function ClipView({
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-1 px-2.5 pt-1 text-[11px] text-fg">
         <span className={`flex min-w-0 items-center gap-1 rounded-sm px-1 ${visual ? "bg-black/60" : ""}`}>
-          <Icon size={11} className="shrink-0" />
+          {/* Caption clips are short; the track header carries their icon, so the text gets the room. */}
+          {!isCaption && <Icon size={11} className="shrink-0" />}
           <span className="truncate">{label}</span>
           {width > 110 && <span className="tabular shrink-0 pl-1 text-fg/80">{formatDuration(durationUs)}</span>}
         </span>
@@ -160,8 +161,9 @@ export function ClipView({
         />
       )}
 
+      {/* The main track's cut markers sit at mid-height, so its diamonds run along the bottom. All stay clear of the trim handles. */}
       {selected && !ghost && clip.keyframes.length > 0 && (
-        <div className="absolute inset-x-0 top-1/2">
+        <div className={`absolute inset-x-0 ${track.id === MAIN_TRACK ? "bottom-[7px]" : "top-1/2"}`}>
           {clip.keyframes.map((k) => (
             <button
               key={k.tUs}
@@ -173,7 +175,7 @@ export function ClipView({
                 useEditor.getState().seek(clip.startUs + k.tUs);
               }}
               className="absolute -top-[5px] h-[10px] w-[10px] -translate-x-1/2 rotate-45 rounded-[1px] border border-black/70 bg-fg hover:bg-accent"
-              style={{ left: Math.max(5, Math.min(width - 5, (k.tUs / US) * zoom)) }}
+              style={{ left: Math.max(EDGE + 7, Math.min(width - EDGE - 7, (k.tUs / US) * zoom)) }}
             />
           ))}
         </div>

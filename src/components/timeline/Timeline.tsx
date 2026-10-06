@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftToLine, ArrowRightToLine, AudioLines, Captions, Copy, Eye, EyeOff, Film, Magnet, Maximize2, Scissors, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
-import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, isCaptionTrack, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
+import { AudioLines, Captions, Copy, Eye, EyeOff, Film, Magnet, Maximize2, PanelLeftClose, PanelRightClose, Scissors, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
+import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, isCaptionTrack, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
@@ -12,6 +12,7 @@ import { CutMarkers } from "./CutMarkers";
 const HEADER_W = 132;
 const RULER_H = 28;
 const SNAP_PX = 8;
+const END_TIP = "The video ends here. Sound after this point is not exported.";
 
 function rowHeight(track: Track) {
   if (track.id === MAIN_TRACK) return 64;
@@ -306,6 +307,10 @@ export function Timeline({ height }: { height: number }) {
   if (!project) return <section className="shrink-0 border-t border-line bg-panel" style={{ height }} />;
 
   const canSplit = splitTargets(project, selection, timeUs).length > 0;
+  // The video ends at its last picture or text; music running past it is cut on export.
+  const videoEnd = projectDuration(project);
+  const endX = (videoEnd / US) * zoom;
+  const pastEnd = videoEnd > 0 && duration > videoEnd;
   const step = tickStep(zoom);
   const firstTick = Math.floor(Math.max(0, view.left - 100) / zoom / step) * step;
   const lastTick = (view.left + view.width + 100) / zoom;
@@ -332,10 +337,10 @@ export function Timeline({ height }: { height: number }) {
           <Scissors size={16} />
         </IconButton>
         <IconButton label={canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"} disabled={!canSplit} onClick={() => deleteSide("left")}>
-          <ArrowLeftToLine size={16} />
+          <PanelLeftClose size={16} />
         </IconButton>
         <IconButton label={canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"} disabled={!canSplit} onClick={() => deleteSide("right")}>
-          <ArrowRightToLine size={16} />
+          <PanelRightClose size={16} />
         </IconButton>
         <IconButton label={deleteLabel} disabled={selection.length === 0 && !cut} onClick={deleteSelection}>
           <Trash2 size={16} />
@@ -383,6 +388,11 @@ export function Timeline({ height }: { height: number }) {
                   ))}
                 </div>
               ))}
+              {pastEnd && (
+                <div className="absolute inset-y-0 w-2 -translate-x-1/2" style={{ left: endX }} title={END_TIP}>
+                  <div className="mx-auto h-full w-0 border-l border-dashed border-muted" />
+                </div>
+              )}
             </div>
           </div>
 
@@ -488,6 +498,14 @@ export function Timeline({ height }: { height: number }) {
                 timing={ghostTiming}
               />
             </div>
+          )}
+
+          {/* Past the video's end: dimmed above the clips, below the track headers. */}
+          {pastEnd && (
+            <div
+              className="pointer-events-none absolute bottom-0 z-[15] border-l border-dashed border-muted bg-black/30"
+              style={{ left: HEADER_W + endX, top: RULER_H, width: laneWidth - endX }}
+            />
           )}
 
           {/* Snap guide */}

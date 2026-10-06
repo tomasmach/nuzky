@@ -20,7 +20,7 @@ Defined in `src/index.css` as Tailwind theme variables.
 | `danger` | `#f05252` | Errors, destructive |
 | `warn` | `#f5a524` | Warnings, snap guides (timeline and preview), always with a dark 1 px outline so they stay visible on bright footage |
 
-Clip tokens. They always come with an icon and a label, never colour alone. Do not name a token `clip-text`: Tailwind already has `bg-clip-text` (background-clip: text) and the clip would render hollow.
+Clip tokens. They always come with an icon and a label, never colour alone; caption clips show only their text, as the Captions track header carries the icon. Do not name a token `clip-text`: Tailwind already has `bg-clip-text` (background-clip: text) and the clip would render hollow.
 
 | Token | Value | Clip |
 |---|---|---|
@@ -49,13 +49,14 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 - **Preset tile**: preview on top, 11 px label below. Selected: accent border plus a check badge.
 - **Checkbox**: dark custom box, accent fill with a black check when on.
 - **Track toggles** (hide, mute): the off state swaps the icon (eye-off, speaker-off) and shows `fg` on `raised`. Accent is reserved for selection and "on" features, so a hidden track never looks active. Fixed columns, eye then speaker; a track without one keeps an empty slot so the columns line up.
-- **Keyframe diamond**: outline when no keyframe sits at the playhead, filled accent when one does. Timeline diamonds are `fg` with a dark border on the selected clip.
+- **Keyframe diamond**: outline when no keyframe sits at the playhead, filled accent when one does. Timeline diamonds are `fg` with a dark border on the selected clip, at mid-height, or along the bottom on the main track so the cut markers never cover them, and clear of the trim handles.
 - **Transition marker**: an 18 px square on the cut. Empty: dark with a faint border, "+" on hover. Set: `fg` square with the kind icon, a darkened band shows the transition length; selected: accent.
+- **Video end**: when sound runs past the last picture or text, a dashed 1 px `muted` line marks the end on the ruler and lanes, and the lanes after it lie under black at 30 %.
 - **Preview selection box**: 1.5 px `fg` outline, 10 px square corner handles, a round rotate handle above the top edge. It may extend past the frame but never past the preview area; a handle that would leave the area is pinned to its edge.
-- **Toasts**: bottom-left above the timeline, over the media panel, so they never cover the video frame.
+- **Toasts**: bottom-left above the timeline, over the media panel and no wider than it (316 px), so they never cover the video frame or the transport. While the transcript's Delete bar shows, they sit above it.
 - **Font picker**: looks like a select: `raised` field, family name at 15 px in its own face, chevron. The list opens below (above when there is no room) with a search field on top; groups "Built in" (each name in its face, 15 px) then "On this computer" (UI font, 13 px), headed like a section at 11 px. The keyboard or pointer position is `raised`; the current font has an `accent` check. A font missing on this computer shows a `warn` triangle with the reason in the tooltip.
 - **Mixed value**: with several clips selected, a number field whose clips differ shows "—"; the slider thumb sits at the first clip's value.
-- **Transcript**: 13 px text on a 22 px line, `fg` at 90 %. Each paragraph starts with an 11 px `muted` timecode. Hover is `raised` behind the word; selected words get `accent` at 30 % behind them; the word playing is `accent` text. Pause chips are 11 px tabular `muted` on `raised`. Out of date, the whole text drops to 40 % and the note above it carries a `warn` icon.
+- **Transcript**: 13 px text on a 22 px line, `fg` at 90 %. Each paragraph starts with an 11 px `muted` timecode. Hover is `raised` behind the word; selected words and the spaces between them get `accent` at 30 %, one band; the word playing is `accent` text, black on `accent` inside the selection. Pause chips are 11 px tabular `muted` on `raised`. Out of date, the whole text drops to 40 % and the note above it carries a `warn` icon.
 
 ## States
 

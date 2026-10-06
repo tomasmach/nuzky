@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { AlertTriangle, RefreshCw, ScrollText, Scissors } from "lucide-react";
-import { cutFromTranscript, formatSeconds, loadStoredTranscript, speechBlocker, startSpeech, tokenize, useSpeech, useTranscript, type Token } from "../../lib/speech";
-import { keepsInPlace, mainClips, useEditor } from "../../lib/store";
+import { cutFromTranscript, formatSeconds, loadStoredTranscript, speechBlocker, speechRanges, speechSig, startSpeech, tokenize, useSpeech, useTranscript, type Token } from "../../lib/speech";
+import { keepsInPlace, useEditor } from "../../lib/store";
 import { US } from "../../lib/time";
 import type { Clip, Project } from "../../lib/types";
 import { Button, Checkbox, IconButton, NumberInput } from "../ui";
@@ -49,9 +49,10 @@ export function TranscriptTab() {
   const { words, language, stale } = useTranscript();
   const { running, last } = useSpeechJobs("transcript");
   const blocker = speechBlocker(project);
-  const main = mainClips(project);
-  const endUs = main.length > 0 ? main[main.length - 1].startUs + main[main.length - 1].durationUs : 0;
-  const tokens = useMemo(() => (words ? tokenize(words, pauseUs, endUs) : []), [words, pauseUs, endUs]);
+  // Keyed by the speech timing, so edits that do not move speech keep the tokens and the selection.
+  const sig = useMemo(() => speechSig(project), [project]);
+  const speech = useMemo(() => (words ? speechRanges(project, words) : []), [sig, words]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tokens = useMemo(() => (words ? tokenize(words, pauseUs, speech) : []), [words, pauseUs, speech]);
   const pauses = tokens.filter((t) => t.kind === "pause");
   const busy = !!running;
 
@@ -119,7 +120,7 @@ export function TranscriptTab() {
               <span className="flex-1" />
               <span title={pauses.length === 0 ? `No pauses longer than ${formatSeconds(pauseUs)}` : `Shorten every pause to ${formatSeconds(pauseUs)}`}>
                 <Button className="h-7 px-2" disabled={pauses.length === 0} onClick={removePauses}>
-                  <Scissors size={14} /> Remove {pauses.length > 0 ? `${pauses.length} · ${formatSeconds(total(pauses))}` : ""}
+                  <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatSeconds(total(pauses))}` : "Remove pauses"}
                 </Button>
               </span>
             </div>

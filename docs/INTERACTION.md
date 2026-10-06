@@ -21,7 +21,7 @@ Drag the line above the timeline to resize it; double-click resets it, ↑/↓ o
 
 ### Import
 Entry: Import button, `Ctrl+I`, or files dropped on the window. Files dropped on the timeline are also placed on it. The Audio tab's "Add music or sound" opens the picker filtered to audio.
-Outcome: items appear in Media (all kinds) and, for audio, in Audio. Unsupported files produce one toast naming each file and the reason; the rest still import.
+Outcome: items appear in Media (all kinds) and, for audio, in Audio. Unsupported files produce one toast naming each file by name only with a short reason ("build.log is not a video, audio or image file"); the rest still import.
 Hovering or focusing a media or audio item shows `+` (add at playhead) and a trash button (remove the item and its clips, after a confirmation).
 
 ### Add to timeline
@@ -41,7 +41,7 @@ Hovering or focusing a media or audio item shows `+` (add at playhead) and a tra
 - **Order**: edits, undo and redo apply one at a time in the order they were made. An edit made before the previous one is confirmed builds on it, so two quick changes (two sliders, two keyframes) both stick.
 
 ### Timeline display
-Clips are drawn 1 px in from each side so every cut is visible. Video clips show a filmstrip whose frames match the source position under each tile, speed included (a single repeated thumbnail until the filmstrip is ready), and a thin waveform strip at the bottom while they have sound. Clips not at 1x carry a speed badge ("2x"). Thin bars at the top edge show the length of the entry (left) and exit (right) animation. The selected clip shows its keyframes as diamonds; clicking one moves the playhead there.
+Clips are drawn 1 px in from each side so every cut is visible. Video clips show a filmstrip whose frames match the source position under each tile, speed included (a single repeated thumbnail until the filmstrip is ready), and a thin waveform strip at the bottom while they have sound. Clips not at 1x carry a speed badge ("2x"). Thin bars at the top edge show the length of the entry (left) and exit (right) animation. The selected clip shows its keyframes as diamonds; clicking one moves the playhead there. Caption clips show only their text. When sound runs past the last picture or text, the video ends there: a dashed line on the ruler and lanes marks the end, the time after it is dimmed, and the ruler's tooltip says the sound after it is not exported.
 
 ### Transitions
 Every cut on the main track has a small square. Clicking an empty one adds a 0.5 s Dissolve and selects it; clicking a set one selects it. A selected transition opens in the inspector with its name, duration and Remove; the kind is picked in the Transitions tab. The Transitions tab applies to the selected cut, else the cut before the selected main-track clip, else the cut nearest the playhead, and names that cut. Duration is capped at 2 s and by the shorter neighbouring clip. None removes the transition.
@@ -88,8 +88,8 @@ Text presets add a text clip at the playhead, centred in the frame, and select i
 Text-based editing, as in CapCut. Transcribe timeline recognises the sound of the video tracks (music tracks are not listened to); a captions run fills the transcript too. The words flow as text in paragraphs that break where speech pauses for a second or more, each led by its timecode. Pauses longer than the threshold (0.5 s by default) show as chips with their length. While playing, the current word is highlighted and kept in view.
 
 - **Select**: click a word to jump there and select it; drag or `Shift`-click to extend. With the text focused, `←`/`→` move word by word (`Shift` extends), `Home`/`End` jump to the ends, `Enter` jumps to the selection, `Esc` clears it, `Space` plays without leaving the text.
-- **Delete**: `Delete`, `Backspace` or the Delete button in the bar under the text, which shows the selection's word count and length. It cuts from the first word's start to the last word's end out of every track except audio kept in place, so captions and overlays stay in sync, as one undo step. The playhead lands on the cut; a toast offers Undo. Inside the text these keys never delete timeline clips.
-- **Remove pauses**: Remove cuts every pause chip at once. Each pause keeps half the threshold on each side, so word edges are not clipped and a 2 s pause at 0.5 s becomes 0.5 s.
+- **Delete**: `Delete`, `Backspace` or the Delete button in the bar under the text, which shows the selection's word count and length. It cuts from the first word's start to the last word's end out of every track except audio kept in place, so captions and overlays stay in sync, as one undo step. The playhead lands on the cut; a toast offers Undo. While the bar shows, toasts sit above it so they never cover Delete. Inside the text these keys never delete timeline clips.
+- **Remove pauses**: the button names the count and total length ("Remove 5 pauses · 6.7 s") and cuts every pause chip at once. Each pause keeps half the threshold next to each word, so word edges are not clipped and a 2 s pause at 0.5 s becomes 0.5 s. Pauses only lie inside clips that carry speech: unmuted video with sound in which words were recognised. A clip without words, such as B-roll, is never part of a pause, so Remove never cuts it.
 - **Keep in place while cutting**: one checkbox per audio track. Music and sound files are checked and keep playing across cuts; sound detached from a video is not, so it is cut with the picture. The setting also applies to `Q`/`W`.
 - **Out of date**: after a cut made here the transcript follows the edit, and undo or redo return to the matching transcript. Any other change to the timing of the video tracks (trim, move, delete, speed, `Q`/`W`, mute) makes it out of date: the text dims and cannot be selected, a note says why and Refresh transcript recognises it again. Changes that do not move speech, such as captions, text, transforms, grading, volume or music, keep it valid.
 
@@ -97,7 +97,7 @@ Text-based editing, as in CapCut. Transcribe timeline recognises the sound of th
 `Ctrl+E` or Export opens a dialog: resolution (720p, 1080p, 2K, 4K, with the resulting pixel size for the canvas), frame rate (24–60, default the project's), quality (High, Recommended, Smaller file) with an estimated file size. Resolution and quality are remembered. Export… asks where to save. The dialog can be closed at any time; a running export shows its percentage in the top bar and clicking it reopens the dialog. Progress shows percentage and time left, with Cancel. Success offers Show in folder, in the dialog or, when it is closed, in a toast. Failure shows the reason and Retry (same file); with the dialog closed a toast offers Details. Export is disabled with a reason while the timeline is empty.
 
 ### Saving
-Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text.
+Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text. An action that changes nothing, such as a failed import, leaves the status as it was.
 
 ## Keyboard
 

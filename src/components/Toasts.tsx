@@ -1,12 +1,16 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { useEditor } from "../lib/store";
 
-/** Bottom-left above the timeline, over the media panel, so they never cover the video frame. */
+/**
+ * Bottom-left above the timeline, over the media panel and no wider than it (340 px less 12 px on
+ * each side), so they never cover the video frame or the transport.
+ */
 export function Toasts({ bottom }: { bottom: number }) {
   const toasts = useEditor((s) => s.toasts);
+  const lift = useEditor((s) => s.toastLift);
   const dismiss = useEditor((s) => s.dismissToast);
   return (
-    <div className="pointer-events-none fixed left-3 z-[90] flex w-[360px] flex-col items-start gap-2" style={{ bottom }} aria-live="polite">
+    <div className="pointer-events-none fixed left-3 z-[90] flex w-[316px] flex-col items-start gap-2" style={{ bottom: bottom + lift }} aria-live="polite">
       {toasts.map((t) => (
         <div
           key={t.id}

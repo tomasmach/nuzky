@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { formatSeconds, paragraphs, tokenAt, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
@@ -18,13 +18,21 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
   for (let i = from; i < to; i++) {
     const t = tokens[i];
     const selected = i >= lo && i <= hi;
-    const tone = i === active ? "text-accent" : selected ? "text-fg" : "";
-    const fill = selected ? "bg-accent/30" : "hover:bg-raised";
+    const playing = i === active;
+    // Accent text on the accent selection is hard to read, so there the word playing is black on accent.
+    const look = selected ? (playing ? "bg-accent text-black" : "bg-accent/30 text-fg") : playing ? "text-accent" : "";
     items.push(
       <Fragment key={i}>
-        {i > from && " "}
+        {/* The space between two selected tokens is filled too, so the selection reads as one band. */}
+        {i > from && (i > lo && i <= hi ? <span className="bg-accent/30"> </span> : " ")}
         {t.kind === "word" ? (
-          <span id={optionId(i)} data-t={i} role="option" aria-selected={selected} className={`cursor-pointer rounded-sm ${fill} ${tone}`}>
+          <span
+            id={optionId(i)}
+            data-t={i}
+            role="option"
+            aria-selected={selected}
+            className={`cursor-pointer ${selected ? `${i === lo ? "rounded-l-sm" : ""} ${i === hi ? "rounded-r-sm" : ""}` : "rounded-sm hover:bg-raised"} ${look}`}
+          >
             {t.text}
           </span>
         ) : (
@@ -35,7 +43,7 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
             aria-selected={selected}
             aria-label={`Pause, ${formatSeconds(t.gapUs)}`}
             title={`Pause of ${formatSeconds(t.gapUs)}`}
-            className={`tabular cursor-pointer rounded px-1 py-px text-[11px] ${selected ? "bg-accent/30" : "bg-raised hover:bg-line"} ${tone || "text-muted"}`}
+            className={`tabular cursor-pointer rounded px-1 py-px text-[11px] ${selected ? look : `bg-raised hover:bg-line ${playing ? "text-accent" : "text-muted"}`}`}
           >
             {formatSeconds(t.gapUs)}
           </span>
@@ -58,6 +66,7 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
 export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]; disabled: boolean; onDelete: (lo: number, hi: number) => Promise<boolean> }) {
   const [sel, setSel] = useState<Selection | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const timeUs = useEditor((s) => s.timeUs);
   const playing = useEditor((s) => s.playing);
@@ -70,6 +79,14 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
 
   // Indices change with the words or the pause length.
   useEffect(() => setSel(null), [tokens, disabled]);
+
+  // Toasts move above the Delete bar while it shows, so an Undo toast never covers Delete.
+  const barShown = lo >= 0;
+  useLayoutEffect(() => {
+    if (!barShown) return;
+    useEditor.setState({ toastLift: bar.current?.offsetHeight ?? 0 });
+    return () => useEditor.setState({ toastLift: 0 });
+  }, [barShown]);
 
   useEffect(() => {
     if (playing && active >= 0) box.current?.querySelector(`[data-t="${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -181,7 +198,7 @@ export function TranscriptText({ tokens, disabled, onDelete }: { tokens: Token[]
         ))}
       </div>
       {lo >= 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
+        <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatSeconds(lengthUs)}
           </span>
