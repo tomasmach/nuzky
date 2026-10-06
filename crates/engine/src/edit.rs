@@ -244,6 +244,18 @@ impl Project {
         self.track_index(track_id).filter(|&i| self.tracks[i].kind == TrackKind::Text).ok_or_else(|| anyhow!("Unknown captions track"))
     }
 
+    /// Revalidate both sides after duration or adjacency changes, once main-track order is final.
+    fn clamp_transitions(&mut self) {
+        let Some(main) = self.track_index(MAIN_TRACK) else { return };
+        let mut previous_duration = None;
+        for clip in &mut self.tracks[main].clips {
+            if let (Some(previous), Some(transition)) = (previous_duration, &mut clip.transition_in) {
+                transition.duration_us = transition.duration_us.min(MAX_TRANSITION_US).min(previous).min(clip.duration_us);
+            }
+            previous_duration = Some(clip.duration_us);
+        }
+    }
+
     fn tidy(&mut self) {
         self.tracks.retain(|t| t.id == MAIN_TRACK || !t.clips.is_empty());
         for t in &mut self.tracks {
@@ -605,6 +617,7 @@ impl Project {
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();
+        self.clamp_transitions();
         Ok(out)
     }
 }
@@ -1162,6 +1175,38 @@ mod tests {
         assert!(p.apply(EditCmd::SetTransition { clip_id: a, transition: Some(t) }).is_err());
         p.apply(EditCmd::SetTransition { clip_id: b, transition: Some(t) }).unwrap();
         assert_eq!(p.tracks[0].clips[1].transition_in.unwrap().duration_us, 2_000_000);
+    }
+
+    #[test]
+    fn duration_edits_reclamp_both_adjacent_transitions() {
+        for operation in ["trim", "speed", "split_left", "split_right", "ripple"] {
+            let mut p = project();
+            for _ in 0..3 {
+                p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+            }
+            for ci in [1, 2] {
+                p.apply(EditCmd::SetTransition {
+                    clip_id: p.tracks[0].clips[ci].id.clone(),
+                    transition: Some(Transition { kind: crate::model::TransitionKind::Dissolve, duration_us: 2_000_000 }),
+                }).unwrap();
+            }
+            let clip_id = p.tracks[0].clips[1].id.clone();
+            let cmd = match operation {
+                "trim" => EditCmd::TrimClip { clip_id, start_us: 5_000_000, duration_us: 500_000, source_in_us: None },
+                "speed" => EditCmd::UpdateClip { clip_id, speed: Some(10.0), transform: None, volume: None, text: None, style: None, adjust: None, fade_in_us: None, fade_out_us: None },
+                "split_left" => EditCmd::SplitClip { clip_id, at_us: 5_500_000 },
+                "split_right" => EditCmd::SplitClip { clip_id, at_us: 9_500_000 },
+                _ => EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 5_500_000, end_us: 9_500_000 }], keep_track_ids: None },
+            };
+            p.apply(cmd).unwrap();
+            let clips = &p.tracks[0].clips;
+            for pair in clips.windows(2) {
+                if let Some(transition) = pair[1].transition_in {
+                    assert!(transition.duration_us <= pair[0].duration_us.min(pair[1].duration_us), "{operation}");
+                }
+            }
+            assert!(clips.iter().any(|c| c.transition_in.is_some_and(|t| t.duration_us == 500_000)), "{operation}");
+        }
     }
 
     #[test]
