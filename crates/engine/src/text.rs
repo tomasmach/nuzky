@@ -31,6 +31,8 @@ const DEFAULT_FAMILY: &str = "Inter";
 pub struct TextRenderer {
     fonts: FontSystem,
     families: HashSet<String>,
+    /// Whether a family draws bold itself, by family name.
+    bold: HashMap<String, bool>,
     swash: SwashCache,
     cache: HashMap<u64, Image>,
 }
@@ -49,7 +51,7 @@ impl TextRenderer {
         }
         fonts.db_mut().set_sans_serif_family(DEFAULT_FAMILY);
         let families = fonts.db().faces().flat_map(|face| face.families.iter().map(|(name, _)| name.clone())).collect();
-        Self { fonts, families, swash: SwashCache::new(), cache: HashMap::new() }
+        Self { fonts, families, bold: HashMap::new(), swash: SwashCache::new(), cache: HashMap::new() }
     }
 
     /// Bundled families first, then installed families, each group sorted and unique.
@@ -64,6 +66,25 @@ impl TextRenderer {
             Some(name) if self.families.contains(name) => Family::Name(name),
             _ => Family::SansSerif,
         }
+    }
+
+    /// Single-weight families such as Anton have no bold face; asking for one would make
+    /// cosmic-text draw another family's bold, so they stay regular instead.
+    fn draws_bold(&mut self, family: Family) -> bool {
+        let name = match family {
+            Family::Name(name) => name,
+            _ => DEFAULT_FAMILY,
+        };
+        if let Some(&known) = self.bold.get(name) {
+            return known;
+        }
+        let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(16.0, 20.0));
+        buffer.set_text("A", &Attrs::new().family(family).weight(Weight::BOLD), Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.fonts, false);
+        let font = buffer.layout_runs().flat_map(|run| run.glyphs.iter()).map(|glyph| glyph.font_id).next();
+        let own = font.and_then(|id| self.fonts.db().face(id)).is_some_and(|face| face.families.iter().any(|(n, _)| n == name));
+        self.bold.insert(name.to_owned(), own);
+        own
     }
 
     /// Renders `text` with `style` scaled by `scale` (output pixels per canvas pixel).
@@ -96,7 +117,9 @@ impl TextRenderer {
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, size * 1.2));
         let wrap = (max_width / scale - 2.0 * pad as f32).max(size);
         buffer.set_size(Some(wrap), None);
-        let attrs = Attrs::new().family(self.family(style.font_family.as_deref())).weight(if style.bold { Weight::BOLD } else { Weight::NORMAL });
+        let family = self.family(style.font_family.as_deref());
+        let weight = if style.bold && self.draws_bold(family) { Weight::BOLD } else { Weight::NORMAL };
+        let attrs = Attrs::new().family(family).weight(weight);
         let text = if text.trim().is_empty() { " " } else { text };
         buffer.set_text(text, &attrs, Shaping::Advanced, Some(Align::Center));
         buffer.shape_until_scroll(&mut self.fonts, false);
@@ -229,7 +252,7 @@ mod tests {
         db.set_sans_serif_family("Inter");
         let fonts = FontSystem::new_with_locale_and_db("cs-CZ".into(), db);
         let families = fonts.db().faces().flat_map(|face| face.families.iter().map(|(name, _)| name.clone())).collect();
-        TextRenderer { fonts, families, swash: SwashCache::new(), cache: HashMap::new() }
+        TextRenderer { fonts, families, bold: HashMap::new(), swash: SwashCache::new(), cache: HashMap::new() }
     }
 
     #[test]
@@ -271,6 +294,18 @@ mod tests {
             let bold = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0);
             let coverage = |image: &Image| image.data.chunks_exact(4).map(|p| u64::from(p[3])).sum::<u64>();
             assert!(coverage(&bold) > coverage(&regular), "Bold did not increase ink coverage in {family}");
+        }
+    }
+
+    #[test]
+    fn single_weight_families_stay_themselves_when_bold() {
+        // With installed fonts present, cosmic-text would otherwise pick another family's bold.
+        let mut renderer = TextRenderer::new();
+        for family in ["Anton", "Bebas Neue"] {
+            let mut style = style(family);
+            let regular = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0);
+            style.bold = true;
+            assert_eq!(renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).data, regular.data, "{family}");
         }
     }
 
