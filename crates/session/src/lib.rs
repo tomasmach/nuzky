@@ -12,7 +12,7 @@ mod types;
 mod validate;
 mod writer;
 
-pub use storage::{lock_project, save as write_json_atomic};
+pub use storage::{json_temp_path, lock_project, save as write_json_atomic};
 pub use types::*;
 pub use validate::validate;
 

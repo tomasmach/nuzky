@@ -36,6 +36,75 @@ fn render_refuses_project_and_sidecars_including_symlinks() {
 }
 
 #[test]
+fn render_refuses_atomic_save_temporaries_and_legacy_names_through_aliases() {
+    let (dir, project, bytes) = fixture();
+    let outputs = [
+        capopen_session::json_temp_path(&project),
+        capopen_session::json_temp_path(&dir.join("project.capopen.checkpoint.json")),
+        dir.join("project.capopen.future-sidecar"),
+        dir.join("project.tmp"),
+    ];
+    let refused = |input: &std::path::Path, output: &std::path::Path| {
+        let result = Command::new(env!("CARGO_BIN_EXE_capopen")).arg("render").arg(input).arg(output).output().unwrap();
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("Output would overwrite"),
+            "{}: {}",
+            output.display(),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    for output in outputs {
+        refused(&project, &output);
+        assert!(!output.exists());
+        // An in-flight save already owns its temporary file; rendering must preserve its bytes.
+        std::fs::write(&output, b"pending JSON save").unwrap();
+        refused(&project, &output);
+        assert_eq!(std::fs::read(&output).unwrap(), b"pending JSON save");
+        #[cfg(unix)]
+        {
+            let input_alias = dir.join("input-alias.capopen");
+            let output_alias = dir.join("output-alias.mp4");
+            std::os::unix::fs::symlink(&project, &input_alias).unwrap();
+            std::os::unix::fs::symlink(output.file_name().unwrap(), &output_alias).unwrap();
+            refused(&input_alias, &output_alias);
+            std::fs::remove_file(&output).unwrap();
+            // Also resolve a dangling output link to a not-yet-created save temporary.
+            refused(&input_alias, &output_alias);
+            std::fs::remove_file(input_alias).unwrap();
+            std::fs::remove_file(output_alias).unwrap();
+        }
+    }
+    #[cfg(unix)]
+    {
+        let alias = dir.join("directory-alias");
+        std::os::unix::fs::symlink(&dir, &alias).unwrap();
+        refused(&alias.join("project.capopen"), &alias.join("project.capopen.some-id.tmp"));
+        let input_alias = dir.join("alternate.capopen");
+        std::os::unix::fs::symlink(&project, &input_alias).unwrap();
+        refused(&input_alias, &dir.join("alternate.capopen.some-id.tmp"));
+        refused(&input_alias, &dir.join("alternate.tmp"));
+        // A reserved destination remains reserved even when it is a symlink pointing outwards.
+        let external = dir.join("unrelated.mp4");
+        std::fs::write(&external, b"unrelated output").unwrap();
+        let sidecar = dir.join("project.capopen.outward.tmp");
+        std::os::unix::fs::symlink(&external, &sidecar).unwrap();
+        refused(&project, &sidecar);
+        assert_eq!(std::fs::read(external).unwrap(), b"unrelated output");
+    }
+    let other = dir.join("other");
+    std::fs::create_dir(&other).unwrap();
+    for output in [dir.join("project.capopen-movie.mp4"), other.join("project.capopen.export.mp4")] {
+        let result =
+            Command::new(env!("CARGO_BIN_EXE_capopen")).arg("render").arg(&project).arg(output).output().unwrap();
+        // The empty fixture stops at export validation, after the output guard has accepted it.
+        assert!(String::from_utf8_lossy(&result.stderr).contains("The timeline is empty"));
+    }
+    assert_eq!(std::fs::read(&project).unwrap(), bytes);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn new_refuses_existing_or_locked_project_and_publishes_complete_json() {
     let (dir, project, bytes) = fixture();
     let image = dir.join("image.ppm");

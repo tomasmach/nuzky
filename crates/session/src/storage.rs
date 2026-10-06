@@ -11,9 +11,14 @@ pub(crate) fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Temporary JSON writes live beside their destination, inside its sidecar namespace.
+pub fn json_temp_path(path: &Path) -> PathBuf {
+    sidecar(path, &format!(".{}.tmp", capopen_engine::edit::new_id()))
+}
+
 pub fn save(path: &Path, value: &impl Serialize) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value).context("Serializing project state")?;
-    let tmp = sidecar(path, &format!(".{}.tmp", capopen_engine::edit::new_id()));
+    let tmp = json_temp_path(path);
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)

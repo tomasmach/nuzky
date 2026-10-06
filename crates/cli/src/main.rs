@@ -54,14 +54,34 @@ fn resolved_path(path: &Path) -> Result<PathBuf> {
     bail!("Too many symlinks in output path")
 }
 
+/// Resolve the parent while preserving the final directory entry, which export replaces.
+fn absolute_entry(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    Ok(std::fs::canonicalize(parent)?.join(path.file_name().context("Output needs a filename")?))
+}
+
 fn check_render_output(project: &Path, out: &Path) -> Result<()> {
-    let target = resolved_path(out)?;
+    let targets = [resolved_path(out)?, absolute_entry(out)?];
     let canonical = std::fs::canonicalize(project)?;
-    for base in [project, canonical.as_path()] {
-        for suffix in ["", ".lock", ".checkpoint.json", ".tmp"] {
+    for base in [absolute_entry(project)?, canonical] {
+        let mut prefix = base.file_name().context("Project needs a filename")?.to_os_string();
+        prefix.push(".");
+        for target in &targets {
+            if target == &base
+                || (target.parent() == base.parent()
+                    && target
+                        .file_name()
+                        .is_some_and(|name| name.as_encoded_bytes().starts_with(prefix.as_encoded_bytes())))
+                || target == &resolved_path(&base.with_extension("tmp"))?
+            {
+                bail!("Output would overwrite the project or its sidecar: {}", out.display());
+            }
+        }
+        // Preserve protection of existing sidecars whose own symlinks point outside that namespace.
+        for suffix in [".lock", ".checkpoint.json", ".tmp"] {
             let mut path = base.as_os_str().to_os_string();
             path.push(suffix);
-            if target == resolved_path(Path::new(&path))? {
+            if targets.contains(&resolved_path(Path::new(&path))?) {
                 bail!("Output would overwrite the project or its sidecar: {}", out.display());
             }
         }
@@ -70,7 +90,7 @@ fn check_render_output(project: &Path, out: &Path) -> Result<()> {
 }
 
 fn publish_new_project(out: &Path, project: &Project) -> Result<()> {
-    let tmp = out.with_file_name(format!(".capopen-new-{}.tmp", new_id()));
+    let tmp = capopen_session::json_temp_path(out);
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
         file.write_all(&serde_json::to_vec_pretty(project)?)?;
