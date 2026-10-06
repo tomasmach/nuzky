@@ -551,6 +551,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "capopen-analysis",
  "capopen-engine",
  "cpal",
  "dirs 6.0.0",
