@@ -67,12 +67,13 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 /// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
 /// same file (import, export and captions) wait for one extraction instead of racing.
 pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32)) -> Result<PathBuf> {
-    static LOCKS: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, Arc<std::sync::Mutex<()>>>>> = std::sync::OnceLock::new();
     let path = pcm_path(cache_dir, asset);
-    let lock = LOCKS.get_or_init(Default::default).lock().unwrap().entry(path.clone()).or_default().clone();
-    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
+    lock.lock()?;
     if !path.exists() {
-        std::fs::create_dir_all(path.parent().unwrap())?;
         extract_pcm(Path::new(&asset.path), &path, progress)?;
     }
     Ok(path)
@@ -200,6 +201,55 @@ mod tests {
         bytes.extend_from_slice(&data_bytes.to_le_bytes());
         for _ in 0..frames { bytes.extend_from_slice(&sample.to_le_bytes()); }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn pcm_cache_child() {
+        let Some(dir) = std::env::var_os("CAPOPEN_PCM_LOCK_TEST") else { return };
+        let dir = PathBuf::from(dir);
+        let asset: Asset = serde_json::from_slice(&std::fs::read(dir.join("asset.json")).unwrap()).unwrap();
+        let id = std::process::id();
+        std::fs::write(dir.join(format!("ready-{id}")), b"").unwrap();
+        let path = ensure_pcm(&dir, &asset, |_| panic!("published cache must be reused")).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), vec![0; 8]);
+        std::fs::write(dir.join(format!("done-{id}")), b"").unwrap();
+    }
+
+    #[test]
+    fn pcm_cache_serializes_processes_and_rechecks_after_lock() {
+        use std::time::{Duration, Instant};
+        let dir = std::env::temp_dir().join(format!("pcm-processes-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(dir.join("pcm")).unwrap();
+        let source = dir.join("source.wav");
+        write_test_wav(&source, 8192, 4800);
+        let asset = crate::media::probe(&source, "same".into()).unwrap();
+        std::fs::write(dir.join("asset.json"), serde_json::to_vec(&asset).unwrap()).unwrap();
+        let path = pcm_path(&dir, &asset);
+        let lock_path = format!("{}.lock", path.display());
+        let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path).unwrap();
+        lock.lock().unwrap();
+        let mut children: Vec<_> = (0..2).map(|_| std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "audio::tests::pcm_cache_child", "--nocapture"])
+            .env("CAPOPEN_PCM_LOCK_TEST", &dir).spawn().unwrap()).collect();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !children.iter().all(|c| dir.join(format!("ready-{}", c.id())).exists()) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(children.iter_mut().all(|c| c.try_wait().unwrap().is_none()));
+        assert!(!path.exists());
+        std::fs::write(&path, [0; 8]).unwrap();
+        drop(lock);
+        for mut child in children {
+            while child.try_wait().unwrap().is_none() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(child.wait().unwrap().success());
+            assert!(dir.join(format!("done-{}", child.id())).exists());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -345,8 +345,10 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let origin = origin_us(&input);
     let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
 
-    let tmp = out.with_extension("part");
-    let mut writer = BufWriter::with_capacity(1 << 20, File::create(&tmp)?);
+    let tmp = out.with_file_name(format!(".capopen-pcm-{}.part", crate::edit::new_id()));
+    let file = File::options().write(true).create_new(true).open(&tmp)?;
+    let result = (|| {
+    let mut writer = BufWriter::with_capacity(1 << 20, file);
     let mut written: u64 = 0; // sample frames
     let mut resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))> = None;
     let mut decoded = frame::Audio::empty();
@@ -448,6 +450,9 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     std::fs::rename(&tmp, out)?;
     progress(1.0);
     Ok(written)
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    result
 }
 
 const PCM_FORMAT: ff::format::Sample = ff::format::Sample::F32(ff::format::sample::Type::Packed);
