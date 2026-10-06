@@ -16,17 +16,19 @@ const MAX_RASTER_PIXELS: usize = 16 * 1024 * 1024;
 const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RASTER_SCALE: f32 = 8.0;
-const MAX_LAYOUT_WIDTH: f32 = 4.0 * 7680.0;
+const MIN_RASTER_SCALE: f32 = 0.01;
+const MAX_LAYOUT_SIDE: f32 = 4.0 * 7680.0;
 
 fn finite_clamp(value: f32, min: f32, max: f32) -> f32 {
     if value.is_finite() { value.clamp(min, max) } else { min }
 }
 
-/// Output pixels per canvas pixel that `style` rasterises at. Large text gets a coarser raster
-/// instead of a smaller font, so callers size the layer and the wrap width with this scale.
-pub fn raster_scale(style: &TextStyle, scale: f32) -> f32 {
-    let size = finite_clamp(style.font_size, 1.0, f32::MAX);
-    finite_clamp(scale, 0.01, MAX_RASTER_SCALE).min(MAX_GLYPH_PX / size).max(0.01)
+/// Rasterised text and the output pixels per canvas pixel it was drawn at. Large text is drawn at
+/// a lower scale than requested, so callers size the layer with this one.
+#[derive(Clone)]
+pub struct TextImage {
+    pub image: Image,
+    pub scale: f32,
 }
 
 #[derive(serde::Deserialize)]
@@ -77,7 +79,7 @@ pub struct TextRenderer {
     /// Whether a family draws bold itself, by family name.
     bold: HashMap<String, bool>,
     swash: SwashCache,
-    cache: HashMap<u64, Image>,
+    cache: HashMap<u64, TextImage>,
 }
 
 impl Default for TextRenderer {
@@ -133,8 +135,8 @@ impl TextRenderer {
     }
 
     /// Renders `text` with `style` scaled by `scale` (output pixels per canvas pixel).
-    /// `max_width` is the wrap width in output pixels.
-    pub fn render(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> Image {
+    /// `max_width` is the wrap width in output pixels at the requested scale.
+    pub fn render(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> TextImage {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
         format!("{style:?}").hash(&mut h);
@@ -146,7 +148,8 @@ impl TextRenderer {
         }
         let img = self.rasterize(text, style, scale, max_width);
         if self.cache.len() >= 512
-            || self.cache.values().map(|image| image.data.len()).sum::<usize>() + img.data.len() > MAX_TEXT_CACHE_BYTES
+            || self.cache.values().map(|text| text.image.data.len()).sum::<usize>() + img.image.data.len()
+                > MAX_TEXT_CACHE_BYTES
         {
             self.cache.clear();
         }
@@ -154,18 +157,18 @@ impl TextRenderer {
         img
     }
 
-    fn rasterize(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> Image {
+    fn rasterize(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> TextImage {
         // Layout stays in canvas pixels; only glyph rasterisation uses the output scale.
-        let scale = finite_clamp(scale, 0.01, MAX_RASTER_SCALE);
-        let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / scale);
+        let wanted = finite_clamp(scale, MIN_RASTER_SCALE, MAX_RASTER_SCALE);
+        let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / MIN_RASTER_SCALE);
         let stroke = finite_clamp(style.stroke_width, 0.0, max_stroke_width(size));
-        let max_width = finite_clamp(max_width / scale, 1.0, MAX_LAYOUT_WIDTH);
+        let max_width = finite_clamp(max_width / wanted, 1.0, MAX_LAYOUT_SIDE);
         let pad_box = if style.background.is_some() { size * 0.3 } else { 0.0 };
         let pad = (stroke.ceil() + pad_box.ceil() + 2.0) as i32;
 
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, size * 1.2));
         let wrap = (max_width - 2.0 * pad as f32).max(size);
-        buffer.set_size(Some(wrap), Some(MAX_RASTER_SIDE as f32 / scale));
+        buffer.set_size(Some(wrap), Some(MAX_LAYOUT_SIDE));
         let family = self.family(style.font_family.as_deref());
         let weight = if style.bold && self.draws_bold(family) { Weight::BOLD } else { Weight::NORMAL };
         let attrs = Attrs::new().family(family).weight(weight);
@@ -181,10 +184,17 @@ impl TextRenderer {
         }
         // Glyphs are centred inside `wrap`, so crop to the widest line.
         let x0 = ((wrap - line_w) / 2.0).floor() as i32;
-        // Clip pathological text before allocating masks or rasterising any glyphs.
-        let w = (((line_w.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize).clamp(1, MAX_RASTER_SIDE);
-        let h = (((text_h.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize)
-            .clamp(1, MAX_RASTER_SIDE.min(MAX_RASTER_PIXELS / w));
+        let canvas_w = (line_w.ceil() + 2.0 * pad as f32).max(1.0);
+        let canvas_h = (text_h.ceil() + 2.0 * pad as f32).max(1.0);
+        // Large text gets a coarser raster rather than a smaller font or a cropped bitmap.
+        let scale = wanted
+            .min(MAX_GLYPH_PX / size)
+            .min(MAX_RASTER_SIDE as f32 / canvas_w.max(canvas_h))
+            .min((MAX_RASTER_PIXELS as f32 / (canvas_w * canvas_h)).sqrt())
+            .max(MIN_RASTER_SCALE);
+        // Pathological text below the minimum scale is clipped before any allocation.
+        let w = ((canvas_w * scale).ceil() as usize).clamp(1, MAX_RASTER_SIDE);
+        let h = ((canvas_h * scale).ceil() as usize).clamp(1, MAX_RASTER_SIDE.min(MAX_RASTER_PIXELS / w));
 
         let mut fill = vec![0u8; w * h];
         for run in buffer.layout_runs() {
@@ -246,7 +256,7 @@ impl TextRenderer {
                 }
             }
         }
-        Image { width: w as u32, height: h as u32, data: Arc::new(out) }
+        TextImage { image: Image { width: w as u32, height: h as u32, data: Arc::new(out) }, scale }
     }
 }
 
@@ -325,7 +335,7 @@ mod tests {
             old.stroke_width = value;
             old.max_width = Some(value);
             let bounded = old.bounded(&canvas);
-            let image = renderer.render("Old title", &bounded, 1.0, bounded.max_width.unwrap());
+            let image = renderer.render("Old title", &bounded, 1.0, bounded.max_width.unwrap()).image;
             assert!(image.width > 0 && image.height > 0);
             assert_eq!(image.data.len(), image.width as usize * image.height as usize * 4);
             assert!(image.data.len() <= MAX_RASTER_PIXELS * 4);
@@ -334,9 +344,9 @@ mod tests {
         let mut old = style("Inter");
         old.font_size = f32::MAX;
         old.stroke_width = f32::MAX;
-        let image = renderer.render("A", &old, 1.0, f32::MAX);
+        let image = renderer.render("A", &old, 1.0, f32::MAX).image;
         assert!(image.data.len() <= MAX_RASTER_PIXELS * 4);
-        let image = renderer.render(&"line\n".repeat(1000), &style("Inter"), f32::NAN, f32::INFINITY);
+        let image = renderer.render(&"line\n".repeat(1000), &style("Inter"), f32::NAN, f32::INFINITY).image;
         assert!(image.data.len() <= MAX_RASTER_PIXELS * 4);
     }
 
@@ -371,7 +381,7 @@ mod tests {
             assert_eq!(covered, Some(true), "Missing Czech glyphs in {:?}", face.families);
         }
         for family in BUNDLED_FONT_FAMILIES.iter().copied() {
-            let image = renderer.render("Příliš žluťoučký kůň", &style(family), 1.0, 1080.0);
+            let image = renderer.render("Příliš žluťoučký kůň", &style(family), 1.0, 1080.0).image;
             assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] != 0), "Empty {family}");
             let mut buffer = Buffer::new(&mut renderer.fonts, Metrics::new(95.0, 114.0));
             buffer.set_size(Some(4000.0), None);
@@ -393,9 +403,9 @@ mod tests {
         for family in ["Inter", "Lexend", "Montserrat", "Oswald", "Poppins", "Roboto"] {
             let mut style = style(family);
             style.stroke_width = 0.0;
-            let regular = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0);
+            let regular = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).image;
             style.bold = true;
-            let bold = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0);
+            let bold = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).image;
             let coverage = |image: &Image| image.data.chunks_exact(4).map(|p| u64::from(p[3])).sum::<u64>();
             assert!(coverage(&bold) > coverage(&regular), "Bold did not increase ink coverage in {family}");
         }
@@ -407,9 +417,13 @@ mod tests {
         let mut renderer = TextRenderer::new();
         for family in ["Anton", "Bebas Neue"] {
             let mut style = style(family);
-            let regular = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0);
+            let regular = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).image;
             style.bold = true;
-            assert_eq!(renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).data, regular.data, "{family}");
+            assert_eq!(
+                renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).image.data,
+                regular.data,
+                "{family}"
+            );
         }
     }
 
@@ -423,13 +437,13 @@ mod tests {
         for family in &families {
             assert_eq!(renderer.family(Some(family)), Family::Name(family));
         }
-        let inter = renderer.render("Příliš žluťoučký kůň", &style("Inter"), 1.0, 2000.0);
-        let anton = renderer.render("Příliš žluťoučký kůň", &style("Anton"), 1.0, 2000.0);
+        let inter = renderer.render("Příliš žluťoučký kůň", &style("Inter"), 1.0, 2000.0).image;
+        let anton = renderer.render("Příliš žluťoučký kůň", &style("Anton"), 1.0, 2000.0).image;
         assert_ne!(inter.data, anton.data);
-        let missing = renderer.render("Ahoj", &style("CapOpen nonexistent font"), 1.0, 1000.0);
+        let missing = renderer.render("Ahoj", &style("CapOpen nonexistent font"), 1.0, 1000.0).image;
         let mut default = style("Inter");
         default.font_family = None;
-        let fallback = renderer.render("Ahoj", &default, 1.0, 1000.0);
+        let fallback = renderer.render("Ahoj", &default, 1.0, 1000.0).image;
         assert_eq!(missing.data, fallback.data);
     }
 }
