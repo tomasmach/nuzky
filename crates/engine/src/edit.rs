@@ -294,6 +294,20 @@ impl Project {
     pub fn apply(&mut self, cmd: EditCmd) -> Result<EditOutcome> {
         let mut out = EditOutcome::default();
         let mut moved: Option<(String, i64)> = None;
+        match cmd {
+            EditCmd::AddAssets { .. } | EditCmd::RemoveAsset { .. } | EditCmd::AddClip { .. } | EditCmd::AddText { .. } | EditCmd::DetachAudio { .. } => self.apply_media(cmd, &mut out, &mut moved)?,
+            EditCmd::MoveClip { .. } | EditCmd::TrimClip { .. } | EditCmd::SplitClip { .. } | EditCmd::DeleteClips { .. } | EditCmd::DuplicateClip { .. } => self.apply_placement(cmd, &mut out, &mut moved)?,
+            EditCmd::UpdateClip { .. } | EditCmd::SetAnimation { .. } | EditCmd::SetTransition { .. } | EditCmd::SetKeyframes { .. } => self.apply_clip(cmd)?,
+            EditCmd::UpdateTrack { .. } | EditCmd::SetCanvas { .. } | EditCmd::RenameProject { .. } => self.apply_tracks(cmd)?,
+            EditCmd::AddCaptions { .. } | EditCmd::ReplaceCaptions { .. } | EditCmd::RippleDeleteRanges { .. } => self.apply_captions(cmd, &mut out)?,
+        }
+        self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
+        self.tidy();
+        self.clamp_transitions();
+        Ok(out)
+    }
+
+    fn apply_media(&mut self, cmd: EditCmd , out: &mut EditOutcome, moved: &mut Option<(String, i64)>) -> Result<()> {
         let min = min_duration(self);
         match cmd {
             EditCmd::AddAssets { assets } => {
@@ -337,7 +351,7 @@ impl Project {
                     self.tracks[t].clips.push(Clip { start_us: start, ..clip });
                 } else {
                     if target == 0 {
-                        moved = Some((clip.id.clone(), start));
+                        *moved = Some((clip.id.clone(), start));
                     }
                     self.tracks[target].clips.push(Clip { start_us: start, ..clip });
                 }
@@ -354,6 +368,38 @@ impl Project {
                 out.select.push(clip.id.clone());
                 self.tracks[t].clips.push(clip);
             }
+            EditCmd::DetachAudio { clip_id } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                let clip = self.tracks[ti].clips[ci].clone();
+                let ClipContent::Media { asset_id, volume, .. } = &clip.content else { bail!("Only video clips have sound to detach") };
+                if self.tracks[ti].kind != TrackKind::Video {
+                    bail!("This clip is already sound on its own track");
+                }
+                let asset = self.asset(asset_id).ok_or_else(|| anyhow!("Unknown media"))?;
+                if asset.kind != AssetKind::Video || !asset.has_audio || *volume <= 0.0 {
+                    bail!("This clip has no sound to detach");
+                }
+                let mut sound = Clip::new(new_id(), clip.start_us, clip.duration_us, clip.content.clone());
+                if let ClipContent::Media { transform, adjust, .. } = &mut sound.content {
+                    *transform = Transform::default();
+                    *adjust = Adjust::default();
+                }
+                if let ClipContent::Media { volume, .. } = &mut self.tracks[ti].clips[ci].content {
+                    *volume = 0.0;
+                }
+                // Detached sound is speech: it is cut together with the picture.
+                let target = self.free_track(TrackKind::Audio, clip.start_us, clip.end_us(), false);
+                out.select.push(sound.id.clone());
+                self.tracks[target].clips.push(sound);
+            }
+            _ => unreachable!("command dispatched to the wrong edit group"),
+        }
+        Ok(())
+    }
+
+    fn apply_placement(&mut self, cmd: EditCmd , out: &mut EditOutcome, moved: &mut Option<(String, i64)>) -> Result<()> {
+        let min = min_duration(self);
+        match cmd {
             EditCmd::MoveClip { clip_id, track_id, start_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 // Clips always sit on a track of their kind; detached sound is a video asset on an audio track.
@@ -366,7 +412,7 @@ impl Project {
                 let target = track_id.and_then(|id| self.track_index(&id)).filter(|&i| self.tracks[i].kind == kind);
                 let target = match target {
                     Some(0) => {
-                        moved = Some((clip.id.clone(), start));
+                        *moved = Some((clip.id.clone(), start));
                         0
                     }
                     Some(i) if self.is_free(i, start, end, None) => i,
@@ -434,44 +480,37 @@ impl Project {
                 let second = self.split_clip(ti, ci, at_us);
                 out.select.push(self.tracks[ti].clips[second].id.clone());
             }
-            EditCmd::RippleDeleteRanges { ranges, keep_track_ids } => {
-                let kept: Vec<bool> = match &keep_track_ids {
-                    Some(ids) => self.tracks.iter().map(|t| ids.contains(&t.id)).collect(),
-                    None => self.tracks.iter().map(|t| t.keep_in_place).collect(),
-                };
-                let mut ranges = merge_ranges(ranges);
-                if let Some(main) = self.track_index(MAIN_TRACK).filter(|&ti| !kept[ti]) {
-                    let mut slivers = Vec::new();
-                    for clip in &self.tracks[main].clips {
-                        let mut start = clip.start_us;
-                        for range in &ranges {
-                            let end = range.start_us.min(clip.end_us());
-                            if start < end && end - start < min {
-                                slivers.push(TimeRange { start_us: start, end_us: end });
-                            }
-                            start = start.max(range.end_us);
-                            if start >= clip.end_us() { break; }
-                        }
-                        if start < clip.end_us() && clip.end_us() - start < min {
-                            slivers.push(TimeRange { start_us: start, end_us: clip.end_us() });
-                        }
-                    }
-                    // Packing also removes these fragments; every moving track must lose that time.
-                    ranges.extend(slivers);
-                    ranges = merge_ranges(ranges);
-                }
-                // Later ranges first, so earlier coordinates stay valid while cutting.
-                for range in ranges.into_iter().rev() {
-                    for ti in (0..self.tracks.len()).filter(|&ti| !kept[ti]) {
-                        self.ripple_delete_track(ti, range, min);
-                    }
-                }
-            }
             EditCmd::DeleteClips { clip_ids } => {
                 for t in &mut self.tracks {
                     t.clips.retain(|c| !clip_ids.contains(&c.id));
                 }
             }
+            EditCmd::DuplicateClip { clip_id } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                let mut copy = self.tracks[ti].clips[ci].clone();
+                copy.id = new_id();
+                copy.start_us = self.tracks[ti].clips[ci].end_us();
+                copy.transition_in = None;
+                out.select.push(copy.id.clone());
+                let target = if ti == 0 || self.is_free(ti, copy.start_us, copy.end_us(), None) {
+                    ti
+                } else {
+                    let (kind, keep) = (self.tracks[ti].kind, self.tracks[ti].keep_in_place);
+                    self.free_track(kind, copy.start_us, copy.end_us(), keep)
+                };
+                if target == 0 {
+                    *moved = Some((copy.id.clone(), copy.start_us));
+                }
+                self.tracks[target].clips.push(copy);
+            }
+            _ => unreachable!("command dispatched to the wrong edit group"),
+        }
+        Ok(())
+    }
+
+    fn apply_clip(&mut self, cmd: EditCmd) -> Result<()> {
+        let min = min_duration(self);
+        match cmd {
             EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed, adjust, fade_in_us, fade_out_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let changes_length = speed.is_some();
@@ -555,48 +594,13 @@ impl Project {
                 keyframes.dedup_by_key(|k| k.t_us);
                 self.tracks[ti].clips[ci].keyframes = keyframes;
             }
-            EditCmd::DuplicateClip { clip_id } => {
-                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                let mut copy = self.tracks[ti].clips[ci].clone();
-                copy.id = new_id();
-                copy.start_us = self.tracks[ti].clips[ci].end_us();
-                copy.transition_in = None;
-                out.select.push(copy.id.clone());
-                let target = if ti == 0 || self.is_free(ti, copy.start_us, copy.end_us(), None) {
-                    ti
-                } else {
-                    let (kind, keep) = (self.tracks[ti].kind, self.tracks[ti].keep_in_place);
-                    self.free_track(kind, copy.start_us, copy.end_us(), keep)
-                };
-                if target == 0 {
-                    moved = Some((copy.id.clone(), copy.start_us));
-                }
-                self.tracks[target].clips.push(copy);
-            }
-            EditCmd::DetachAudio { clip_id } => {
-                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                let clip = self.tracks[ti].clips[ci].clone();
-                let ClipContent::Media { asset_id, volume, .. } = &clip.content else { bail!("Only video clips have sound to detach") };
-                if self.tracks[ti].kind != TrackKind::Video {
-                    bail!("This clip is already sound on its own track");
-                }
-                let asset = self.asset(asset_id).ok_or_else(|| anyhow!("Unknown media"))?;
-                if asset.kind != AssetKind::Video || !asset.has_audio || *volume <= 0.0 {
-                    bail!("This clip has no sound to detach");
-                }
-                let mut sound = Clip::new(new_id(), clip.start_us, clip.duration_us, clip.content.clone());
-                if let ClipContent::Media { transform, adjust, .. } = &mut sound.content {
-                    *transform = Transform::default();
-                    *adjust = Adjust::default();
-                }
-                if let ClipContent::Media { volume, .. } = &mut self.tracks[ti].clips[ci].content {
-                    *volume = 0.0;
-                }
-                // Detached sound is speech: it is cut together with the picture.
-                let target = self.free_track(TrackKind::Audio, clip.start_us, clip.end_us(), false);
-                out.select.push(sound.id.clone());
-                self.tracks[target].clips.push(sound);
-            }
+            _ => unreachable!("command dispatched to the wrong edit group"),
+        }
+        Ok(())
+    }
+
+    fn apply_tracks(&mut self, cmd: EditCmd) -> Result<()> {
+        match cmd {
             EditCmd::UpdateTrack { track_id, muted, hidden, keep_in_place } => {
                 let i = self.track_index(&track_id).ok_or_else(|| anyhow!("Unknown track"))?;
                 let t = &mut self.tracks[i];
@@ -623,6 +627,20 @@ impl Project {
                     self.canvas.background = b;
                 }
             }
+            EditCmd::RenameProject { name } => {
+                let name = name.trim();
+                if !name.is_empty() {
+                    self.name = name.to_string();
+                }
+            }
+            _ => unreachable!("command dispatched to the wrong edit group"),
+        }
+        Ok(())
+    }
+
+    fn apply_captions(&mut self, cmd: EditCmd , out: &mut EditOutcome) -> Result<()> {
+        let min = min_duration(self);
+        match cmd {
             EditCmd::AddCaptions { segments, style } => {
                 let clips = caption_clips(segments, &style, &self.canvas, min);
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
@@ -634,18 +652,44 @@ impl Project {
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks[ti].clips = clips;
             }
-            EditCmd::RenameProject { name } => {
-                let name = name.trim();
-                if !name.is_empty() {
-                    self.name = name.to_string();
+            EditCmd::RippleDeleteRanges { ranges, keep_track_ids } => {
+                let kept: Vec<bool> = match &keep_track_ids {
+                    Some(ids) => self.tracks.iter().map(|t| ids.contains(&t.id)).collect(),
+                    None => self.tracks.iter().map(|t| t.keep_in_place).collect(),
+                };
+                let mut ranges = merge_ranges(ranges);
+                if let Some(main) = self.track_index(MAIN_TRACK).filter(|&ti| !kept[ti]) {
+                    let mut slivers = Vec::new();
+                    for clip in &self.tracks[main].clips {
+                        let mut start = clip.start_us;
+                        for range in &ranges {
+                            let end = range.start_us.min(clip.end_us());
+                            if start < end && end - start < min {
+                                slivers.push(TimeRange { start_us: start, end_us: end });
+                            }
+                            start = start.max(range.end_us);
+                            if start >= clip.end_us() { break; }
+                        }
+                        if start < clip.end_us() && clip.end_us() - start < min {
+                            slivers.push(TimeRange { start_us: start, end_us: clip.end_us() });
+                        }
+                    }
+                    // Packing also removes these fragments; every moving track must lose that time.
+                    ranges.extend(slivers);
+                    ranges = merge_ranges(ranges);
+                }
+                // Later ranges first, so earlier coordinates stay valid while cutting.
+                for range in ranges.into_iter().rev() {
+                    for ti in (0..self.tracks.len()).filter(|&ti| !kept[ti]) {
+                        self.ripple_delete_track(ti, range, min);
+                    }
                 }
             }
+            _ => unreachable!("command dispatched to the wrong edit group"),
         }
-        self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
-        self.tidy();
-        self.clamp_transitions();
-        Ok(out)
+        Ok(())
     }
+
 }
 
 /// Clip ids added and removed between two versions, in timeline order.
