@@ -564,7 +564,7 @@ fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::model::TrackKind;
+    use capopen_engine::model::{Asset, TrackKind};
     use capopen_analysis::Word;
     use capopen_engine::Editor;
 
@@ -666,8 +666,10 @@ mod tests {
         let out = root.join("fonts");
         std::fs::create_dir_all(&out)?;
         let asset = capopen_engine::media::probe(&root.join("talk.mp4"), "talk".into())?;
+        // The same sound imported as an audio file is music, not speech.
+        let song = Asset { id: "song".into(), kind: AssetKind::Audio, ..asset.clone() };
         let mut project = Project::new("Speech test");
-        project.apply(EditCmd::AddAssets { assets: vec![asset] })?;
+        project.apply(EditCmd::AddAssets { assets: vec![asset, song] })?;
         project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None })?;
         // A leading gap proves the recogniser returns timeline rather than asset time.
         project.tracks[0].clips[0].start_us = 2_000_000;
@@ -678,6 +680,9 @@ mod tests {
         let mut music = project.tracks[0].clone();
         music.id = "music".into();
         music.kind = TrackKind::Audio;
+        if let ClipContent::Media { asset_id, .. } = &mut music.clips[0].content {
+            *asset_id = "song".into();
+        }
         project.tracks.push(music);
         assert_eq!(speech_audio(&project, &cache, &cancel)?, mixed);
         let models = root.join("xdg/data/capopen/models");

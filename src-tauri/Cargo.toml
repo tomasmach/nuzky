@@ -36,3 +36,7 @@ dirs = "6"
 uuid = { version = "1", features = ["v4"] }
 whisper-rs = "0.16.0"
 ureq = "3.4.2"
+
+# Speech recognition on the GPU through Vulkan, verified on Linux so far.
+[target.'cfg(target_os = "linux")'.dependencies]
+capopen-analysis = { workspace = true, features = ["gpu"] }

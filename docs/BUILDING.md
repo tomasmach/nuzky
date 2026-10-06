@@ -11,7 +11,7 @@ sudo apt-get update
 sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev clang cmake pkg-config \
   ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
   libswresample-dev libavfilter-dev libavdevice-dev libx264-dev \
-  patchelf libfuse2t64 librsvg2-bin libvulkan1 mesa-vulkan-drivers
+  patchelf libfuse2t64 librsvg2-bin libvulkan1 mesa-vulkan-drivers libvulkan-dev glslc
 npm ci
 npm run tauri dev
 ```
@@ -21,7 +21,7 @@ Ubuntu 24.04 ships [FFmpeg 6.1](https://packages.ubuntu.com/noble/libavcodec-dev
 Fedora/Nobara with root:
 
 ```sh
-sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel
+sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel vulkan-loader-devel vulkan-headers glslc
 npm install
 npm run tauri dev
 ```
@@ -36,7 +36,11 @@ npm install
 npm run tauri dev
 ```
 
-The setup script only downloads/extracts RPM headers and generates ignored, machine-specific `.cargo/config.toml`. It does not use sudo or replace runtime libraries. Do not copy that config onto another machine. Export requires an FFmpeg build with the `libx264` encoder; Fedora's available codecs depend on installed packages. Check `ffmpeg -hide_banner -encoders` for `libx264` and `aac`.
+The setup script extracts RPM headers and, if neither system Vulkan development packages nor `VULKAN_SDK` are available, downloads the SHA-256-pinned LunarG SDK 1.4.363.0 into `~/.cache/capopen/deps/vulkan-sdk` (override the dependency root with `CAPOPEN_DEPS`). This download supports x86_64 Linux. It links against the existing system `libvulkan.so.1`; install a working Vulkan driver separately. It generates ignored, machine-specific `.cargo/config.toml` with `VULKAN_SDK`, SDK tools on `PATH`, and `LIBRARY_PATH` for linking. Rerun setup after changing your shell paths. No sudo or replacement of system libraries is involved. Do not copy that config onto another machine. Export requires an FFmpeg build with the `libx264` encoder; Fedora's available codecs depend on installed packages. Check `ffmpeg -hide_banner -encoders` for `libx264` and `aac`.
+
+### Speech recognition on the GPU
+
+On Linux, Whisper runs on the GPU through Vulkan and falls back to the CPU when no GPU context can be created. Building needs `glslc`, the Vulkan headers and the loader library (`libvulkan-dev glslc` on Ubuntu, `vulkan-loader-devel vulkan-headers glslc` on Fedora); without root, the setup script downloads a checksum-pinned LunarG SDK instead. The app uses Vulkan FP32 (`GGML_VK_DISABLE_F16=1`) because FP16 moved word times by up to 330 ms in our tests. macOS (Metal) and Windows still recognise speech on the CPU.
 
 Build Ubuntu installers with:
 

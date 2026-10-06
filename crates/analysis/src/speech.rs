@@ -47,7 +47,7 @@ pub struct Transcript {
     pub segments: Vec<Segment>,
 }
 
-/// Local CPU transcription, greedy decoding without random temperature fallback.
+/// Local transcription, greedy decoding without random temperature fallback.
 /// Silero VAD compaction is explicitly mapped back to source time. Token times are
 /// Whisper estimates, not forced alignment; inspect before destructive editing.
 pub fn transcribe_words(
@@ -97,9 +97,18 @@ pub fn transcribe_words(
         return Ok(transcript);
     }
     let mut context_params = WhisperContextParameters::default();
-    context_params.use_gpu(false);
-    let context = WhisperContext::new_with_params(model_path, context_params)
-        .context("Loading speech model")?;
+    context_params.use_gpu(cfg!(feature = "gpu"));
+    let context = match WhisperContext::new_with_params(model_path, context_params) {
+        Ok(context) => context,
+        Err(error) if cfg!(feature = "gpu") => {
+            eprintln!("GPU speech context failed ({error}); retrying on CPU");
+            let mut cpu_params = WhisperContextParameters::default();
+            cpu_params.use_gpu(false);
+            WhisperContext::new_with_params(model_path, cpu_params)
+                .context("Loading speech model on CPU after GPU failure")?
+        }
+        Err(error) => return Err(error).context("Loading speech model"),
+    };
     let mut state = context
         .create_state()
         .context("Creating speech recognition state")?;
