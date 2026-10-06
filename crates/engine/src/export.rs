@@ -97,6 +97,22 @@ fn output_size(project: &Project, options: &ExportOptions, max_dimension: u32) -
     Ok((w as u32, h as u32))
 }
 
+/// Start of frame `index`, rounded to the nearest microsecond like cut points made at the
+/// playhead, so a clip starting on a frame is the one shown on that frame. Computed from the
+/// integer index, never by accumulating rounded durations.
+pub fn frame_time_us(index: u64, fps: u32) -> i64 {
+    ((2 * index as i128 * 1_000_000 + fps as i128) / (2 * fps as i128)) as i64
+}
+
+/// Number of frames that start before `duration_us`.
+fn frame_count(duration_us: i64, fps: u32) -> u64 {
+    if duration_us <= 0 {
+        return 0;
+    }
+    // frame_time_us(i) < d exactly when i < (2d - 1) * fps / 2_000_000.
+    (((2 * duration_us as i128 - 1) * fps as i128 + 1_999_999) / 2_000_000) as u64
+}
+
 fn encode(
     project: &Project,
     cache_dir: &Path,
@@ -111,7 +127,7 @@ fn encode(
     if fps == 0 || fps > 240 { bail!("Export frame rate must be between 1 and 240"); }
     let mut renderer = Renderer::new()?;
     let (w, h) = output_size(project, options, renderer.max_texture_dimension())?;
-    let total_frames = ((duration as i128 * fps as i128 + 999_999) / 1_000_000) as u64;
+    let total_frames = frame_count(duration, fps);
 
     let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
     let global_header = octx.format().flags().contains(ff::format::Flags::GLOBAL_HEADER);
@@ -196,8 +212,7 @@ fn encode(
         if cancel.load(Ordering::Relaxed) {
             bail!("Export cancelled");
         }
-        // Frame time from the integer index, never by accumulating rounded durations.
-        let t = (i as i128 * 1_000_000 / fps as i128) as i64;
+        let t = frame_time_us(i, fps);
         let pixels = renderer.render(project, t, w, h, Wait::Exact, true)?;
         let stride = rgba.stride(0);
         let row = w as usize * 4;
@@ -211,7 +226,7 @@ fn encode(
         drain(&mut venc, vindex, (1, fps as i32).into(), vtb, &mut octx)?;
 
         // Keep audio up to the end of this video frame.
-        let audio_until = crate::audio::us_to_samples(((i + 1) as i128 * 1_000_000 / fps as i128) as i64).min(total_samples);
+        let audio_until = crate::audio::us_to_samples(frame_time_us(i + 1, fps)).min(total_samples);
         while audio_pos < audio_until {
             encode_audio(&mut aenc, &mut mixer, project, audio_pos, &mut mix, aframe_size)?;
             audio_pos += aframe_size as i64;
@@ -253,6 +268,29 @@ fn encode_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frames_start_on_the_rounded_times_cuts_are_made_at() {
+        // The playhead snaps to round(134 / 30 s) = 4_466_667 µs; the frame must not be 4_466_666.
+        assert_eq!(frame_time_us(134, 30), 4_466_667);
+        assert_eq!(frame_time_us(1, 30), 33_333);
+        assert_eq!(frame_time_us(30, 30), 1_000_000);
+        assert_eq!(frame_time_us(1, 24), 41_667);
+    }
+
+    #[test]
+    fn frame_count_covers_frames_that_start_before_the_end() {
+        assert_eq!(frame_count(0, 30), 0);
+        assert_eq!(frame_count(1, 30), 1);
+        assert_eq!(frame_count(91_900_000, 30), 2757);
+        // A timeline ending on a rounded-up frame time has no frame at the end itself.
+        assert_eq!(frame_count(4_466_667, 30), 134);
+        assert_eq!(frame_count(4_466_668, 30), 135);
+        for d in [1, 33_333, 33_334, 1_000_000, 4_466_666, 4_466_667, 91_900_000] {
+            let n = frame_count(d, 30);
+            assert!(frame_time_us(n - 1, 30) < d && frame_time_us(n, 30) >= d, "{d}");
+        }
+    }
 
     #[test]
     fn oversized_portrait_export_returns_error() {
