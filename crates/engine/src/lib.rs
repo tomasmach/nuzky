@@ -9,6 +9,7 @@ pub mod gpu;
 pub mod media;
 pub mod model;
 pub mod render;
+pub mod speech;
 pub mod text;
 pub mod worker;
 

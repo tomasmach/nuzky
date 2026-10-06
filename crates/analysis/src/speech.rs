@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use capopen_engine::model::Asset;
+pub use capopen_engine::speech::Word;
 use serde::{Deserialize, Serialize};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext,
@@ -21,15 +22,6 @@ pub enum AudioSource<'a> {
     },
     /// Already mixed 16 kHz mono f32, with time zero at the timeline origin.
     TimelineAudio(&'a [f32]),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Word {
-    pub start_us: i64,
-    pub end_us: i64,
-    pub text: String,
-    /// Mean probability of the constituent text tokens, not calibrated confidence.
-    pub probability: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
