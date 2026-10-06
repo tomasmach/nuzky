@@ -346,16 +346,24 @@ impl Project {
             .ok_or_else(|| anyhow!("Unknown captions track"))
     }
 
-    /// Revalidate both sides after duration or adjacency changes, once main-track order is final.
-    fn clamp_transitions(&mut self) {
-        let Some(main) = self.track_index(MAIN_TRACK) else { return };
-        let mut previous_duration = None;
-        for clip in &mut self.tracks[main].clips {
-            if let (Some(previous), Some(transition)) = (previous_duration, &mut clip.transition_in) {
-                transition.duration_us =
-                    transition.duration_us.min(MAX_TRANSITION_US).min(previous).min(clip.duration_us);
+    /// Revalidate fades and both sides of transitions after duration or adjacency changes.
+    fn clamp_timing_windows(&mut self) {
+        for track in &mut self.tracks {
+            let mut previous_duration = None;
+            for clip in &mut track.clips {
+                if let ClipContent::Media { fade_in_us, fade_out_us, .. } = &mut clip.content {
+                    let half = clip.duration_us.max(0) / 2;
+                    *fade_in_us = (*fade_in_us).clamp(0, half);
+                    *fade_out_us = (*fade_out_us).clamp(0, half);
+                }
+                if track.id == MAIN_TRACK
+                    && let (Some(previous), Some(transition)) = (previous_duration, &mut clip.transition_in)
+                {
+                    transition.duration_us =
+                        transition.duration_us.min(MAX_TRANSITION_US).min(previous).min(clip.duration_us);
+                }
+                previous_duration = Some(clip.duration_us);
             }
-            previous_duration = Some(clip.duration_us);
         }
     }
 
@@ -395,7 +403,7 @@ impl Project {
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();
-        self.clamp_transitions();
+        self.clamp_timing_windows();
         Ok(out)
     }
 
@@ -1462,6 +1470,50 @@ mod tests {
         assert!(p.apply(EditCmd::SetTransition { clip_id: a, transition: Some(t) }).is_err());
         p.apply(EditCmd::SetTransition { clip_id: b, transition: Some(t) }).unwrap();
         assert_eq!(p.tracks[0].clips[1].transition_in.unwrap().duration_us, 2_000_000);
+    }
+
+    #[test]
+    fn duration_edits_reclamp_both_audio_fades_on_every_track() {
+        for asset_id in ["a", "m"] {
+            for operation in ["trim", "speed", "split", "ripple"] {
+                let mut p = project();
+                let id = p
+                    .apply(EditCmd::AddClip { asset_id: asset_id.into(), start_us: None, track_id: None })
+                    .unwrap()
+                    .select[0]
+                    .clone();
+                let (ti, ci) = p.find_clip(&id).unwrap();
+                let duration = p.tracks[ti].clips[ci].duration_us;
+                let fade: EditCmd = serde_json::from_value(serde_json::json!({
+                    "type":"updateClip", "clipId":id, "fadeInUs":duration / 2, "fadeOutUs":duration / 2
+                }))
+                .unwrap();
+                p.apply(fade).unwrap();
+                let cmd = match operation {
+                    "trim" => {
+                        EditCmd::TrimClip { clip_id: id, start_us: 0, duration_us: 1_000_000, source_in_us: None }
+                    }
+                    "speed" => {
+                        serde_json::from_value(serde_json::json!({"type":"updateClip", "clipId":id, "speed":10.0}))
+                            .unwrap()
+                    }
+                    "split" => EditCmd::SplitClip { clip_id: id, at_us: 1_000_000 },
+                    _ => EditCmd::RippleDeleteRanges {
+                        ranges: vec![TimeRange { start_us: 1_000_000, end_us: duration - 1_000_000 }],
+                        keep_track_ids: Some(vec![]),
+                    },
+                };
+                p.apply(cmd).unwrap();
+                for clip in p.tracks.iter().flat_map(|track| &track.clips) {
+                    let ClipContent::Media { fade_in_us, fade_out_us, .. } = &clip.content else { panic!() };
+                    assert_eq!(
+                        (*fade_in_us, *fade_out_us),
+                        (clip.duration_us / 2, clip.duration_us / 2),
+                        "{asset_id}: {operation}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
