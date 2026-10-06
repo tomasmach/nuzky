@@ -473,7 +473,7 @@ mod tests {
         let style = TextStyle { font_family: None, font_size: 60.0, color: "#ffffff".into(), bold: true, stroke_width: 3.0, stroke_color: "#000000".into(), background: None };
         let image = text.render("Ahoj světe", &style, 1.0, 972.0);
         let clip = Clip::new("text".into(), 0, 1_000_000, ClipContent::Text { text: "Ahoj světe".into(), style, transform: Transform { scale: 1.5, x: 0.1, ..Transform::default() } });
-        project.tracks.push(Track { id: "text".into(), kind: TrackKind::Text, name: String::new(), muted: false, hidden: false, clips: vec![clip] });
+        project.tracks.push(Track { id: "text".into(), kind: TrackKind::Text, name: String::new(), muted: false, hidden: false, keep_in_place: false, clips: vec![clip] });
         let bounds = layer_bounds(&project, 500_000, &mut text);
         let quad = bounds[0].1;
         assert_eq!(quad[1][0] - quad[0][0], image.width as f32 * 1.5);

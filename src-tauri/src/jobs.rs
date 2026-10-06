@@ -620,7 +620,7 @@ mod tests {
 
         // Cutting the speech or muting it does.
         let mut cut = changed.clone();
-        cut.project.apply(EditCmd::RippleDeleteRanges { ranges: vec![capopen_engine::edit::TimeRange { start_us: 1_000_000, end_us: 2_000_000 }], keep_track_ids: vec![] }).unwrap();
+        cut.project.apply(EditCmd::RippleDeleteRanges { ranges: vec![capopen_engine::edit::TimeRange { start_us: 1_000_000, end_us: 2_000_000 }], keep_track_ids: Some(vec![]) }).unwrap();
         assert!(!cached.matches(&cut, "small", "cs"));
         let mut muted = changed.clone();
         muted.project.tracks[0].muted = true;

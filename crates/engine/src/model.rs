@@ -86,6 +86,10 @@ pub struct Track {
     pub muted: bool,
     #[serde(default)]
     pub hidden: bool,
+    /// Ripple cuts leave this track alone, so music keeps playing across them. On for tracks
+    /// made for audio files, off for everything else, including sound detached from a video.
+    #[serde(default)]
+    pub keep_in_place: bool,
     pub clips: Vec<Clip>,
 }
 
@@ -295,6 +299,7 @@ impl Project {
                 name: "Main".into(),
                 muted: false,
                 hidden: false,
+                keep_in_place: false,
                 clips: Vec::new(),
             }],
         }

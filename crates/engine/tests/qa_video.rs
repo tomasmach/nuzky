@@ -358,6 +358,7 @@ fn png_alpha_composites_over_video() {
         name: String::new(),
         muted: false,
         hidden: false,
+        keep_in_place: false,
         clips: vec![clip("over", &asset.id, 0, 200_000)],
     });
     p.assets.push(asset);

@@ -117,6 +117,8 @@ export interface Track {
   name: string;
   muted: boolean;
   hidden: boolean;
+  /** Ripple cuts leave the track alone; on for music, off for sound detached from a video. */
+  keepInPlace: boolean;
   clips: Clip[];
 }
 
@@ -240,9 +242,10 @@ export type EditCmd =
   | { type: "setKeyframes"; clipId: string; keyframes: Keyframe[] }
   | { type: "duplicateClip"; clipId: string }
   | { type: "detachAudio"; clipId: string }
-  | { type: "updateTrack"; trackId: string; muted?: boolean | null; hidden?: boolean | null }
+  | { type: "updateTrack"; trackId: string; muted?: boolean | null; hidden?: boolean | null; keepInPlace?: boolean | null }
   | { type: "addCaptions"; segments: CaptionSegment[]; style: TextStyle }
   | { type: "replaceCaptions"; trackId: string; segments: CaptionSegment[]; style: TextStyle }
-  | { type: "rippleDeleteRanges"; ranges: TimeRange[]; keepTrackIds: string[] }
+  /** Without `keepTrackIds` the tracks kept in place stay. */
+  | { type: "rippleDeleteRanges"; ranges: TimeRange[]; keepTrackIds?: string[] | null }
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
   | { type: "renameProject"; name: string };

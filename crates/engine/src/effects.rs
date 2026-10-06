@@ -176,7 +176,7 @@ mod tests {
     fn centred_transition_progress() {
         let mut b = clip();
         b.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 1_000_000 });
-        let track = Track { id: "main".into(), kind: crate::model::TrackKind::Video, name: String::new(), muted: false, hidden: false, clips: vec![clip(), b] };
+        let track = Track { id: "main".into(), kind: crate::model::TrackKind::Video, name: String::new(), muted: false, hidden: false, keep_in_place: false, clips: vec![clip(), b] };
         assert!(transition_at(&track, 499_999).is_none());
         for (t, p) in [(500_000, 0.0), (1_000_000, 0.5), (1_499_999, 0.999999)] {
             assert!((transition_at(&track, t).unwrap().3 - p).abs() < 1e-6);

@@ -57,15 +57,19 @@ pub enum EditCmd {
     DuplicateClip { clip_id: String },
     /// Moves a video clip's sound to an audio track and silences the video clip.
     DetachAudio { clip_id: String },
-    UpdateTrack { track_id: String, muted: Option<bool>, hidden: Option<bool> },
+    UpdateTrack { track_id: String, muted: Option<bool>, hidden: Option<bool>, keep_in_place: Option<bool> },
     SetCanvas { width: u32, height: u32, background: Option<String>, background_blur: Option<f32> },
     /// Adds a new captions track; existing tracks are left alone.
     AddCaptions { segments: Vec<CaptionSegment>, style: TextStyle },
     /// Replaces the clips of an existing captions track.
     ReplaceCaptions { track_id: String, segments: Vec<CaptionSegment>, style: TextStyle },
-    /// Cuts the timeline ranges out of every track except `keep_track_ids` and closes the
-    /// gaps, so video, overlays, audio and captions stay in sync.
-    RippleDeleteRanges { ranges: Vec<TimeRange>, keep_track_ids: Vec<String> },
+    /// Cuts the timeline ranges out of every track except `keep_track_ids` (by default the
+    /// tracks kept in place) and closes the gaps, so video, overlays, audio and captions stay in sync.
+    RippleDeleteRanges {
+        ranges: Vec<TimeRange>,
+        #[serde(default)]
+        keep_track_ids: Option<Vec<String>>,
+    },
     RenameProject { name: String },
 }
 
@@ -130,32 +134,32 @@ impl Project {
             .all(|c| end <= c.start_us || start >= c.end_us())
     }
 
-    fn insert_track(&mut self, at: usize, kind: TrackKind) -> usize {
+    fn insert_track(&mut self, at: usize, kind: TrackKind, keep_in_place: bool) -> usize {
         let name = match kind {
             TrackKind::Video => "Overlay",
             TrackKind::Audio => "Audio",
             TrackKind::Text => "Text",
         };
         let at = at.clamp(1, self.tracks.len());
-        self.tracks.insert(at, Track { id: new_id(), kind, name: name.into(), muted: false, hidden: false, clips: Vec::new() });
+        self.tracks.insert(at, Track { id: new_id(), kind, name: name.into(), muted: false, hidden: false, keep_in_place, clips: Vec::new() });
         at
     }
 
-    /// A track of `kind` free over [start, end), creating one if needed.
-    fn free_track(&mut self, kind: TrackKind, start: i64, end: i64) -> usize {
+    /// A track of `kind` free over [start, end) that is kept in place or not, creating one if needed.
+    fn free_track(&mut self, kind: TrackKind, start: i64, end: i64, keep_in_place: bool) -> usize {
         let found = self
             .tracks
             .iter()
             .enumerate()
             .skip(1)
-            .find(|(i, t)| t.kind == kind && self.is_free(*i, start, end, None))
+            .find(|(i, t)| t.kind == kind && t.keep_in_place == keep_in_place && self.is_free(*i, start, end, None))
             .map(|(i, _)| i);
         found.unwrap_or_else(|| {
             let at = match kind {
                 TrackKind::Video => self.tracks.iter().rposition(|t| t.kind == TrackKind::Video).unwrap_or(0) + 1,
                 TrackKind::Audio | TrackKind::Text => self.tracks.len(),
             };
-            self.insert_track(at, kind)
+            self.insert_track(at, kind, keep_in_place)
         })
     }
 
@@ -270,6 +274,7 @@ impl Project {
             EditCmd::AddClip { asset_id, start_us, track_id } => {
                 let asset = self.asset(&asset_id).ok_or_else(|| anyhow!("Unknown media"))?.clone();
                 let kind = track_kind_for(&asset);
+                let keep = asset.kind == AssetKind::Audio;
                 let duration = if asset.kind == AssetKind::Image { IMAGE_DURATION_US } else { asset.duration_us.max(min) };
                 let clip = Clip::new(new_id(), 0, duration, ClipContent::Media {
                     asset_id,
@@ -286,11 +291,11 @@ impl Project {
                 let target = match (kind, requested) {
                     (_, Some(i)) => i,
                     (TrackKind::Video, None) => 0,
-                    (_, None) => self.free_track(kind, start_us.unwrap_or(0), start_us.unwrap_or(0) + duration),
+                    (_, None) => self.free_track(kind, start_us.unwrap_or(0), start_us.unwrap_or(0) + duration, keep),
                 };
                 let start = start_us.unwrap_or(if target == 0 { i64::MAX / 4 } else { 0 }).max(0);
                 if target != 0 && !self.is_free(target, start, start + duration, None) {
-                    let t = self.free_track(kind, start, start + duration);
+                    let t = self.free_track(kind, start, start + duration, keep);
                     self.tracks[t].clips.push(Clip { start_us: start, ..clip });
                 } else {
                     if target == 0 {
@@ -301,7 +306,7 @@ impl Project {
             }
             EditCmd::AddText { start_us, text, style } => {
                 let start = start_us.max(0);
-                let t = self.free_track(TrackKind::Text, start, start + TEXT_DURATION_US);
+                let t = self.free_track(TrackKind::Text, start, start + TEXT_DURATION_US, false);
                 let clip = Clip::new(new_id(), start, TEXT_DURATION_US, ClipContent::Text {
                     text,
                     style,
@@ -315,6 +320,7 @@ impl Project {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 // Clips always sit on a track of their kind; detached sound is a video asset on an audio track.
                 let kind = self.tracks[ti].kind;
+                let keep = self.tracks[ti].keep_in_place;
                 let mut clip = self.tracks[ti].clips.remove(ci);
                 let start = start_us.max(0);
                 clip.start_us = start;
@@ -327,13 +333,13 @@ impl Project {
                     }
                     Some(i) if self.is_free(i, start, end, None) => i,
                     // Dropped onto an occupied spot or no track: a new track right above.
-                    Some(i) => self.insert_track(i + 1, kind),
+                    Some(i) => self.insert_track(i + 1, kind, keep),
                     None => {
                         let at = match kind {
                             TrackKind::Video => ti.max(0) + 1,
                             _ => self.tracks.len(),
                         };
-                        self.insert_track(at, kind)
+                        self.insert_track(at, kind, keep)
                     }
                 };
                 out.select.push(clip.id.clone());
@@ -391,12 +397,14 @@ impl Project {
                 out.select.push(self.tracks[ti].clips[second].id.clone());
             }
             EditCmd::RippleDeleteRanges { ranges, keep_track_ids } => {
+                let kept: Vec<bool> = match &keep_track_ids {
+                    Some(ids) => self.tracks.iter().map(|t| ids.contains(&t.id)).collect(),
+                    None => self.tracks.iter().map(|t| t.keep_in_place).collect(),
+                };
                 // Later ranges first, so earlier coordinates stay valid while cutting.
                 for range in merge_ranges(ranges).into_iter().rev() {
-                    for ti in 0..self.tracks.len() {
-                        if !keep_track_ids.contains(&self.tracks[ti].id) {
-                            self.ripple_delete_track(ti, range, min);
-                        }
+                    for ti in (0..self.tracks.len()).filter(|&ti| !kept[ti]) {
+                        self.ripple_delete_track(ti, range, min);
                     }
                 }
             }
@@ -498,8 +506,8 @@ impl Project {
                 let target = if ti == 0 || self.is_free(ti, copy.start_us, copy.end_us(), None) {
                     ti
                 } else {
-                    let kind = self.tracks[ti].kind;
-                    self.free_track(kind, copy.start_us, copy.end_us())
+                    let (kind, keep) = (self.tracks[ti].kind, self.tracks[ti].keep_in_place);
+                    self.free_track(kind, copy.start_us, copy.end_us(), keep)
                 };
                 if target == 0 {
                     moved = Some((copy.id.clone(), copy.start_us));
@@ -525,11 +533,12 @@ impl Project {
                 if let ClipContent::Media { volume, .. } = &mut self.tracks[ti].clips[ci].content {
                     *volume = 0.0;
                 }
-                let target = self.free_track(TrackKind::Audio, clip.start_us, clip.end_us());
+                // Detached sound is speech: it is cut together with the picture.
+                let target = self.free_track(TrackKind::Audio, clip.start_us, clip.end_us(), false);
                 out.select.push(sound.id.clone());
                 self.tracks[target].clips.push(sound);
             }
-            EditCmd::UpdateTrack { track_id, muted, hidden } => {
+            EditCmd::UpdateTrack { track_id, muted, hidden, keep_in_place } => {
                 let i = self.track_index(&track_id).ok_or_else(|| anyhow!("Unknown track"))?;
                 let t = &mut self.tracks[i];
                 if let Some(m) = muted {
@@ -537,6 +546,9 @@ impl Project {
                 }
                 if let Some(h) = hidden {
                     t.hidden = h;
+                }
+                if let Some(k) = keep_in_place {
+                    t.keep_in_place = k;
                 }
             }
             EditCmd::SetCanvas { width, height, background, background_blur } => {
@@ -555,7 +567,7 @@ impl Project {
             EditCmd::AddCaptions { segments, style } => {
                 let clips = caption_clips(segments, &style, min);
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
-                self.tracks.push(Track { id: new_id(), kind: TrackKind::Text, name: "Captions".into(), muted: false, hidden: false, clips });
+                self.tracks.push(Track { id: new_id(), kind: TrackKind::Text, name: "Captions".into(), muted: false, hidden: false, keep_in_place: false, clips });
             }
             EditCmd::ReplaceCaptions { track_id, segments, style } => {
                 let ti = self.caption_track(&track_id)?;
@@ -791,6 +803,24 @@ mod tests {
         assert_eq!(p.duration_us(), 20_000_000);
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
         assert_eq!(p.duration_us(), 5_000_000);
+    }
+
+    #[test]
+    fn music_stays_in_place_through_ripple_cuts_and_detached_sound_does_not() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
+        let video = p.tracks[0].clips[0].id.clone();
+        p.apply(EditCmd::DetachAudio { clip_id: video }).unwrap();
+        let music = p.tracks.iter().find(|t| t.keep_in_place).map(|t| t.id.clone()).unwrap();
+        let sound = p.tracks.iter().find(|t| t.kind == TrackKind::Audio && !t.keep_in_place).map(|t| t.id.clone()).unwrap();
+        assert_eq!(p.tracks.iter().filter(|t| t.kind == TrackKind::Audio).count(), 2, "detached sound gets its own track");
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 0, end_us: 1_000_000 }], keep_track_ids: None }).unwrap();
+        let end = |p: &Project, id: &str| p.tracks.iter().find(|t| t.id == id).unwrap().clips[0].end_us();
+        assert_eq!((end(&p, &music), end(&p, &sound)), (20_000_000, 4_000_000));
+        p.apply(EditCmd::UpdateTrack { track_id: music.clone(), muted: None, hidden: None, keep_in_place: Some(false) }).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 0, end_us: 1_000_000 }], keep_track_ids: None }).unwrap();
+        assert_eq!(end(&p, &music), 19_000_000);
     }
 
     #[test]
@@ -1128,7 +1158,7 @@ mod tests {
             TimeRange { start_us: 1_000_000, end_us: 2_000_000 },
             TimeRange { start_us: 1_500_000, end_us: 2_000_000 },
         ];
-        p.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: vec![music.clone()] }).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: Some(vec![music.clone()]) }).unwrap();
         // Main: 5 s minus 1.5 s, cut into three pieces with continuous source.
         assert_eq!(main_layout(&p), vec![(0, 1000), (1000, 1000), (2000, 1500)]);
         let sources: Vec<i64> = p.tracks[0]
@@ -1158,7 +1188,7 @@ mod tests {
         let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into() };
         p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
         // Cutting [1.5, 2.2) leaves 0.5 s before and 0.8 s after: the later part stays.
-        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 1_500_000, end_us: 2_200_000 }], keep_track_ids: vec![] }).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 1_500_000, end_us: 2_200_000 }], keep_track_ids: Some(vec![]) }).unwrap();
         let captions = p.tracks.iter().find(|t| t.name == "Captions").unwrap();
         let spans: Vec<_> = captions.clips.iter().map(|c| (c.start_us, c.end_us())).collect();
         assert_eq!(spans, vec![(1_500_000, 2_300_000)]);
@@ -1169,7 +1199,7 @@ mod tests {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
         // Leaves 10 ms of the clip before the cut, less than one 30 fps frame.
-        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 10_000, end_us: 1_000_000 }], keep_track_ids: vec![] }).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 10_000, end_us: 1_000_000 }], keep_track_ids: Some(vec![]) }).unwrap();
         assert_eq!(main_layout(&p), vec![(0, 4000)]);
     }
 }

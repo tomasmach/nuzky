@@ -129,7 +129,7 @@ mod tests {
     }
 
     fn ripple(p: &mut Project, start_us: i64, end_us: i64) {
-        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us, end_us }], keep_track_ids: vec![] }).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us, end_us }], keep_track_ids: Some(vec![]) }).unwrap();
     }
 
     fn main_id(p: &Project, i: usize) -> String {
@@ -188,7 +188,7 @@ mod tests {
         p.apply(EditCmd::AddClip { asset_id: "song".into(), start_us: Some(0), track_id: None }).unwrap();
         let song_words = HashMap::from([("song".to_string(), words["v"].clone())]);
         assert!(map_words(&p, &song_words).is_empty());
-        p.apply(EditCmd::UpdateTrack { track_id: "main".into(), muted: Some(true), hidden: None }).unwrap();
+        p.apply(EditCmd::UpdateTrack { track_id: "main".into(), muted: Some(true), hidden: None, keep_in_place: None }).unwrap();
         assert!(map_words(&p, &words).is_empty());
     }
 

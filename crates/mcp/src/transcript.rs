@@ -301,7 +301,7 @@ mod tests {
                 start_us: 3_000_000,
                 end_us: 6_000_000,
             }],
-            keep_track_ids: vec![],
+            keep_track_ids: Some(vec![]),
         })
         .unwrap();
         let id = p.tracks[0].clips[1].id.clone();
@@ -347,7 +347,7 @@ mod tests {
                 start_us: 0,
                 end_us: 1_000_000,
             }],
-            keep_track_ids: vec![],
+            keep_track_ids: Some(vec![]),
         })
         .unwrap();
         assert!(
