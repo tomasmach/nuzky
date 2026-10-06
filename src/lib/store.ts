@@ -152,12 +152,15 @@ export const useEditor = create<EditorState>((set, get) => ({
   setSnap: (snap, keepSelection = true) => {
     const ids = new Set(allClips(snap.project).map((c) => c.id));
     const kept = keepSelection ? get().selection.filter((id) => ids.has(id)) : [];
-    const cut = get().cut;
+    const { cut, snap: prev } = get();
+    // Only a new revision (or another project) is saved; a snapshot of an unchanged project, such
+    // as after a failed import, gets no "saved" event and would leave Saving… forever.
+    const changed = !prev || snap.path !== prev.path || snap.revision > prev.revision;
     set({
       snap,
       selection: snap.select.length > 0 ? snap.select : kept,
       cut: snap.select.length === 0 && keepSelection && cut && mainCuts(snap.project).some((c) => c.clipId === cut) ? cut : null,
-      saveState: "saving",
+      saveState: changed ? "saving" : get().saveState,
       timeUs: Math.min(get().timeUs, projectDuration(snap.project)),
     });
   },

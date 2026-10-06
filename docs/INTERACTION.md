@@ -97,7 +97,7 @@ Text-based editing, as in CapCut. Transcribe timeline recognises the sound of th
 `Ctrl+E` or Export opens a dialog: resolution (720p, 1080p, 2K, 4K, with the resulting pixel size for the canvas), frame rate (24–60, default the project's), quality (High, Recommended, Smaller file) with an estimated file size. Resolution and quality are remembered. Export… asks where to save. The dialog can be closed at any time; a running export shows its percentage in the top bar and clicking it reopens the dialog. Progress shows percentage and time left, with Cancel. Success offers Show in folder, in the dialog or, when it is closed, in a toast. Failure shows the reason and Retry (same file); with the dialog closed a toast offers Details. Export is disabled with a reason while the timeline is empty.
 
 ### Saving
-Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text.
+Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text. An action that changes nothing, such as a failed import, leaves the status as it was.
 
 ## Keyboard
 
