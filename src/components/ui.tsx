@@ -29,10 +29,13 @@ export function Button({
   );
 }
 
-/** Icon-only button. `label` is required: it becomes the tooltip and the accessible name. */
+/**
+ * Icon-only button. `label` is required: it becomes the tooltip and the accessible name.
+ * Passing `active`, true or false, makes it a toggle button.
+ */
 export function IconButton({
   label,
-  active = false,
+  active,
   className = "",
   children,
   ...rest
@@ -42,8 +45,8 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      aria-pressed={active || undefined}
-      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-35 disabled:active:translate-y-0 ${
+      aria-pressed={active}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40 disabled:active:translate-y-0 ${
         active ? "bg-accent/20 text-accent" : "text-muted hover:bg-raised hover:text-fg"
       } ${className}`}
       {...rest}
@@ -150,6 +153,7 @@ export function RangeInput({
   step,
   onChange,
   disabled,
+  valueText,
   className = "",
 }: {
   label: string;
@@ -159,6 +163,8 @@ export function RangeInput({
   step: number;
   onChange: (v: number) => void;
   disabled?: boolean;
+  /** What the value means to a person, for sliders whose position is not the value, such as logarithmic ones. */
+  valueText?: string;
   className?: string;
 }) {
   const frac = (v: number) => (max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0);
@@ -176,6 +182,7 @@ export function RangeInput({
         max={max}
         step={step}
         value={value}
+        aria-valuetext={valueText}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
         className="range relative w-full disabled:opacity-40"
@@ -217,7 +224,17 @@ export function Slider({
   return (
     <div className="flex items-center gap-2" title={title}>
       <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
-      <RangeInput label={label} value={value} min={min} max={max} step={step} onChange={onChange} disabled={disabled} className="min-w-0 flex-1" />
+      <RangeInput
+        label={label}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={onChange}
+        disabled={disabled}
+        valueText={mixed ? "Mixed" : `${format(value)}${unit && ` ${unit}`}`}
+        className="min-w-0 flex-1"
+      />
       <span className="flex shrink-0 items-center gap-0.5">
         <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} mixed={mixed} />
         <span className="w-3 text-[11px] text-muted">{unit}</span>
@@ -311,8 +328,33 @@ export function tabListKeys<T extends string>(ids: readonly T[], value: T, onCha
   };
 }
 
-/** Text tabs with an underline, arrow keys move between them. */
-export function TabBar<T extends string>({ tabs, value, onChange, label }: { tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void; label: string }) {
+/** Ids that tie a tab to its panel, unique per tab `group`. */
+export const tabIds = (group: string, id: string) => ({ tab: `${group}-tab-${id}`, panel: `${group}-panel-${id}` });
+
+/** The content of the selected tab, named by its tab. */
+export function TabPanel({ group, id, className, children }: { group: string; id: string; className?: string; children: ReactNode }) {
+  const ids = tabIds(group, id);
+  return (
+    <div role="tabpanel" id={ids.panel} aria-labelledby={ids.tab} className={className}>
+      {children}
+    </div>
+  );
+}
+
+/** Text tabs with an underline, arrow keys move between them. The selected tab's content goes in a `TabPanel` of the same `group`. */
+export function TabBar<T extends string>({
+  group,
+  tabs,
+  value,
+  onChange,
+  label,
+}: {
+  group: string;
+  tabs: { id: T; label: string }[];
+  value: T;
+  onChange: (id: T) => void;
+  label: string;
+}) {
   const onKeyDown = tabListKeys(
     tabs.map((t) => t.id),
     value,
@@ -325,8 +367,10 @@ export function TabBar<T extends string>({ tabs, value, onChange, label }: { tab
           key={t.id}
           type="button"
           role="tab"
+          id={tabIds(group, t.id).tab}
           data-tab={t.id}
           aria-selected={t.id === value}
+          aria-controls={t.id === value ? tabIds(group, t.id).panel : undefined}
           tabIndex={t.id === value ? 0 : -1}
           onClick={() => onChange(t.id)}
           className={`h-10 shrink-0 px-2 text-[13px] transition-colors duration-[120ms] ease-out ${
@@ -403,7 +447,7 @@ export function PresetTile({
       className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40"
     >
       <span
-        className={`preset-tile relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
+        className={`relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
           selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line group-enabled:group-hover:border-muted"
         }`}
       >
@@ -419,12 +463,13 @@ export function PresetTile({
   );
 }
 
-/** Determinate when `value` is above 0, otherwise an indeterminate sweep. */
-export function ProgressBar({ value, className = "" }: { value: number; className?: string }) {
+/** Determinate when `value` is above 0, otherwise an indeterminate sweep. `label` names the work in progress. */
+export function ProgressBar({ value, label, className = "" }: { value: number; label: string; className?: string }) {
   const known = value > 0;
   return (
     <div
       role="progressbar"
+      aria-label={label}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={known ? Math.round(value * 100) : undefined}

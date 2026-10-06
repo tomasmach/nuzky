@@ -15,8 +15,8 @@ export function Toasts({ bottom }: { bottom: number }) {
         <div
           key={t.id}
           role={t.kind === "error" ? "alert" : "status"}
-          className={`pointer-events-auto flex max-w-full items-center gap-2 rounded-lg border px-3 py-2 text-[13px] shadow-xl shadow-black/50 ${
-            t.kind === "error" ? "border-danger/50 bg-[#2a1416] text-fg" : "border-line bg-raised text-fg"
+          className={`pointer-events-auto flex max-w-full items-center gap-2 rounded-lg border bg-raised px-3 py-2 text-[13px] text-fg shadow-xl shadow-black/50 ${
+            t.kind === "error" ? "border-danger/50" : "border-line"
           }`}
         >
           {t.kind === "error" ? (

@@ -16,6 +16,19 @@ export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0,
 export const CAPTION_Y = 0.15;
 export const NO_ADJUST: Adjust = { exposure: 0, tint: 0, highlights: 0, shadows: 0, fade: 0, brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
 
+export const ADJUST_ROWS: { key: keyof Adjust; label: string; min: number }[] = [
+  { key: "exposure", label: "Exposure", min: -100 },
+  { key: "brightness", label: "Brightness", min: -100 },
+  { key: "contrast", label: "Contrast", min: -100 },
+  { key: "highlights", label: "Highlights", min: -100 },
+  { key: "shadows", label: "Shadows", min: -100 },
+  { key: "saturation", label: "Saturation", min: -100 },
+  { key: "temperature", label: "Temperature", min: -100 },
+  { key: "tint", label: "Tint", min: -100 },
+  { key: "fade", label: "Fade", min: 0 },
+  { key: "vignette", label: "Vignette", min: 0 },
+];
+
 export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = [
   { name: "Classic", text: "Your text", style: { fontSize: 84, color: "#ffffff", bold: true, strokeWidth: 7, strokeColor: "#000000", background: null } },
   { name: "Title", text: "BIG TITLE", style: { fontSize: 130, color: "#ffffff", bold: true, strokeWidth: 0, strokeColor: "#000000", background: null } },

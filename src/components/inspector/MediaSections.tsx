@@ -1,24 +1,11 @@
 import { RotateCcw, Unlink } from "lucide-react";
-import { MAX_SPEED, MIN_SPEED, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
+import { ADJUST_ROWS, MAX_SPEED, MIN_SPEED, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
 import { detachAudio, detachBlocker, editClip, findClip, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
 import { Button, IconButton, Section, Segmented, Slider } from "../ui";
 
 type Media = Extract<Clip["content"], { type: "media" }>;
-
-const ADJUST_ROWS: { key: keyof Adjust; label: string; min: number }[] = [
-  { key: "exposure", label: "Exposure", min: -100 },
-  { key: "brightness", label: "Brightness", min: -100 },
-  { key: "contrast", label: "Contrast", min: -100 },
-  { key: "highlights", label: "Highlights", min: -100 },
-  { key: "shadows", label: "Shadows", min: -100 },
-  { key: "saturation", label: "Saturation", min: -100 },
-  { key: "temperature", label: "Temperature", min: -100 },
-  { key: "tint", label: "Tint", min: -100 },
-  { key: "fade", label: "Fade", min: 0 },
-  { key: "vignette", label: "Vignette", min: 0 },
-];
 
 export function AdjustSection({ clip, content }: { clip: Clip; content: Media }) {
   const edit = useEditor((s) => s.edit);

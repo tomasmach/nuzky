@@ -6,7 +6,7 @@ import { findClip, isCaptionTrack, mainCuts, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
 import type { Asset, Clip } from "../../lib/types";
 import { TransitionSettings } from "../panel/TransitionsTab";
-import { TabBar } from "../ui";
+import { TabBar, TabPanel } from "../ui";
 import { AnimationSection } from "./AnimationSection";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
 import { MultiInspector } from "./MultiInspector";
@@ -64,8 +64,8 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
   return (
     <>
       <Header icon={KIND_ICON[kind]} title={title} detail={detail} />
-      <TabBar label="Clip settings" tabs={tabs} value={tab} onChange={(id) => onChoose({ ...chosen, [kind]: id })} />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <TabBar group="clip" label="Clip settings" tabs={tabs} value={tab} onChange={(id) => onChoose({ ...chosen, [kind]: id })} />
+      <TabPanel group="clip" id={tab} className="min-h-0 flex-1 overflow-y-auto">
         {(tab === "video" || tab === "transform") && <TransformSection clip={clip} asset={asset} />}
         {tab === "text" && c.type === "text" && <TextSection clip={clip} text={c.text} style={c.style} caption={kind === "caption"} />}
         {tab === "adjust" && c.type === "media" && <AdjustSection clip={clip} content={c} />}
@@ -77,7 +77,7 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
             {kind === "audio" && <SpeedSection clip={clip} content={c} asset={asset} />}
           </>
         )}
-      </div>
+      </TabPanel>
     </>
   );
 }

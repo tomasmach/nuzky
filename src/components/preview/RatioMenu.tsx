@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { Check, ChevronDown, RectangleHorizontal } from "lucide-react";
 import { FORMATS, formatLabel } from "../../lib/presets";
 import { useEditor } from "../../lib/store";
@@ -13,16 +13,20 @@ export function RatioMenu() {
   const open = useEditor((s) => s.ratioOpen);
   const setOpen = (ratioOpen: boolean) => useEditor.setState({ ratioOpen });
   const ref = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const closeToTrigger = () => {
+    setOpen(false);
+    trigger.current?.focus();
+  };
 
   useEffect(() => {
     if (!open) return;
     ref.current?.querySelector<HTMLElement>("[aria-checked=true]")?.focus();
     const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const key = (e: KeyboardEvent) => {
+    const key = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        setOpen(false);
-        ref.current?.querySelector<HTMLElement>("button")?.focus();
+        closeToTrigger();
       }
     };
     window.addEventListener("pointerdown", close);
@@ -33,9 +37,20 @@ export function RatioMenu() {
     };
   }, [open]);
 
+  // Like the clip menu: ↑/↓ move, and no key reaches the editor's shortcuts.
+  const onMenuKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+  };
+
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -51,7 +66,7 @@ export function RatioMenu() {
         <ChevronDown size={13} className="text-muted" />
       </button>
       {open && (
-        <div role="menu" aria-label="Canvas ratio" className="absolute bottom-10 right-0 z-50 w-60 rounded-lg border border-line bg-panel p-1 shadow-2xl shadow-black/60">
+        <div role="menu" aria-label="Canvas ratio" onKeyDown={onMenuKey} className="absolute bottom-10 right-0 z-50 w-60 rounded-lg border border-line bg-panel p-1 shadow-2xl shadow-black/60">
           {FORMATS.map((f) => {
             const on = f.width === canvas.width && f.height === canvas.height;
             return (
@@ -62,7 +77,7 @@ export function RatioMenu() {
                 aria-checked={on}
                 onClick={() => {
                   if (!on) edit({ type: "setCanvas", width: f.width, height: f.height });
-                  setOpen(false);
+                  closeToTrigger();
                 }}
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-raised"
               >

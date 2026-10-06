@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, Loader2, X } from "lucide-react";
-import { api } from "../../lib/api";
+import { api, errorText } from "../../lib/api";
 import { useSpeech } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import type { CaptionModel, JobEvent } from "../../lib/types";
@@ -35,10 +35,17 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
   const model = useSpeech((s) => s.model);
   const language = useSpeech((s) => s.language);
   const [models, setModels] = useState<CaptionModel[]>([]);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const { running } = useSpeechJobs("captions");
   // Refreshed when a job starts and ends, so a model downloaded by it loses its "download" note.
   useEffect(() => {
-    api.captionModels().then(setModels);
+    api.captionModels().then(
+      (list) => {
+        setModels(list);
+        setModelsError(null);
+      },
+      (e) => setModelsError(errorText(e)),
+    );
   }, [running?.id]);
   return (
     <>
@@ -52,13 +59,20 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
         </select>
       </Field>
       <Field label="Accuracy">
-        <select value={model} disabled={disabled} onChange={(e) => useSpeech.setState({ model: e.target.value })} className={selectClass}>
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label} ({m.sizeMb} MB){m.downloaded ? "" : " · download"}
-            </option>
-          ))}
-        </select>
+        {modelsError && models.length === 0 ? (
+          <span className="flex gap-1.5 text-[12px] text-danger" role="alert">
+            <AlertCircle size={14} className="mt-px shrink-0" />
+            Could not load the models: {modelsError}
+          </span>
+        ) : (
+          <select value={model} disabled={disabled} onChange={(e) => useSpeech.setState({ model: e.target.value })} className={selectClass}>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label} ({m.sizeMb} MB){m.downloaded ? "" : " · download"}
+              </option>
+            ))}
+          </select>
+        )}
       </Field>
     </>
   );
@@ -79,7 +93,7 @@ export function SpeechJobCard({ job }: { job: JobEvent }) {
           <X size={14} /> Cancel
         </Button>
       </div>
-      <ProgressBar value={job.progress} className="mr-1.5" />
+      <ProgressBar value={job.progress} label={job.label} className="mr-1.5" />
     </div>
   );
 }

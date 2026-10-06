@@ -32,10 +32,6 @@ function ProjectName() {
   const name = useEditor((s) => s.snap?.project.name ?? "");
   const edit = useEditor((s) => s.edit);
   const [draft, setDraft] = useState<string | null>(null);
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (draft !== null) ref.current?.select();
-  }, [draft !== null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (draft === null)
     return (
@@ -54,9 +50,10 @@ function ProjectName() {
   };
   return (
     <input
-      ref={ref}
+      autoFocus
       aria-label="Project name"
       value={draft}
+      onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -70,14 +67,18 @@ function ProjectName() {
 
 function ProjectMenu() {
   const [open, setOpen] = useState(false);
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  // null until the list has loaded, so a failed load never claims there are no projects.
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const current = useEditor((s) => s.snap?.path);
   const { toast } = useEditor.getState();
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    api.listProjects().then(setProjects);
+    api.listProjects().then(setProjects, (e) => {
+      setProjects(null);
+      toast({ kind: "error", text: errorText(e) });
+    });
     const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("pointerdown", close);
@@ -122,8 +123,8 @@ function ProjectMenu() {
           </div>
           <div className="border-t border-line px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">Recent</div>
           <div className="max-h-72 overflow-y-auto">
-            {projects.length === 0 && <div className="px-2 py-2 text-[12px] text-muted">No saved projects yet.</div>}
-            {projects.map((p) => (
+            {projects?.length === 0 && <div className="px-2 py-2 text-[12px] text-muted">No saved projects yet.</div>}
+            {projects?.map((p) => (
               <button
                 key={p.path}
                 type="button"
@@ -156,7 +157,7 @@ function JobIndicator() {
       <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
       <span className="max-w-[220px] truncate">{j.kind === "export" ? "Exporting" : (j.phase ?? j.label)}</span>
       {pct && <span className="tabular text-muted">{pct}</span>}
-      {j.kind === "export" && <ProgressBar value={j.progress} className="w-16" />}
+      {j.kind === "export" && <ProgressBar value={j.progress} label={j.label} className="w-16" />}
       {running.length > 1 && <span className="text-muted">+{running.length - 1}</span>}
     </>
   );
@@ -169,12 +170,13 @@ function JobIndicator() {
   return (
     <button
       type="button"
-      role="status"
       title={j.kind === "export" ? "Show export progress" : j.kind === "transcript" ? "Show transcript" : "Show captions"}
       onClick={() => (j.kind === "export" ? useEditor.setState({ exportOpen: true }) : useEditor.setState({ panelTab: j.kind === "transcript" ? "transcript" : "captions" }))}
-      className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg hover:bg-raised"
+      className="flex h-8 items-center rounded-md px-2 text-[12px] text-fg hover:bg-raised"
     >
-      {body}
+      <span className="flex items-center gap-1.5" role="status">
+        {body}
+      </span>
     </button>
   );
 }

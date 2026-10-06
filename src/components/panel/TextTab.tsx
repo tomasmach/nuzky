@@ -12,7 +12,7 @@ export function TextTab() {
           type="button"
           title={`Add "${p.name}" text at the playhead`}
           onClick={() => edit({ type: "addText", startUs: useEditor.getState().timeUs, text: p.text, style: p.style })}
-          className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-line bg-[#2b3036] px-2 hover:border-muted"
+          className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-line bg-line px-2 hover:border-muted"
         >
           <TextSwatch style={p.style} label={p.name === "Title" ? "TITLE" : p.name} />
         </button>

@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { AlertCircle, AlertTriangle, RefreshCw, ScrollText, Scissors } from "lucide-react";
-import { cutWords, formatSeconds, removePauses, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
+import { cutWords, removePauses, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
-import { US } from "../../lib/time";
+import { US, formatDuration } from "../../lib/time";
 import type { Clip, Project } from "../../lib/types";
 import { Button, Checkbox, IconButton, NumberInput } from "../ui";
 import { JobError, SpeechFields, SpeechJobCard, useSpeechJobs } from "./SpeechControls";
@@ -44,7 +44,7 @@ function missingClips(project: Project, untranscribed: string[]): number {
 const describe = (tokens: Token[]) => (removedUs: number) => {
   const words = tokens.filter((t) => t.kind === "word").length;
   const n = words || tokens.length;
-  return `${n} ${words ? "word" : "pause"}${n === 1 ? "" : "s"} (${formatSeconds(removedUs)})`;
+  return `${n} ${words ? "word" : "pause"}${n === 1 ? "" : "s"} (${formatDuration(removedUs)})`;
 };
 
 const total = (tokens: Token[]) => tokens.reduce((s, t) => s + t.endUs - t.startUs, 0);
@@ -108,7 +108,7 @@ export function TranscriptTab() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-col gap-3 border-b border-line p-3">
         <div className="flex items-center gap-2">
-          <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} words</span>
+          <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} word{view.words.length === 1 ? "" : "s"}</span>
           <IconButton label={blocker ?? (busy ? "Wait for speech recognition to finish" : "Transcribe again")} className="h-7 w-7" disabled={!!blocker || busy} onClick={() => startSpeech(null, true)}>
             <RefreshCw size={14} />
           </IconButton>
@@ -132,9 +132,9 @@ export function TranscriptTab() {
           <NumberInput label="Shortest pause to show" value={pauseUs / US} min={0.1} max={5} step={0.1} format={(v) => v.toFixed(1)} onChange={(v) => useSpeech.setState({ pauseUs: Math.round(v * US) })} className="w-11" />
           <span className="text-[12px] text-muted">s</span>
           <span className="flex-1" />
-          <span title={cutBlocker ?? (pauses.length === 0 ? `No pauses longer than ${formatSeconds(pauseUs)}` : `Shorten every pause to ${formatSeconds(pauseUs)}`)}>
+          <span title={cutBlocker ?? (pauses.length === 0 ? `No pauses longer than ${formatDuration(pauseUs)}` : `Shorten every pause to ${formatDuration(pauseUs)}`)}>
             <Button className="h-7 px-2" disabled={pauses.length === 0 || !!cutBlocker} onClick={removeAll}>
-              <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatSeconds(total(pauses))}` : "Remove pauses"}
+              <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatDuration(total(pauses))}` : "Remove pauses"}
             </Button>
           </span>
         </div>

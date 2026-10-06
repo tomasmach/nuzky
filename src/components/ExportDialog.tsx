@@ -13,7 +13,7 @@ import { Button, IconButton, ProgressBar, Segmented } from "./ui";
 const RESOLUTIONS = [
   { id: 720, label: "720p" },
   { id: 1080, label: "1080p" },
-  { id: 1440, label: "2K" },
+  { id: 1440, label: "1440p" },
   { id: 2160, label: "4K" },
 ];
 const FRAME_RATES = [24, 25, 30, 50, 60];
@@ -72,8 +72,9 @@ export function ExportDialog() {
 
   // Options start from the project each time the dialog opens; resolution and quality are remembered.
   useEffect(() => {
-    if (open && project) setOptions(loadOptions(project.canvas));
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    const canvas = useEditor.getState().snap?.project.canvas;
+    if (open && canvas) setOptions(loadOptions(canvas));
+  }, [open]);
 
   const close = () => {
     setError(null);
@@ -84,7 +85,11 @@ export function ExportDialog() {
 
   const ready = open && options !== null;
   useEffect(() => {
-    if (ready) dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    if (!ready) return;
+    // Closing returns focus to what opened the dialog: Export, the top bar job or a toast.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    return () => opener?.focus();
   }, [ready]);
 
   useEffect(() => {
@@ -193,7 +198,7 @@ export function ExportDialog() {
                 <span className="text-fg">Rendering… {Math.round(job.progress * 100)}%</span>
                 <span className="tabular text-muted">{eta}</span>
               </div>
-              <ProgressBar value={job.progress} />
+              <ProgressBar value={job.progress} label={job.label} />
               <p className="text-[12px] text-muted">You can keep editing. Changes made now are not part of this export.</p>
             </div>
           )}
