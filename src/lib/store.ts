@@ -47,7 +47,8 @@ interface EditorState {
   /** Audio tracks the user set to stay in place (true) or to be cut with the video (false). */
   keepTracks: Record<string, boolean>;
 
-  setSnap: (snap: Snapshot, keepSelection?: boolean) => void;
+  /** `opened`: the snapshot of a project just opened, created or booted; others must belong to the open session. */
+  setSnap: (snap: Snapshot, keepSelection?: boolean, opened?: boolean) => void;
   /**
    * Queues an edit. A function is called with the latest confirmed project right before
    * sending, so edits fired before the previous snapshot arrives build on it instead of
@@ -149,9 +150,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   ratioOpen: false,
   keepTracks: {},
 
-  setSnap: (snap, keepSelection = true) => {
+  setSnap: (snap, keepSelection = true, opened = false) => {
     const previous = get().snap;
     if (previous?.sessionEpoch === snap.sessionEpoch && snap.revision < previous.revision) return;
+    // A late reply from the project open before must not switch the editor back to it.
+    if (previous && previous.sessionEpoch !== snap.sessionEpoch && !opened) return;
     const ids = new Set(allClips(snap.project).map((c) => c.id));
     const kept = keepSelection ? get().selection.filter((id) => ids.has(id)) : [];
     const { cut, snap: prev } = get();

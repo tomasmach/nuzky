@@ -389,6 +389,10 @@ fn run_speech_job(
             revision: Some(view.stamp.revision),
             speech_key: Some(capopen_engine::speech::speech_key(&source.project)),
         }).context("Applying captions")?;
+        // Not the frontend's own edit: send it the new timeline, as for an agent's edits.
+        if let Ok(snap) = current.snapshot(Vec::new()) {
+            app.emit("project-changed", snap).ok();
+        }
         format!("{count} captions")
     } else {
         format!("{} words", cached.transcript.words.len())

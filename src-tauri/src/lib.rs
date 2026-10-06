@@ -29,6 +29,8 @@ pub struct AppState {
     preview_url: String,
     cache_dir: PathBuf,
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Saving failed when the window was closed; the next close quits without retrying the warning.
+    close_failed: AtomicBool,
     thumbs: Mutex<HashMap<String, String>>,
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
     preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -457,6 +459,7 @@ pub fn run() {
                 preview_url: server.url.clone(),
                 cache_dir,
                 jobs: Mutex::new(HashMap::new()),
+                close_failed: AtomicBool::new(false),
                 thumbs: Mutex::new(HashMap::new()),
                 filmstrips: Mutex::new(HashMap::new()),
                 preview_locks: Mutex::new(HashMap::new()),
@@ -501,8 +504,19 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building CapOpen")
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
+        .run(|app, event| match event {
+            tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
+                let state = app.state::<AppState>();
+                let saved = state.session.lock().unwrap().session.disconnect();
+                // A second close after a failed save quits anyway; the user has been told what is lost.
+                if let Err(error) = saved
+                    && !state.close_failed.swap(true, Ordering::AcqRel)
+                {
+                    api.prevent_close();
+                    app.emit("close-save-failed", format!("{error:#}")).ok();
+                }
+            }
+            tauri::RunEvent::Exit => {
                 let state = app.state::<AppState>();
                 let current = state.session.lock().unwrap();
                 current.stopped.store(true, Ordering::Release);
@@ -510,5 +524,6 @@ pub fn run() {
                     log::error!("Cannot save project on exit: {error:#}");
                 }
             }
+            _ => {}
         });
 }

@@ -142,6 +142,11 @@ function useBackendEvents() {
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
     offs.push(
+      listen<string>("close-save-failed", (e) =>
+        useEditor.getState().toast({ kind: "error", text: `Your last changes could not be saved: ${e.payload}. Free some disk space and close again, or close again to quit without them.` }),
+      ),
+    );
+    offs.push(
       getCurrentWebview().onDragDropEvent((e) => {
         if (e.payload.type !== "drop" || useEditor.getState().snap?.recovery) return;
         const paths = e.payload.paths.filter((p) => MEDIA_EXTENSIONS.includes(p.split(".").pop()?.toLowerCase() ?? ""));
@@ -158,15 +163,21 @@ function useBackendEvents() {
   }, []);
 }
 
+const UI_CONTEXT_MS = 250;
+
+/** Tells agents what is selected and where the playhead is: at most every 250 ms, ending on the latest values, also while playing. */
 function useUiContext() {
   const selection = useEditor((s) => s.selection);
   const timeUs = useEditor((s) => s.timeUs);
   const epoch = useEditor((s) => s.snap?.sessionEpoch);
+  const lastSent = useRef(0);
   useEffect(() => {
     if (!epoch) return;
-    const timer = setTimeout(() => {
+    const send = () => {
+      lastSent.current = Date.now();
       void api.setUiContext(selection, timeUs).catch((e) => useEditor.getState().toast({ kind: "error", text: errorText(e) }));
-    }, 200);
+    };
+    const timer = setTimeout(send, Math.max(0, UI_CONTEXT_MS - (Date.now() - lastSent.current)));
     return () => clearTimeout(timer);
   }, [selection, timeUs, epoch]);
 }
@@ -283,7 +294,7 @@ export default function App() {
   useEffect(() => {
     api.boot().then((boot) => {
       useEditor.setState({ previewUrl: boot.previewUrl, playing: boot.transport.playing, timeUs: boot.transport.tUs });
-      useEditor.getState().setSnap(boot.snapshot);
+      useEditor.getState().setSnap(boot.snapshot, true, true);
       useEditor.setState({ saveState: "saved" });
     });
   }, []);

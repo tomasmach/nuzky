@@ -91,7 +91,7 @@ function ProjectMenu() {
   const run = async (fn: () => Promise<Snapshot>) => {
     setOpen(false);
     try {
-      setSnap(await fn(), false);
+      setSnap(await fn(), false, true);
       useEditor.setState({ timeUs: 0, thumbs: {}, filmstrips: {}, waveforms: {} });
     } catch (e) {
       toast({ kind: "error", text: errorText(e) });
