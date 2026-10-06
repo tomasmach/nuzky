@@ -172,7 +172,7 @@ export function Preview() {
             title={playing ? "Pause (Space)" : "Play (Space)"}
             disabled={empty}
             onClick={togglePlay}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-fg text-black transition-transform duration-[120ms] ease-out hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-fg text-black transition-transform duration-[120ms] ease-out hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="translate-x-px" />}
           </button>
