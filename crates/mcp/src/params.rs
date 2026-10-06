@@ -66,6 +66,8 @@ pub struct Import {
 pub struct Inspect {
     pub times_us: Vec<i64>,
     pub width: Option<u32>,
+    #[serde(default)]
+    pub safe_area: bool,
 }
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -84,8 +86,6 @@ pub struct AnalysisParams {
     pub window_us: Option<i64>,
     pub threshold: Option<f32>,
     pub min_gap_us: Option<i64>,
-    /// Required for fillers. Reuse a completed asset transcript job id.
-    pub transcript_id: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -98,11 +98,29 @@ pub struct Analyze {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Transcribe {
-    /// "timeline" or an asset id. Asset timestamps survive subsequent ripple edits.
-    pub target: String,
-    pub language: String,
-    /// Installed model name (e.g. large-v3-turbo-q5_0) or absolute local .bin path.
-    pub model: String,
+    pub asset_ids: Option<Vec<String>>,
+    pub language: Option<String>,
+    /// Installed model name or absolute local .bin path. Defaults to best installed.
+    pub model: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetTranscript {
+    /// Half-open timeline interval; word indices remain global.
+    pub range_us: Option<[i64; 2]>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditTranscript {
+    pub run_id: String,
+    pub speech_key: String,
+    /// Inclusive zero-based word indices [from,to].
+    pub delete: Option<Vec<[usize; 2]>>,
+    /// Inclusive zero-based word indices [from,to]. Mutually exclusive with delete.
+    pub keep: Option<Vec<[usize; 2]>>,
+    pub shorten_pauses_us: Option<i64>,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -120,7 +138,6 @@ pub struct Job {
 #[serde(deny_unknown_fields)]
 pub struct Captions {
     pub run_id: String,
-    pub transcript_id: String,
     pub style: Option<TextStyle>,
     pub max_words: Option<usize>,
     pub max_chars: Option<usize>,
@@ -166,7 +183,7 @@ mod tests {
     #[test]
     fn captions_omit_style_and_grouping_for_reel_defaults() {
         let args: Captions = serde_json::from_value(serde_json::json!({
-            "run_id": "run", "transcript_id": "transcript"
+            "run_id": "run"
         })).unwrap();
         let defaults = capopen_analysis::CaptionGrouping::default();
         assert_eq!(args.grouping().max_words, defaults.max_words);

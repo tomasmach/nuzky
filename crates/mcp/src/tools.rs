@@ -10,22 +10,20 @@ use capopen_engine::{
     export::{ExportOptions, export},
     media::probe,
 };
-use capopen_session::{Expect, Mode, ProjectSession, SessionState};
+use capopen_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel, transcripts::{Record, Segment, VERSION}};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::{
-    jobs::{Jobs, Output, check_cancel},
     media,
     params::*,
     transcript,
 };
 
 pub struct Backend {
-    pub session: ProjectSession,
-    pub jobs: Jobs,
-    cache: PathBuf,
+    pub host: Host,
+    client_id: String,
     project_dir: PathBuf,
     project_path: PathBuf,
     export_queue: Arc<Mutex<()>>,
@@ -49,9 +47,8 @@ impl Backend {
         )?;
         std::fs::create_dir_all(&cache).context("Creating media cache")?;
         Ok(Self {
-            session,
-            jobs: Jobs::default(),
-            cache,
+            host: Host::new(session, cache)?,
+            client_id: new_id(),
             project_dir,
             project_path,
             export_queue: Arc::new(Mutex::new(())),
@@ -59,13 +56,14 @@ impl Backend {
     }
 
     pub fn call(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
-        let state = self.session.state()?;
+        let state = self.host.session.state()?;
         if name == "inspect_frames" {
             let args: Inspect = parse(arguments)?;
             let bytes = media::contact_sheet(
                 &self.media_project(&state.project),
                 &args.times_us,
                 args.width,
+                args.safe_area,
             )?;
             return Ok(CallToolResult::success(vec![ContentBlock::text(json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch, "times_us": args.times_us, "labels": "seconds.microseconds"}).to_string()), ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png")]));
         }
@@ -87,7 +85,7 @@ impl Backend {
             "get_state" => self.get_state(parse(arguments)?, state),
             "begin_run" => {
                 let a: Begin = parse(arguments)?;
-                Ok(serde_json::to_value(self.session.begin_run(a.label)?)?)
+                Ok(serde_json::to_value(self.host.session.begin_run(a.label)?)?)
             }
             "resolve_recovery" => {
                 let a: Recovery = parse(arguments)?;
@@ -95,11 +93,11 @@ impl Backend {
                     RecoveryAction::Keep => capopen_session::RecoveryAction::Keep,
                     RecoveryAction::Restore => capopen_session::RecoveryAction::Restore,
                 };
-                Ok(serde_json::to_value(self.session.resolve_recovery(action)?)?)
+                Ok(serde_json::to_value(self.host.session.resolve_recovery(action)?)?)
             }
             "apply_edits" => {
                 let a: Apply = parse(arguments)?;
-                Ok(serde_json::to_value(self.session.apply_edits(
+                Ok(serde_json::to_value(self.host.session.apply_edits(
                     &a.run_id,
                     &a.request_id,
                     a.edits,
@@ -113,19 +111,21 @@ impl Backend {
                     EndAction::Discard => capopen_session::EndAction::Discard,
                 };
                 Ok(serde_json::to_value(
-                    self.session.end_run(&a.run_id, action)?,
+                    self.host.session.end_run(&a.run_id, action)?,
                 )?)
             }
             "undo_run" => {
                 let a: Undo = parse(arguments)?;
-                Ok(serde_json::to_value(self.session.undo_run(&a.run_id)?)?)
+                Ok(serde_json::to_value(self.host.session.undo_run(&a.run_id)?)?)
             }
             "import_media" => self.import(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "transcribe" => self.transcribe(parse(arguments)?, state),
+            "get_transcript" => self.get_transcript(parse(arguments)?, state),
+            "edit_transcript" => self.edit_transcript(parse(arguments)?, state),
             "job" => {
                 let a: Job = parse(arguments)?;
-                self.jobs
+                self.host.jobs
                     .get(&a.job_id, matches!(a.action, JobAction::Cancel))
             }
             "build_captions" => self.captions(parse(arguments)?, state),
@@ -184,7 +184,7 @@ impl Backend {
             })
             .collect::<Result<Vec<_>>>()?;
         let ids: Vec<_> = assets.iter().map(|a| a.id.clone()).collect();
-        let result = self.session.apply_edits(
+        let result = self.host.session.apply_edits(
             &args.run_id,
             &new_id(),
             vec![EditCmd::AddAssets { assets }],
@@ -208,22 +208,15 @@ impl Backend {
             asset.path
         );
         let transcript = if matches!(args.kind, AnalysisKind::Fillers) {
-            let record =
-                self.jobs
-                    .transcript(args.params.transcript_id.as_deref().context(
-                        "Fillers require params.transcript_id from an asset transcription",
-                    )?)?;
-            ensure!(
-                record.target == args.asset_id
-                    && record.project.asset(&args.asset_id) == state.project.asset(&args.asset_id),
-                "TRANSCRIPT_MISMATCH: fillers require the current asset transcript"
-            );
-            Some(record.transcript)
+            let record = self.host.transcripts.get(&asset)?.context("TRANSCRIPT_MISSING: transcribe this asset first")?;
+            Some(capopen_analysis::Transcript {
+                language: record.language, words: record.words, segments: vec![],
+            })
         } else {
             None
         };
-        let cache = self.cache.clone();
-        self.jobs.start("analysis", state.stamp.clone(), move |cancel, progress| {
+        let cache = self.host.cache_dir.clone();
+        self.host.jobs.start(&self.client_id, "analysis", state.stamp.clone(), move |cancel, progress| {
             check_cancel(&cancel)?;
             progress.set("analyzing", None);
             let p = args.params;
@@ -234,42 +227,106 @@ impl Backend {
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
             };
             check_cancel(&cancel)?;
-            Ok(Output::Json(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result})))
+            Ok(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result}))
         })
     }
 
     fn transcribe(&self, args: Transcribe, state: &SessionState) -> Result<Value> {
-        let (model, vad) = transcript::models(&args.model)?;
         let project = self.media_project(&state.project);
-        let original = state.project.clone();
-        let cache = self.cache.clone();
-        self.jobs.start(
-            "transcription",
-            state.stamp.clone(),
-            move |cancel, progress| {
-                progress.set("transcribing", None);
-                let mut record = transcript::transcribe(
-                    project,
-                    args.target,
-                    &args.language,
-                    &model,
-                    &vad,
-                    &cache,
-                    &cancel,
+        let mut assets = Vec::new();
+        if let Some(ids) = args.asset_ids {
+            for id in ids {
+                let asset = project.asset(&id).context("UNKNOWN_ASSET: transcription source")?;
+                if !assets.iter().any(|a: &capopen_engine::model::Asset| a.id == id) {
+                    assets.push(asset.clone());
+                }
+            }
+        } else {
+            let heard = transcript::heard_assets(&project);
+            for asset in project.assets.iter().filter(|a| heard.contains(&a.id)) {
+                if self.host.transcripts.get(asset)?.is_none() { assets.push(asset.clone()); }
+            }
+        }
+        let name = args.model.unwrap_or_else(|| transcript::best_model().into());
+        let model_paths = if assets.is_empty() { None } else { Some(transcript::models(&name)?) };
+        let language = args.language.unwrap_or_else(|| "auto".into());
+        let store = self.host.transcripts.clone();
+        let cache = self.host.cache_dir.clone();
+        self.host.jobs.start(&self.client_id, "transcription", state.stamp.clone(), move |cancel, progress| {
+            let mut recognised = Vec::new();
+            let count = assets.len();
+            let mut recognised_files = std::collections::HashSet::new();
+            for (i, asset) in assets.into_iter().enumerate() {
+                check_cancel(&cancel)?;
+                progress.set("transcribing", Some(i as f32 / count as f32));
+                let fingerprint = store.fingerprint(&asset)?;
+                if !recognised_files.insert(fingerprint.clone()) {
+                    recognised.push(json!({"asset_id":asset.id,"reused":true}));
+                    continue;
+                }
+                let (model, vad) = model_paths.as_ref().context("MODEL_MISSING: transcription model")?;
+                let result = capopen_analysis::transcribe_words(
+                    capopen_analysis::AudioSource::Asset { asset: &asset, cache: &cache }, model, vad, &language,
                 )?;
-                record.project = original;
-                Ok(Output::Transcript(record))
-            },
-        )
+                check_cancel(&cancel)?;
+                let record = Record { version: VERSION, fingerprint, model: name.clone(), language: result.language,
+                    words: result.words, segments: result.segments.into_iter().map(|s| Segment {
+                        start_us: s.start_us, end_us: s.end_us, text: s.text,
+                    }).collect() };
+                store.put(&asset, &record)?;
+                recognised.push(json!({"asset_id":asset.id,"words":record.words.len(),"language":record.language}));
+            }
+            Ok(json!({"assets":recognised}))
+        })
+    }
+
+    fn get_transcript(&self, args: GetTranscript, state: &SessionState) -> Result<Value> {
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        let mut result = transcript::summary(&derived, args.range_us)?;
+        result["speech_key"] = json!(state.speech_key);
+        Ok(result)
+    }
+
+    fn edit_transcript(&self, args: EditTranscript, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        ensure!(args.speech_key == state.speech_key, "SPEECH_CHANGED: timeline speech changed");
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
+        let before = state.project.duration_us();
+        let ranges = transcript::deletion_ranges(&derived.words, before, args.delete.as_deref(),
+            args.keep.as_deref(), args.shorten_pauses_us.unwrap_or(300_000))?;
+        let edit = EditCmd::RippleDeleteRanges { ranges: ranges.clone(), keep_track_ids: None };
+        let mut preview = state.project.clone();
+        preview.apply(edit.clone()).context("EDIT_REJECTED: preview failed")?;
+        capopen_session::validate(&preview)?;
+        let words = capopen_engine::speech::map_words(&preview, &derived.sources);
+        let identities = |words: &[capopen_engine::speech::TimelineWord]| {
+            let mut ids: Vec<_> = words.iter().map(|w| (w.asset_id.clone(), w.source_start_us, w.text.clone())).collect();
+            ids.sort();
+            ids
+        };
+        let retained: Vec<_> = derived.words.iter().filter(|w| !ranges.iter()
+            .any(|r| r.start_us <= w.start_us && r.end_us >= w.end_us)).cloned().collect();
+        ensure!(identities(&words) == identities(&retained),
+            "UNSAFE_CUT: kept tracks or sub-frame fragments would change the selected words");
+        let preview_text: String = words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(400).collect();
+        let revision = if args.dry_run { state.stamp.revision } else {
+            self.host.session.apply_edits(&args.run_id, &new_id(), vec![edit],
+                Expect { revision: Some(state.stamp.revision), speech_key: Some(args.speech_key) })?.stamp.revision
+        };
+        Ok(json!({"duration_us":{"before":before,"after":preview.duration_us()},
+            "removed_us":before-preview.duration_us(),"ranges":ranges,"preview_text":preview_text,
+            "speech_key":capopen_engine::speech::speech_key(&preview),"revision":revision,"dry_run":args.dry_run}))
     }
 
     fn captions(&self, args: Captions, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
-        let record = self.jobs.transcript(&args.transcript_id)?;
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before captions");
         let grouping = args.grouping();
         let style = args.style.unwrap_or_else(reel_style);
-        let (edit, _) = transcript::caption_edit(&record, &state.project, style, grouping)?;
-        let result = self.session.apply_edits(
+        let (edit, _) = transcript::caption_edit(&derived.words, &state.project, style, grouping)?;
+        let result = self.host.session.apply_edits(
             &args.run_id,
             &new_id(),
             vec![edit],
@@ -304,7 +361,7 @@ impl Backend {
         );
         let project = self.media_project(&state.project);
         media::check_media(&project)?;
-        let cache = self.cache.clone();
+        let cache = self.host.cache_dir.clone();
         let options = ExportOptions {
             resolution: Some(args.resolution),
             fps: Some(args.fps),
@@ -313,8 +370,8 @@ impl Backend {
             ..ExportOptions::default()
         };
         let queue = self.export_queue.clone();
-        self.jobs
-            .start("export", state.stamp.clone(), move |cancel, progress| {
+        self.host.jobs
+            .start(&self.client_id, "export", state.stamp.clone(), move |cancel, progress| {
                 progress.set("waiting_for_export", None);
                 let _export = queue.lock().unwrap();
                 check_cancel(&cancel)?;
@@ -324,9 +381,7 @@ impl Backend {
                         Some(p.frame as f32 / p.total_frames.max(1) as f32),
                     )
                 })?;
-                Ok(Output::Json(
-                    json!({"path": out, "duration_us": project.duration_us()}),
-                ))
+                Ok(json!({"path": out, "duration_us": project.duration_us()}))
             })
     }
 
@@ -371,7 +426,7 @@ pub async fn call(backend: Arc<Backend>, name: String, arguments: Value) -> Call
 }
 
 fn tool_error(backend: &Backend, message: String) -> CallToolResult {
-    match backend.session.state() {
+    match backend.host.session.state() {
         Ok(state) => CallToolResult::structured_error(json!({
             "error": message, "revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
         })),
@@ -436,5 +491,56 @@ mod tests {
             caption_stats(&project),
             json!({"count":1,"max_chars":16,"max_words":2})
         );
+    }
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use super::*;
+
+    #[test]
+    fn dry_run_stale_key_and_multiple_clip_slips_are_one_undo() {
+        let dir = std::env::temp_dir().join(format!("transcript-tools-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mut project, sources) = transcript::tests::fixture();
+        let asset_path = dir.join("talk.mov");
+        std::fs::write(&asset_path, b"fixture content").unwrap();
+        project.assets[0].path = asset_path.to_string_lossy().into();
+        let clip = project.tracks[0].clips[0].id.clone();
+        project.apply(EditCmd::SplitClip { clip_id: clip, at_us: 5_000_000 }).unwrap();
+        let path = dir.join("project.capopen");
+        std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
+        let store = capopen_session::transcripts::TranscriptStore::at(dir.join("transcripts")).unwrap();
+        store.put(&project.assets[0], &Record { version: VERSION,
+            fingerprint: store.fingerprint(&project.assets[0]).unwrap(), model: "fixture".into(), language: "en".into(),
+            words: sources["talk"].clone(), segments: vec![],
+        }).unwrap();
+        let backend = Backend {
+            host: Host { session: ProjectSession::open(&path, Mode::Write, None).unwrap(),
+                jobs: Default::default(), transcripts: store, cache_dir: dir.join("cache") },
+            client_id: "test".into(), project_dir: dir.clone(), project_path: path,
+            export_queue: Arc::default(),
+        };
+        let run = backend.host.session.begin_run("remove slips".into()).unwrap();
+        let state = backend.host.session.state().unwrap();
+        let args = json!({"run_id":run.run_id,"speech_key":state.speech_key,"delete":[[1,2],[6,6]],"dry_run":true});
+        let preview = backend.dispatch("edit_transcript", args.clone(), &state).unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project, project);
+        assert_eq!(backend.host.session.state().unwrap().stamp.revision, state.stamp.revision);
+        let mut apply = args;
+        apply["dry_run"] = json!(false);
+        let result = backend.dispatch("edit_transcript", apply.clone(), &state).unwrap();
+        assert_eq!(preview["duration_us"], result["duration_us"]);
+        assert_eq!(preview["preview_text"], result["preview_text"]);
+        let changed = backend.host.session.state().unwrap();
+        assert_eq!(result["speech_key"], changed.speech_key);
+        assert!(backend.dispatch("edit_transcript", apply, &changed).unwrap_err().to_string().contains("SPEECH_CHANGED"));
+        let transcript = backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap();
+        assert_eq!(transcript["words"].as_array().unwrap().len(), 5);
+        backend.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep).unwrap();
+        backend.host.session.undo_run(&run.run_id).unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project, project);
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
