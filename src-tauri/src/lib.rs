@@ -1,6 +1,7 @@
 mod audio_out;
 mod engine;
 mod jobs;
+mod model_download;
 mod preview_server;
 mod store;
 mod thumbs;

@@ -2,7 +2,6 @@
 //! Every job reports through `job` events. Audio preparation cannot be cancelled.
 
 use std::collections::HashSet;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -20,7 +19,10 @@ use capopen_session::{host::Host, transcripts::TranscriptStore};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::AppState;
+use crate::{
+    AppState,
+    model_download::{self, Integrity},
+};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -200,8 +202,31 @@ pub struct SpeechModel {
     pub downloaded: bool,
 }
 
-const MODELS: &[(&str, &str, u32)] =
-    &[("base", "Fast", 142), ("small", "Balanced", 466), ("large-v3-turbo-q5_0", "Most accurate", 547)];
+// File sizes and SHA-256 LFS object IDs from the publishers' Hugging Face repositories, checked 2026-10-06:
+// https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main
+// https://huggingface.co/api/models/ggml-org/whisper-vad/tree/main
+const MODELS: &[(&str, &str, u32, Integrity)] = &[
+    (
+        "base",
+        "Fast",
+        142,
+        Integrity { size: 147_951_465, sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe" },
+    ),
+    (
+        "small",
+        "Balanced",
+        466,
+        Integrity { size: 487_601_967, sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b" },
+    ),
+    (
+        "large-v3-turbo-q5_0",
+        "Most accurate",
+        547,
+        Integrity { size: 574_041_195, sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2" },
+    ),
+];
+const VAD_INTEGRITY: Integrity =
+    Integrity { size: 885_098, sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf" };
 
 fn model_path(id: &str) -> PathBuf {
     models_dir().join(format!("ggml-{id}.bin"))
@@ -211,7 +236,13 @@ fn model_path(id: &str) -> PathBuf {
 pub fn speech_models() -> Vec<SpeechModel> {
     MODELS
         .iter()
-        .map(|(id, label, size)| SpeechModel { id, label, size_mb: *size, downloaded: model_path(id).exists() })
+        .map(|(id, label, size, integrity)| SpeechModel {
+            id,
+            label,
+            size_mb: *size,
+            downloaded: std::fs::metadata(model_path(id))
+                .is_ok_and(|file| file.is_file() && file.len() == integrity.size),
+        })
         .collect()
 }
 
@@ -402,52 +433,19 @@ use capopen_analysis::VAD_MODEL;
 
 fn download_model(id: &str, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathBuf> {
     let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{id}.bin");
-    download(&url, &model_path(id), cancel, rep, "Downloading speech model")
+    let integrity = MODELS.iter().find(|(model, ..)| *model == id).context("Unknown speech model")?.3;
+    model_download::download(&url, &model_path(id), integrity, cancel, |value| {
+        rep.progress(value, Some("Downloading speech model"))
+    })
 }
 
 /// Voice activity detection model; skipping non-speech stops Whisper from inventing
 /// captions over music and silence.
 fn download_vad(cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathBuf> {
     let url = format!("https://huggingface.co/ggml-org/whisper-vad/resolve/main/{VAD_MODEL}");
-    download(&url, &models_dir().join(VAD_MODEL), cancel, rep, "Downloading voice detector")
-}
-
-fn download(url: &str, path: &Path, cancel: &AtomicBool, rep: &mut Reporter, phase: &str) -> anyhow::Result<PathBuf> {
-    check_cancelled(cancel)?;
-    let path = path.to_path_buf();
-    if path.exists() {
-        return Ok(path);
-    }
-    rep.progress(0.0, Some(phase));
-    std::fs::create_dir_all(models_dir()).context("Creating speech model directory")?;
-    let response = ureq::get(url).call().with_context(|| format!("{phase}: requesting model"))?;
-    let total: u64 = response.headers().get("content-length").and_then(|v| v.to_str().ok()?.parse().ok()).unwrap_or(0);
-    let mut reader = response.into_body().into_reader();
-    let tmp = path.with_extension("part");
-    let mut file = std::io::BufWriter::new(std::fs::File::create(&tmp).context("Creating model download")?);
-    let mut buf = vec![0u8; 1 << 16];
-    let mut done: u64 = 0;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            drop(file);
-            std::fs::remove_file(&tmp).ok();
-            anyhow::bail!("CANCELLED: job cancelled");
-        }
-        let n = reader.read(&mut buf).context("Reading model download")?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n]).context("Writing model download")?;
-        done += n as u64;
-        if total > 0 {
-            rep.progress(done as f32 / total as f32, Some(phase));
-        }
-    }
-    file.flush().context("Flushing model download")?;
-    drop(file);
-    check_cancelled(cancel)?;
-    std::fs::rename(&tmp, &path).context("Installing downloaded model")?;
-    Ok(path)
+    model_download::download(&url, &models_dir().join(VAD_MODEL), VAD_INTEGRITY, cancel, |value| {
+        rep.progress(value, Some("Downloading voice detector"))
+    })
 }
 
 fn count_label(count: usize, singular: &str, plural: &str) -> String {
