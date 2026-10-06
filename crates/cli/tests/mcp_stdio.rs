@@ -126,7 +126,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 15);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_key"].is_object());
@@ -230,4 +230,42 @@ fn recovery_tool_resolves_both_choices_over_stdio() {
         c.call("begin_run", json!({"label": "after recovery"}));
         c.finish();
     }
+}
+
+
+#[test]
+#[ignore = "Requires tmp-test/talk.mp4 and installed small + Silero models; run with XDG_DATA_HOME=tmp-test/xdg/data"]
+fn transcribe_edit_and_caption_real_media_over_stdio() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let media = root.join("tmp-test/talk.mp4").canonicalize().unwrap();
+    let mut c = Client::new(true);
+    let run = c.call("begin_run", json!({"label":"import"}));
+    let assets = c.call("import_media", json!({"run_id":run["run_id"],"paths":[media]}));
+    let asset_id = &assets["asset_ids"][0];
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":asset_id}]}));
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    let job = c.call("transcribe", json!({"asset_ids":[asset_id],"model":"small"}));
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    loop {
+        let status = c.call("job", json!({"job_id":job["job_id"],"action":"get"}));
+        if status["status"] == "done" { break; }
+        assert_eq!(status["status"], "running", "{status}");
+        assert!(std::time::Instant::now() < deadline, "transcription timed out");
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    let transcript = c.call("get_transcript", json!({}));
+    assert!(transcript["words"].as_array().unwrap().len() >= 2);
+    assert_eq!(transcript["untranscribed"], json!([]));
+    let run = c.call("begin_run", json!({"label":"words and captions"}));
+    let args = json!({"run_id":run["run_id"],"speech_key":transcript["speech_key"],"delete":[[0,0]],"dry_run":true});
+    let preview = c.call("edit_transcript", args.clone());
+    assert_eq!(c.call("get_transcript", json!({}))["speech_key"], transcript["speech_key"]);
+    let mut args = args;
+    args["dry_run"] = json!(false);
+    let edited = c.call("edit_transcript", args);
+    assert_eq!(preview["duration_us"], edited["duration_us"]);
+    let captions = c.call("build_captions", json!({"run_id":run["run_id"]}));
+    assert!(captions["caption_count"].as_u64().unwrap() > 0);
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    c.finish();
 }
