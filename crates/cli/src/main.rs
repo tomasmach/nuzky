@@ -14,7 +14,8 @@ const USAGE: &str = "Usage:
   capopen probe <media>
   capopen new <project.json> <media>...     main-track project from media files
   capopen frame <project.json> <seconds> <out.png> [width]
-  capopen render <project.json> <out.mp4>";
+  capopen bench <project.json> [width] [seconds]
+  capopen render <project.json> <out.mp4> [resolution] [fps]";
 
 fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
@@ -60,12 +61,42 @@ fn main() -> Result<()> {
             eprintln!("Rendered {width}x{height} at {secs}s in {:?} on {}", start.elapsed(), renderer.adapter_name());
             write_png(Path::new(out), width, height, &rgba)?;
         }
-        ["render", project, out] => {
+        ["bench", project, rest @ ..] => {
+            let project = load(project)?;
+            let width: u32 = rest.first().map(|s| s.parse()).transpose()?.unwrap_or(576);
+            let seconds: f64 = rest.get(1).map(|s| s.parse()).transpose()?.unwrap_or(5.0);
+            if width == 0 || !seconds.is_finite() || seconds <= 0.0 {
+                bail!("Width and seconds must be positive");
+            }
+            let height = (width as u64 * project.canvas.height as u64 / project.canvas.width.max(1) as u64) as u32;
+            let fps = project.canvas.fps.max(1) as u64;
+            let frames = ((seconds * fps as f64).ceil() as u64).max(1);
+            let mut renderer = Renderer::new()?;
+            renderer.render(&project, 0, width, height, Wait::Exact, true)?;
+            let clock = Instant::now();
+            let mut times = Vec::with_capacity(frames as usize);
+            for i in 0..frames {
+                let deadline = clock + std::time::Duration::from_secs_f64(i as f64 / fps as f64);
+                std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                let now = Instant::now();
+                renderer.render(&project, (i * 1_000_000 / fps) as i64, width, height, Wait::Ready, true)?;
+                times.push(now.elapsed().as_secs_f64() * 1000.0);
+            }
+            let avg = times.iter().sum::<f64>() / times.len() as f64;
+            times.sort_by(f64::total_cmp);
+            println!("{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers", renderer.adapter_name(), times[(times.len() * 95).div_ceil(100).saturating_sub(1)], renderer.late_layers);
+        }
+        ["render", project, out, rest @ ..] => {
             let project = load(project)?;
             let start = Instant::now();
             let cancel = AtomicBool::new(false);
             let mut last = 0;
-            export(&project, &cache_dir(), Path::new(out), &ExportOptions::default(), &cancel, |p| {
+            let options = ExportOptions {
+                resolution: rest.first().map(|s| s.parse()).transpose()?,
+                fps: rest.get(1).map(|s| s.parse()).transpose()?,
+                ..ExportOptions::default()
+            };
+            export(&project, &cache_dir(), Path::new(out), &options, &cancel, |p| {
                 let pct = p.frame * 100 / p.total_frames.max(1);
                 if pct >= last + 10 {
                     last = pct;

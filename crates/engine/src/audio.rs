@@ -9,6 +9,7 @@ use anyhow::Result;
 use memmap2::Mmap;
 
 use crate::media::{extract_pcm, pcm_path};
+use crate::effects::transition_window;
 use crate::model::{Asset, AssetKind, CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
 /// Short fades at clip edges so cuts do not click.
@@ -90,11 +91,17 @@ impl Mixer {
             if track.muted || track.kind == TrackKind::Text {
                 continue;
             }
-            for clip in &track.clips {
-                let ClipContent::Media { asset_id, source_in_us, volume, .. } = &clip.content else { continue };
+            for (index, clip) in track.clips.iter().enumerate() {
+                let ClipContent::Media { asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, .. } = &clip.content else { continue };
                 let c0 = us_to_samples(clip.start_us);
                 let c1 = us_to_samples(clip.end_us());
-                let (from, to) = (start.max(c0), end.min(c1));
+                let incoming = if track.id == crate::edit::MAIN_TRACK && index > 0 { transition_window(clip) } else { None };
+                let outgoing = if track.id == crate::edit::MAIN_TRACK { track.clips.get(index + 1).and_then(transition_window) } else { None };
+                let incoming = incoming.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
+                let outgoing = outgoing.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
+                let begin = incoming.map(|w| w.0).unwrap_or(c0);
+                let finish = outgoing.map(|w| w.1).unwrap_or(c1);
+                let (from, to) = (start.max(begin), end.min(finish));
                 if from >= to || *volume <= 0.0 {
                     continue;
                 }
@@ -104,23 +111,117 @@ impl Mixer {
                 }
                 let Some(pcm) = self.source(asset) else { continue };
                 let samples = pcm.samples();
-                let src0 = us_to_samples(*source_in_us);
+                let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
+                let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 for i in from..to {
-                    let src = src0 + (i - c0);
-                    if src < 0 || (src as usize + 1) * CHANNELS > samples.len() {
-                        continue;
-                    }
-                    let edge = (i - c0).min(c1 - 1 - i);
-                    let gain = volume * if edge < EDGE_FADE { edge as f32 / EDGE_FADE as f32 } else { 1.0 };
+                    let src = src0 + (i as f64 - origin) * *speed as f64;
+                    let gain = volume * gain_at(i, begin, finish, 0, 0, incoming, outgoing)
+                        * fade_gain(i, c0, c1, us_to_samples(*fade_in_us), us_to_samples(*fade_out_us));
                     let o = ((i - start) as usize) * CHANNELS;
-                    let s = src as usize * CHANNELS;
-                    out[o] += samples[s] * gain;
-                    out[o + 1] += samples[s + 1] * gain;
+                    for ch in 0..CHANNELS {
+                        out[o + ch] += sample_at(samples, src, ch) * gain;
+                    }
                 }
             }
         }
         for s in out.iter_mut() {
             *s = s.clamp(-1.0, 1.0);
+        }
+    }
+}
+
+fn sample_at(samples: &[f32], position: f64, channel: usize) -> f32 {
+    if !position.is_finite() || position < 0.0 || position >= (samples.len() / CHANNELS) as f64 {
+        return 0.0;
+    }
+    let index = position.floor() as usize;
+    let p = (position - index as f64) as f32;
+    let a = samples[index * CHANNELS + channel];
+    let b = samples.get((index + 1) * CHANNELS + channel).copied().unwrap_or(0.0);
+    a + (b - a) * p
+}
+
+fn fade_gain(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64) -> f32 {
+    let ramp = |n: i64, d: i64| if d > 0 { (n as f32 / d as f32).clamp(0.0, 1.0) } else { 1.0 };
+    ramp(i - start, fade_in) * ramp(end - 1 - i, fade_out)
+}
+
+fn gain_at(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64, incoming: Option<(i64, i64)>, outgoing: Option<(i64, i64)>) -> f32 {
+    if i < start || i >= end { return 0.0; }
+    let ramp = |n: i64, d: i64| if d > 0 { (n as f32 / d as f32).clamp(0.0, 1.0) } else { 1.0 };
+    let mut gain = ramp((i - start).min(end - 1 - i), EDGE_FADE);
+    gain *= fade_gain(i, start, end, fade_in, fade_out);
+    for (window, entering) in [(incoming, true), (outgoing, false)] {
+        if let Some((a, b)) = window {
+            let p = ((i - a) as f64 / (b - a).max(1) as f64).clamp(0.0, 1.0);
+            let angle = p * std::f64::consts::FRAC_PI_2;
+            gain *= if entering { angle.sin() as f32 } else { angle.cos() as f32 };
+        }
+    }
+    gain
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixer_speed_and_crossfade_are_independent_of_buffer_boundaries() {
+        use crate::model::{Clip, Transform, Transition, TransitionKind};
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test").join(format!("mixer-{}", std::process::id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let mut project = Project::new("audio test");
+        for (id, value) in [("a", 0.2f32), ("b", 0.4)] {
+            let asset = Asset { id: id.into(), name: id.into(), path: String::new(), kind: AssetKind::Video, duration_us: 3_000_000, width: 2, height: 2, fps: 30.0, has_audio: true, rotation: 0 };
+            let samples = vec![value; 144000 * CHANNELS];
+            std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&samples)).unwrap();
+            project.assets.push(asset);
+            let mut clip = Clip::new(id.into(), if id == "a" { 0 } else { 1_000_000 }, 1_000_000, ClipContent::Media {
+                asset_id: id.into(), source_in_us: 500_000, volume: 1.0, transform: Transform::default(), speed: 2.0,
+                adjust: Default::default(), fade_in_us: 0, fade_out_us: 0,
+            });
+            if id == "b" { clip.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 400_000 }); }
+            project.tracks[0].clips.push(clip);
+        }
+        let mut mixer = Mixer::new(cache.clone());
+        let mut whole = vec![0.0; 96000 * CHANNELS];
+        mixer.mix(&project, 0, &mut whole);
+        assert!((whole[48000 * CHANNELS] - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+        let mut chunks = vec![0.0; whole.len()];
+        for (index, chunk) in chunks.chunks_mut(137 * CHANNELS).enumerate() { mixer.mix(&project, (index * 137) as i64, chunk); }
+        assert_eq!(whole, chunks);
+        drop(mixer);
+        let samples: Vec<f32> = (0..144000).flat_map(|i| [i as f32 / 200000.0; CHANNELS]).collect();
+        std::fs::write(pcm_path(&cache, &project.assets[0]), bytemuck::cast_slice(&samples)).unwrap();
+        let mut mixer = Mixer::new(cache.clone());
+        let mut frame = [0.0; CHANNELS];
+        mixer.mix(&project, 1000, &mut frame);
+        assert!((frame[0] - 26000.0 / 200000.0).abs() < 1e-6);
+        drop(mixer);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
+    fn speed_reads_fractional_source_samples_and_silence_past_eof() {
+        let samples = [0.0, 0.0, 0.2, -0.2, 0.4, -0.4, 0.6, -0.6];
+        assert!((sample_at(&samples, 1.0 * 1.5, 0) - 0.3).abs() < 1e-6);
+        assert!((sample_at(&samples, 1.0 * 2.0, 1) + 0.4).abs() < 1e-6);
+        assert_eq!(sample_at(&samples, -0.1, 0), 0.0);
+        assert_eq!(sample_at(&samples, 4.0, 0), 0.0);
+    }
+
+    #[test]
+    fn fades_multiply_and_transition_is_equal_power() {
+        assert_eq!(gain_at(0, 0, 48000, 4800, 4800, None, None), 0.0);
+        assert_eq!(gain_at(2400, 0, 48000, 4800, 4800, None, None), 0.5);
+        assert_eq!(gain_at(45599, 0, 48000, 4800, 4800, None, None), 0.5);
+        assert_eq!(gain_at(47999, 0, 48000, 0, 0, None, None), 0.0);
+        assert!((gain_at(120, 0, 48000, 4800, 0, None, None) - 0.0125).abs() < 1e-6);
+        for i in [12000, 18000, 24000] {
+            let a = gain_at(i, 0, 36000, 0, 0, None, Some((12000, 24000)));
+            let b = gain_at(i, 0, 36000, 0, 0, Some((12000, 24000)), None);
+            assert!((a * a + b * b - 1.0).abs() < 1e-6);
+            if i == 18000 { assert!((a * 0.2 + b * 0.4 - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6); }
         }
     }
 }

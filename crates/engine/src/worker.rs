@@ -79,6 +79,7 @@ pub struct VideoWorker {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     pub last_used: Instant,
+    pub exact: bool,
 }
 
 impl VideoWorker {
@@ -89,7 +90,7 @@ impl VideoWorker {
             .name("video-decode".into())
             .spawn(move || run(s, path))
             .expect("spawn decoder thread");
-        Self { shared, thread: Some(thread), last_used: Instant::now() }
+        Self { shared, thread: Some(thread), last_used: Instant::now(), exact: false }
     }
 
     /// Source size (before rotation) once the file is open.
@@ -106,6 +107,7 @@ impl VideoWorker {
     /// otherwise returns the nearest ready frame or `None` and lets decoding catch up.
     pub fn get(&mut self, t_us: i64, size: (u32, u32), playing: bool, blocking: bool) -> Option<RgbaFrame> {
         self.last_used = Instant::now();
+        self.exact = false;
         let deadline = Instant::now() + BLOCKING_TIMEOUT;
         let mut st = self.shared.state.lock().unwrap();
         if st.size != size {
@@ -126,6 +128,7 @@ impl VideoWorker {
                 }
                 let frame = st.frames[0].clone();
                 if exact || !blocking {
+                    self.exact = exact;
                     self.shared.cv.notify_all();
                     return Some(frame);
                 }

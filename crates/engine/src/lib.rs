@@ -3,6 +3,7 @@
 
 pub mod audio;
 pub mod edit;
+pub mod effects;
 pub mod export;
 pub mod gpu;
 pub mod media;

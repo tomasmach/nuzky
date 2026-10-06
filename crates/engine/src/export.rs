@@ -70,6 +70,16 @@ pub fn export(
     }
 }
 
+fn output_size(project: &Project, options: &ExportOptions) -> Result<(u32, u32)> {
+    let (w, h) = (project.canvas.width, project.canvas.height);
+    if w < 2 || h < 2 { bail!("Canvas dimensions must be at least 2 pixels"); }
+    let short = options.resolution.unwrap_or(w.min(h));
+    if short < 2 || short > 7680 { bail!("Export resolution must be between 2 and 7680"); }
+    let scale = short as f64 / w.min(h) as f64;
+    let even = |v: u32| ((v as f64 * scale / 2.0).round() as u32).max(1) * 2;
+    Ok((even(w), even(h)))
+}
+
 fn encode(
     project: &Project,
     cache_dir: &Path,
@@ -80,8 +90,9 @@ fn encode(
     duration: i64,
 ) -> Result<()> {
 
-    let fps = project.canvas.fps.max(1);
-    let (w, h) = (project.canvas.width & !1, project.canvas.height & !1);
+    let fps = options.fps.unwrap_or(project.canvas.fps);
+    if fps == 0 || fps > 240 { bail!("Export frame rate must be between 1 and 240"); }
+    let (w, h) = output_size(project, options)?;
     let total_frames = ((duration as i128 * fps as i128 + 999_999) / 1_000_000) as u64;
 
     let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
@@ -219,4 +230,24 @@ fn encode_audio(
     f.set_pts(Some(pos));
     enc.send_frame(&f)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_resolution_keeps_aspect_and_even_dimensions() {
+        let mut project = Project::new("size");
+        let options = ExportOptions { resolution: Some(720), ..ExportOptions::default() };
+        assert_eq!(output_size(&project, &options).unwrap(), (720, 1280));
+        project.canvas.width = 1920;
+        project.canvas.height = 1080;
+        assert_eq!(output_size(&project, &options).unwrap(), (1280, 720));
+        project.canvas.width = 1001;
+        project.canvas.height = 777;
+        let (w, h) = output_size(&project, &options).unwrap();
+        assert_eq!((w % 2, h % 2, h), (0, 0, 720));
+        assert!((w as f64 / h as f64 - 1001.0 / 777.0).abs() < 0.002);
+    }
 }

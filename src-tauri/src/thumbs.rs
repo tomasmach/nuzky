@@ -39,6 +39,46 @@ pub fn thumbnail(asset: &Asset) -> Result<Option<String>> {
     Ok(Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png_bytes))))
 }
 
+pub fn filmstrip(asset: &Asset) -> Result<Option<crate::Filmstrip>> {
+    if asset.kind == AssetKind::Audio || asset.width == 0 || asset.height == 0 {
+        return Ok(None);
+    }
+    let count = if asset.kind == AssetKind::Image { 1 } else { (asset.duration_us / 500_000).clamp(1, 40) as u32 };
+    let interval_us = (asset.duration_us / count as i64).max(500_000);
+    let frame_height = 90;
+    let frame_width = (asset.width as f64 * frame_height as f64 / asset.height as f64).round().max(2.0) as u32;
+    let (dw, dh) = if asset.rotation % 180 == 90 { (frame_height, frame_width) } else { (frame_width, frame_height) };
+    let width = frame_width * count;
+    let mut sprite = vec![0; (width * frame_height * 4) as usize];
+    let mut decoder = VideoDecoder::open(Path::new(&asset.path))?;
+    for i in 0..count {
+        let target = i as i64 * interval_us;
+        decoder.seek(target)?;
+        let mut picked = None;
+        while let Some((t, frame)) = decoder.next_frame()? {
+            if t > target && picked.is_some() { break; }
+            picked = Some((t, frame));
+            if t >= target { break; }
+        }
+        let Some((t, frame)) = picked else { anyhow::bail!("No filmstrip frame at {target} us in {}", asset.path) };
+        let frame = decoder.convert(&frame, t, dw, dh)?;
+        let (rgba, _, _) = rotate(&frame.data, dw, dh, asset.rotation);
+        let row = frame_width as usize * 4;
+        for y in 0..frame_height as usize {
+            let offset = (y * width as usize + i as usize * frame_width as usize) * 4;
+            sprite[offset..offset + row].copy_from_slice(&rgba[y * row..(y + 1) * row]);
+        }
+    }
+    let mut bytes = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut bytes, width, frame_height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.write_header()?.write_image_data(&sprite)?;
+    }
+    let url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes));
+    Ok(Some(crate::Filmstrip { url, frame_width, frame_height, interval_us, count }))
+}
+
 /// Rotates tightly packed RGBA clockwise by 0/90/180/270 degrees.
 fn rotate(src: &[u8], w: u32, h: u32, rotation: u32) -> (Vec<u8>, u32, u32) {
     let (w, h) = (w as usize, h as usize);
@@ -60,5 +100,42 @@ fn rotate(src: &[u8], w: u32, h: u32, rotation: u32) -> (Vec<u8>, u32, u32) {
             (out, ow as u32, oh as u32)
         }
         _ => (src.to_vec(), w as u32, h as u32),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_preserves_corner_order() {
+        let pixels: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
+        for (angle, expected) in [(90, vec![3, 0, 4, 1, 5, 2]), (180, vec![5, 4, 3, 2, 1, 0]), (270, vec![2, 5, 1, 4, 0, 3])] {
+            let (out, w, h) = rotate(&pixels, 3, 2, angle);
+            assert_eq!(out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), expected);
+            assert_eq!((w, h), if angle == 180 { (3, 2) } else { (2, 3) });
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the local tmp-test media fixtures"]
+    fn filmstrip_media_fixtures() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tmp-test");
+        let out = root.join("engine-evidence");
+        std::fs::create_dir_all(&out).unwrap();
+        for name in ["portrait.mp4", "wide.mp4", "phone_hevc_vfr.mov", "music.mp3", "engine-evidence/identity.png"] {
+            let asset = capopen_engine::media::probe(&root.join(name), name.into()).unwrap();
+            let strip = filmstrip(&asset).unwrap();
+            if asset.kind == AssetKind::Audio { assert!(strip.is_none()); continue; }
+            let strip = strip.unwrap();
+            assert_eq!(strip.frame_height, 90);
+            assert!(strip.count <= 40 && strip.interval_us >= 500_000);
+            if asset.kind == AssetKind::Image { assert_eq!(strip.count, 1); }
+            let bytes = base64::engine::general_purpose::STANDARD.decode(strip.url.split_once(',').unwrap().1).unwrap();
+            let reader = png::Decoder::new(std::io::Cursor::new(&bytes)).read_info().unwrap();
+            assert_eq!(reader.info().width, strip.frame_width * strip.count);
+            assert_eq!(reader.info().height, 90);
+            std::fs::write(out.join(format!("filmstrip-{}.png", asset.name)), bytes).unwrap();
+        }
     }
 }

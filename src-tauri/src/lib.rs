@@ -30,6 +30,8 @@ pub struct AppState {
     cache_dir: PathBuf,
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     thumbs: Mutex<HashMap<String, String>>,
+    filmstrips: Mutex<HashMap<String, Filmstrip>>,
+    bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -243,7 +245,7 @@ fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest) -> C
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Filmstrip {
     /// PNG or JPEG data URL of `count` frames side by side.
@@ -267,15 +269,29 @@ pub struct LayerBounds {
 
 /// Layers visible at `t_us`, bottom to top, with animations and keyframes applied.
 #[tauri::command]
-fn layer_bounds(_state: State<'_, AppState>, _t_us: i64) -> Vec<LayerBounds> {
-    // Contract stub: implemented by the backend workstream.
-    Vec::new()
+async fn layer_bounds(app: AppHandle, t_us: i64) -> CmdResult<Vec<LayerBounds>> {
+    let project = app.state::<AppState>().editor.lock().unwrap().project.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut text = state.bounds_text.lock().unwrap();
+        let text = text.get_or_insert_with(capopen_engine::text::TextRenderer::new);
+        capopen_engine::render::layer_bounds(&project, t_us, text).into_iter().map(|(clip_id, corners)| LayerBounds { clip_id, corners }).collect()
+    }).await.map_err(err)
 }
 
 #[tauri::command]
-async fn filmstrip(_app: AppHandle, _asset_id: String) -> CmdResult<Option<Filmstrip>> {
-    // Contract stub: implemented by the backend workstream.
-    Ok(None)
+async fn filmstrip(app: AppHandle, asset_id: String) -> CmdResult<Option<Filmstrip>> {
+    let state = app.state::<AppState>();
+    if let Some(strip) = state.filmstrips.lock().unwrap().get(&asset_id) {
+        return Ok(Some(strip.clone()));
+    }
+    let asset = state.editor.lock().unwrap().project.asset(&asset_id).cloned();
+    let Some(asset) = asset else { return Ok(None) };
+    let strip = tauri::async_runtime::spawn_blocking(move || thumbs::filmstrip(&asset)).await.map_err(err)?.map_err(err)?;
+    if let Some(strip) = &strip {
+        state.filmstrips.lock().unwrap().insert(asset_id, strip.clone());
+    }
+    Ok(strip)
 }
 
 #[tauri::command]
@@ -315,6 +331,8 @@ pub fn run() {
                 cache_dir,
                 jobs: Mutex::new(HashMap::new()),
                 thumbs: Mutex::new(HashMap::new()),
+                filmstrips: Mutex::new(HashMap::new()),
+                bounds_text: Mutex::new(None),
             };
             let project = state.editor.lock().unwrap().project.clone();
             // Jobs look the state up from their threads, so it must be managed first.
