@@ -4,7 +4,7 @@
 //! video of the same file share one origin.
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Once};
 
@@ -347,6 +347,8 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let stream_index = stream.index();
     let time_base = f64::from(stream.time_base());
     let duration_us = input.duration().max(1) as f64;
+    // Audio cannot start after the container ends; larger offsets are malformed timestamps.
+    let max_lead_us = if input.duration() > 0 { input.duration() } else { MAX_UNKNOWN_LEAD_US };
     let origin = origin_us(&input);
     let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
 
@@ -404,9 +406,9 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
             if *written == 0
                 && let Some(pts) = f.timestamp().or(f.pts())
             {
-                let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
-                let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
-                writer.write_all(&vec![0u8; pad as usize * CHANNELS * 4])?;
+                let start_us = ((pts as f64 * time_base * 1e6) as i64 - origin).clamp(0, max_lead_us);
+                let pad = (start_us as u64 * SAMPLE_RATE as u64) / 1_000_000;
+                std::io::copy(&mut std::io::repeat(0).take(pad * (CHANNELS * 4) as u64), writer)?;
                 *written += pad;
             }
             let mut f = f.clone();
@@ -462,6 +464,9 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     }
     result
 }
+
+/// Silence allowed before the first audio frame when the container has no duration.
+const MAX_UNKNOWN_LEAD_US: i64 = 3_600_000_000;
 
 const PCM_FORMAT: ff::format::Sample = ff::format::Sample::F32(ff::format::sample::Type::Packed);
 
