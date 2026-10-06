@@ -53,6 +53,9 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 - **Transition marker**: an 18 px square on the cut. Empty: dark with a faint border, "+" on hover. Set: `fg` square with the kind icon, a darkened band shows the transition length; selected: accent.
 - **Preview selection box**: 1.5 px `fg` outline, 10 px square corner handles, a round rotate handle above the top edge. It may extend past the frame but never past the preview area; a handle that would leave the area is pinned to its edge.
 - **Toasts**: bottom-left above the timeline, over the media panel, so they never cover the video frame.
+- **Font picker**: looks like a select: `raised` field, family name at 15 px in its own face, chevron. The list opens below (above when there is no room) with a search field on top; groups "Built in" (each name in its face, 15 px) then "On this computer" (UI font, 13 px), headed like a section at 11 px. The keyboard or pointer position is `raised`; the current font has an `accent` check. A font missing on this computer shows a `warn` triangle with the reason in the tooltip.
+- **Mixed value**: with several clips selected, a number field whose clips differ shows "—"; the slider thumb sits at the first clip's value.
+- **Transcript**: 13 px text on a 22 px line, `fg` at 90 %. Each paragraph starts with an 11 px `muted` timecode. Hover is `raised` behind the word; selected words get `accent` at 30 % behind them; the word playing is `accent` text. Pause chips are 11 px tabular `muted` on `raised`. Out of date, the whole text drops to 40 % and the note above it carries a `warn` icon.
 
 ## States
 
