@@ -120,7 +120,7 @@ export function TranscriptTab() {
               <span className="flex-1" />
               <span title={pauses.length === 0 ? `No pauses longer than ${formatSeconds(pauseUs)}` : `Shorten every pause to ${formatSeconds(pauseUs)}`}>
                 <Button className="h-7 px-2" disabled={pauses.length === 0} onClick={removePauses}>
-                  <Scissors size={14} /> Remove {pauses.length > 0 ? `${pauses.length} · ${formatSeconds(total(pauses))}` : ""}
+                  <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatSeconds(total(pauses))}` : "Remove pauses"}
                 </Button>
               </span>
             </div>
