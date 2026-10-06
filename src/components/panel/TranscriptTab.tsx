@@ -108,7 +108,7 @@ export function TranscriptTab() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-col gap-3 border-b border-line p-3">
         <div className="flex items-center gap-2">
-          <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} words</span>
+          <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} word{view.words.length === 1 ? "" : "s"}</span>
           <IconButton label={blocker ?? (busy ? "Wait for speech recognition to finish" : "Transcribe again")} className="h-7 w-7" disabled={!!blocker || busy} onClick={() => startSpeech(null, true)}>
             <RefreshCw size={14} />
           </IconButton>

@@ -13,7 +13,7 @@ import { Button, IconButton, ProgressBar, Segmented } from "./ui";
 const RESOLUTIONS = [
   { id: 720, label: "720p" },
   { id: 1080, label: "1080p" },
-  { id: 1440, label: "2K" },
+  { id: 1440, label: "1440p" },
   { id: 2160, label: "4K" },
 ];
 const FRAME_RATES = [24, 25, 30, 50, 60];
