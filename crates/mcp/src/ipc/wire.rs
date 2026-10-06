@@ -11,18 +11,13 @@ use serde::{
 use crate::limits::MAX_LINE_BYTES;
 
 pub(super) fn send(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
-    stream
-        .write_all(&encode(value)?)
-        .context("IPC_CLOSED: writing message")
+    stream.write_all(&encode(value)?).context("IPC_CLOSED: writing message")
 }
 
 pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec(value).context("PROTOCOL_MISMATCH: serializing message")?;
     bytes.push(b'\n');
-    ensure!(
-        bytes.len() <= MAX_LINE_BYTES,
-        "RESULT_TOO_LARGE: IPC message exceeds transport limit"
-    );
+    ensure!(bytes.len() <= MAX_LINE_BYTES, "RESULT_TOO_LARGE: IPC message exceeds transport limit");
     Ok(bytes)
 }
 
@@ -31,22 +26,15 @@ pub(super) struct Line {
     pub complete: bool,
 }
 
-pub(super) fn line(
-    reader: &mut BufReader<UnixStream>,
-    limit: usize,
-    deadline: Option<Instant>,
-) -> Result<Line> {
+pub(super) fn line(reader: &mut BufReader<UnixStream>, limit: usize, deadline: Option<Instant>) -> Result<Line> {
     let mut bytes = Vec::new();
     while bytes.len() < limit {
         if let Some(deadline) = deadline {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .context("IPC_UNTRUSTED: hello deadline exceeded")?;
+            let remaining =
+                deadline.checked_duration_since(Instant::now()).context("IPC_UNTRUSTED: hello deadline exceeded")?;
             reader.get_ref().set_read_timeout(Some(remaining))?;
         }
-        let buffered = reader
-            .fill_buf()
-            .context("IPC_UNTRUSTED: reading IPC message")?;
+        let buffered = reader.fill_buf().context("IPC_UNTRUSTED: reading IPC message")?;
         ensure!(!buffered.is_empty(), "IPC_CLOSED: peer disconnected");
         let available = buffered.len().min(limit - bytes.len());
         let end = buffered[..available].iter().position(|byte| *byte == b'\n');
@@ -54,16 +42,10 @@ pub(super) fn line(
         bytes.extend_from_slice(&buffered[..length]);
         reader.consume(length);
         if end.is_some() {
-            return Ok(Line {
-                bytes,
-                complete: true,
-            });
+            return Ok(Line { bytes, complete: true });
         }
     }
-    Ok(Line {
-        bytes,
-        complete: false,
-    })
+    Ok(Line { bytes, complete: false })
 }
 
 pub(super) fn receive<T: DeserializeOwned>(
@@ -72,10 +54,7 @@ pub(super) fn receive<T: DeserializeOwned>(
     deadline: Option<Instant>,
 ) -> Result<T> {
     let line = line(reader, limit, deadline)?;
-    ensure!(
-        line.complete,
-        "PROTOCOL_MISMATCH: message exceeds line limit"
-    );
+    ensure!(line.complete, "PROTOCOL_MISMATCH: message exceeds line limit");
     serde_json::from_slice(&line.bytes).context("PROTOCOL_MISMATCH: invalid message")
 }
 
@@ -100,10 +79,7 @@ pub(super) fn request_id(bytes: &[u8]) -> Option<u64> {
     }
     let found = std::cell::Cell::new(None);
     // deserialize_map also checks the closing brace; the truncated tail is deliberately ignored.
-    let _ = serde::Deserializer::deserialize_map(
-        &mut serde_json::Deserializer::from_slice(bytes),
-        Id(&found),
-    );
+    let _ = serde::Deserializer::deserialize_map(&mut serde_json::Deserializer::from_slice(bytes), Id(&found));
     found.get()
 }
 
@@ -124,14 +100,7 @@ mod tests {
             }
         });
         let began = Instant::now();
-        assert!(
-            line(
-                &mut BufReader::new(reader),
-                4096,
-                Some(began + Duration::from_millis(80))
-            )
-            .is_err()
-        );
+        assert!(line(&mut BufReader::new(reader), 4096, Some(began + Duration::from_millis(80))).is_err());
         assert!(began.elapsed() < Duration::from_millis(250));
         writer.join().unwrap();
     }
@@ -139,11 +108,7 @@ mod tests {
     #[test]
     fn oversized_line_retains_request_id_without_allocating_the_rest() {
         let (reader, mut sender) = UnixStream::pair().unwrap();
-        sender
-            .write_all(
-                br#"{"id":37,"tool":"x","args":{"payload":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"#,
-            )
-            .unwrap();
+        sender.write_all(br#"{"id":37,"tool":"x","args":{"payload":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"#).unwrap();
         let line = line(&mut BufReader::new(reader), 64, None).unwrap();
         assert!(!line.complete);
         assert_eq!(line.bytes.len(), 64);

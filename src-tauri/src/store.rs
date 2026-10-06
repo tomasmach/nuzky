@@ -36,7 +36,9 @@ pub fn load(path: &Path) -> Result<Project> {
 pub fn open(path: &Path, events: Sender<SessionEvent>) -> Result<ProjectSession> {
     ProjectSession::open(path, Mode::Write, Some(events)).map_err(|error| {
         if error.to_string().starts_with("PROJECT_BUSY:") {
-            anyhow::anyhow!("This project is open in another CapOpen window or an AI agent is editing it. Close it there first.")
+            anyhow::anyhow!(
+                "This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
+            )
         } else {
             error
         }
@@ -113,7 +115,10 @@ mod tests {
         assert_eq!(list_in(&dir)[0].name, project.name);
         drop(desktop);
         let agent = ProjectSession::open(&path, Mode::Write, None).unwrap();
-        assert_eq!(open(&path, tx).err().unwrap().to_string(), "This project is open in another CapOpen window or an AI agent is editing it. Close it there first.");
+        assert_eq!(
+            open(&path, tx).err().unwrap().to_string(),
+            "This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
+        );
         drop(agent);
         std::fs::remove_dir_all(dir).unwrap();
     }

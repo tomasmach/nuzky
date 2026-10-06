@@ -23,20 +23,9 @@ impl Fixture {
         fs::set_permissions(&dir, Permissions::from_mode(0o700)).unwrap();
         let path = dir.join("project.capopen");
         fs::write(&path, serde_json::to_vec(&Project::new("fixture")).unwrap()).unwrap();
-        let host = Arc::new(
-            Host::new(
-                ProjectSession::open(&path, Mode::Write, None).unwrap(),
-                dir.join("cache"),
-            )
-            .unwrap(),
-        );
-        Self {
-            socket: dir.join("project.sock"),
-            _cleanup: Cleanup(dir.clone()),
-            dir,
-            path,
-            host,
-        }
+        let host =
+            Arc::new(Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap());
+        Self { socket: dir.join("project.sock"), _cleanup: Cleanup(dir.clone()), dir, path, host }
     }
     fn listener(&self) -> Listener {
         Listener::at(self.host.clone(), self.socket.clone()).unwrap()
@@ -54,12 +43,7 @@ impl Drop for Fixture {
     }
 }
 fn value(reader: &mut BufReader<UnixStream>) -> Value {
-    receive(
-        reader,
-        MAX_LINE_BYTES,
-        Some(Instant::now() + Duration::from_secs(5)),
-    )
-    .unwrap()
+    receive(reader, MAX_LINE_BYTES, Some(Instant::now() + Duration::from_secs(5))).unwrap()
 }
 
 #[test]
@@ -80,10 +64,7 @@ fn prepared_endpoint_cannot_exfiltrate_a_symlinked_token() {
     fs::set_permissions(&f.dir, Permissions::from_mode(0o755)).unwrap();
     assert!(Remote::at(&f.socket, false).is_err());
     assert!(Listener::at(f.host.clone(), f.socket.clone()).is_err());
-    assert_eq!(
-        fs::metadata(&f.dir).unwrap().permissions().mode() & 0o777,
-        0o755
-    );
+    assert_eq!(fs::metadata(&f.dir).unwrap().permissions().mode() & 0o777, 0o755);
 }
 
 #[test]
@@ -99,14 +80,8 @@ fn fallback_requires_absence_not_rejection_mismatch_or_timeout() {
         .write_all("a".repeat(security::TOKEN_LEN).as_bytes())
         .unwrap();
     for (reply, code) in [
-        (
-            Some(json!({"ok":false,"error":"UNAUTHORIZED: wrong token"})),
-            "UNAUTHORIZED",
-        ),
-        (
-            Some(json!({"ok":false,"error":"PROTOCOL_MISMATCH: old server"})),
-            "PROTOCOL_MISMATCH",
-        ),
+        (Some(json!({"ok":false,"error":"UNAUTHORIZED: wrong token"})), "UNAUTHORIZED"),
+        (Some(json!({"ok":false,"error":"PROTOCOL_MISMATCH: old server"})), "PROTOCOL_MISMATCH"),
         (Some(json!({"ok":true})), "PROTOCOL_MISMATCH"),
         (None, "IPC_UNTRUSTED"),
     ] {
@@ -135,19 +110,11 @@ fn connections_and_hello_lines_are_bounded() {
     for _ in 0..MAX_CONNECTIONS {
         let mut stream = UnixStream::connect(&f.socket).unwrap();
         send(&mut stream, &f.hello()).unwrap();
-        assert_eq!(
-            value(&mut BufReader::new(stream.try_clone().unwrap()))["ok"],
-            true
-        );
+        assert_eq!(value(&mut BufReader::new(stream.try_clone().unwrap()))["ok"], true);
         connections.push(stream);
     }
     let mut extra = BufReader::new(UnixStream::connect(&f.socket).unwrap());
-    assert!(
-        value(&mut extra)["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("IPC_BUSY")
-    );
+    assert!(value(&mut extra)["error"].as_str().unwrap().starts_with("IPC_BUSY"));
     connections.clear();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !listener.connections.lock().unwrap().is_empty() {
@@ -156,12 +123,7 @@ fn connections_and_hello_lines_are_bounded() {
     }
     let mut stream = UnixStream::connect(&f.socket).unwrap();
     stream.write_all(&vec![b' '; MAX_HELLO_BYTES + 1]).unwrap();
-    assert!(
-        value(&mut BufReader::new(stream))["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("PROTOCOL_MISMATCH")
-    );
+    assert!(value(&mut BufReader::new(stream))["error"].as_str().unwrap().starts_with("PROTOCOL_MISMATCH"));
     drop(listener);
 }
 
@@ -169,27 +131,15 @@ fn connections_and_hello_lines_are_bounded() {
 fn oversized_request_receives_an_error_with_its_id() {
     let f = Fixture::new();
     let (server, mut client) = UnixStream::pair().unwrap();
-    let backend = Arc::new(
-        Backend::shared(
-            f.host.clone(),
-            &f.path,
-            Client {
-                id: new_id(),
-                access: Access::Write,
-            },
-        )
-        .unwrap(),
-    );
+    let backend =
+        Arc::new(Backend::shared(f.host.clone(), &f.path, Client { id: new_id(), access: Access::Write }).unwrap());
     let worker = std::thread::spawn(move || {
         let mut reader = BufReader::new(server.try_clone().unwrap());
         serve_requests(&mut reader, backend, Arc::new(Mutex::new(server)), 128).unwrap();
     });
     let request = json!({"id":91,"tool":"get_state","args":{"payload":"x".repeat(200)}});
     // Preserve id before the large argument rather than relying on map ordering.
-    let bytes = format!(
-        "{{\"id\":91,\"tool\":\"get_state\",\"args\":{}}}\n",
-        request["args"]
-    );
+    let bytes = format!("{{\"id\":91,\"tool\":\"get_state\",\"args\":{}}}\n", request["args"]);
     client.write_all(bytes.as_bytes()).unwrap();
     let reply = value(&mut BufReader::new(client));
     assert_eq!(reply["id"], 91);
@@ -202,36 +152,15 @@ fn oversized_inspection_is_a_tool_error_and_connection_survives() {
     let f = Fixture::new();
     let listener = f.listener();
     let remote = Remote::at(&f.socket, true).unwrap().unwrap();
-    let run = remote
-        .call("begin_run".into(), json!({"label":"frames"}))
-        .unwrap()
-        .structured_content
-        .unwrap();
+    let run = remote.call("begin_run".into(), json!({"label":"frames"})).unwrap().structured_content.unwrap();
     let result = remote.call("apply_edits".into(), json!({"run_id":run["run_id"],"request_id":"caption","edits":[{"type":"addText","startUs":0,"text":"test","style":{"fontSize":64,"color":"#fff","bold":false,"strokeWidth":0,"strokeColor":"#000","background":null}}]})).unwrap();
     assert_ne!(result.is_error, Some(true), "{result:?}");
-    let result = remote
-        .call(
-            "inspect_frames".into(),
-            json!({"times_us":vec![0;16],"width":1280}),
-        )
-        .unwrap();
+    let result = remote.call("inspect_frames".into(), json!({"times_us":vec![0;16],"width":1280})).unwrap();
     assert_eq!(result.is_error, Some(true));
-    assert!(
-        serde_json::to_string(&result)
-            .unwrap()
-            .contains("RESULT_TOO_LARGE")
-    );
-    let error = remote
-        .call(
-            "get_state".into(),
-            json!({"payload":"x".repeat(MAX_LINE_BYTES)}),
-        )
-        .unwrap_err();
+    assert!(serde_json::to_string(&result).unwrap().contains("RESULT_TOO_LARGE"));
+    let error = remote.call("get_state".into(), json!({"payload":"x".repeat(MAX_LINE_BYTES)})).unwrap_err();
     assert!(error.to_string().starts_with("REQUEST_TOO_LARGE"));
-    assert_ne!(
-        remote.call("get_state".into(), json!({})).unwrap().is_error,
-        Some(true)
-    );
+    assert_ne!(remote.call("get_state".into(), json!({})).unwrap().is_error, Some(true));
     drop(remote);
     drop(listener);
 }
@@ -241,16 +170,8 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
     let f = Fixture::new();
     let listener = f.listener();
     let remote = Remote::at(&f.socket, true).unwrap().unwrap();
-    let run = remote
-        .call("begin_run".into(), json!({"label":"owner"}))
-        .unwrap()
-        .structured_content
-        .unwrap();
-    let job = remote
-        .call("transcribe".into(), json!({"asset_ids":[]}))
-        .unwrap()
-        .structured_content
-        .unwrap();
+    let run = remote.call("begin_run".into(), json!({"label":"owner"})).unwrap().structured_content.unwrap();
+    let job = remote.call("transcribe".into(), json!({"asset_ids":[]})).unwrap().structured_content.unwrap();
     assert_eq!(job["run_id"], run["run_id"]);
     let (release, wait) = mpsc::channel();
     let held = f
@@ -269,19 +190,11 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
     drop(remote);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let cancelled = f
-            .host
-            .jobs
-            .get(held["job_id"].as_str().unwrap(), false)
-            .unwrap()["cancel_requested"]
-            == true;
+        let cancelled = f.host.jobs.get(held["job_id"].as_str().unwrap(), false).unwrap()["cancel_requested"] == true;
         if cancelled && f.host.session.state().unwrap().open_run.is_none() {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "disconnect did not cancel the client job and finish the run"
-        );
+        assert!(Instant::now() < deadline, "disconnect did not cancel the client job and finish the run");
         std::thread::sleep(Duration::from_millis(10));
     }
     release.send(()).unwrap();
@@ -291,9 +204,18 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
 #[test]
 fn cancelled_transcription_never_loads_models() {
     let missing = Path::new("/nonexistent-capopen-model");
-    let asset = capopen_engine::model::Asset { id: "cancelled".into(), name: "cancelled".into(),
-        path: "/nonexistent-capopen-source".into(), kind: capopen_engine::model::AssetKind::Audio,
-        duration_us: 1, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 };
+    let asset = capopen_engine::model::Asset {
+        id: "cancelled".into(),
+        name: "cancelled".into(),
+        path: "/nonexistent-capopen-source".into(),
+        kind: capopen_engine::model::AssetKind::Audio,
+        duration_us: 1,
+        width: 0,
+        height: 0,
+        fps: 0.0,
+        has_audio: true,
+        rotation: 0,
+    };
     let error = capopen_analysis::transcribe_words_cancellable(
         capopen_analysis::AudioSource::Asset { asset: &asset, cache: missing },
         missing,

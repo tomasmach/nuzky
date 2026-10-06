@@ -7,11 +7,7 @@ use crate::{Range, Transcript, Word};
 /// repetition is indistinguishable from stuttering here: review before applying.
 /// Unsupported languages return no proposals.
 pub fn filler_words(transcript: &Transcript, language: &str) -> Vec<Range> {
-    let language = if language == "auto" {
-        transcript.language.as_str()
-    } else {
-        language
-    };
+    let language = if language == "auto" { transcript.language.as_str() } else { language };
     if !matches!(language, "cs" | "en") {
         return Vec::new();
     }
@@ -24,15 +20,9 @@ pub fn filler_words(transcript: &Transcript, language: &str) -> Vec<Range> {
             "cs" => matches!(token, "ehm" | "hmm" | "eee"),
             _ => matches!(token, "um" | "uh" | "erm"),
         };
-        let ambiguous = matches!(
-            (language, token),
-            ("cs", "jakoby" | "prostě") | ("en", "like")
-        );
+        let ambiguous = matches!((language, token), ("cs", "jakoby" | "prostě") | ("en", "like"));
         if simple || (ambiguous && isolated(words, index, index)) {
-            ranges.push(Range {
-                start_us: word.start_us,
-                end_us: word.end_us,
-            });
+            ranges.push(Range { start_us: word.start_us, end_us: word.end_us });
         }
         if language == "en"
             && token == "you"
@@ -40,19 +30,13 @@ pub fn filler_words(transcript: &Transcript, language: &str) -> Vec<Range> {
             && words[index + 1].start_us.saturating_sub(word.end_us) <= 250_000
             && isolated(words, index, index + 1)
         {
-            ranges.push(Range {
-                start_us: word.start_us,
-                end_us: words[index + 1].end_us,
-            });
+            ranges.push(Range { start_us: word.start_us, end_us: words[index + 1].end_us });
         }
         if !token.is_empty() && !word.text.ends_with(['.', '?', '!', ',', ';', ':']) {
             if let Some(next) = words.get(index + 1) {
                 let gap = next.start_us.saturating_sub(word.end_us);
                 if normalized[index + 1] == token && (0..=250_000).contains(&gap) {
-                    ranges.push(Range {
-                        start_us: word.start_us,
-                        end_us: word.end_us,
-                    });
+                    ranges.push(Range { start_us: word.start_us, end_us: word.end_us });
                 }
             }
         }
@@ -62,9 +46,7 @@ pub fn filler_words(transcript: &Transcript, language: &str) -> Vec<Range> {
     let mut merged: Vec<Range> = Vec::new();
     for range in ranges {
         match merged.last_mut() {
-            Some(last) if range.start_us <= last.end_us => {
-                last.end_us = last.end_us.max(range.end_us)
-            }
+            Some(last) if range.start_us <= last.end_us => last.end_us = last.end_us.max(range.end_us),
             _ => merged.push(range),
         }
     }
@@ -72,16 +54,12 @@ pub fn filler_words(transcript: &Transcript, language: &str) -> Vec<Range> {
 }
 
 fn normalize(text: &str) -> String {
-    text.trim_matches(|c: char| !c.is_alphanumeric())
-        .to_lowercase()
+    text.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
 }
 
 fn isolated(words: &[Word], first: usize, last: usize) -> bool {
     let before = first == 0
-        || words[first]
-            .start_us
-            .saturating_sub(words[first - 1].end_us)
-            >= 150_000
+        || words[first].start_us.saturating_sub(words[first - 1].end_us) >= 150_000
         || words[first - 1].text.ends_with(',');
     let after = last + 1 == words.len()
         || words[last + 1].start_us.saturating_sub(words[last].end_us) >= 150_000
@@ -114,16 +92,10 @@ mod tests {
     fn conservative_cs_and_stutter_keep_last_copy() {
         let t = transcript("Ehm je je je to prostě jednoduché jakoby nic hmm");
         let ranges = filler_words(&t, "cs");
-        assert_eq!(
-            ranges.iter().map(|r| r.start_us).collect::<Vec<_>>(),
-            vec![0, 200_000, 400_000, 1_800_000]
-        );
+        assert_eq!(ranges.iter().map(|r| r.start_us).collect::<Vec<_>>(), vec![0, 200_000, 400_000, 1_800_000]);
         assert_eq!(
             filler_words(&transcript("To, prostě, funguje"), "cs"),
-            vec![Range {
-                start_us: 200_000,
-                end_us: 380_000
-            }]
+            vec![Range { start_us: 200_000, end_us: 380_000 }]
         );
         assert!(filler_words(&transcript("Je. Je to tak"), "cs").is_empty());
     }
@@ -133,13 +105,7 @@ mod tests {
         assert!(filler_words(&transcript("I like you and you know this"), "en").is_empty());
         let ranges = filler_words(&transcript("Um I, like, think, you know, uh yes"), "en");
         assert_eq!(ranges.len(), 4);
-        assert_eq!(
-            ranges[2],
-            Range {
-                start_us: 800_000,
-                end_us: 1_180_000
-            }
-        );
+        assert_eq!(ranges[2], Range { start_us: 800_000, end_us: 1_180_000 });
         assert!(filler_words(&transcript("um"), "de").is_empty());
     }
 }

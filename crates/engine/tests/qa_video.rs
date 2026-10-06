@@ -35,26 +35,15 @@ fn check_seek(path: &Path) {
         }
         if let Some((ts, frame)) = candidate {
             let rgba = decoder.convert(&frame, ts, a.width, a.height).unwrap();
-            let error = mae(
-                &rgba.data,
-                &truth[expected * frame_len..(expected + 1) * frame_len],
-            );
+            let error = mae(&rgba.data, &truth[expected * frame_len..(expected + 1) * frame_len]);
             if ts != timestamps[expected] || error > 1.0 {
-                failures.push(format!(
-                    "decoder t={t}: pts={ts} expected={} MAE={error}",
-                    timestamps[expected]
-                ));
+                failures.push(format!("decoder t={t}: pts={ts} expected={} MAE={error}", timestamps[expected]));
             }
         } else {
             failures.push(format!("decoder t={t}: no candidate"));
         }
-        let rgba = worker
-            .get(t, (a.width, a.height), false, true)
-            .expect("worker frame");
-        let error = mae(
-            &rgba.data,
-            &truth[expected * frame_len..(expected + 1) * frame_len],
-        );
+        let rgba = worker.get(t, (a.width, a.height), false, true).expect("worker frame");
+        let error = mae(&rgba.data, &truth[expected * frame_len..(expected + 1) * frame_len]);
         if !worker.exact || rgba.t_us != timestamps[expected] || error > 1.0 {
             failures.push(format!(
                 "worker t={t}: pts={} expected={} exact={} MAE={error}",
@@ -62,12 +51,7 @@ fn check_seek(path: &Path) {
             ));
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{}\n{}",
-        path.display(),
-        failures.join("\n")
-    );
+    assert!(failures.is_empty(), "{}\n{}", path.display(), failures.join("\n"));
 }
 
 #[test]
@@ -84,10 +68,7 @@ fn cfr_h264_long_gop_b_frames_seek_matches_ffmpeg_pts_and_pixels() {
                 "-f",
                 "lavfi",
                 "-i",
-                &format!(
-                    "testsrc2=size=96x64:rate={rate}:duration={}",
-                    if rate == "25" { 10.4 } else { 3.0 }
-                ),
+                &format!("testsrc2=size=96x64:rate={rate}:duration={}", if rate == "25" { 10.4 } else { 3.0 }),
                 "-vf",
                 "drawtext=text='%{n}':x=4:y=4:fontsize=22:fontcolor=white:box=1:boxcolor=black",
                 "-c:v",
@@ -124,16 +105,8 @@ fn vfr_and_hevc_10_bit_seek_matches_ffmpeg() {
         let path = d.join(if hevc { "hevc10.mp4" } else { "vfr.mp4" });
         let filter = "drawtext=text='%{n}':x=4:y=4:fontsize=22:fontcolor=white:box=1:boxcolor=black,setpts='if(lt(N,20),N/(30*TB),(20/30+(N-20)/12)/TB)'";
         let vaapi_filter = format!("{filter},format=p010le,hwupload");
-        let mut args = vec![
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=96x64:rate=30:duration=2",
-            "-vf",
-            filter,
-            "-fps_mode",
-            "vfr",
-        ];
+        let mut args =
+            vec!["-f", "lavfi", "-i", "testsrc2=size=96x64:rate=30:duration=2", "-vf", filter, "-fps_mode", "vfr"];
         if hevc && has_x265 {
             args.extend([
                 "-c:v",
@@ -164,37 +137,13 @@ fn rotation_display_matrices_match_ffmpeg_autorotate() {
     }
     let d = dir("rotation");
     let source = d.join("base.mp4");
-    ff(
-        &[
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=96x64:rate=25:duration=0.2",
-            "-c:v",
-            "libx264",
-            "-threads",
-            "2",
-        ],
-        &source,
-    );
+    ff(&["-f", "lavfi", "-i", "testsrc2=size=96x64:rate=25:duration=0.2", "-c:v", "libx264", "-threads", "2"], &source);
     let mut renderer = Renderer::new().unwrap();
     for angle in [90, 180, 270] {
         let path = d.join(format!("rotate-{angle}.mp4"));
-        ff(
-            &[
-                "-display_rotation",
-                &angle.to_string(),
-                "-i",
-                source.to_str().unwrap(),
-                "-c",
-                "copy",
-            ],
-            &path,
-        );
+        ff(&["-display_rotation", &angle.to_string(), "-i", source.to_str().unwrap(), "-c", "copy"], &path);
         assert!(
-            info(&path)["streams"][0]["side_data_list"]
-                .as_array()
-                .is_some_and(|a| !a.is_empty()),
+            info(&path)["streams"][0]["side_data_list"].as_array().is_some_and(|a| !a.is_empty()),
             "fixture has no display matrix"
         );
         let p = project(&path, 200_000);
@@ -324,32 +273,8 @@ fn png_alpha_composites_over_video() {
     let d = dir("alpha-composite");
     let video = d.join("blue.mp4");
     let png = d.join("red-half.png");
-    ff(
-        &[
-            "-f",
-            "lavfi",
-            "-i",
-            "color=blue:s=64x64:r=25:d=0.2",
-            "-c:v",
-            "libx264",
-            "-threads",
-            "2",
-        ],
-        &video,
-    );
-    ff(
-        &[
-            "-f",
-            "lavfi",
-            "-i",
-            "color=red@0.5:s=64x64,format=rgba",
-            "-frames:v",
-            "1",
-            "-pix_fmt",
-            "rgba",
-        ],
-        &png,
-    );
+    ff(&["-f", "lavfi", "-i", "color=blue:s=64x64:r=25:d=0.2", "-c:v", "libx264", "-threads", "2"], &video);
+    ff(&["-f", "lavfi", "-i", "color=red@0.5:s=64x64,format=rgba", "-frames:v", "1", "-pix_fmt", "rgba"], &png);
     let mut p = project(&video, 200_000);
     let asset = probe(&png, "overlay".into()).unwrap();
     p.tracks.push(Track {
@@ -362,16 +287,10 @@ fn png_alpha_composites_over_video() {
         clips: vec![clip("over", &asset.id, 0, 200_000)],
     });
     p.assets.push(asset);
-    let frame = Renderer::new()
-        .unwrap()
-        .render(&p, 0, 64, 64, Wait::Exact, false)
-        .unwrap();
+    let frame = Renderer::new().unwrap().render(&p, 0, 64, 64, Wait::Exact, false).unwrap();
     let pixel = &frame[(32 * 64 + 32) * 4..(32 * 64 + 32) * 4 + 4];
     assert!(
-        (pixel[0] as i16 - 127).abs() < 5
-            && pixel[1] < 5
-            && (pixel[2] as i16 - 127).abs() < 5
-            && pixel[3] == 255,
+        (pixel[0] as i16 - 127).abs() < 5 && pixel[1] < 5 && (pixel[2] as i16 - 127).abs() < 5 && pixel[3] == 255,
         "half-red over blue: {pixel:?}"
     );
 }
@@ -414,10 +333,7 @@ fn cold_seek_immediately_before_keyframe_uses_previous_frame() {
         let first = decoder.next_frame().unwrap().unwrap().0;
         let mut worker = VideoWorker::spawn(path.clone());
         let frame = worker.get(t, (96, 64), false, true).unwrap();
-        let error = mae(
-            &frame.data,
-            &truth[expected * 96 * 64 * 4..(expected + 1) * 96 * 64 * 4],
-        );
+        let error = mae(&frame.data, &truth[expected * 96 * 64 * 4..(expected + 1) * 96 * 64 * 4]);
         eprintln!(
             "QA keyframe boundary want={t} first_after_seek={first} worker={} expected={} exact={} MAE={error}",
             frame.t_us, timestamps[expected], worker.exact
@@ -432,34 +348,15 @@ fn cold_seek_immediately_before_keyframe_uses_previous_frame() {
     // Diagnose the proposed repair without changing VideoDecoder: seek in stream ticks,
     // explicitly rounding the upper bound down. A 1/12800 tick must not round up to .4s.
     let mut input = ffmpeg_next::format::input(&path).unwrap();
-    let stream = input
-        .streams()
-        .best(ffmpeg_next::media::Type::Video)
-        .unwrap();
+    let stream = input.streams().best(ffmpeg_next::media::Type::Video).unwrap();
     let index = stream.index();
     let tb = stream.time_base();
     let tick = 399_999_i64 * tb.denominator() as i64 / (1_000_000 * tb.numerator() as i64);
-    let result = unsafe {
-        ffmpeg_next::ffi::avformat_seek_file(
-            input.as_mut_ptr(),
-            index as i32,
-            i64::MIN,
-            tick,
-            tick,
-            0,
-        )
-    };
+    let result =
+        unsafe { ffmpeg_next::ffi::avformat_seek_file(input.as_mut_ptr(), index as i32, i64::MIN, tick, tick, 0) };
     assert_eq!(result, 0);
-    let first = input
-        .packets()
-        .find(|(s, _)| s.index() == index)
-        .unwrap()
-        .1
-        .pts()
-        .unwrap();
-    eprintln!(
-        "QA stream-tick diagnostic: time_base={tb}, floor_tick={tick}, first_packet_pts={first}"
-    );
+    let first = input.packets().find(|(s, _)| s.index() == index).unwrap().1.pts().unwrap();
+    eprintln!("QA stream-tick diagnostic: time_base={tb}, floor_tick={tick}, first_packet_pts={first}");
     assert!(first <= tick);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use memmap2::Mmap;
 
-use crate::media::extract_pcm;
 use crate::effects::transition_window;
+use crate::media::extract_pcm;
 use crate::model::{Asset, AssetKind, CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
 /// Short fades at clip edges so cuts do not click.
@@ -51,12 +51,16 @@ pub fn has_audio(asset: &Asset) -> bool {
 pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
     let revision = match std::fs::metadata(&asset.path) {
         Ok(metadata) => {
-            let modified = metadata.modified().ok().map(|time| {
-                time.duration_since(std::time::UNIX_EPOCH).map_or_else(
-                    |before| format!("pre{}", before.duration().as_nanos()),
-                    |since| since.as_nanos().to_string(),
-                )
-            }).unwrap_or_else(|| "unknown".into());
+            let modified = metadata
+                .modified()
+                .ok()
+                .map(|time| {
+                    time.duration_since(std::time::UNIX_EPOCH).map_or_else(
+                        |before| format!("pre{}", before.duration().as_nanos()),
+                        |since| since.as_nanos().to_string(),
+                    )
+                })
+                .unwrap_or_else(|| "unknown".into());
             format!("{}-{modified}", metadata.len())
         }
         Err(_) => "missing".into(),
@@ -110,11 +114,20 @@ impl Mixer {
                 continue;
             }
             for (index, clip) in track.clips.iter().enumerate() {
-                let ClipContent::Media { asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, .. } = &clip.content else { continue };
+                let ClipContent::Media { asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, .. } =
+                    &clip.content
+                else {
+                    continue;
+                };
                 let c0 = us_to_samples(clip.start_us);
                 let c1 = us_to_samples(clip.end_us());
-                let incoming = if track.id == crate::edit::MAIN_TRACK && index > 0 { transition_window(clip) } else { None };
-                let outgoing = if track.id == crate::edit::MAIN_TRACK { track.clips.get(index + 1).and_then(transition_window) } else { None };
+                let incoming =
+                    if track.id == crate::edit::MAIN_TRACK && index > 0 { transition_window(clip) } else { None };
+                let outgoing = if track.id == crate::edit::MAIN_TRACK {
+                    track.clips.get(index + 1).and_then(transition_window)
+                } else {
+                    None
+                };
                 let incoming = incoming.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let outgoing = outgoing.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let begin = incoming.map(|w| w.0).unwrap_or(c0);
@@ -138,7 +151,8 @@ impl Mixer {
                 let finish = finish.min(available_end);
                 for i in from.max(begin)..to.min(finish) {
                     let src = src0 + (i as f64 - origin) * *speed as f64;
-                    let gain = volume * gain_at(i, begin, finish, incoming, outgoing)
+                    let gain = volume
+                        * gain_at(i, begin, finish, incoming, outgoing)
                         * fade_gain(i, c0, c1, us_to_samples(*fade_in_us), us_to_samples(*fade_out_us));
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
@@ -170,7 +184,9 @@ fn fade_gain(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64) -> f32 {
 }
 
 fn gain_at(i: i64, start: i64, end: i64, incoming: Option<(i64, i64)>, outgoing: Option<(i64, i64)>) -> f32 {
-    if i < start || i >= end { return 0.0; }
+    if i < start || i >= end {
+        return 0.0;
+    }
     let ramp = |n: i64, d: i64| if d > 0 { (n as f32 / d as f32).clamp(0.0, 1.0) } else { 1.0 };
     let mut gain = ramp((i - start).min(end - 1 - i), EDGE_FADE);
     for (window, entering) in [(incoming, true), (outgoing, false)] {
@@ -194,12 +210,20 @@ mod tests {
         bytes.extend_from_slice(&(36 + data_bytes).to_le_bytes());
         bytes.extend_from_slice(b"WAVEfmt ");
         bytes.extend_from_slice(&16u32.to_le_bytes());
-        for field in [1u16, 1] { bytes.extend_from_slice(&field.to_le_bytes()); }
-        for field in [48_000u32, 96_000] { bytes.extend_from_slice(&field.to_le_bytes()); }
-        for field in [2u16, 16] { bytes.extend_from_slice(&field.to_le_bytes()); }
+        for field in [1u16, 1] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+        for field in [48_000u32, 96_000] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+        for field in [2u16, 16] {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
         bytes.extend_from_slice(b"data");
         bytes.extend_from_slice(&data_bytes.to_le_bytes());
-        for _ in 0..frames { bytes.extend_from_slice(&sample.to_le_bytes()); }
+        for _ in 0..frames {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
         std::fs::write(path, bytes).unwrap();
     }
 
@@ -228,9 +252,15 @@ mod tests {
         let lock_path = format!("{}.lock", path.display());
         let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path).unwrap();
         lock.lock().unwrap();
-        let mut children: Vec<_> = (0..2).map(|_| std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "audio::tests::pcm_cache_child", "--nocapture"])
-            .env("CAPOPEN_PCM_LOCK_TEST", &dir).spawn().unwrap()).collect();
+        let mut children: Vec<_> = (0..2)
+            .map(|_| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "audio::tests::pcm_cache_child", "--nocapture"])
+                    .env("CAPOPEN_PCM_LOCK_TEST", &dir)
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
         let deadline = Instant::now() + Duration::from_secs(10);
         while !children.iter().all(|c| dir.join(format!("ready-{}", c.id())).exists()) {
             assert!(Instant::now() < deadline);
@@ -258,8 +288,18 @@ mod tests {
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let source = cache.join("source.wav");
         write_test_wav(&source, 8_192, 4_800);
-        let asset = Asset { id: "same-id".into(), name: "source".into(), path: source.to_string_lossy().into(),
-            kind: AssetKind::Audio, duration_us: 100_000, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 };
+        let asset = Asset {
+            id: "same-id".into(),
+            name: "source".into(),
+            path: source.to_string_lossy().into(),
+            kind: AssetKind::Audio,
+            duration_us: 100_000,
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            has_audio: true,
+            rotation: 0,
+        };
         let legacy = cache.join("pcm/same-id.v2.f32");
         std::fs::write(&legacy, b"old cache").unwrap();
         let first = ensure_pcm(&cache, &asset, |_| {}).unwrap();
@@ -288,21 +328,50 @@ mod tests {
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let mut project = Project::new("source edges");
         for (id, value, speed, start) in [("a", 0.2f32, 2.0, 0), ("b", 0.4, 0.5, 1_000_000)] {
-            let asset = Asset { id: id.into(), name: id.into(), path: String::new(), kind: AssetKind::Video, duration_us: 2_000_000, width: 2, height: 2, fps: 30.0, has_audio: true, rotation: 0 };
+            let asset = Asset {
+                id: id.into(),
+                name: id.into(),
+                path: String::new(),
+                kind: AssetKind::Video,
+                duration_us: 2_000_000,
+                width: 2,
+                height: 2,
+                fps: 30.0,
+                has_audio: true,
+                rotation: 0,
+            };
             std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&vec![value; 96000 * CHANNELS])).unwrap();
             project.assets.push(asset);
-            let mut clip = Clip::new(id.into(), start, 1_000_000, ClipContent::Media {
-                asset_id: id.into(), source_in_us: 0, volume: 1.0, transform: Transform::default(), speed,
-                adjust: Default::default(), fade_in_us: 0, fade_out_us: 0,
-            });
-            if id == "b" { clip.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 400_000 }); }
+            let mut clip = Clip::new(
+                id.into(),
+                start,
+                1_000_000,
+                ClipContent::Media {
+                    asset_id: id.into(),
+                    source_in_us: 0,
+                    volume: 1.0,
+                    transform: Transform::default(),
+                    speed,
+                    adjust: Default::default(),
+                    fade_in_us: 0,
+                    fade_out_us: 0,
+                },
+            );
+            if id == "b" {
+                clip.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 400_000 });
+            }
             project.tracks[0].clips.push(clip);
         }
         let mut mixer = Mixer::new(cache.clone());
         let mut out = vec![0.0; 1000 * CHANNELS];
         mixer.mix(&project, 47500, &mut out);
-        let max_step = out.chunks_exact(CHANNELS).map(|f| f[0]).collect::<Vec<_>>()
-            .windows(2).map(|p| (p[1] - p[0]).abs()).fold(0.0f32, f32::max);
+        let max_step = out
+            .chunks_exact(CHANNELS)
+            .map(|f| f[0])
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|p| (p[1] - p[0]).abs())
+            .fold(0.0f32, f32::max);
         drop(mixer);
         std::fs::remove_dir_all(cache).unwrap();
         assert!(max_step < 0.002, "sample step: {max_step}");
@@ -311,19 +380,45 @@ mod tests {
     #[test]
     fn mixer_speed_and_crossfade_are_independent_of_buffer_boundaries() {
         use crate::model::{Clip, Transform, Transition, TransitionKind};
-        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test").join(format!("mixer-{}", std::process::id()));
+        let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tmp-test")
+            .join(format!("mixer-{}", std::process::id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let mut project = Project::new("audio test");
         for (id, value) in [("a", 0.2f32), ("b", 0.4)] {
-            let asset = Asset { id: id.into(), name: id.into(), path: String::new(), kind: AssetKind::Video, duration_us: 3_000_000, width: 2, height: 2, fps: 30.0, has_audio: true, rotation: 0 };
+            let asset = Asset {
+                id: id.into(),
+                name: id.into(),
+                path: String::new(),
+                kind: AssetKind::Video,
+                duration_us: 3_000_000,
+                width: 2,
+                height: 2,
+                fps: 30.0,
+                has_audio: true,
+                rotation: 0,
+            };
             let samples = vec![value; 144000 * CHANNELS];
             std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&samples)).unwrap();
             project.assets.push(asset);
-            let mut clip = Clip::new(id.into(), if id == "a" { 0 } else { 1_000_000 }, 1_000_000, ClipContent::Media {
-                asset_id: id.into(), source_in_us: 500_000, volume: 1.0, transform: Transform::default(), speed: 2.0,
-                adjust: Default::default(), fade_in_us: 0, fade_out_us: 0,
-            });
-            if id == "b" { clip.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 400_000 }); }
+            let mut clip = Clip::new(
+                id.into(),
+                if id == "a" { 0 } else { 1_000_000 },
+                1_000_000,
+                ClipContent::Media {
+                    asset_id: id.into(),
+                    source_in_us: 500_000,
+                    volume: 1.0,
+                    transform: Transform::default(),
+                    speed: 2.0,
+                    adjust: Default::default(),
+                    fade_in_us: 0,
+                    fade_out_us: 0,
+                },
+            );
+            if id == "b" {
+                clip.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 400_000 });
+            }
             project.tracks[0].clips.push(clip);
         }
         let mut mixer = Mixer::new(cache.clone());
@@ -331,7 +426,9 @@ mod tests {
         mixer.mix(&project, 0, &mut whole);
         assert!((whole[48000 * CHANNELS] - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
         let mut chunks = vec![0.0; whole.len()];
-        for (index, chunk) in chunks.chunks_mut(137 * CHANNELS).enumerate() { mixer.mix(&project, (index * 137) as i64, chunk); }
+        for (index, chunk) in chunks.chunks_mut(137 * CHANNELS).enumerate() {
+            mixer.mix(&project, (index * 137) as i64, chunk);
+        }
         assert_eq!(whole, chunks);
         drop(mixer);
         let samples: Vec<f32> = (0..144000).flat_map(|i| [i as f32 / 200000.0; CHANNELS]).collect();
@@ -364,7 +461,9 @@ mod tests {
             let a = gain_at(i, 0, 36000, None, Some((12000, 24000)));
             let b = gain_at(i, 0, 36000, Some((12000, 24000)), None);
             assert!((a * a + b * b - 1.0).abs() < 1e-6);
-            if i == 18000 { assert!((a * 0.2 + b * 0.4 - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6); }
+            if i == 18000 {
+                assert!((a * 0.2 + b * 0.4 - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+            }
         }
     }
 }

@@ -29,10 +29,7 @@ pub(super) fn directory(path: &Path) -> Result<()> {
 
 pub(super) fn socket(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path).context("IPC_UNTRUSTED: checking socket")?;
-    ensure!(
-        meta.file_type().is_socket() && meta.uid() == uid(),
-        "IPC_UNTRUSTED: socket must be owned by this user"
-    );
+    ensure!(meta.file_type().is_socket() && meta.uid() == uid(), "IPC_UNTRUSTED: socket must be owned by this user");
     Ok(())
 }
 
@@ -42,20 +39,13 @@ pub(super) fn token(path: &Path) -> Result<String> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .context("IPC_UNTRUSTED: opening token without following symlinks")?;
-    let meta = file
-        .metadata()
-        .context("IPC_UNTRUSTED: checking token descriptor")?;
+    let meta = file.metadata().context("IPC_UNTRUSTED: checking token descriptor")?;
     ensure!(
-        meta.is_file()
-            && meta.uid() == uid()
-            && meta.mode() & 0o7777 == 0o600
-            && meta.len() == TOKEN_LEN as u64,
+        meta.is_file() && meta.uid() == uid() && meta.mode() & 0o7777 == 0o600 && meta.len() == TOKEN_LEN as u64,
         "IPC_UNTRUSTED: token must be a private 0600 regular file of exactly 64 bytes"
     );
     let mut bytes = Vec::with_capacity(TOKEN_LEN + 1);
-    file.take((TOKEN_LEN + 1) as u64)
-        .read_to_end(&mut bytes)
-        .context("IPC_UNTRUSTED: reading token")?;
+    file.take((TOKEN_LEN + 1) as u64).read_to_end(&mut bytes).context("IPC_UNTRUSTED: reading token")?;
     ensure!(
         bytes.len() == TOKEN_LEN && bytes.iter().all(u8::is_ascii_hexdigit),
         "IPC_UNTRUSTED: token must contain 64 hex digits"
@@ -78,20 +68,13 @@ pub(super) fn peer(stream: &UnixStream) -> Result<()> {
 }
 
 fn verify_uid(peer: u32) -> Result<()> {
-    ensure!(
-        peer == uid(),
-        "IPC_UNTRUSTED: peer belongs to a different user"
-    );
+    ensure!(peer == uid(), "IPC_UNTRUSTED: peer belongs to a different user");
     Ok(())
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn peer_uid(stream: &UnixStream) -> Result<u32> {
-    let mut cred = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut length = std::mem::size_of_val(&cred) as libc::socklen_t;
     // The kernel writes at most length bytes into the correctly sized ucred.
     let rc = unsafe {
@@ -158,8 +141,7 @@ mod tests {
 
     #[test]
     fn reject_symlink_token_wrong_modes_and_foreign_directory() {
-        let dir =
-            std::env::temp_dir().join(format!("ipc-trust-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("ipc-trust-{}", capopen_engine::edit::new_id()));
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         directory(&dir).unwrap();
@@ -167,12 +149,7 @@ mod tests {
         fs::write(&secret, "PRIVATE KEY MUST NEVER BE SENT").unwrap();
         let path = dir.join("token");
         symlink(&secret, &path).unwrap();
-        assert!(
-            token(&path)
-                .unwrap_err()
-                .to_string()
-                .starts_with("IPC_UNTRUSTED")
-        );
+        assert!(token(&path).unwrap_err().to_string().starts_with("IPC_UNTRUSTED"));
         assert!(create_token(&path).is_err());
         fs::remove_file(&path).unwrap();
         fs::write(&path, "a".repeat(TOKEN_LEN)).unwrap();
@@ -180,11 +157,7 @@ mod tests {
         assert!(token(&path).is_err());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(token(&path).unwrap().len(), TOKEN_LEN);
-        for text in [
-            "a".repeat(TOKEN_LEN - 1),
-            "g".repeat(TOKEN_LEN),
-            "a".repeat(TOKEN_LEN + 1),
-        ] {
+        for text in ["a".repeat(TOKEN_LEN - 1), "g".repeat(TOKEN_LEN), "a".repeat(TOKEN_LEN + 1)] {
             fs::write(&path, text).unwrap();
             assert!(token(&path).is_err());
         }

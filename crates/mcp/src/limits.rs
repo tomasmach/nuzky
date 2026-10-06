@@ -20,14 +20,8 @@ mod tests {
 
     #[test]
     fn oversized_tool_result_is_a_tool_error() {
-        let result = tool_result(CallToolResult::success(vec![ContentBlock::text(
-            "x".repeat(MAX_TOOL_BYTES),
-        )]));
+        let result = tool_result(CallToolResult::success(vec![ContentBlock::text("x".repeat(MAX_TOOL_BYTES))]));
         assert_eq!(result.is_error, Some(true));
-        assert!(
-            serde_json::to_string(&result)
-                .unwrap()
-                .contains("RESULT_TOO_LARGE")
-        );
+        assert!(serde_json::to_string(&result).unwrap().contains("RESULT_TOO_LARGE"));
     }
 }

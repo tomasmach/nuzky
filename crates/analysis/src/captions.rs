@@ -35,8 +35,11 @@ pub fn group_words(words: &[Word], grouping: CaptionGrouping) -> Vec<CaptionSegm
         match groups.last_mut() {
             Some(group) if !hard_break(group, word, grouping) && fits(group, word, grouping) => group.push(word),
             // "iPhone 17": a number starts its caption together with the word it belongs to.
-            Some(group) if !hard_break(group, word, grouping) && starts_with_digit(word) && group.len() > 1
-                && fits(&group[group.len() - 1..], word, grouping) =>
+            Some(group)
+                if !hard_break(group, word, grouping)
+                    && starts_with_digit(word)
+                    && group.len() > 1
+                    && fits(&group[group.len() - 1..], word, grouping) =>
             {
                 let carried = group.pop();
                 groups.push(carried.into_iter().chain([word]).collect());
@@ -71,7 +74,8 @@ fn hard_break(group: &[&Word], next: &Word, grouping: CaptionGrouping) -> bool {
 }
 
 fn fits(group: &[&Word], next: &Word, grouping: CaptionGrouping) -> bool {
-    let chars = group.iter().map(|w| w.text.trim().chars().count() + 1).sum::<usize>() + next.text.trim().chars().count();
+    let chars =
+        group.iter().map(|w| w.text.trim().chars().count() + 1).sum::<usize>() + next.text.trim().chars().count();
     group.len() < grouping.max_words.max(1) && chars <= grouping.max_chars
 }
 
@@ -136,7 +140,13 @@ mod tests {
 
     #[test]
     fn numbers_stay_with_their_word_and_phrases_do_not_end_on_a_lone_word() {
-        let words = [word(0, 300, "přišel"), word(300, 600, "iPhone"), word(600, 900, "17"), word(900, 1100, "a"), word(1100, 1500, "konec.")];
+        let words = [
+            word(0, 300, "přišel"),
+            word(300, 600, "iPhone"),
+            word(600, 900, "17"),
+            word(900, 1100, "a"),
+            word(1100, 1500, "konec."),
+        ];
         assert_eq!(texts(&words, CaptionGrouping::default()), ["přišel", "iPhone 17", "a konec."]);
         // Across a pause the lone word keeps its own caption.
         let paused = [word(0, 300, "fakt"), word(300, 600, "dobře"), word(1200, 1500, "jo.")];

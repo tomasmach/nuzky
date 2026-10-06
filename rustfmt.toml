@@ -1,0 +1,3 @@
+# Keep compact edit commands and model literals readable without the previous unbounded lines.
+max_width = 120
+use_small_heuristics = "Max"

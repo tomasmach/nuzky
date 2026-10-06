@@ -4,9 +4,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use ffmpeg_next as ff;
 use ff::software::scaling;
 use ff::util::{color, format::Pixel, frame};
+use ffmpeg_next as ff;
 
 use crate::audio::{Mixer, ensure_pcm, has_audio};
 use crate::media::{init, set_sws_colorspace};
@@ -45,7 +45,13 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { crf: Quality::Recommended.crf(), replace_existing: false, preset: "veryfast".into(), resolution: None, fps: None }
+        Self {
+            crf: Quality::Recommended.crf(),
+            replace_existing: false,
+            preset: "veryfast".into(),
+            resolution: None,
+            fps: None,
+        }
     }
 }
 
@@ -71,14 +77,20 @@ pub fn export(
         bail!("The timeline is empty");
     }
     check_source_path(project, out)?;
-    let heard: std::collections::HashSet<&str> = project.tracks.iter()
+    let heard: std::collections::HashSet<&str> = project
+        .tracks
+        .iter()
         .filter(|track| !track.muted && track.kind != TrackKind::Text)
         .flat_map(|track| &track.clips)
         .filter_map(|clip| match &clip.content {
             ClipContent::Media { asset_id, volume, .. }
-                if *volume > 0.0 && clip.end_us() > 0 && clip.start_us < duration => Some(asset_id.as_str()),
+                if *volume > 0.0 && clip.end_us() > 0 && clip.start_us < duration =>
+            {
+                Some(asset_id.as_str())
+            }
             _ => None,
-        }).collect();
+        })
+        .collect();
     for asset in project.assets.iter().filter(|a| heard.contains(a.id.as_str()) && has_audio(a)) {
         ensure_pcm(cache_dir, asset, |_| {})?;
     }
@@ -133,9 +145,13 @@ fn publish(tmp: &Path, out: &Path, replace_existing: bool, cancel: &AtomicBool) 
 
 fn output_size(project: &Project, options: &ExportOptions, max_dimension: u32) -> Result<(u32, u32)> {
     let (w, h) = (project.canvas.width, project.canvas.height);
-    if w < 2 || h < 2 { bail!("Canvas dimensions must be at least 2 pixels"); }
+    if w < 2 || h < 2 {
+        bail!("Canvas dimensions must be at least 2 pixels");
+    }
     let short = options.resolution.unwrap_or(w.min(h));
-    if short < 2 || short > 7680 { bail!("Export resolution must be between 2 and 7680"); }
+    if short < 2 || short > 7680 {
+        bail!("Export resolution must be between 2 and 7680");
+    }
     let scale = short as f64 / w.min(h) as f64;
     let even = |v: u32| (v as f64 * scale / 2.0).round().max(1.0) * 2.0;
     let (w, h) = (even(w), even(h));
@@ -170,9 +186,10 @@ fn encode(
     progress: &mut impl FnMut(ExportProgress),
     duration: i64,
 ) -> Result<()> {
-
     let fps = options.fps.unwrap_or(project.canvas.fps);
-    if fps == 0 || fps > 240 { bail!("Export frame rate must be between 1 and 240"); }
+    if fps == 0 || fps > 240 {
+        bail!("Export frame rate must be between 1 and 240");
+    }
     let mut renderer = Renderer::new()?;
     let (w, h) = output_size(project, options, renderer.max_texture_dimension())?;
     let total_frames = frame_count(duration, fps);
@@ -245,11 +262,18 @@ fn encode(
     let mut audio_pos: i64 = 0;
     let mut mix = vec![0f32; aframe_size * CHANNELS];
 
-    let drain = |enc: &mut ff::encoder::Encoder, index: usize, from: ff::Rational, to: ff::Rational, octx: &mut ff::format::context::Output| -> Result<()> {
+    let drain = |enc: &mut ff::encoder::Encoder,
+                 index: usize,
+                 from: ff::Rational,
+                 to: ff::Rational,
+                 octx: &mut ff::format::context::Output|
+     -> Result<()> {
         let mut packet = ff::Packet::empty();
         while enc.receive_packet(&mut packet).is_ok() {
             packet.set_stream(index);
-            if index == vindex { packet.set_duration(1); }
+            if index == vindex {
+                packet.set_duration(1);
+            }
             packet.rescale_ts(from, to);
             packet.write_interleaved(octx)?;
         }
@@ -300,7 +324,11 @@ fn encode_audio(
     frame_size: usize,
 ) -> Result<()> {
     mixer.mix(project, pos, mix);
-    let mut f = frame::Audio::new(ff::format::Sample::F32(ff::format::sample::Type::Planar), frame_size, ff::ChannelLayout::STEREO);
+    let mut f = frame::Audio::new(
+        ff::format::Sample::F32(ff::format::sample::Type::Planar),
+        frame_size,
+        ff::ChannelLayout::STEREO,
+    );
     f.set_rate(SAMPLE_RATE);
     for ch in 0..CHANNELS {
         let plane = f.plane_mut::<f32>(ch);

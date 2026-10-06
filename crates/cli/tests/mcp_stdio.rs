@@ -23,23 +23,17 @@ impl Client {
         let dir = std::env::temp_dir().join(format!("capopen-mcp-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("project.capopen");
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&Project::new("Original")).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&path, serde_json::to_vec(&Project::new("Original")).unwrap()).unwrap();
         if let Some(project) = checkpoint {
-            std::fs::write(dir.join("project.capopen.checkpoint.json"),
-                serde_json::to_vec(&json!({"project": project})).unwrap()).unwrap();
+            std::fs::write(
+                dir.join("project.capopen.checkpoint.json"),
+                serde_json::to_vec(&json!({"project": project})).unwrap(),
+            )
+            .unwrap();
         }
         let binary = env!("CARGO_BIN_EXE_capopen");
         let mut command = Command::new(binary);
-        command
-            .arg("mcp")
-            .arg("--project")
-            .arg(path)
-            .arg("--cache")
-            .arg(dir.join("cache"));
+        command.arg("mcp").arg("--project").arg(path).arg("--cache").arg(dir.join("cache"));
         if write {
             command.arg("--allow-write");
         }
@@ -55,20 +49,13 @@ impl Client {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let line = line.unwrap();
-                let value = serde_json::from_str(&line)
-                    .unwrap_or_else(|_| panic!("Non-JSON on MCP stdout: {line}"));
+                let value = serde_json::from_str(&line).unwrap_or_else(|_| panic!("Non-JSON on MCP stdout: {line}"));
                 if tx.send(value).is_err() {
                     break;
                 }
             }
         });
-        let mut client = Self {
-            child,
-            input,
-            output,
-            dir,
-            seq: 0,
-        };
+        let mut client = Self { child, input, output, dir, seq: 0 };
         let init = client.rpc("initialize", json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}}));
         assert_eq!(init["result"]["serverInfo"]["name"], "capopen");
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
@@ -82,10 +69,7 @@ impl Client {
         self.seq += 1;
         self.send(json!({"jsonrpc":"2.0","id":self.seq,"method":method,"params":params}));
         loop {
-            let value = self
-                .output
-                .recv_timeout(Duration::from_secs(20))
-                .expect("MCP response timed out");
+            let value = self.output.recv_timeout(Duration::from_secs(20)).expect("MCP response timed out");
             if value["id"] == self.seq {
                 return value;
             }
@@ -105,10 +89,7 @@ impl Client {
                 assert!(status.success());
                 break;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "MCP did not exit on EOF"
-            );
+            assert!(std::time::Instant::now() < deadline, "MCP did not exit on EOF");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -141,10 +122,13 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     assert_eq!(before["playhead_us"], 0);
     let run = c.call("begin_run", json!({"label":"integration"}));
     let args = json!({"run_id":run["run_id"],"request_id":"rename","expected_revision":run["revision"],"expected_speech_layout_key":before["speech_layout_key"],"edits":[{"type":"renameProject","name":"Edited via MCP"}]});
-    let rejected = c.rpc("tools/call", json!({"name":"apply_edits", "arguments":{
-        "run_id":run["run_id"], "request_id":"wrong-speech", "expected_speech_layout_key":"stale",
-        "edits":[{"type":"renameProject","name":"Must not apply"}]
-    }}));
+    let rejected = c.rpc(
+        "tools/call",
+        json!({"name":"apply_edits", "arguments":{
+            "run_id":run["run_id"], "request_id":"wrong-speech", "expected_speech_layout_key":"stale",
+            "edits":[{"type":"renameProject","name":"Must not apply"}]
+        }}),
+    );
     assert_eq!(rejected["result"]["isError"], true);
     assert!(rejected["result"]["content"][0]["text"].as_str().unwrap().contains("SPEECH_CHANGED"));
     let applied = c.call("apply_edits", args.clone());
@@ -154,8 +138,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     c.call("undo_run", json!({"run_id":run["run_id"]}));
     assert_eq!(c.call("get_state", json!({}))["name"], before["name"]);
     c.finish();
-    let disk: Value =
-        serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
     assert_eq!(disk["name"], "Original");
 }
 
@@ -163,43 +146,16 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
 fn readonly_resources_prompts_and_clear_errors() {
     let mut c = Client::new(false);
     assert_eq!(c.call("get_state", json!({}))["read_only"], true);
-    let error = c.rpc(
-        "tools/call",
-        json!({"name":"begin_run","arguments":{"label":"denied"}}),
-    );
+    let error = c.rpc("tools/call", json!({"name":"begin_run","arguments":{"label":"denied"}}));
     assert_eq!(error["result"]["isError"], true);
-    assert!(
-        error["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("READ_ONLY")
-    );
+    assert!(error["result"]["content"][0]["text"].as_str().unwrap().contains("READ_ONLY"));
     let resources = c.rpc("resources/list", json!({}));
-    assert_eq!(
-        resources["result"]["resources"].as_array().unwrap().len(),
-        2
-    );
+    assert_eq!(resources["result"]["resources"].as_array().unwrap().len(), 2);
     let guide = c.rpc("resources/read", json!({"uri":"capopen://guide"}));
-    assert!(
-        guide["result"]["contents"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("rippleDeleteRanges")
-    );
-    let prompt = c.rpc(
-        "prompts/get",
-        json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}),
-    );
-    assert!(
-        prompt["result"]["messages"][0]["content"]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Make a reel")
-    );
-    let error = c.rpc(
-        "tools/call",
-        json!({"name":"inspect_frames","arguments":{"times_us":[0]}}),
-    );
+    assert!(guide["result"]["contents"][0]["text"].as_str().unwrap().contains("rippleDeleteRanges"));
+    let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
+    assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
+    let error = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0]}}));
     assert_eq!(error["result"]["isError"], true);
     c.finish();
 }
@@ -208,11 +164,13 @@ fn readonly_resources_prompts_and_clear_errors() {
 fn disconnect_keeps_and_removes_checkpoint() {
     let mut c = Client::new(true);
     let run = c.call("begin_run", json!({"label":"disconnect"}));
-    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"rename","edits":[{"type":"renameProject","name":"Kept"}]}));
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"rename","edits":[{"type":"renameProject","name":"Kept"}]}),
+    );
     c.finish();
     assert!(!c.dir.join("project.capopen.checkpoint.json").exists());
-    let disk: Value =
-        serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
     assert_eq!(disk["name"], "Kept");
 }
 
@@ -232,7 +190,6 @@ fn recovery_tool_resolves_both_choices_over_stdio() {
     }
 }
 
-
 #[test]
 #[ignore = "Requires tmp-test/talk.mp4 and installed small + Silero models; run with XDG_DATA_HOME=tmp-test/xdg/data"]
 fn transcribe_edit_and_caption_real_media_over_stdio() {
@@ -242,13 +199,18 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     let run = c.call("begin_run", json!({"label":"import"}));
     let assets = c.call("import_media", json!({"run_id":run["run_id"],"paths":[media]}));
     let asset_id = &assets["asset_ids"][0];
-    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":asset_id}]}));
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":asset_id}]}),
+    );
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     let job = c.call("transcribe", json!({"asset_ids":[asset_id],"model":"small"}));
     let deadline = std::time::Instant::now() + Duration::from_secs(600);
     loop {
         let status = c.call("job", json!({"job_id":job["job_id"],"action":"get"}));
-        if status["status"] == "done" { break; }
+        if status["status"] == "done" {
+            break;
+        }
         assert_eq!(status["status"], "running", "{status}");
         assert!(std::time::Instant::now() < deadline, "transcription timed out");
         std::thread::sleep(Duration::from_secs(2));
@@ -257,7 +219,8 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     assert!(transcript["words"].as_array().unwrap().len() >= 2);
     assert_eq!(transcript["untranscribed"], json!([]));
     let run = c.call("begin_run", json!({"label":"words and captions"}));
-    let args = json!({"run_id":run["run_id"],"transcript_key":transcript["transcript_key"],"delete":[[0,0]],"dry_run":true});
+    let args =
+        json!({"run_id":run["run_id"],"transcript_key":transcript["transcript_key"],"delete":[[0,0]],"dry_run":true});
     let preview = c.call("edit_transcript", args.clone());
     assert_eq!(c.call("get_transcript", json!({}))["transcript_key"], transcript["transcript_key"]);
     let mut args = args;

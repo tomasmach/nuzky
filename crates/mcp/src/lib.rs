@@ -2,8 +2,8 @@
 pub mod bridge;
 #[cfg(unix)]
 pub mod ipc;
-mod media;
 mod limits;
+mod media;
 mod params;
 mod tools;
 pub mod transcript;
@@ -27,10 +27,7 @@ struct Server {
 
 fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<Tool> {
     let schema = schema_for!(T);
-    let object = schema
-        .as_object()
-        .context("Tool schema must be an object")?
-        .clone();
+    let object = schema.as_object().context("Tool schema must be an object")?.clone();
     let read_only = matches!(name, "get_state" | "get_transcript" | "inspect_frames");
     let annotations = ToolAnnotations::new()
         .read_only(read_only)
@@ -38,10 +35,7 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<
             name,
             "apply_edits" | "edit_transcript" | "end_run" | "undo_run" | "build_captions" | "resolve_recovery"
         ))
-        .idempotent(matches!(
-            name,
-            "get_state" | "get_transcript" | "inspect_frames" | "apply_edits"
-        ))
+        .idempotent(matches!(name, "get_state" | "get_transcript" | "inspect_frames" | "apply_edits"))
         .open_world(false);
     Ok(Tool::new(name, description, object).with_annotations(annotations))
 }
@@ -113,15 +107,9 @@ fn catalog() -> Result<Vec<Tool>> {
 
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .enable_prompts()
-                .build(),
-        )
-        .with_server_info(Implementation::new("capopen", env!("CARGO_PKG_VERSION")))
-        .with_instructions(GUIDE)
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().enable_prompts().build())
+            .with_server_info(Implementation::new("capopen", env!("CARGO_PKG_VERSION")))
+            .with_instructions(GUIDE)
     }
 
     async fn list_tools(
@@ -141,12 +129,12 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        Ok(self.target.clone().call(
-            request.name.to_string(),
-            Value::Object(request.arguments.unwrap_or_default()),
-        )
-        .await
-        .into())
+        Ok(self
+            .target
+            .clone()
+            .call(request.name.to_string(), Value::Object(request.arguments.unwrap_or_default()))
+            .await
+            .into())
     }
 
     async fn list_resources(
@@ -156,8 +144,7 @@ impl ServerHandler for Server {
     ) -> Result<ListResourcesResult, ErrorData> {
         Ok(ListResourcesResult::with_all_items(vec![
             Resource::new("capopen://guide", "Editing guide").with_mime_type("text/markdown"),
-            Resource::new("capopen://schema", "Project JSON schema")
-                .with_mime_type("application/schema+json"),
+            Resource::new("capopen://schema", "Project JSON schema").with_mime_type("application/schema+json"),
         ]))
     }
 

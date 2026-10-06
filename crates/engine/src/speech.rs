@@ -116,10 +116,16 @@ mod tests {
     /// A 10 s talking-head video with a word every second ("w0" at 0.2–0.6 s, "w1" at 1.2–1.6 s…).
     fn talk() -> (Project, HashMap<String, Vec<Word>>) {
         let mut p = Project::new("speech");
-        p.apply(EditCmd::AddAssets { assets: vec![asset("v", AssetKind::Video), asset("song", AssetKind::Audio)] }).unwrap();
+        p.apply(EditCmd::AddAssets { assets: vec![asset("v", AssetKind::Video), asset("song", AssetKind::Audio)] })
+            .unwrap();
         p.apply(EditCmd::AddClip { asset_id: "v".into(), start_us: None, track_id: None }).unwrap();
         let words = (0..10)
-            .map(|i| Word { start_us: i * S + 200_000, end_us: i * S + 600_000, text: format!("w{i}"), probability: 1.0 })
+            .map(|i| Word {
+                start_us: i * S + 200_000,
+                end_us: i * S + 600_000,
+                text: format!("w{i}"),
+                probability: 1.0,
+            })
             .collect();
         (p, HashMap::from([("v".to_string(), words)]))
     }
@@ -129,7 +135,11 @@ mod tests {
     }
 
     fn ripple(p: &mut Project, start_us: i64, end_us: i64) {
-        p.apply(EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us, end_us }], keep_track_ids: Some(vec![]) }).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges {
+            ranges: vec![TimeRange { start_us, end_us }],
+            keep_track_ids: Some(vec![]),
+        })
+        .unwrap();
     }
 
     fn main_id(p: &Project, i: usize) -> String {
@@ -188,7 +198,8 @@ mod tests {
         p.apply(EditCmd::AddClip { asset_id: "song".into(), start_us: Some(0), track_id: None }).unwrap();
         let song_words = HashMap::from([("song".to_string(), words["v"].clone())]);
         assert!(map_words(&p, &song_words).is_empty());
-        p.apply(EditCmd::UpdateTrack { track_id: "main".into(), muted: Some(true), hidden: None, keep_in_place: None }).unwrap();
+        p.apply(EditCmd::UpdateTrack { track_id: "main".into(), muted: Some(true), hidden: None, keep_in_place: None })
+            .unwrap();
         assert!(map_words(&p, &words).is_empty());
     }
 

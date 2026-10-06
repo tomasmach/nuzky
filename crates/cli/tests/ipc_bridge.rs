@@ -45,39 +45,16 @@ impl App {
             })
             .unwrap();
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-        let host = Arc::new(
-            Host::new(
-                ProjectSession::open(&path, Mode::Write, None).unwrap(),
-                dir.join("cache"),
-            )
-            .unwrap(),
-        );
-        let socket = dir.join("capopen").join(
-            capopen_mcp::ipc::socket_path(&path)
-                .unwrap()
-                .file_name()
-                .unwrap(),
-        );
+        let host =
+            Arc::new(Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap());
+        let socket = dir.join("capopen").join(capopen_mcp::ipc::socket_path(&path).unwrap().file_name().unwrap());
         let listener = Some(Listener::at(host.clone(), socket.clone()).unwrap());
-        Self {
-            listener,
-            host,
-            dir,
-            path,
-            socket,
-        }
+        Self { listener, host, dir, path, socket }
     }
     fn hello(&self, token: &str, version: u32) -> Value {
         let mut stream = UnixStream::connect(&self.socket).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .unwrap();
-        writeln!(
-            stream,
-            "{}",
-            json!({"capopen":version,"token":token,"client":"test","access":"write"})
-        )
-        .unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        writeln!(stream, "{}", json!({"capopen":version,"token":token,"client":"test","access":"write"})).unwrap();
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
@@ -99,19 +76,11 @@ struct Bridge {
 impl Bridge {
     fn new(app: &App, write: bool) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_capopen"));
-        command
-            .args(["mcp", "--project"])
-            .arg(&app.path)
-            .env("XDG_RUNTIME_DIR", &app.dir);
+        command.args(["mcp", "--project"]).arg(&app.path).env("XDG_RUNTIME_DIR", &app.dir);
         if write {
             command.arg("--allow-write");
         }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
+        let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
         let input = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         let (tx, output) = mpsc::channel();
@@ -123,19 +92,13 @@ impl Bridge {
                 }
             }
         });
-        let mut bridge = Self {
-            child,
-            input,
-            output,
-            id: 0,
-        };
-        bridge.rpc("initialize", json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ipc-test","version":"1"}}));
-        writeln!(
-            bridge.input.as_mut().unwrap(),
-            "{}",
-            json!({"jsonrpc":"2.0","method":"notifications/initialized"})
-        )
-        .unwrap();
+        let mut bridge = Self { child, input, output, id: 0 };
+        bridge.rpc(
+            "initialize",
+            json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ipc-test","version":"1"}}),
+        );
+        writeln!(bridge.input.as_mut().unwrap(), "{}", json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+            .unwrap();
         bridge
     }
     fn send(&mut self, method: &str, params: Value) -> u64 {
@@ -207,18 +170,8 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     assert_eq!(permissions(app.socket.parent().unwrap()), 0o700);
     assert_eq!(permissions(&app.socket), 0o600);
     assert_eq!(permissions(&token_path), 0o600);
-    assert!(
-        app.hello("wrong", 1)["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("UNAUTHORIZED")
-    );
-    assert!(
-        app.hello(&token, 2)["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("PROTOCOL_MISMATCH")
-    );
+    assert!(app.hello("wrong", 1)["error"].as_str().unwrap().starts_with("UNAUTHORIZED"));
+    assert!(app.hello(&token, 2)["error"].as_str().unwrap().starts_with("PROTOCOL_MISMATCH"));
     let mut writer = Bridge::new(&app, true);
     let mut reader = Bridge::new(&app, false);
     let mut other = Bridge::new(&app, true);
@@ -239,24 +192,11 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     other.error("apply_edits", edit.clone(), "INVALID_RUN");
     other.finish();
     reader.finish();
-    assert_eq!(
-        app.host.session.state().unwrap().open_run.unwrap().run_id,
-        run
-    );
+    assert_eq!(app.host.session.state().unwrap().open_run.unwrap().run_id, run);
     writer.call("apply_edits", edit.clone());
     assert_eq!(app.host.session.state().unwrap().project.name, "Live");
-    assert!(
-        app.host
-            .session
-            .edit(vec![], None, Default::default())
-            .unwrap_err()
-            .to_string()
-            .contains("RUN_ACTIVE")
-    );
-    let frame_id = writer.send(
-        "tools/call",
-        json!({"name":"inspect_frames","arguments":{"times_us":[0],"width":96}}),
-    );
+    assert!(app.host.session.edit(vec![], None, Default::default()).unwrap_err().to_string().contains("RUN_ACTIVE"));
+    let frame_id = writer.send("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0],"width":96}}));
     let state_id = writer.send("tools/call", json!({"name":"get_state","arguments":{}}));
     let mut results = std::collections::HashMap::new();
     while results.len() < 2 {
@@ -268,39 +208,22 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     assert_eq!(results[&state_id]["structuredContent"]["name"], "Live");
     let frames = &results[&frame_id];
     assert_ne!(frames["isError"], true, "{frames}");
-    let image = frames["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["type"] == "image")
-        .unwrap();
+    let image = frames["content"].as_array().unwrap().iter().find(|c| c["type"] == "image").unwrap();
     assert_eq!(image["mimeType"], "image/png");
     assert!(image["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
     let job = app
         .host
         .jobs
-        .start(
-            "test-client",
-            run.as_str(),
-            "test",
-            app.host.session.state().unwrap().stamp,
-            |cancel, _| {
-                while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                capopen_session::jobs::check_cancel(&cancel)?;
-                Ok(json!({}))
-            },
-        )
+        .start("test-client", run.as_str(), "test", app.host.session.state().unwrap().stamp, |cancel, _| {
+            while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            capopen_session::jobs::check_cancel(&cancel)?;
+            Ok(json!({}))
+        })
         .unwrap();
     app.host.stop_run().unwrap();
-    wait(|| {
-        app.host
-            .jobs
-            .get(job["job_id"].as_str().unwrap(), false)
-            .unwrap()["status"]
-            == "cancelled"
-    });
+    wait(|| app.host.jobs.get(job["job_id"].as_str().unwrap(), false).unwrap()["status"] == "cancelled");
     for tool in ["apply_edits", "build_captions", "end_run"] {
         writer.error(tool, edit.clone(), "RUN_STOPPED");
     }
@@ -323,12 +246,7 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     attached.error("get_state", json!({}), "APP_CLOSED");
     app.listener = Some(Listener::at(app.host.clone(), app.socket.clone()).unwrap());
     assert_ne!(std::fs::read_to_string(&token_path).unwrap(), token);
-    assert!(
-        app.hello(&token, 1)["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("UNAUTHORIZED")
-    );
+    assert!(app.hello(&token, 1)["error"].as_str().unwrap().starts_with("UNAUTHORIZED"));
     attached.error("get_state", json!({}), "APP_CLOSED");
     attached.finish();
 }

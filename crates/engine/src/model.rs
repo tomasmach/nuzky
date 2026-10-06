@@ -231,7 +231,16 @@ pub struct Adjust {
 
 impl Clip {
     pub fn new(id: String, start_us: i64, duration_us: i64, content: ClipContent) -> Self {
-        Self { id, start_us, duration_us, content, anim_in: None, anim_out: None, keyframes: Vec::new(), transition_in: None }
+        Self {
+            id,
+            start_us,
+            duration_us,
+            content,
+            anim_in: None,
+            anim_out: None,
+            keyframes: Vec::new(),
+            transition_in: None,
+        }
     }
 
     pub fn end_us(&self) -> i64 {
@@ -407,7 +416,8 @@ mod tests {
             transition_in: None,
             content: ClipContent::Text {
                 text: "Ahoj světe".into(),
-                style: TextStyle { font_family: None,
+                style: TextStyle {
+                    font_family: None,
                     font_size: 80.0,
                     color: "#ffffff".into(),
                     bold: true,

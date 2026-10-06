@@ -55,13 +55,8 @@ impl TranscriptStore {
     }
 
     pub fn at(directory: PathBuf) -> Result<Self> {
-        fs::create_dir_all(&directory)
-            .context("STORE_UNAVAILABLE: creating transcript directory")?;
-        Ok(Self {
-            directory,
-            events: None,
-            fingerprints: Arc::default(),
-        })
+        fs::create_dir_all(&directory).context("STORE_UNAVAILABLE: creating transcript directory")?;
+        Ok(Self { directory, events: None, fingerprints: Arc::default() })
     }
 
     pub(crate) fn with_events(mut self, events: Option<std::sync::mpsc::Sender<crate::SessionEvent>>) -> Self {
@@ -72,9 +67,7 @@ impl TranscriptStore {
     pub fn fingerprint(&self, asset: &Asset) -> Result<String> {
         let path = Path::new(&asset.path);
         let metadata = fs::metadata(path).context("MEDIA_MISSING: reading transcript source")?;
-        let modified = metadata
-            .modified()
-            .context("MEDIA_UNREADABLE: modification time")?;
+        let modified = metadata.modified().context("MEDIA_UNREADABLE: modification time")?;
         let size = metadata.len();
         let mut cache = self.fingerprints.lock().unwrap();
         if let Some(hit) = cache.get(path)
@@ -97,14 +90,7 @@ impl TranscriptStore {
             hash_chunk(&mut file, offset, &mut buffer, &mut hash)?;
         }
         let fingerprint = format!("{size:016x}-{hash:016x}");
-        cache.insert(
-            path.to_owned(),
-            CachedFingerprint {
-                modified,
-                size,
-                fingerprint: fingerprint.clone(),
-            },
-        );
+        cache.insert(path.to_owned(), CachedFingerprint { modified, size, fingerprint: fingerprint.clone() });
         Ok(fingerprint)
     }
 
@@ -116,36 +102,41 @@ impl TranscriptStore {
             Err(error) => return Err(error).context("STORE_UNREADABLE: reading transcript"),
         };
         #[derive(Deserialize)]
-        struct Header { version: u32 }
+        struct Header {
+            version: u32,
+        }
         let header: Header = serde_json::from_slice(&bytes).context("INVALID_TRANSCRIPT: parsing version")?;
-        if header.version != VERSION { return Ok(None); }
-        let record: Record =
-            serde_json::from_slice(&bytes).context("INVALID_TRANSCRIPT: parsing record")?;
+        if header.version != VERSION {
+            return Ok(None);
+        }
+        let record: Record = serde_json::from_slice(&bytes).context("INVALID_TRANSCRIPT: parsing record")?;
         ensure!(
             record.version == VERSION && record.fingerprint == fingerprint,
             "INVALID_TRANSCRIPT: version or fingerprint mismatch"
         );
-        if record.duration_us.abs_diff(asset.duration_us) > DURATION_TOLERANCE_US { return Ok(None); }
+        if record.duration_us.abs_diff(asset.duration_us) > DURATION_TOLERANCE_US {
+            return Ok(None);
+        }
         Ok(Some(record))
     }
 
     pub fn put(&self, asset: &Asset, record: &Record) -> Result<()> {
         let fingerprint = self.fingerprint(asset)?;
         ensure!(
-            record.version == VERSION && record.fingerprint == fingerprint
+            record.version == VERSION
+                && record.fingerprint == fingerprint
                 && record.duration_us.abs_diff(asset.duration_us) <= DURATION_TOLERANCE_US,
             "SOURCE_CHANGED: recognition source, duration or record version changed"
         );
         ensure!(
-            record
-                .words
-                .iter()
-                .all(|w| w.start_us >= 0 && w.end_us >= w.start_us && w.probability.is_finite()),
+            record.words.iter().all(|w| w.start_us >= 0 && w.end_us >= w.start_us && w.probability.is_finite()),
             "INVALID_TRANSCRIPT: invalid word timing or probability"
         );
         crate::storage::save(&self.directory.join(format!("{fingerprint}.json")), record)
             .context("STORE_WRITE_FAILED: publishing transcript")?;
-        if let Some(events) = &self.events { let _ = events.send(crate::SessionEvent::TranscriptsChanged); }
+        if let Some(events) = &self.events {
+            let _ = events.send(crate::SessionEvent::TranscriptsChanged);
+        }
         Ok(())
     }
 }
@@ -219,11 +210,28 @@ mod tests {
         fs::write(&path, &bytes).unwrap();
         bytes[SAMPLE_BYTES as usize..2 * SAMPLE_BYTES as usize].fill(9);
         fs::write(&copy, bytes).unwrap();
-        let mut asset = Asset { id: "a".into(), name: "a".into(), path: path.to_string_lossy().into(),
-            kind: AssetKind::Video, duration_us: 1_000_000, width: 1, height: 1, fps: 30.0, has_audio: true, rotation: 0 };
+        let mut asset = Asset {
+            id: "a".into(),
+            name: "a".into(),
+            path: path.to_string_lossy().into(),
+            kind: AssetKind::Video,
+            duration_us: 1_000_000,
+            width: 1,
+            height: 1,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+        };
         let fingerprint = store.fingerprint(&asset).unwrap();
-        let record = Record { version: VERSION, fingerprint: fingerprint.clone(), duration_us: asset.duration_us,
-            model: "small".into(), language: "en".into(), words: vec![], segments: vec![] };
+        let record = Record {
+            version: VERSION,
+            fingerprint: fingerprint.clone(),
+            duration_us: asset.duration_us,
+            model: "small".into(),
+            language: "en".into(),
+            words: vec![],
+            segments: vec![],
+        };
         store.put(&asset, &record).unwrap();
         asset.path = copy.to_string_lossy().into();
         assert_ne!(store.fingerprint(&asset).unwrap(), fingerprint);
@@ -242,5 +250,4 @@ mod tests {
         assert!(store.get(&asset).unwrap().is_none());
         fs::remove_dir_all(dir).unwrap();
     }
-
 }

@@ -11,34 +11,22 @@ use crate::limits::MAX_SHEET_PIXELS;
 pub fn check_media(project: &Project) -> Result<()> {
     for clip in project.tracks.iter().flat_map(|t| &t.clips) {
         if let ClipContent::Media { asset_id, .. } = &clip.content {
-            let asset = project
-                .asset(asset_id)
-                .context("UNKNOWN_ASSET: clip references absent asset")?;
-            ensure!(
-                Path::new(&asset.path).is_file(),
-                "MEDIA_MISSING: {}",
-                asset.path
-            );
+            let asset = project.asset(asset_id).context("UNKNOWN_ASSET: clip references absent asset")?;
+            ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
         }
     }
     Ok(())
 }
 
 pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_area: bool) -> Result<Vec<u8>> {
-    ensure!(
-        !times.is_empty() && times.len() <= MAX_FRAMES,
-        "Provide 1..={MAX_FRAMES} frame times"
-    );
+    ensure!(!times.is_empty() && times.len() <= MAX_FRAMES, "Provide 1..={MAX_FRAMES} frame times");
     ensure!(
         times.iter().all(|t| *t >= 0 && *t < project.duration_us()),
         "Frame times must be inside the timeline in integer microseconds"
     );
     check_media(project)?;
     let width = width.unwrap_or(DEFAULT_WIDTH);
-    ensure!(
-        (96..=1280).contains(&width),
-        "Frame width must be 96..=1280 pixels"
-    );
+    ensure!((96..=1280).contains(&width), "Frame width must be 96..=1280 pixels");
     let height = (width as u64 * project.canvas.height as u64 / project.canvas.width as u64) as u32;
     let columns = (times.len() as u32).min(4);
     let rows = (times.len() as u32).div_ceil(columns);
@@ -56,16 +44,14 @@ pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_
         let mut rgba = renderer
             .render(project, time, width, height, Wait::Exact, false)
             .context("Rendering contact sheet frame")?;
-        if safe_area { shade_unsafe(&mut rgba, width, height, &project.canvas); }
-        let (x, y) = (
-            index as u32 % columns * width,
-            index as u32 / columns * (height + LABEL_HEIGHT),
-        );
+        if safe_area {
+            shade_unsafe(&mut rgba, width, height, &project.canvas);
+        }
+        let (x, y) = (index as u32 % columns * width, index as u32 / columns * (height + LABEL_HEIGHT));
         for row in 0..height as usize {
             let dest = ((y as usize + row) * sheet_w as usize + x as usize) * 4;
             let src = row * width as usize * 4;
-            pixels[dest..dest + width as usize * 4]
-                .copy_from_slice(&rgba[src..src + width as usize * 4]);
+            pixels[dest..dest + width as usize * 4].copy_from_slice(&rgba[src..src + width as usize * 4]);
         }
         label(
             &mut pixels,
@@ -103,11 +89,7 @@ fn label(pixels: &mut [u8], stride: u32, x: u32, y: u32, text: &str, available: 
         [0, 0, 0, 0, 2],
     ];
     for (index, byte) in text.bytes().take((available / 8) as usize).enumerate() {
-        let glyph = if byte == b'.' {
-            10
-        } else {
-            (byte - b'0') as usize
-        };
+        let glyph = if byte == b'.' { 10 } else { (byte - b'0') as usize };
         for (row, bits) in DIGITS[glyph].iter().enumerate() {
             for col in 0..3 {
                 if bits & (1 << (2 - col)) == 0 {
@@ -115,12 +97,8 @@ fn label(pixels: &mut [u8], stride: u32, x: u32, y: u32, text: &str, available: 
                 }
                 for dy in 0..2 {
                     for dx in 0..2 {
-                        let offset = (((y + row as u32 * 2 + dy) * stride
-                            + x
-                            + index as u32 * 8
-                            + col * 2
-                            + dx)
-                            * 4) as usize;
+                        let offset =
+                            (((y + row as u32 * 2 + dy) * stride + x + index as u32 * 8 + col * 2 + dx) * 4) as usize;
                         pixels[offset..offset + 4].fill(255);
                     }
                 }
@@ -157,7 +135,7 @@ mod tests {
         let mut pixels = vec![100; 108 * 192 * 4];
         shade_unsafe(&mut pixels, 108, 192, &canvas);
         assert_eq!(&pixels[(80 * 108 + 54) * 4..][..4], &[100; 4]);
-        assert_eq!(&pixels[..4], &[135,95,90,100]);
+        assert_eq!(&pixels[..4], &[135, 95, 90, 100]);
         canvas.width = 1920;
         canvas.height = 1080;
         let before = pixels.clone();

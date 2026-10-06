@@ -17,20 +17,8 @@ fn pcm_rates_layouts_length_level_and_reference_samples() {
     for rate in [8000, 11025, 22050, 44100, 48000, 96000] {
         for channels in [1, 2, 6] {
             let source = d.join(format!("tone-{rate}-{channels}.wav"));
-            let expr = std::iter::repeat_n("0.25*sin(2*PI*440*t)", channels)
-                .collect::<Vec<_>>()
-                .join("|");
-            ff(
-                &[
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    &format!("aevalsrc={expr}:s={rate}:d=1"),
-                    "-c:a",
-                    "pcm_f32le",
-                ],
-                &source,
-            );
+            let expr = std::iter::repeat_n("0.25*sin(2*PI*440*t)", channels).collect::<Vec<_>>().join("|");
+            ff(&["-f", "lavfi", "-i", &format!("aevalsrc={expr}:s={rate}:d=1"), "-c:a", "pcm_f32le"], &source);
             let out = d.join(format!("tone-{rate}-{channels}.f32"));
             let frames = extract_pcm(&source, &out, |_| {}).unwrap();
             let samples = pcm(&out);
@@ -40,25 +28,20 @@ fn pcm_rates_layouts_length_level_and_reference_samples() {
                 cmd.args(["-af", "pan=stereo|c0=c0|c1=c0"]);
             }
             let reference = run(cmd.args(["-ar", "48000", "-ac", "2", "-f", "f32le", "-"])).stdout;
-            let reference: Vec<f32> = reference
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                .collect();
-            let max_error = samples
-                .iter()
-                .zip(&reference)
-                .map(|(a, b)| (a - b).abs())
-                .fold(0.0, f32::max);
+            let reference: Vec<f32> =
+                reference.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+            let max_error = samples.iter().zip(&reference).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
             let peak = samples.iter().copied().map(f32::abs).fold(0.0, f32::max);
-            eprintln!(
-                "QA PCM {rate}/{channels}: {frames} frames, peak {peak:.6}, reference max error {max_error}"
-            );
+            eprintln!("QA PCM {rate}/{channels}: {frames} frames, peak {peak:.6}, reference max error {max_error}");
             if (frames as i64 - 48000).abs() > 1024
                 || (samples.len() as i64 - reference.len() as i64).abs() > 2048
                 || max_error > 0.001
                 || channels == 1 && (peak - 0.25).abs() > 0.005
             {
-                failures.push(format!("{rate}/{channels}: frames={frames}, reference={}, peak={peak}, error={max_error}",reference.len()/2));
+                failures.push(format!(
+                    "{rate}/{channels}: frames={frames}, reference={}, peak={peak}, error={max_error}",
+                    reference.len() / 2
+                ));
             }
             assert!(!out.with_extension("part").exists());
             let p = Pcm::open(&out).unwrap();
@@ -93,17 +76,10 @@ fn aac_priming_and_nonzero_container_origin_preserve_alignment() {
         let out = d.join(format!("offset-{offset}.f32"));
         let n = extract_pcm(&source, &out, |_| {}).unwrap();
         let samples = pcm(&out);
-        let onset = samples
-            .chunks_exact(2)
-            .position(|s| s[0].abs() > 0.02)
-            .unwrap();
+        let onset = samples.chunks_exact(2).position(|s| s[0].abs() > 0.02).unwrap();
         // The container's origin can include the encoder priming packet at nonzero offset.
         let j = info(&source);
-        let origin = j["format"]["start_time"]
-            .as_str()
-            .unwrap()
-            .parse::<f64>()
-            .unwrap();
+        let origin = j["format"]["start_time"].as_str().unwrap().parse::<f64>().unwrap();
         let expected = (0.2 + offset as f64 - origin) * 48000.0;
         let expected_end = (1.0 + offset as f64 - origin) * 48000.0;
         eprintln!(
@@ -111,12 +87,8 @@ fn aac_priming_and_nonzero_container_origin_preserve_alignment() {
         );
         // One AAC frame at the SOURCE rate is 1115 output frames after 44.1 -> 48 kHz resampling.
         let aac_frame = (1024.0_f64 * 48000.0 / 44100.0).ceil();
-        if (onset as f64 - expected).abs() > aac_frame
-            || (n as f64 - expected_end).abs() > aac_frame
-        {
-            failures.push(format!(
-                "offset={offset}: onset={onset}/{expected}, frames={n}/{expected_end}"
-            ));
+        if (onset as f64 - expected).abs() > aac_frame || (n as f64 - expected_end).abs() > aac_frame {
+            failures.push(format!("offset={offset}: onset={onset}/{expected}, frames={n}/{expected_end}"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -157,17 +129,10 @@ fn late_audio_is_padded_to_video_container_origin() {
     }
     let out = ensure_pcm(&cache, &asset, |_| {}).unwrap();
     let samples = pcm(&out);
-    let onset = samples
-        .chunks_exact(2)
-        .position(|s| s[0].abs() > 0.02)
-        .unwrap();
+    let onset = samples.chunks_exact(2).position(|s| s[0].abs() > 0.02).unwrap();
     eprintln!("QA late audio onset={onset}, frames={}", samples.len() / 2);
     assert!((onset as i64 - 24000).abs() <= 1024, "onset={onset}");
-    assert!(
-        (samples.len() as i64 / 2 - 72000).abs() <= 1024,
-        "length={}",
-        samples.len() / 2
-    );
+    assert!((samples.len() as i64 / 2 - 72000).abs() <= 1024, "length={}", samples.len() / 2);
     assert!(samples[..22000 * 2].iter().all(|v| v.abs() < 0.001));
 }
 #[test]
@@ -178,10 +143,7 @@ fn mp3_attached_picture_remains_audio_asset() {
     let d = dir("mp3-cover");
     let cover = d.join("cover.jpg");
     let source = d.join("covered.mp3");
-    ff(
-        &["-f", "lavfi", "-i", "color=green:s=64x64", "-frames:v", "1"],
-        &cover,
-    );
+    ff(&["-f", "lavfi", "-i", "color=green:s=64x64", "-frames:v", "1"], &cover);
     ff(
         &[
             "-f",

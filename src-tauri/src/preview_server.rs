@@ -13,7 +13,8 @@ use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::StatusCode;
 use tungstenite::{Bytes, Message};
 
-const ALLOWED_ORIGINS: &[&str] = &["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420"];
+const ALLOWED_ORIGINS: &[&str] =
+    &["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420"];
 
 /// Header layout (little endian): magic "CPF1", width u32, height u32, flags u32, time i64.
 pub const HEADER_LEN: usize = 24;

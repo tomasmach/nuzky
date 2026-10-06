@@ -1,6 +1,6 @@
 //! One editing authority for user edits and agent runs, with ordered background saves.
-pub mod host;
 pub mod hash;
+pub mod host;
 pub mod jobs;
 pub mod transcripts;
 
@@ -75,11 +75,7 @@ pub struct ProjectSession {
 }
 
 impl ProjectSession {
-    pub fn open(
-        path: impl AsRef<Path>,
-        mode: Mode,
-        events: Option<Sender<SessionEvent>>,
-    ) -> Result<Self> {
+    pub fn open(path: impl AsRef<Path>, mode: Mode, events: Option<Sender<SessionEvent>>) -> Result<Self> {
         Self::open_with_idle_timeout(path, mode, IDLE_TIMEOUT, events)
     }
 
@@ -155,16 +151,13 @@ impl ProjectSession {
         self.inner.lock().unwrap().ui = UiContext { selection, playhead_us };
     }
 
-    pub fn edit(
-        &self,
-        cmds: Vec<EditCmd>,
-        coalesce: Option<String>,
-        expect: Expect,
-    ) -> Result<EditResult> {
+    pub fn edit(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect) -> Result<EditResult> {
         let mut inner = self.inner.lock().unwrap();
         inner.user_editable()?;
-        ensure!(!coalesce.as_deref().is_some_and(|key| key.starts_with("run:")),
-            "INVALID_REQUEST: run: coalesce keys are reserved");
+        ensure!(
+            !coalesce.as_deref().is_some_and(|key| key.starts_with("run:")),
+            "INVALID_REQUEST: run: coalesce keys are reserved"
+        );
         inner.check_expect(&expect)?;
         let result = inner.apply(cmds, coalesce, Origin::User)?;
         inner.schedule()?;
@@ -230,7 +223,10 @@ impl Inner {
     }
 
     fn recovered(&self) -> Result<()> {
-        ensure!(self.recovery.is_none(), "RECOVERY_PENDING: inspect and resolve the leftover checkpoint before editing");
+        ensure!(
+            self.recovery.is_none(),
+            "RECOVERY_PENDING: inspect and resolve the leftover checkpoint before editing"
+        );
         Ok(())
     }
 
@@ -243,7 +239,11 @@ impl Inner {
 
     fn check_expect(&self, expect: &Expect) -> Result<()> {
         if let Some(expected) = expect.revision {
-            ensure!(expected == self.editor.revision, "STALE_REVISION: expected {expected}, current {}", self.editor.revision);
+            ensure!(
+                expected == self.editor.revision,
+                "STALE_REVISION: expected {expected}, current {}",
+                self.editor.revision
+            );
         }
         if let Some(expected) = &expect.speech_layout_key {
             ensure!(expected == &speech_layout_key(&self.editor.project), "SPEECH_CHANGED: timeline speech changed");
@@ -251,21 +251,14 @@ impl Inner {
         Ok(())
     }
 
-    fn apply(
-        &mut self,
-        cmds: Vec<EditCmd>,
-        coalesce: Option<String>,
-        origin: Origin,
-    ) -> Result<EditResult> {
+    fn apply(&mut self, cmds: Vec<EditCmd>, coalesce: Option<String>, origin: Origin) -> Result<EditResult> {
         let before = self.editor.project.clone();
         let mut outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.editor.apply_batch_checked(cmds, coalesce, validate)
         }))
         .map_err(|_| anyhow::anyhow!("EDIT_REJECTED: engine failed while applying the batch; project unchanged"))?
         .map_err(|error| anyhow::anyhow!("EDIT_REJECTED: {error:#}"))?;
-        outcome.select.retain(|id| {
-            self.editor.project.tracks.iter().any(|t| t.clips.iter().any(|c| &c.id == id))
-        });
+        outcome.select.retain(|id| self.editor.project.tracks.iter().any(|t| t.clips.iter().any(|c| &c.id == id)));
         let (changed, clips) = changes(&before, &self.editor.project, &outcome);
         if self.editor.project != before {
             self.changed(origin);
@@ -274,13 +267,11 @@ impl Inner {
     }
 
     fn schedule(&self) -> Result<()> {
-        self.writer.as_ref().context("READ_ONLY: no writer")?
-            .schedule(&self.editor.project, self.editor.revision)
+        self.writer.as_ref().context("READ_ONLY: no writer")?.schedule(&self.editor.project, self.editor.revision)
     }
 
     fn flush(&self) -> Result<()> {
-        self.writer.as_ref().context("READ_ONLY: no writer")?
-            .flush(&self.editor.project, self.editor.revision)
+        self.writer.as_ref().context("READ_ONLY: no writer")?.flush(&self.editor.project, self.editor.revision)
     }
 }
 
@@ -302,9 +293,8 @@ fn spawn_idle_worker(
             let (flag, wake) = &*stop;
             loop {
                 let stopped = flag.lock().unwrap();
-                let (stopped, _) = wake
-                    .wait_timeout_while(stopped, timeout.min(Duration::from_secs(1)), |stop| !*stop)
-                    .unwrap();
+                let (stopped, _) =
+                    wake.wait_timeout_while(stopped, timeout.min(Duration::from_secs(1)), |stop| !*stop).unwrap();
                 if *stopped {
                     break;
                 }

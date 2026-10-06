@@ -121,7 +121,15 @@ fn open_stream(
             && c.max_sample_rate() >= SAMPLE_RATE
     });
     let (config, channels, rate) = if supports_native {
-        (cpal::StreamConfig { channels: CHANNELS as u16, sample_rate: SAMPLE_RATE, buffer_size: cpal::BufferSize::Default }, CHANNELS, SAMPLE_RATE)
+        (
+            cpal::StreamConfig {
+                channels: CHANNELS as u16,
+                sample_rate: SAMPLE_RATE,
+                buffer_size: cpal::BufferSize::Default,
+            },
+            CHANNELS,
+            SAMPLE_RATE,
+        )
     } else {
         let def = device.default_output_config().ok()?;
         if def.sample_format() != cpal::SampleFormat::F32 {

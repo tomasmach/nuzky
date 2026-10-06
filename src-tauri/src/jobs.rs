@@ -4,16 +4,16 @@
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use capopen_analysis::CaptionGrouping;
+use capopen_analysis::models_dir;
 use capopen_engine::audio::{ensure_pcm, has_audio};
 use capopen_engine::edit::new_id;
 use capopen_engine::export::{ExportOptions, Quality, export};
-use capopen_analysis::models_dir;
 use capopen_engine::model::{Asset, Project, TextStyle};
 use capopen_mcp::transcript;
 use capopen_session::{host::Host, transcripts::TranscriptStore};
@@ -147,13 +147,25 @@ pub struct ExportRequest {
 
 impl ExportRequest {
     fn options(&self) -> ExportOptions {
-        ExportOptions { crf: self.quality.crf(), replace_existing: true, resolution: Some(self.resolution), fps: Some(self.fps), ..ExportOptions::default() }
+        ExportOptions {
+            crf: self.quality.crf(),
+            replace_existing: true,
+            resolution: Some(self.resolution),
+            fps: Some(self.fps),
+            ..ExportOptions::default()
+        }
     }
 }
 
-pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest, expected_epoch: Option<&str>) -> Result<String, String> {
+pub fn start_export(
+    app: &AppHandle,
+    out: PathBuf,
+    request: ExportRequest,
+    expected_epoch: Option<&str>,
+) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let project = crate::lock_session(&state.session, expected_epoch)?.host.session.state().map_err(crate::err)?.project;
+    let project =
+        crate::lock_session(&state.session, expected_epoch)?.host.session.state().map_err(crate::err)?.project;
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
@@ -188,11 +200,8 @@ pub struct SpeechModel {
     pub downloaded: bool,
 }
 
-const MODELS: &[(&str, &str, u32)] = &[
-    ("base", "Fast", 142),
-    ("small", "Balanced", 466),
-    ("large-v3-turbo-q5_0", "Most accurate", 547),
-];
+const MODELS: &[(&str, &str, u32)] =
+    &[("base", "Fast", 142), ("small", "Balanced", 466), ("large-v3-turbo-q5_0", "Most accurate", 547)];
 
 fn model_path(id: &str) -> PathBuf {
     models_dir().join(format!("ggml-{id}.bin"))
@@ -245,13 +254,27 @@ struct SpeechRequest {
 }
 
 #[tauri::command]
-pub fn start_captions(app: AppHandle, request: CaptionRequest, expected_epoch: Option<String>) -> Result<String, String> {
+pub fn start_captions(
+    app: AppHandle,
+    request: CaptionRequest,
+    expected_epoch: Option<String>,
+) -> Result<String, String> {
     let (model, language) = (request.model.clone(), request.language.clone());
-    start_speech(app, SpeechRequest { model, language, refresh: false, captions: Some(request) }, expected_epoch.as_deref())
+    start_speech(
+        app,
+        SpeechRequest { model, language, refresh: false, captions: Some(request) },
+        expected_epoch.as_deref(),
+    )
 }
 
 #[tauri::command]
-pub fn start_transcript(app: AppHandle, model: String, language: String, refresh: bool, expected_epoch: Option<String>) -> Result<String, String> {
+pub fn start_transcript(
+    app: AppHandle,
+    model: String,
+    language: String,
+    refresh: bool,
+    expected_epoch: Option<String>,
+) -> Result<String, String> {
     start_speech(app, SpeechRequest { model, language, refresh, captions: None }, expected_epoch.as_deref())
 }
 
@@ -282,7 +305,8 @@ fn start_speech(app: AppHandle, request: SpeechRequest, expected_epoch: Option<&
         let mut rep = Reporter::new(&worker_app, &job_id, kind, label.into());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_speech_job(&host, assets, &request, &cancel, &mut rep)
-        })).unwrap_or_else(|p| Err(anyhow::anyhow!("Speech recognition crashed: {}", panic_text(&p))));
+        }))
+        .unwrap_or_else(|p| Err(anyhow::anyhow!("Speech recognition crashed: {}", panic_text(&p))));
         rep.finish(result, cancel.load(Ordering::Relaxed));
         unregister(&worker_app, &job_id);
     });
@@ -323,10 +347,21 @@ fn run_speech_job(
     let Some(captions) = &request.captions else {
         return Ok(Some(count_label(derived.words.len(), "word", "words")));
     };
-    anyhow::ensure!(derived.untranscribed.is_empty(), "A clip was added during recognition. Generate the captions again.");
+    anyhow::ensure!(
+        derived.untranscribed.is_empty(),
+        "A clip was added during recognition. Generate the captions again."
+    );
     rep.progress(1.0, Some("Grouping captions"));
-    let (cmd, count) = transcript::caption_edit(&derived.words, &view.project, captions.style.clone(), captions.grouping())?;
-    current.host.session.edit(vec![cmd], None, capopen_session::Expect { revision: None, speech_layout_key: Some(view.speech_layout_key) })
+    let (cmd, count) =
+        transcript::caption_edit(&derived.words, &view.project, captions.style.clone(), captions.grouping())?;
+    current
+        .host
+        .session
+        .edit(
+            vec![cmd],
+            None,
+            capopen_session::Expect { revision: None, speech_layout_key: Some(view.speech_layout_key) },
+        )
         .context("Applying captions")?;
     // Not the frontend's own edit: send it the new timeline, as for an agent's edits.
     if let Ok(snap) = current.snapshot(Vec::new()) {
@@ -425,7 +460,10 @@ fn check_cancelled(cancel: &AtomicBool) -> anyhow::Result<()> {
 }
 
 fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into())
+    p.downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown error".into())
 }
 #[cfg(test)]
 mod tests {
@@ -436,16 +474,30 @@ mod tests {
         for (quality, crf) in [("high", 17), ("recommended", 21), ("small", 26)] {
             let request: ExportRequest = serde_json::from_value(serde_json::json!({
                 "resolution": 1080, "fps": 30, "quality": quality
-            })).unwrap();
+            }))
+            .unwrap();
             assert_eq!(request.options().crf, crf);
             assert!(request.options().replace_existing);
         }
     }
 
     fn request(max_words: Option<u8>, max_chars: Option<u8>) -> CaptionRequest {
-        CaptionRequest { model: "small".into(), language: "cs".into(), max_words, max_chars,
-            style: TextStyle { font_family: Some("Inter".into()), font_size: 95.0, color: "#ffffff".into(),
-                bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None, max_width: None } }
+        CaptionRequest {
+            model: "small".into(),
+            language: "cs".into(),
+            max_words,
+            max_chars,
+            style: TextStyle {
+                font_family: Some("Inter".into()),
+                font_size: 95.0,
+                color: "#ffffff".into(),
+                bold: false,
+                stroke_width: 7.5,
+                stroke_color: "#000000".into(),
+                background: None,
+                max_width: None,
+            },
+        }
     }
 
     #[test]

@@ -24,7 +24,9 @@ fn run_key(id: &str) -> String {
 impl ProjectSession {
     pub(crate) fn register_job<T>(&self, run: Option<&str>, register: impl FnOnce() -> Result<T>) -> Result<T> {
         let inner = self.inner.lock().unwrap();
-        if let Some(run) = run { inner.owns_run(run)?; }
+        if let Some(run) = run {
+            inner.owns_run(run)?;
+        }
         register()
     }
 
@@ -52,20 +54,10 @@ impl ProjectSession {
             .as_ref()
             .context("READ_ONLY: no writer")?
             .checkpoint(serde_json::to_value(checkpoint).context("Serializing checkpoint")?)?;
-        let info = RunInfo {
-            run_id: run_id.clone(),
-            label,
-        };
-        inner.run = Some(Run {
-            info: info.clone(),
-            touched: Instant::now(),
-            ending: None,
-        });
+        let info = RunInfo { run_id: run_id.clone(), label };
+        inner.run = Some(Run { info: info.clone(), touched: Instant::now(), ending: None });
         inner.emit(SessionEvent::Run(Some(info)));
-        Ok(RunResult {
-            run_id,
-            stamp: inner.stamp(),
-        })
+        Ok(RunResult { run_id, stamp: inner.stamp() })
     }
 
     pub fn apply_edits(
@@ -79,10 +71,7 @@ impl ProjectSession {
         inner.writable()?;
         inner.not_stopped(run_id)?;
         inner.touch()?;
-        ensure!(
-            !request_id.is_empty(),
-            "INVALID_REQUEST: request_id cannot be empty"
-        );
+        ensure!(!request_id.is_empty(), "INVALID_REQUEST: request_id cannot be empty");
         inner.owns_run(run_id)?;
         ensure!(
             inner.run.as_ref().is_some_and(|run| run.ending.is_none()),
@@ -102,14 +91,7 @@ impl ProjectSession {
         inner.check_expect(&expect)?;
         let origin = inner.run_origin()?;
         let result = inner.apply(cmds, Some(run_key(run_id)), origin)?;
-        inner.requests.insert(
-            key,
-            Request {
-                content,
-                expect,
-                result: result.clone(),
-            },
-        );
+        inner.requests.insert(key, Request { content, expect, result: result.clone() });
         inner.flush()?;
         Ok(result)
     }
@@ -121,10 +103,7 @@ impl ProjectSession {
         inner.touch()?;
         inner.owns_run(run_id)?;
         inner.finish(action)?;
-        Ok(RunResult {
-            run_id: run_id.into(),
-            stamp: inner.stamp(),
-        })
+        Ok(RunResult { run_id: run_id.into(), stamp: inner.stamp() })
     }
 
     pub fn stop_run(&self) -> Result<RunResult> {
@@ -134,20 +113,11 @@ impl ProjectSession {
     pub(crate) fn stop_run_with(&self, revoked: impl FnOnce(&str)) -> Result<RunResult> {
         let mut inner = self.inner.lock().unwrap();
         inner.writable()?;
-        let run_id = inner
-            .run
-            .as_ref()
-            .context("INVALID_RUN: no open run")?
-            .info
-            .run_id
-            .clone();
+        let run_id = inner.run.as_ref().context("INVALID_RUN: no open run")?.info.run_id.clone();
         inner.stopped_runs.insert(run_id.clone());
         revoked(&run_id);
         inner.finish(EndAction::Keep)?;
-        Ok(RunResult {
-            run_id,
-            stamp: inner.stamp(),
-        })
+        Ok(RunResult { run_id, stamp: inner.stamp() })
     }
 
     pub fn undo_run(&self, run_id: &str) -> Result<RunResult> {
@@ -160,45 +130,29 @@ impl ProjectSession {
         inner.editor.undo();
         inner.changed(Origin::Undo);
         inner.flush()?;
-        Ok(RunResult {
-            run_id: run_id.into(),
-            stamp: inner.stamp(),
-        })
+        Ok(RunResult { run_id: run_id.into(), stamp: inner.stamp() })
     }
 }
 
 impl Inner {
     fn not_stopped(&self, id: &str) -> Result<()> {
-        ensure!(
-            !self.stopped_runs.contains(id),
-            "RUN_STOPPED: run was stopped by the user"
-        );
+        ensure!(!self.stopped_runs.contains(id), "RUN_STOPPED: run was stopped by the user");
         Ok(())
     }
 
     fn owns_run(&self, id: &str) -> Result<()> {
         self.not_stopped(id)?;
-        ensure!(
-            self.run.as_ref().is_some_and(|r| r.info.run_id == id),
-            "INVALID_RUN: run is not open or has ended"
-        );
+        ensure!(self.run.as_ref().is_some_and(|r| r.info.run_id == id), "INVALID_RUN: run is not open or has ended");
         Ok(())
     }
 
     fn run_origin(&self) -> Result<Origin> {
         let info = &self.run.as_ref().context("INVALID_RUN: no open run")?.info;
-        Ok(Origin::Run {
-            run_id: info.run_id.clone(),
-            label: info.label.clone(),
-        })
+        Ok(Origin::Run { run_id: info.run_id.clone(), label: info.label.clone() })
     }
 
     pub(super) fn expire(&mut self) -> Result<()> {
-        if self
-            .run
-            .as_ref()
-            .is_some_and(|r| r.touched.elapsed() >= self.timeout)
-        {
+        if self.run.as_ref().is_some_and(|r| r.touched.elapsed() >= self.timeout) {
             self.finish(EndAction::Keep)?;
         }
         Ok(())
@@ -215,15 +169,13 @@ impl Inner {
     pub(super) fn finish(&mut self, action: EndAction) -> Result<()> {
         let run = self.run.as_mut().context("INVALID_RUN: no open run")?;
         let action = *run.ending.get_or_insert(action);
-        if matches!(action, EndAction::Discard) && self.editor.drop_last(&run_key(&run.info.run_id))
-        {
+        if matches!(action, EndAction::Discard) && self.editor.drop_last(&run_key(&run.info.run_id)) {
             self.changed(self.run_origin()?);
         }
         self.editor.seal();
         self.flush()?;
         // On failure leave the marker and the run available for another finish attempt.
-        fs::remove_file(storage::sidecar(&self.path, ".checkpoint.json"))
-            .context("Removing run checkpoint")?;
+        fs::remove_file(storage::sidecar(&self.path, ".checkpoint.json")).context("Removing run checkpoint")?;
         self.run = None;
         self.requests.clear();
         self.emit(SessionEvent::Run(None));

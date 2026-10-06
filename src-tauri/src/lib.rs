@@ -9,13 +9,13 @@ mod transcripts;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, OnceLock};
 
+use capopen_engine::Project;
 use capopen_engine::edit::{EditCmd, new_id};
 use capopen_engine::media::probe;
-use capopen_engine::Project;
-use capopen_session::{Expect, Origin, host::Host, RecoveryAction, SessionEvent};
+use capopen_session::{Expect, Origin, RecoveryAction, SessionEvent, host::Host};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -56,7 +56,8 @@ pub struct Snapshot {
 
 fn snapshot_project<S: serde::Serializer>(project: &Project, serializer: S) -> Result<S::Ok, S::Error> {
     let mut value = serde_json::to_value(project).map_err(serde::ser::Error::custom)?;
-    value["canvas"]["safeArea"] = serde_json::to_value(project.canvas.safe_area()).map_err(serde::ser::Error::custom)?;
+    value["canvas"]["safeArea"] =
+        serde_json::to_value(project.canvas.safe_area()).map_err(serde::ser::Error::custom)?;
     value.serialize(serializer)
 }
 
@@ -98,7 +99,10 @@ struct OpenSession {
     stopped: Arc<AtomicBool>,
 }
 
-fn lock_session<'a>(session: &'a Mutex<OpenSession>, expected_epoch: Option<&str>) -> CmdResult<std::sync::MutexGuard<'a, OpenSession>> {
+fn lock_session<'a>(
+    session: &'a Mutex<OpenSession>,
+    expected_epoch: Option<&str>,
+) -> CmdResult<std::sync::MutexGuard<'a, OpenSession>> {
     let current = session.lock().unwrap();
     if let Some(epoch) = expected_epoch {
         if current.host.session.state().map_err(err)?.stamp.session_epoch != epoch {
@@ -114,7 +118,16 @@ impl OpenSession {
         let host = Arc::new(Host::new(store::open(&path, tx)?, store::cache_dir())?);
         #[cfg(unix)]
         let listener = Some(capopen_mcp::ipc::Listener::start(host.clone())?);
-        Ok((Self { host, #[cfg(unix)] listener, path, stopped: Arc::new(AtomicBool::new(false)) }, rx))
+        Ok((
+            Self {
+                host,
+                #[cfg(unix)]
+                listener,
+                path,
+                stopped: Arc::new(AtomicBool::new(false)),
+            },
+            rx,
+        ))
     }
 
     fn close_ipc(&mut self) {
@@ -125,9 +138,12 @@ impl OpenSession {
     fn prepare_switch(&mut self) -> anyhow::Result<()> {
         self.close_ipc();
         if let Err(error) = self.host.session.disconnect() {
-            #[cfg(unix)] {
-                self.listener = Some(capopen_mcp::ipc::Listener::start(self.host.clone())
-                    .map_err(|restore| anyhow::anyhow!("{error:#}; restoring IPC failed: {restore:#}"))?);
+            #[cfg(unix)]
+            {
+                self.listener = Some(
+                    capopen_mcp::ipc::Listener::start(self.host.clone())
+                        .map_err(|restore| anyhow::anyhow!("{error:#}; restoring IPC failed: {restore:#}"))?,
+                );
             }
             return Err(error);
         }
@@ -161,9 +177,13 @@ impl OpenSession {
                 };
                 let state = app.state::<AppState>();
                 let current = state.session.lock().unwrap();
-                if stopped.load(Ordering::Acquire) || !session.ptr_eq(&Arc::downgrade(&current.host)) { break; }
+                if stopped.load(Ordering::Acquire) || !session.ptr_eq(&Arc::downgrade(&current.host)) {
+                    break;
+                }
                 match event {
-                    SessionEvent::TranscriptsChanged => { app.emit("transcripts-changed", ()).ok(); }
+                    SessionEvent::TranscriptsChanged => {
+                        app.emit("transcripts-changed", ()).ok();
+                    }
                     SessionEvent::Changed { origin, .. } => {
                         if let Ok(snap) = current.snapshot(Vec::new()) {
                             state.publish_project(&snap.project);
@@ -173,10 +193,14 @@ impl OpenSession {
                             }
                         }
                     }
-                    SessionEvent::Saved { revision, error } => { app.emit("saved", store::SavedEvent { revision, error }).ok(); }
+                    SessionEvent::Saved { revision, error } => {
+                        app.emit("saved", store::SavedEvent { revision, error }).ok();
+                    }
                     SessionEvent::Run(run) => {
                         app.emit("run-changed", run.map(|run| run.label)).ok();
-                        if let Ok(snap) = current.snapshot(Vec::new()) { app.emit("project-changed", snap).ok(); }
+                        if let Ok(snap) = current.snapshot(Vec::new()) {
+                            app.emit("project-changed", snap).ok();
+                        }
                     }
                 }
             }
@@ -188,7 +212,9 @@ impl Drop for OpenSession {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
         self.close_ipc();
-        if let Err(error) = self.host.retire() { log::error!("{error:#}"); }
+        if let Err(error) = self.host.retire() {
+            log::error!("{error:#}");
+        }
     }
 }
 
@@ -204,30 +230,51 @@ impl AppState {
         self.engine.send(Msg::Project(Arc::new(project.clone())));
     }
 
-    fn apply_batch(&self, cmds: Vec<EditCmd>, coalesce: Option<String>, expect: Expect, expected_epoch: Option<&str>) -> CmdResult<Snapshot> {
+    fn apply_batch(
+        &self,
+        cmds: Vec<EditCmd>,
+        coalesce: Option<String>,
+        expect: Expect,
+        expected_epoch: Option<&str>,
+    ) -> CmdResult<Snapshot> {
         let current = lock_session(&self.session, expected_epoch)?;
         let result = current.host.session.edit(cmds, coalesce, expect).map_err(err)?;
         current.snapshot(result.outcome.select)
     }
 
-    fn asset_preview<T: Clone>(&self, asset_id: &str, cache: &Mutex<HashMap<String, T>>, decode: impl FnOnce(&capopen_engine::model::Asset) -> anyhow::Result<Option<T>>) -> CmdResult<Option<T>> {
+    fn asset_preview<T: Clone>(
+        &self,
+        asset_id: &str,
+        cache: &Mutex<HashMap<String, T>>,
+        decode: impl FnOnce(&capopen_engine::model::Asset) -> anyhow::Result<Option<T>>,
+    ) -> CmdResult<Option<T>> {
         let (asset, lock) = {
             let current = self.session.lock().unwrap();
-            let Some(asset) = current.host.session.state().map_err(err)?.project.asset(asset_id).cloned() else { return Ok(None) };
+            let Some(asset) = current.host.session.state().map_err(err)?.project.asset(asset_id).cloned() else {
+                return Ok(None);
+            };
             let lock = self.preview_locks.lock().unwrap().entry(asset_id.into()).or_default().clone();
             (asset, lock)
         };
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         {
             let _current = self.session.lock().unwrap();
-            if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) { return Ok(None); }
-            if let Some(value) = cache.lock().unwrap().get(asset_id) { return Ok(Some(value.clone())); }
+            if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) {
+                return Ok(None);
+            }
+            if let Some(value) = cache.lock().unwrap().get(asset_id) {
+                return Ok(Some(value.clone()));
+            }
         }
         let value = decode(&asset).map_err(err)?;
         let _current = self.session.lock().unwrap();
         // Removal or replacement invalidates in-flight decodes, even if the ID is reused.
-        if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) { return Ok(None); }
-        if let Some(value) = &value { cache.lock().unwrap().insert(asset_id.into(), value.clone()); }
+        if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) {
+            return Ok(None);
+        }
+        if let Some(value) = &value {
+            cache.lock().unwrap().insert(asset_id.into(), value.clone());
+        }
         Ok(value)
     }
 
@@ -262,13 +309,37 @@ fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
 }
 
 #[tauri::command]
-fn apply_edit(state: State<'_, AppState>, cmd: EditCmd, coalesce: Option<String>, expected_revision: Option<u64>, expected_speech_layout_key: Option<String>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
-    state.apply_batch(vec![cmd], coalesce, Expect { revision: expected_revision, speech_layout_key: expected_speech_layout_key }, expected_epoch.as_deref())
+fn apply_edit(
+    state: State<'_, AppState>,
+    cmd: EditCmd,
+    coalesce: Option<String>,
+    expected_revision: Option<u64>,
+    expected_speech_layout_key: Option<String>,
+    expected_epoch: Option<String>,
+) -> CmdResult<Snapshot> {
+    state.apply_batch(
+        vec![cmd],
+        coalesce,
+        Expect { revision: expected_revision, speech_layout_key: expected_speech_layout_key },
+        expected_epoch.as_deref(),
+    )
 }
 
 #[tauri::command]
-fn apply_edits(state: State<'_, AppState>, cmds: Vec<EditCmd>, coalesce: Option<String>, expected_revision: Option<u64>, expected_speech_layout_key: Option<String>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
-    state.apply_batch(cmds, coalesce, Expect { revision: expected_revision, speech_layout_key: expected_speech_layout_key }, expected_epoch.as_deref())
+fn apply_edits(
+    state: State<'_, AppState>,
+    cmds: Vec<EditCmd>,
+    coalesce: Option<String>,
+    expected_revision: Option<u64>,
+    expected_speech_layout_key: Option<String>,
+    expected_epoch: Option<String>,
+) -> CmdResult<Snapshot> {
+    state.apply_batch(
+        cmds,
+        coalesce,
+        Expect { revision: expected_revision, speech_layout_key: expected_speech_layout_key },
+        expected_epoch.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -330,7 +401,12 @@ async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option
     let snapshot = if assets.is_empty() {
         lock_session(&state.session, expected_epoch.as_deref())?.snapshot(Vec::new())?
     } else {
-        let snap = state.apply_batch(vec![EditCmd::AddAssets { assets }], None, Expect::default(), expected_epoch.as_deref())?;
+        let snap = state.apply_batch(
+            vec![EditCmd::AddAssets { assets }],
+            None,
+            Expect::default(),
+            expected_epoch.as_deref(),
+        )?;
         jobs::ensure_audio(&state, &snap.project);
         snap
     };
@@ -342,7 +418,9 @@ async fn thumbnail(app: AppHandle, asset_id: String) -> CmdResult<Option<String>
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         state.asset_preview(&asset_id, &state.thumbs, thumbs::thumbnail)
-    }).await.map_err(err)?
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
@@ -392,13 +470,17 @@ pub struct FontFamilies {
 
 #[tauri::command]
 fn list_fonts(state: State<'_, AppState>) -> FontFamilies {
-    state.fonts.get_or_init(|| {
-        use capopen_engine::text::{BUNDLED_FONT_FAMILIES, TextRenderer};
-        let mut renderer = state.bounds_text.lock().unwrap();
-        let families = renderer.get_or_insert_with(TextRenderer::new).font_families();
-        let (bundled, system) = families.into_iter().partition(|name| BUNDLED_FONT_FAMILIES.contains(&name.as_str()));
-        FontFamilies { bundled, system }
-    }).clone()
+    state
+        .fonts
+        .get_or_init(|| {
+            use capopen_engine::text::{BUNDLED_FONT_FAMILIES, TextRenderer};
+            let mut renderer = state.bounds_text.lock().unwrap();
+            let families = renderer.get_or_insert_with(TextRenderer::new).font_families();
+            let (bundled, system) =
+                families.into_iter().partition(|name| BUNDLED_FONT_FAMILIES.contains(&name.as_str()));
+            FontFamilies { bundled, system }
+        })
+        .clone()
 }
 
 #[tauri::command]
@@ -415,12 +497,19 @@ fn new_project(state: State<'_, AppState>, width: u32, height: u32) -> CmdResult
 fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot> {
     let path = std::fs::canonicalize(path).map_err(err)?;
     let mut current = state.session.lock().unwrap();
-    if current.path == path { return current.snapshot(Vec::new()); }
+    if current.path == path {
+        return current.snapshot(Vec::new());
+    }
     state.replace_project(&mut current, path)
 }
 
 #[tauri::command]
-fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest, expected_epoch: Option<String>) -> CmdResult<String> {
+fn start_export(
+    app: AppHandle,
+    path: String,
+    options: jobs::ExportRequest,
+    expected_epoch: Option<String>,
+) -> CmdResult<String> {
     jobs::start_export(&app, PathBuf::from(path), options, expected_epoch.as_deref())
 }
 
@@ -455,8 +544,13 @@ async fn layer_bounds(app: AppHandle, t_us: i64) -> CmdResult<Vec<LayerBounds>> 
         let state = app.state::<AppState>();
         let mut text = state.bounds_text.lock().unwrap();
         let text = text.get_or_insert_with(capopen_engine::text::TextRenderer::new);
-        capopen_engine::render::layer_bounds(&project, t_us, text).into_iter().map(|(clip_id, corners)| LayerBounds { clip_id, corners }).collect()
-    }).await.map_err(err)
+        capopen_engine::render::layer_bounds(&project, t_us, text)
+            .into_iter()
+            .map(|(clip_id, corners)| LayerBounds { clip_id, corners })
+            .collect()
+    })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -464,7 +558,9 @@ async fn filmstrip(app: AppHandle, asset_id: String) -> CmdResult<Option<Filmstr
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         state.asset_preview(&asset_id, &state.filmstrips, thumbs::filmstrip)
-    }).await.map_err(err)?
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
@@ -477,9 +573,7 @@ fn cancel_job(state: State<'_, AppState>, id: String) {
 /// The most recent project, or a new one when it cannot be opened, e.g. while an agent edits it.
 fn initial_project() -> anyhow::Result<(OpenSession, Receiver<SessionEvent>)> {
     if let Some(recent) = store::list().first() {
-        let opened = std::fs::canonicalize(&recent.path)
-            .map_err(anyhow::Error::from)
-            .and_then(OpenSession::open);
+        let opened = std::fs::canonicalize(&recent.path).map_err(anyhow::Error::from).and_then(OpenSession::open);
         match opened {
             Ok(found) => return Ok(found),
             Err(error) => log::warn!("Starting with a new project: {error:#}"),
@@ -492,7 +586,10 @@ fn initial_project() -> anyhow::Result<(OpenSession, Receiver<SessionEvent>)> {
 }
 
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")).init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
+    )
+    .init();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -501,7 +598,8 @@ pub fn run() {
             let (session, events) = initial_project()?;
             let project = session.host.session.state()?.project;
             let cache_dir = store::cache_dir();
-            let engine = Engine::start(app.handle().clone(), server.clone(), Arc::new(project.clone()), cache_dir.clone());
+            let engine =
+                Engine::start(app.handle().clone(), server.clone(), Arc::new(project.clone()), cache_dir.clone());
             let state = AppState {
                 app: app.handle().clone(),
                 session: Mutex::new(session),
@@ -572,7 +670,9 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 let mut current = state.session.lock().unwrap();
                 current.close_ipc();
-                if let Err(error) = current.host.retire() { log::error!("{error:#}"); }
+                if let Err(error) = current.host.retire() {
+                    log::error!("{error:#}");
+                }
                 current.stopped.store(true, Ordering::Release);
                 if let Err(error) = current.host.session.disconnect() {
                     log::error!("Cannot save project on exit: {error:#}");
@@ -595,7 +695,10 @@ mod ipc_lifecycle_tests {
         project.canvas.width = 1080;
         project.canvas.height = 1920;
         let snapshot = serde_json::to_value(View { project: &project }).unwrap();
-        assert_eq!(snapshot["project"]["canvas"]["safeArea"], serde_json::json!({"left":60.0,"top":250.0,"right":900.0,"bottom":1420.0}));
+        assert_eq!(
+            snapshot["project"]["canvas"]["safeArea"],
+            serde_json::json!({"left":60.0,"top":250.0,"right":900.0,"bottom":1420.0})
+        );
         assert!(serde_json::to_value(&project).unwrap()["canvas"].get("safeArea").is_none());
         project.canvas.height = 1080;
         assert!(serde_json::to_value(View { project: &project }).unwrap()["project"]["canvas"]["safeArea"].is_null());
@@ -652,7 +755,11 @@ mod ipc_lifecycle_tests {
         let asset = probe(&image, new_id()).unwrap();
         let apply = || -> CmdResult<()> {
             let current = lock_session(&session, Some(&epoch))?;
-            current.host.session.edit(vec![EditCmd::AddAssets { assets: vec![asset] }], None, Expect::default()).map_err(err)?;
+            current
+                .host
+                .session
+                .edit(vec![EditCmd::AddAssets { assets: vec![asset] }], None, Expect::default())
+                .map_err(err)?;
             Ok(())
         };
         assert_eq!(apply().unwrap_err(), "EPOCH_CHANGED: another project is open");
@@ -675,10 +782,13 @@ mod ipc_lifecycle_tests {
         let (next, _) = OpenSession::open(next_path).unwrap();
         let (release, wait) = mpsc::channel();
         let stamp = current.host.session.state().unwrap().stamp;
-        current.host.start_job("client", None, "test", stamp, move |_, _| {
-            wait.recv_timeout(Duration::from_secs(5)).unwrap();
-            Ok(serde_json::json!({}))
-        }).unwrap();
+        current
+            .host
+            .start_job("client", None, "test", stamp, move |_, _| {
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(serde_json::json!({}))
+            })
+            .unwrap();
         let began = Instant::now();
         current.prepare_switch().unwrap();
         current = next;
@@ -689,8 +799,11 @@ mod ipc_lifecycle_tests {
         assert!(locked, "old project lock must survive until work ends");
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_ok() { break; }
-            assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(10));
+            if capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_ok() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
         }
         drop(current);
     }

@@ -91,13 +91,7 @@ pub enum Origin {
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     TranscriptsChanged,
-    Changed {
-        revision: u64,
-        origin: Origin,
-    },
+    Changed { revision: u64, origin: Origin },
     Run(Option<RunInfo>),
-    Saved {
-        revision: u64,
-        error: Option<String>,
-    },
+    Saved { revision: u64, error: Option<String> },
 }

@@ -24,24 +24,15 @@ pub struct SilenceParams {
 
 impl Default for SilenceParams {
     fn default() -> Self {
-        Self {
-            threshold_db: None,
-            min_silence_us: 400_000,
-            pad_us: 120_000,
-        }
+        Self { threshold_db: None, min_silence_us: 400_000, pad_us: 120_000 }
     }
 }
 
 pub(crate) fn open_pcm(asset: &Asset, cache: &Path) -> Result<Pcm> {
     ensure!(has_audio(asset), "Asset {} has no audio", asset.name);
     let path = ensure_pcm(cache, asset, |_| {}).context("Preparing analysis PCM")?;
-    let size = std::fs::metadata(&path)
-        .context("Reading PCM metadata")?
-        .len();
-    ensure!(
-        size > 0 && size % (CHANNELS * 4) as u64 == 0,
-        "PCM must contain complete stereo f32 frames"
-    );
+    let size = std::fs::metadata(&path).context("Reading PCM metadata")?.len();
+    ensure!(size > 0 && size % (CHANNELS * 4) as u64 == 0, "PCM must contain complete stereo f32 frames");
     Pcm::open(&path).with_context(|| format!("Mapping PCM {}", path.display()))
 }
 
@@ -88,10 +79,7 @@ pub fn silences(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Ve
 }
 
 fn quiet_ranges(samples: &[f32], params: SilenceParams) -> Result<Vec<Range>> {
-    ensure!(
-        params.min_silence_us > 0 && params.pad_us >= 0,
-        "Invalid silence duration or padding"
-    );
+    ensure!(params.min_silence_us > 0 && params.pad_us >= 0, "Invalid silence duration or padding");
     if let Some(threshold) = params.threshold_db {
         ensure!(threshold.is_finite(), "Silence threshold must be finite");
     }
@@ -116,10 +104,7 @@ fn quiet_ranges(samples: &[f32], params: SilenceParams) -> Result<Vec<Range>> {
             let padded_start = from.saturating_add(params.pad_us);
             let padded_end = end.saturating_sub(params.pad_us);
             if end - from >= params.min_silence_us && padded_start < padded_end {
-                ranges.push(Range {
-                    start_us: padded_start,
-                    end_us: padded_end,
-                });
+                ranges.push(Range { start_us: padded_start, end_us: padded_end });
             }
         }
     }
@@ -156,21 +141,12 @@ mod tests {
             *sample = (seed as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32 * 0.001;
         }
         let gaps = quiet_ranges(&samples, SilenceParams::default())?;
-        assert_eq!(
-            gaps,
-            vec![Range {
-                start_us: 1_120_000,
-                end_us: 1_880_000
-            }]
-        );
+        assert_eq!(gaps, vec![Range { start_us: 1_120_000, end_us: 1_880_000 }]);
         assert!(quiet_ranges(&[0.2; 48_000], SilenceParams::default())?.is_empty());
         assert!(quiet_ranges(&[0.0; 960], SilenceParams::default())?.is_empty());
         assert_eq!(
             quiet_ranges(&vec![0.0; 96_000], SilenceParams::default())?,
-            vec![Range {
-                start_us: 120_000,
-                end_us: 880_000
-            }]
+            vec![Range { start_us: 120_000, end_us: 880_000 }]
         );
         Ok(())
     }

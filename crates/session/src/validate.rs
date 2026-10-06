@@ -8,36 +8,18 @@ use capopen_engine::{
 
 /// Structural validity; missing media is reported by media tools, not by editing.
 pub fn validate(project: &Project) -> Result<()> {
-    ensure!(
-        project.version == PROJECT_VERSION,
-        "INVALID_PROJECT: unsupported version"
-    );
+    ensure!(project.version == PROJECT_VERSION, "INVALID_PROJECT: unsupported version");
     ensure!(
         (16..=7680).contains(&project.canvas.width) && (16..=7680).contains(&project.canvas.height),
         "INVALID_PROJECT: canvas size"
     );
-    ensure!(
-        (1..=240).contains(&project.canvas.fps),
-        "INVALID_PROJECT: frame rate"
-    );
-    ensure!(
-        project.canvas.background_blur.is_finite(),
-        "INVALID_PROJECT: background blur"
-    );
+    ensure!((1..=240).contains(&project.canvas.fps), "INVALID_PROJECT: frame rate");
+    ensure!(project.canvas.background_blur.is_finite(), "INVALID_PROJECT: background blur");
     unique(project.assets.iter().map(|a| a.id.as_str()), "asset")?;
     unique(project.tracks.iter().map(|t| t.id.as_str()), "track")?;
-    unique(
-        project
-            .tracks
-            .iter()
-            .flat_map(|t| t.clips.iter().map(|c| c.id.as_str())),
-        "clip",
-    )?;
+    unique(project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.id.as_str())), "clip")?;
     ensure!(
-        project
-            .tracks
-            .first()
-            .is_some_and(|t| t.id == "main" && t.kind == TrackKind::Video),
+        project.tracks.first().is_some_and(|t| t.id == "main" && t.kind == TrackKind::Video),
         "INVALID_PROJECT: first track must be main video"
     );
     for asset in &project.assets {
@@ -52,16 +34,9 @@ pub fn validate(project: &Project) -> Result<()> {
         clips.sort_by_key(|c| c.start_us);
         let mut end = 0;
         for clip in clips {
-            ensure!(
-                clip.start_us >= end,
-                "INVALID_PROJECT: overlapping clips on {}",
-                track.id
-            );
+            ensure!(clip.start_us >= end, "INVALID_PROJECT: overlapping clips on {}", track.id);
             if track.id == "main" {
-                ensure!(
-                    clip.start_us == end,
-                    "INVALID_PROJECT: main track is magnetic and must have no gaps"
-                );
+                ensure!(clip.start_us == end, "INVALID_PROJECT: main track is magnetic and must have no gaps");
             }
             validate_clip(project, clip, track.kind)?;
             end = clip
@@ -76,58 +51,32 @@ pub fn validate(project: &Project) -> Result<()> {
 fn unique<'a>(ids: impl Iterator<Item = &'a str>, kind: &str) -> Result<()> {
     let mut seen = HashSet::new();
     for id in ids {
-        ensure!(
-            !id.is_empty() && seen.insert(id),
-            "INVALID_PROJECT: empty or duplicate {kind} id {id}"
-        );
+        ensure!(!id.is_empty() && seen.insert(id), "INVALID_PROJECT: empty or duplicate {kind} id {id}");
     }
     Ok(())
 }
 
 fn transform(value: &Transform) -> Result<()> {
     ensure!(
-        [value.x, value.y, value.scale, value.rotation, value.opacity]
-            .iter()
-            .all(|v| v.is_finite()),
+        [value.x, value.y, value.scale, value.rotation, value.opacity].iter().all(|v| v.is_finite()),
         "INVALID_PROJECT: non-finite transform"
     );
-    ensure!(
-        value.scale > 0.0 && (0.0..=1.0).contains(&value.opacity),
-        "INVALID_PROJECT: transform scale or opacity"
-    );
+    ensure!(value.scale > 0.0 && (0.0..=1.0).contains(&value.opacity), "INVALID_PROJECT: transform scale or opacity");
     Ok(())
 }
 
 fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> {
-    ensure!(
-        clip.start_us >= 0 && clip.duration_us > 0,
-        "INVALID_PROJECT: clip {} timing",
-        clip.id
-    );
+    ensure!(clip.start_us >= 0 && clip.duration_us > 0, "INVALID_PROJECT: clip {} timing", clip.id);
     match &clip.content {
-        ClipContent::Media {
-            asset_id,
-            source_in_us,
-            speed,
-            volume,
-            transform: t,
-            fade_in_us,
-            fade_out_us,
-            adjust,
-        } => {
-            let asset = project
-                .asset(asset_id)
-                .ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
+        ClipContent::Media { asset_id, source_in_us, speed, volume, transform: t, fade_in_us, fade_out_us, adjust } => {
+            let asset =
+                project.asset(asset_id).ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
             ensure!(
-                kind != TrackKind::Text
-                    && (kind != TrackKind::Video || asset.kind != AssetKind::Audio),
+                kind != TrackKind::Text && (kind != TrackKind::Video || asset.kind != AssetKind::Audio),
                 "INVALID_PROJECT: media on incompatible track"
             );
             ensure!(
-                speed.is_finite()
-                    && (0.1..=10.0).contains(speed)
-                    && volume.is_finite()
-                    && *volume >= 0.0,
+                speed.is_finite() && (0.1..=10.0).contains(speed) && volume.is_finite() && *volume >= 0.0,
                 "INVALID_PROJECT: clip {} speed/volume",
                 clip.id
             );
@@ -137,15 +86,11 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             let minimum_clip_duration_us = project.frame_duration_us().ceil();
             let tolerance = minimum_clip_duration_us * *speed as f64;
             ensure!(
-                asset.kind == AssetKind::Image
-                    || source_end <= asset.duration_us as f64 + tolerance,
+                asset.kind == AssetKind::Image || source_end <= asset.duration_us as f64 + tolerance,
                 "INVALID_PROJECT: clip {} exceeds source duration",
                 clip.id
             );
-            ensure!(
-                *fade_in_us >= 0 && *fade_out_us >= 0,
-                "INVALID_PROJECT: negative fade"
-            );
+            ensure!(*fade_in_us >= 0 && *fade_out_us >= 0, "INVALID_PROJECT: negative fade");
             ensure!(
                 [
                     adjust.exposure,
@@ -165,11 +110,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             );
             transform(t)?;
         }
-        ClipContent::Text {
-            style,
-            transform: t,
-            ..
-        } => {
+        ClipContent::Text { style, transform: t, .. } => {
             ensure!(
                 style.font_size.is_finite()
                     && style.font_size > 0.0
@@ -191,16 +132,10 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
         last_key = Some(key.t_us);
     }
     for animation in [clip.anim_in, clip.anim_out].into_iter().flatten() {
-        ensure!(
-            animation.duration_us >= 0,
-            "INVALID_PROJECT: negative animation duration"
-        );
+        ensure!(animation.duration_us >= 0, "INVALID_PROJECT: negative animation duration");
     }
     if let Some(transition) = clip.transition_in {
-        ensure!(
-            transition.duration_us >= 0,
-            "INVALID_PROJECT: negative transition duration"
-        );
+        ensure!(transition.duration_us >= 0, "INVALID_PROJECT: negative transition duration");
     }
     Ok(())
 }
@@ -208,19 +143,27 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::{edit::EditCmd, model::{Adjust, Asset}};
+    use capopen_engine::{
+        edit::EditCmd,
+        model::{Adjust, Asset},
+    };
 
     #[test]
     fn new_color_adjustments_reject_non_finite_values() {
         let mut project = Project::new("color validation");
         project.assets.push(Asset {
-            id: "ramp".into(), name: "Ramp".into(), path: "ramp.ppm".into(),
-            kind: AssetKind::Image, duration_us: 0, width: 256, height: 16,
-            fps: 0.0, has_audio: false, rotation: 0,
+            id: "ramp".into(),
+            name: "Ramp".into(),
+            path: "ramp.ppm".into(),
+            kind: AssetKind::Image,
+            duration_us: 0,
+            width: 256,
+            height: 16,
+            fps: 0.0,
+            has_audio: false,
+            rotation: 0,
         });
-        project.apply(EditCmd::AddClip {
-            asset_id: "ramp".into(), start_us: None, track_id: None,
-        }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "ramp".into(), start_us: None, track_id: None }).unwrap();
         validate(&project).unwrap();
         for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, 0.5, 1.0] {
             for candidate in [

@@ -42,9 +42,10 @@ const FONT_DATA: &[(&str, &[u8])] = embed_fonts![
 ];
 
 static BUNDLED_FONTS: std::sync::LazyLock<Vec<&'static [u8]>> = std::sync::LazyLock::new(|| {
-    FONT_MANIFEST.iter().map(|face| {
-        FONT_DATA.iter().find(|(file, _)| *file == face.file).expect("manifest font is embedded").1
-    }).collect()
+    FONT_MANIFEST
+        .iter()
+        .map(|face| FONT_DATA.iter().find(|(file, _)| *file == face.file).expect("manifest font is embedded").1)
+        .collect()
 });
 
 /// Text without a chosen font uses this bundled family, so a project looks the same on every machine.
@@ -104,7 +105,9 @@ impl TextRenderer {
         buffer.set_text("A", &Attrs::new().family(family).weight(Weight::BOLD), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         let font = buffer.layout_runs().flat_map(|run| run.glyphs.iter()).map(|glyph| glyph.font_id).next();
-        let own = font.and_then(|id| self.fonts.db().face(id)).is_some_and(|face| face.families.iter().any(|(n, _)| n == name));
+        let own = font
+            .and_then(|id| self.fonts.db().face(id))
+            .is_some_and(|face| face.families.iter().any(|(n, _)| n == name));
         self.bold.insert(name.to_owned(), own);
         own
     }
@@ -162,13 +165,18 @@ impl TextRenderer {
             for glyph in run.glyphs {
                 let offset = ((pad - x0) as f32 * scale, (run.line_y + pad as f32) * scale);
                 let physical = glyph.physical(offset, scale);
-                self.swash.with_pixels(&mut self.fonts, physical.cache_key, Color::rgb(255, 255, 255), |x, y, color| {
-                    let (px, py) = (x + physical.x, y + physical.y);
-                    if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
-                        let i = py as usize * w + px as usize;
-                        fill[i] = fill[i].max(color.a());
-                    }
-                });
+                self.swash.with_pixels(
+                    &mut self.fonts,
+                    physical.cache_key,
+                    Color::rgb(255, 255, 255),
+                    |x, y, color| {
+                        let (px, py) = (x + physical.x, y + physical.y);
+                        if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                            let i = py as usize * w + px as usize;
+                            fill[i] = fill[i].max(color.a());
+                        }
+                    },
+                );
             }
         }
 
@@ -262,8 +270,16 @@ mod tests {
     const CZECH: &str = "Příliš žluťoučký kůň ěščřžýáíéúůťďň ĚŠČŘŽÝÁÍÉÚŮŤĎŇ";
 
     fn style(family: &str) -> TextStyle {
-        TextStyle { font_family: Some(family.into()), font_size: 95.0, color: "#ffffff".into(),
-            bold: false, stroke_width: 7.5, stroke_color: "#000000".into(), background: None, max_width: None }
+        TextStyle {
+            font_family: Some(family.into()),
+            font_size: 95.0,
+            color: "#ffffff".into(),
+            bold: false,
+            stroke_width: 7.5,
+            stroke_color: "#000000".into(),
+            background: None,
+            max_width: None,
+        }
     }
 
     #[test]

@@ -19,13 +19,16 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use capopen_engine::edit::new_id;
-use capopen_session::{host::Host, hash::{FNV_OFFSET, hash_bytes}};
+use capopen_session::{
+    hash::{FNV_OFFSET, hash_bytes},
+    host::Host,
+};
 use rmcp::model::CallToolResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::tools::{Access, Backend, Client, tool_error};
 use crate::limits::MAX_LINE_BYTES;
+use crate::tools::{Access, Backend, Client, tool_error};
 mod security;
 mod wire;
 mod workers;
@@ -104,26 +107,15 @@ impl Listener {
 
     pub fn at(host: Arc<Host>, path: PathBuf) -> Result<Self> {
         let project = host.session.locked_path()?;
-        private_directory(
-            path.parent()
-                .context("IPC_UNAVAILABLE: no socket directory")?,
-        )?;
+        private_directory(path.parent().context("IPC_UNAVAILABLE: no socket directory")?)?;
         remove(&path)?;
         remove(&path.with_extension("token"))?;
         let listener = UnixListener::bind(&path).context("IPC_UNAVAILABLE: binding socket")?;
-        let mut owner = Self {
-            path,
-            stop: Arc::default(),
-            connections: Arc::default(),
-            worker: None,
-        };
+        let mut owner = Self { path, stop: Arc::default(), connections: Arc::default(), worker: None };
         fs::set_permissions(&owner.path, Permissions::from_mode(0o600))?;
         let mut random = [0u8; 32];
         File::open("/dev/urandom")?.read_exact(&mut random)?;
-        let token = random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
+        let token = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let mut token_file = security::create_token(&owner.path.with_extension("token"))?;
         token_file.write_all(token.as_bytes())?;
         listener.set_nonblocking(true)?;
@@ -139,23 +131,23 @@ impl Listener {
                                 Ok((mut stream, _)) => {
                                     if connections.lock().unwrap().len() >= MAX_CONNECTIONS {
                                         let _ = stream.set_write_timeout(Some(ACCEPT_INTERVAL));
-                                        let _ = send(&mut stream, &json!({"ok":false,"error":"IPC_BUSY: connection limit reached"}));
+                                        let _ = send(
+                                            &mut stream,
+                                            &json!({"ok":false,"error":"IPC_BUSY: connection limit reached"}),
+                                        );
                                         continue;
                                     }
                                     let id = new_id();
                                     let copy = match stream.try_clone() {
                                         Ok(copy) => copy,
                                         Err(error) => {
-                                            eprintln!(
-                                                "IPC_UNAVAILABLE: tracking connection: {error}"
-                                            );
+                                            eprintln!("IPC_UNAVAILABLE: tracking connection: {error}");
                                             continue;
                                         }
                                     };
                                     connections.lock().unwrap().insert(id.clone(), copy);
                                     let connections = connections.clone();
-                                    let (host, project, token) =
-                                        (host.clone(), project.clone(), token.clone());
+                                    let (host, project, token) = (host.clone(), project.clone(), token.clone());
                                     scope.spawn(move || {
                                         if let Err(e) = connection(stream, host, &project, &token) {
                                             eprintln!("IPC_CLIENT: {e:#}");
@@ -203,15 +195,18 @@ fn connection(mut stream: UnixStream, host: Arc<Host>, project: &Path, token: &s
     security::peer(&stream)?;
     stream.set_write_timeout(Some(HELLO_TIMEOUT))?;
     let mut reader = BufReader::new(stream.try_clone()?);
-    let hello = receive::<Hello>(&mut reader, MAX_HELLO_BYTES, Some(Instant::now() + HELLO_TIMEOUT))
-        .and_then(|hello| {
+    let hello =
+        receive::<Hello>(&mut reader, MAX_HELLO_BYTES, Some(Instant::now() + HELLO_TIMEOUT)).and_then(|hello| {
             ensure!(hello.capopen == PROTOCOL, "PROTOCOL_MISMATCH: expected capopen {PROTOCOL}");
             ensure!(security::equal_token(&hello.token, token), "UNAUTHORIZED: invalid token");
             Ok(hello)
         });
     let hello = match hello {
         Ok(hello) => hello,
-        Err(e) => { send(&mut stream, &json!({"ok":false,"error":format!("{e:#}")}))?; return Ok(()); }
+        Err(e) => {
+            send(&mut stream, &json!({"ok":false,"error":format!("{e:#}")}))?;
+            return Ok(());
+        }
     };
     let backend = Arc::new(Backend::shared(host, project, Client { id: new_id(), access: hello.access })?);
     send(&mut stream, &json!({"ok":true,"session_epoch":backend.host.session.state()?.stamp.session_epoch}))?;
@@ -219,7 +214,12 @@ fn connection(mut stream: UnixStream, host: Arc<Host>, project: &Path, token: &s
     serve_requests(&mut reader, backend, Arc::new(Mutex::new(stream)), MAX_LINE_BYTES)
 }
 
-fn serve_requests(reader: &mut BufReader<UnixStream>, backend: Arc<Backend>, writer: Arc<Mutex<UnixStream>>, line_limit: usize) -> Result<()> {
+fn serve_requests(
+    reader: &mut BufReader<UnixStream>,
+    backend: Arc<Backend>,
+    writer: Arc<Mutex<UnixStream>>,
+    line_limit: usize,
+) -> Result<()> {
     let mut workers = Workers::default();
     while let Ok(line) = wire::line(reader, line_limit, None) {
         if !line.complete {
@@ -239,15 +239,18 @@ fn serve_requests(reader: &mut BufReader<UnixStream>, backend: Arc<Backend>, wri
         let id = request.id;
         if let Err(error) = workers.start(move || {
             let (backend, writer) = (request_backend, request_writer);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.call(&request.tool, request.args)))
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("TOOL_FAILED: worker panicked")))
-                .unwrap_or_else(|e| tool_error(&backend, format!("{e:#}")));
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.call(&request.tool, request.args)))
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("TOOL_FAILED: worker panicked")))
+                    .unwrap_or_else(|e| tool_error(&backend, format!("{e:#}")));
             if send(&mut writer.lock().unwrap(), &Response { id, result }).is_err() {
                 let _ = writer.lock().unwrap().shutdown(Shutdown::Both);
             }
         }) {
             let result = tool_error(&backend, error.to_string());
-            if send(&mut writer.lock().unwrap(), &Response { id, result }).is_err() { break; }
+            if send(&mut writer.lock().unwrap(), &Response { id, result }).is_err() {
+                break;
+            }
         }
     }
     backend.close();
@@ -281,15 +284,26 @@ impl Remote {
         }
         let mut stream = match UnixStream::connect(path) {
             Ok(stream) => stream,
-            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => return Ok(None),
+            Err(error)
+                if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) =>
+            {
+                return Ok(None);
+            }
             Err(error) => return Err(error).context("IPC_UNTRUSTED: connecting to endpoint"),
         };
         security::peer(&stream)?;
         let token = security::token(&path.with_extension("token"))?;
         stream.set_write_timeout(Some(HELLO_TIMEOUT))?;
         let deadline = Instant::now() + HELLO_TIMEOUT;
-        send(&mut stream, &Hello { capopen: PROTOCOL, token, client: "capopen-mcp".into(),
-            access: if allow_write { Access::Write } else { Access::ReadOnly } })?;
+        send(
+            &mut stream,
+            &Hello {
+                capopen: PROTOCOL,
+                token,
+                client: "capopen-mcp".into(),
+                access: if allow_write { Access::Write } else { Access::ReadOnly },
+            },
+        )?;
         let mut reader = BufReader::new(stream.try_clone()?);
         let hello: Value = receive(&mut reader, MAX_HELLO_BYTES, Some(deadline))?;
         if hello["ok"] != true {
@@ -335,8 +349,7 @@ impl Remote {
             ensure!(!self.closed.load(Ordering::Acquire), APP_CLOSED);
             pending.insert(id, tx);
         }
-        if self.writer.lock().unwrap().write_all(&bytes).is_err()
-        {
+        if self.writer.lock().unwrap().write_all(&bytes).is_err() {
             self.closed.store(true, Ordering::Release);
             self.pending.lock().unwrap().clear();
             let _ = self.writer.lock().unwrap().shutdown(Shutdown::Both);

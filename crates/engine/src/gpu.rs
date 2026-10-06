@@ -171,10 +171,9 @@ impl Gpu {
         }))
         .context("No GPU adapter found")?;
         let adapter_name = adapter.get_info().name;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("capopen"),
-            ..Default::default()
-        }))
+        let (device, queue) = pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor { label: Some("capopen"), ..Default::default() }),
+        )
         .context("Cannot open GPU device")?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -217,36 +216,42 @@ impl Gpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let make_pipeline = |blend| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("compositor"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let make_pipeline = |blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("compositor"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let pipeline = make_pipeline(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
-        let component = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+        let component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
         let additive = make_pipeline(wgpu::BlendState { color: component, alpha: component });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear"),
@@ -256,7 +261,18 @@ impl Gpu {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        Ok(Self { device, queue, pipeline, additive, transitions: Vec::new(), layout, sampler, target: None, textures: HashMap::new(), adapter_name })
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+            additive,
+            transitions: Vec::new(),
+            layout,
+            sampler,
+            target: None,
+            textures: HashMap::new(),
+            adapter_name,
+        })
     }
 
     pub fn max_texture_dimension(&self) -> u32 {
@@ -331,7 +347,8 @@ impl Gpu {
         }
         let a = layer.adjust;
         let uniform = LayerUniform {
-            corners, opacity: [layer.opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            corners,
+            opacity: [layer.opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
             adjust: [a.brightness, a.contrast, a.saturation, a.temperature],
             effects: [a.vignette, layer.blur, premult as u8 as f32, a.fade],
             grading: [a.exposure, a.tint, a.highlights, a.shadows],
@@ -358,7 +375,14 @@ impl Gpu {
         })
     }
 
-    fn draw_pass(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, background: [f32; 4], groups: &[wgpu::BindGroup], additive: bool) {
+    fn draw_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        background: [f32; 4],
+        groups: &[wgpu::BindGroup],
+        additive: bool,
+    ) {
         let [r, g, b, a] = background;
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("composite"),
@@ -407,17 +431,25 @@ impl Gpu {
                         used.push(Arc::as_ptr(&layer.image.data) as usize);
                         groups.push(self.bind(layer, &tex, w, h, false));
                     }
-                    if self.transitions.get(transition_index).map(|t| (t.texture.width(), t.texture.height())) != Some((w, h)) {
+                    if self.transitions.get(transition_index).map(|t| (t.texture.width(), t.texture.height()))
+                        != Some((w, h))
+                    {
                         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                            label: Some("transition"), size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                            label: Some("transition"),
+                            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
                             format: wgpu::TextureFormat::Rgba8Unorm,
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
                         });
                         let view = texture.create_view(&Default::default());
                         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("transition"), size: std::mem::size_of::<LayerUniform>() as u64,
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+                            label: Some("transition"),
+                            size: std::mem::size_of::<LayerUniform>() as u64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
                         });
                         let bind_group = self.bind_group(&uniform, &view);
                         let target = TransitionTarget { texture, view, uniform, bind_group };
@@ -431,8 +463,16 @@ impl Gpu {
                     transition_index += 1;
                     self.draw_pass(&mut encoder, &target.view, [0.0; 4], &groups, true);
                     let uniform = LayerUniform {
-                        corners: [[-1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0], [-1.0, -1.0, 0.0, 1.0], [1.0, -1.0, 1.0, 1.0]],
-                        opacity: [1.0, 0.0, 0.0, 0.0], adjust: [0.0; 4], effects: [0.0, 0.0, 1.0, 0.0], grading: [0.0; 4],
+                        corners: [
+                            [-1.0, 1.0, 0.0, 0.0],
+                            [1.0, 1.0, 1.0, 0.0],
+                            [-1.0, -1.0, 0.0, 1.0],
+                            [1.0, -1.0, 1.0, 1.0],
+                        ],
+                        opacity: [1.0, 0.0, 0.0, 0.0],
+                        adjust: [0.0; 4],
+                        effects: [0.0, 0.0, 1.0, 0.0],
+                        grading: [0.0; 4],
                         clip: [0.0, 0.0, w as f32, h as f32],
                     };
                     self.queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
@@ -495,7 +535,11 @@ mod tests {
         let layer = Layer {
             image: Image { width: 1, height: 1, data: Arc::new(vec![80, 100, 120, 255]) },
             corners: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]],
-            uv_rotation: 0, opacity: 0.5, adjust: Adjust::default(), blur: 0.0, clip: None,
+            uv_rotation: 0,
+            opacity: 0.5,
+            adjust: Adjust::default(),
+            blur: 0.0,
+            clip: None,
         };
         let draws = [Draw::Transition([layer.clone(), layer])];
         let first = gpu.render(2, 2, [0.0; 4], &draws).unwrap();
@@ -506,8 +550,10 @@ mod tests {
         assert_ne!(gpu.transitions[0].bind_group, group);
         assert!(resized.chunks_exact(4).all(|p| p == &first[..4]));
         let max = gpu.max_texture_dimension();
-        assert_eq!(gpu.render(max + 1, 2, [0.0; 4], &[]).unwrap_err().to_string(),
-            format!("This resolution is larger than your GPU supports (max {max} px)"));
+        assert_eq!(
+            gpu.render(max + 1, 2, [0.0; 4], &[]).unwrap_err().to_string(),
+            format!("This resolution is larger than your GPU supports (max {max} px)")
+        );
     }
 
     #[test]
@@ -517,16 +563,25 @@ mod tests {
         let layer = Layer {
             image: Image { width: 2, height: 2, data: Arc::new(pixels.clone()) },
             corners: [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
-            uv_rotation: 0, opacity: 1.0, adjust: Adjust::default(), blur: 0.0, clip: None,
+            uv_rotation: 0,
+            opacity: 1.0,
+            adjust: Adjust::default(),
+            blur: 0.0,
+            clip: None,
         };
         assert_eq!(gpu.render(2, 2, [0.0; 4], &[Draw::Layer(layer.clone())]).unwrap(), pixels);
         let mut half = layer.clone();
         half.opacity = 0.5;
         let mixed = gpu.render(2, 2, [1.0, 0.0, 1.0, 1.0], &[Draw::Transition([half.clone(), half])]).unwrap();
-        for (a, b) in mixed.iter().zip(&pixels) { assert!((*a as i16 - *b as i16).abs() <= 1); }
+        for (a, b) in mixed.iter().zip(&pixels) {
+            assert!((*a as i16 - *b as i16).abs() <= 1);
+        }
         let mut grey = layer;
         grey.adjust.saturation = -1.0;
         let output = gpu.render(2, 2, [0.0; 4], &[Draw::Layer(grey)]).unwrap();
-        for pixel in output.chunks_exact(4) { assert_eq!(pixel[0], pixel[1]); assert_eq!(pixel[1], pixel[2]); }
+        for pixel in output.chunks_exact(4) {
+            assert_eq!(pixel[0], pixel[1]);
+            assert_eq!(pixel[1], pixel[2]);
+        }
     }
 }

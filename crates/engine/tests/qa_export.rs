@@ -12,26 +12,10 @@ use std::{
     time::Instant,
 };
 fn source(path: &Path) {
-    ff(
-        &[
-            "-f",
-            "lavfi",
-            "-i",
-            "color=red:s=64x64:r=25:d=0.4",
-            "-c:v",
-            "libx264",
-            "-threads",
-            "2",
-        ],
-        path,
-    );
+    ff(&["-f", "lavfi", "-i", "color=red:s=64x64:r=25:d=0.4", "-c:v", "libx264", "-threads", "2"], path);
 }
 fn options() -> ExportOptions {
-    ExportOptions {
-        preset: "ultrafast".into(),
-        replace_existing: true,
-        ..ExportOptions::default()
-    }
+    ExportOptions { preset: "ultrafast".into(), replace_existing: true, ..ExportOptions::default() }
 }
 #[test]
 fn export_odd_canvas_duration_and_av_cut_match_timeline() {
@@ -43,10 +27,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
     p.canvas.width = 65;
     p.canvas.height = 67;
     p.canvas.fps = 25;
-    for (id, color, tone, start, duration) in [
-        ("a", "red", 440, 0, 600_000),
-        ("b", "blue", 880, 600_000, 400_000),
-    ] {
+    for (id, color, tone, start, duration) in [("a", "red", 440, 0, 600_000), ("b", "blue", 880, 600_000, 400_000)] {
         let path = d.join(format!("{id}.mp4"));
         ff(
             &[
@@ -83,15 +64,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
         }
     }
     let out = d.join("cut.mp4");
-    export(
-        &p,
-        &cache,
-        &out,
-        &options(),
-        &AtomicBool::new(false),
-        |_| {},
-    )
-    .unwrap();
+    export(&p, &cache, &out, &options(), &AtomicBool::new(false), |_| {}).unwrap();
     let j = info(&out);
     let streams = j["streams"].as_array().unwrap();
     let video = streams.iter().find(|s| s["codec_type"] == "video").unwrap();
@@ -100,10 +73,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
     assert_eq!(video["height"].as_u64().unwrap() % 2, 0);
     assert_eq!(video["nb_frames"].as_str().unwrap(), "25");
     let mut failures = Vec::new();
-    for (name, s, tolerance) in [
-        ("video", video, 0.001),
-        ("audio", audio, 1024.0 / 48000.0 + 0.001),
-    ] {
+    for (name, s, tolerance) in [("video", video, 0.001), ("audio", audio, 1024.0 / 48000.0 + 0.001)] {
         let duration = s["duration"].as_str().unwrap().parse::<f64>().unwrap();
         let start = s["start_time"].as_str().unwrap().parse::<f64>().unwrap();
         eprintln!("QA export {name} start={start} duration={duration}");
@@ -112,27 +82,19 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
         }
     }
     let pixels = raw(&out, &[]);
-    let frame_len =
-        (video["width"].as_u64().unwrap() * video["height"].as_u64().unwrap() * 4) as usize;
+    let frame_len = (video["width"].as_u64().unwrap() * video["height"].as_u64().unwrap() * 4) as usize;
     let center = (video["height"].as_u64().unwrap() / 2 * video["width"].as_u64().unwrap()
         + video["width"].as_u64().unwrap() / 2) as usize
         * 4;
     if pixels.len() / frame_len != 25 {
-        failures.push(format!(
-            "decoded {} frames instead of 25",
-            pixels.len() / frame_len
-        ));
+        failures.push(format!("decoded {} frames instead of 25", pixels.len() / frame_len));
     }
     for (frame, red) in [(14, true), (15, false), (24, false)] {
         if (frame + 1) * frame_len > pixels.len() {
             continue;
         }
         let px = &pixels[frame * frame_len + center..frame * frame_len + center + 3];
-        if if red {
-            px[0] < 200 || px[2] > 30
-        } else {
-            px[2] < 200 || px[0] > 30
-        } {
+        if if red { px[0] < 200 || px[2] > 30 } else { px[2] < 200 || px[0] > 30 } {
             failures.push(format!("frame {frame}: {px:?}"));
         }
     }
@@ -141,10 +103,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
         .arg(&out)
         .args(["-f", "f32le", "-ac", "1", "-ar", "48000", "-"]))
     .stdout;
-    let samples: Vec<f32> = audio
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
+    let samples: Vec<f32> = audio.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
     let power = |center: usize, f: f64| {
         let mut re = 0.0;
         let mut im = 0.0;
@@ -155,14 +114,8 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
         }
         re * re + im * im
     };
-    let switch = (26000..32000)
-        .step_by(48)
-        .find(|&n| power(n, 880.0) > power(n, 440.0))
-        .unwrap();
-    eprintln!(
-        "QA tone switch {switch} samples = {:.3}s",
-        switch as f64 / 48000.0
-    );
+    let switch = (26000..32000).step_by(48).find(|&n| power(n, 880.0) > power(n, 440.0)).unwrap();
+    eprintln!("QA tone switch {switch} samples = {:.3}s", switch as f64 / 48000.0);
     if (switch as i64 - 28800).abs() > 1024 {
         failures.push(format!("tone switch sample={switch}, expected=28800"));
     }
@@ -183,26 +136,15 @@ fn export_cancellation_is_prompt_and_preserves_destination() {
     let cancel = AtomicBool::new(false);
     let now = Instant::now();
     let mut last = 0;
-    let result = export(
-        &p,
-        &d.join("cache"),
-        &out,
-        &options(),
-        &cancel,
-        |progress| {
-            last = progress.frame;
-            if progress.frame == 2 {
-                cancel.store(true, Ordering::Relaxed);
-            }
-        },
-    );
+    let result = export(&p, &d.join("cache"), &out, &options(), &cancel, |progress| {
+        last = progress.frame;
+        if progress.frame == 2 {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    });
     assert!(result.is_err());
     assert!(format!("{:#}", result.unwrap_err()).contains("cancel"));
-    assert!(
-        now.elapsed().as_secs_f64() < 5.0,
-        "cancellation took {:?}",
-        now.elapsed()
-    );
+    assert!(now.elapsed().as_secs_f64() < 5.0, "cancellation took {:?}", now.elapsed());
     assert_eq!(last, 2);
     assert_eq!(std::fs::read(&out).unwrap(), b"existing destination");
     assert!(!out.with_extension("capopen-part.mp4").exists());
@@ -217,14 +159,7 @@ fn export_refuses_to_overwrite_source() {
     source(&input);
     let before = std::fs::read(&input).unwrap();
     let p = project(&input, 200_000);
-    let result = export(
-        &p,
-        &d.join("cache"),
-        &input,
-        &options(),
-        &AtomicBool::new(false),
-        |_| {},
-    );
+    let result = export(&p, &d.join("cache"), &input, &options(), &AtomicBool::new(false), |_| {});
     assert!(result.is_err());
     assert_eq!(std::fs::read(&input).unwrap(), before);
 }
@@ -239,14 +174,7 @@ fn export_temp_path_must_not_destroy_a_source() {
     let before = std::fs::read(&input).unwrap();
     let p = project(&input, 200_000);
     let out = d.join("result.mp4");
-    let result = export(
-        &p,
-        &d.join("cache"),
-        &out,
-        &options(),
-        &AtomicBool::new(false),
-        |_| {},
-    );
+    let result = export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {});
     assert!(
         std::fs::read(&input).is_ok_and(|bytes| bytes == before),
         "source destroyed by temporary export path, export result={result:?}"
@@ -263,19 +191,9 @@ fn failed_final_rename_leaves_no_temporary_export() {
     let p = project(&input, 200_000);
     let out = d.join("existing-directory.mp4");
     std::fs::create_dir_all(&out).unwrap();
-    let result = export(
-        &p,
-        &d.join("cache"),
-        &out,
-        &options(),
-        &AtomicBool::new(false),
-        |_| {},
-    );
+    let result = export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {});
     assert!(result.is_err());
-    assert!(
-        !out.with_extension("capopen-part.mp4").exists(),
-        "complete temporary export remains after failed rename"
-    );
+    assert!(!out.with_extension("capopen-part.mp4").exists(), "complete temporary export remains after failed rename");
 }
 
 #[test]
@@ -312,8 +230,18 @@ fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
     p.assets.push(probe(&image, "image".into()).unwrap());
     p.tracks[0].clips.push(clip("image", "image", 0, 100_000));
     for id in ["unused", "muted", "zero"] {
-        p.assets.push(Asset { id: id.into(), name: id.into(), path: d.join(format!("{id}.wav")).to_string_lossy().into(),
-            kind: AssetKind::Audio, duration_us: 100_000, width: 0, height: 0, fps: 0.0, has_audio: true, rotation: 0 });
+        p.assets.push(Asset {
+            id: id.into(),
+            name: id.into(),
+            path: d.join(format!("{id}.wav")).to_string_lossy().into(),
+            kind: AssetKind::Audio,
+            duration_us: 100_000,
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            has_audio: true,
+            rotation: 0,
+        });
     }
     let mut muted = p.tracks[0].clone();
     muted.id = "muted".into();
@@ -324,7 +252,9 @@ fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
     zero.id = "zero".into();
     zero.muted = false;
     zero.clips = vec![clip("zero", "zero", 0, 100_000)];
-    if let ClipContent::Media { volume, .. } = &mut zero.clips[0].content { *volume = 0.0; }
+    if let ClipContent::Media { volume, .. } = &mut zero.clips[0].content {
+        *volume = 0.0;
+    }
     p.tracks.extend([muted, zero]);
     let out = d.join("out.mp4");
     export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap();

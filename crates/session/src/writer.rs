@@ -31,39 +31,25 @@ impl Writer {
             .name("capopen-session-writer".into())
             .spawn(move || write_loop(path, events, rx))
             .context("Starting project writer")?;
-        Ok(Self {
-            tx,
-            worker: Some(worker),
-        })
+        Ok(Self { tx, worker: Some(worker) })
     }
 
     pub(crate) fn checkpoint(&self, value: serde_json::Value) -> Result<()> {
         let (tx, rx) = mpsc::channel();
-        self.tx
-            .send(Message::Checkpoint(value, tx))
-            .context("SAVE_FAILED: project writer stopped")?;
+        self.tx.send(Message::Checkpoint(value, tx)).context("SAVE_FAILED: project writer stopped")?;
         rx.recv().context("SAVE_FAILED: project writer stopped")?
     }
 
     pub(crate) fn schedule(&self, project: &Project, revision: u64) -> Result<()> {
         self.tx
-            .send(Message::Schedule(Snapshot {
-                project: project.clone(),
-                revision,
-            }))
+            .send(Message::Schedule(Snapshot { project: project.clone(), revision }))
             .context("SAVE_FAILED: project writer stopped")
     }
 
     pub(crate) fn flush(&self, project: &Project, revision: u64) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         self.tx
-            .send(Message::Flush(
-                Snapshot {
-                    project: project.clone(),
-                    revision,
-                },
-                tx,
-            ))
+            .send(Message::Flush(Snapshot { project: project.clone(), revision }, tx))
             .context("SAVE_FAILED: project writer stopped")?;
         rx.recv().context("SAVE_FAILED: project writer stopped")?
     }
@@ -107,11 +93,7 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<
     }
 }
 
-fn save(
-    path: &std::path::Path,
-    events: &Option<Sender<SessionEvent>>,
-    snapshot: Snapshot,
-) -> Result<()> {
+fn save(path: &std::path::Path, events: &Option<Sender<SessionEvent>>, snapshot: Snapshot) -> Result<()> {
     let result = storage::save(path, &snapshot.project).context("SAVE_FAILED: saving project");
     if let Some(events) = events {
         let _ = events.send(SessionEvent::Saved {

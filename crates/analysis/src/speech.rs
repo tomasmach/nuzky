@@ -5,8 +5,8 @@ use capopen_engine::model::Asset;
 pub use capopen_engine::speech::Word;
 use serde::{Deserialize, Serialize};
 use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext,
-    WhisperVadContextParams, WhisperVadParams,
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams,
+    WhisperVadParams,
 };
 
 use crate::{Range, audio::open_pcm};
@@ -16,10 +16,7 @@ const CS: usize = RATE / 100;
 const GAP: usize = RATE / 5;
 
 pub enum AudioSource<'a> {
-    Asset {
-        asset: &'a Asset,
-        cache: &'a Path,
-    },
+    Asset { asset: &'a Asset, cache: &'a Path },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -50,43 +47,33 @@ pub fn transcribe_words(
 }
 
 pub fn transcribe_words_cancellable(
-    source: AudioSource<'_>, model_path: &Path, vad_model_path: &Path, language: &str,
+    source: AudioSource<'_>,
+    model_path: &Path,
+    vad_model_path: &Path,
+    language: &str,
     cancelled: impl Fn() -> bool,
 ) -> Result<Transcript> {
-    let check = || { ensure!(!cancelled(), "CANCELLED: transcription cancelled"); Ok::<_, anyhow::Error>(()) };
+    let check = || {
+        ensure!(!cancelled(), "CANCELLED: transcription cancelled");
+        Ok::<_, anyhow::Error>(())
+    };
     check()?;
     ensure!(
-        language == "auto"
-            || (!language.contains('\0') && whisper_rs::get_lang_id(language).is_some()),
+        language == "auto" || (!language.contains('\0') && whisper_rs::get_lang_id(language).is_some()),
         "Unknown language: {language}"
     );
-    ensure!(
-        model_path.is_file(),
-        "Speech model not found: {}",
-        model_path.display()
-    );
+    ensure!(model_path.is_file(), "Speech model not found: {}", model_path.display());
     let converted;
     let audio = match source {
         AudioSource::Asset { asset, cache } => {
             let pcm = open_pcm(asset, cache)?;
             // Average three 48 kHz stereo frames (six channel samples) into one 16 kHz mono sample.
-            converted = pcm
-                .samples()
-                .chunks(6)
-                .map(|s| s.iter().sum::<f32>() / s.len() as f32)
-                .collect::<Vec<_>>();
+            converted = pcm.samples().chunks(6).map(|s| s.iter().sum::<f32>() / s.len() as f32).collect::<Vec<_>>();
             &converted
         }
     };
-    ensure!(
-        audio.iter().all(|s| s.is_finite()),
-        "Speech audio contains non-finite samples"
-    );
-    let mut transcript = Transcript {
-        language: language.into(),
-        words: Vec::new(),
-        segments: Vec::new(),
-    };
+    ensure!(audio.iter().all(|s| s.is_finite()), "Speech audio contains non-finite samples");
+    let mut transcript = Transcript { language: language.into(), words: Vec::new(), segments: Vec::new() };
     if audio.is_empty() {
         return Ok(transcript);
     }
@@ -109,20 +96,15 @@ pub fn transcribe_words_cancellable(
         }
         Err(error) => return Err(error).context("Loading speech model"),
     };
-    let mut state = context
-        .create_state()
-        .context("Creating speech recognition state")?;
+    let mut state = context.create_state().context("Creating speech recognition state")?;
     // Independent decoding prevents tokens from drifting across compacted pauses.
     for region in regions {
         check()?;
         let (compact, mapping) = compact_audio(audio, &[region]);
-        state
-            .full(recognition_params(&transcript.language), &compact)
-            .context("Recognising speech region")?;
+        state.full(recognition_params(&transcript.language), &compact).context("Recognising speech region")?;
         check()?;
-        transcript.language = whisper_rs::get_lang_str(state.full_lang_id_from_state())
-            .context("Missing detected language")?
-            .into();
+        transcript.language =
+            whisper_rs::get_lang_str(state.full_lang_id_from_state()).context("Missing detected language")?.into();
         append_segments(&state, context.token_eot(), &mapping, &mut transcript, &cancelled)?;
     }
     Ok(transcript)
@@ -154,9 +136,7 @@ fn append_segments(
 ) -> Result<()> {
     for segment in state.as_iter() {
         ensure!(!cancelled(), "CANCELLED: transcription cancelled");
-        let text = segment
-            .to_str_lossy()
-            .context("Reading transcript segment")?;
+        let text = segment.to_str_lossy().context("Reading transcript segment")?;
         if is_annotation(&text) || segment.no_speech_probability() > 0.6 {
             continue;
         }
@@ -169,12 +149,7 @@ fn append_segments(
             let data = token.token_data();
             let start = data.t0.max(0).saturating_mul(10_000);
             let end = data.t1.max(data.t0).max(0).saturating_mul(10_000);
-            words.push(
-                token.to_bytes().context("Reading speech token")?,
-                start,
-                end,
-                data.p,
-            );
+            words.push(token.to_bytes().context("Reading speech token")?, start, end, data.p);
         }
         let compact_words = words.finish();
         let mut segment_words = Vec::new();
@@ -191,11 +166,7 @@ fn append_segments(
                 transcript.segments.push(Segment {
                     start_us: first.start_us,
                     end_us: last.end_us,
-                    text: group
-                        .iter()
-                        .map(|w| w.text.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" "),
+                    text: group.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "),
                 });
             }
         }
@@ -210,14 +181,11 @@ fn voice_regions(audio: &[f32], model: &Path) -> Result<Vec<(usize, usize)>> {
     let mut context_params = WhisperVadContextParams::new();
     context_params.set_n_threads(4);
     context_params.set_use_gpu(false);
-    let mut context =
-        WhisperVadContext::new(model, context_params).context("Loading voice detector")?;
+    let mut context = WhisperVadContext::new(model, context_params).context("Loading voice detector")?;
     let mut params = WhisperVadParams::new();
     params.set_speech_pad(120);
     params.set_min_silence_duration(300);
-    let segments = context
-        .segments_from_samples(params, audio)
-        .context("Detecting speech")?;
+    let segments = context.segments_from_samples(params, audio).context("Detecting speech")?;
     let mut regions: Vec<(usize, usize)> = Vec::new();
     for segment in segments {
         let start = ((segment.start.max(0.0) as f64 * CS as f64).round() as usize).min(audio.len());
@@ -246,11 +214,7 @@ fn compact_audio(audio: &[f32], regions: &[(usize, usize)]) -> (Vec<f32>, Vec<Ma
         if !joined.is_empty() {
             joined.resize(joined.len() + GAP, 0.0);
         }
-        mapping.push(Mapping {
-            compact_start: joined.len(),
-            source_start: start,
-            len: end - start,
-        });
+        mapping.push(Mapping { compact_start: joined.len(), source_start: start, len: end - start });
         joined.extend_from_slice(&audio[start..end]);
     }
     // Whisper rejects very short buffers; this tail is deliberately absent from the map.
@@ -273,18 +237,12 @@ fn original_range(mapping: &[Mapping], start_us: i64, end_us: i64) -> Option<Ran
             && start_us < sample_us(entry.compact_start + entry.len)
         {
             let time = start_us + sample_us(entry.source_start) - sample_us(entry.compact_start);
-            return Some(Range {
-                start_us: time,
-                end_us: time,
-            });
+            return Some(Range { start_us: time, end_us: time });
         }
         if end - start > overlap {
             overlap = end - start;
             let offset = sample_us(entry.source_start) - sample_us(entry.compact_start);
-            best = Some(Range {
-                start_us: start + offset,
-                end_us: end + offset,
-            });
+            best = Some(Range { start_us: start + offset, end_us: end + offset });
         }
     }
     best
@@ -313,11 +271,7 @@ impl WordBuilder {
                 }
                 self.end = end;
                 self.bytes.extend_from_slice(content);
-                self.probability += if probability.is_finite() {
-                    probability.clamp(0.0, 1.0) as f64
-                } else {
-                    0.0
-                };
+                self.probability += if probability.is_finite() { probability.clamp(0.0, 1.0) as f64 } else { 0.0 };
                 self.tokens += 1;
             }
             if part.last().is_some_and(u8::is_ascii_whitespace) {
@@ -370,12 +324,8 @@ impl WordBuilder {
 
 fn is_annotation(text: &str) -> bool {
     let text = text.trim_matches(|c: char| c.is_whitespace() || c == '.');
-    [('[', ']'), ('(', ')'), ('*', '*')]
-        .iter()
-        .any(|&(a, b)| text.starts_with(a) && text.ends_with(b))
-        || text
-            .chars()
-            .all(|c| c == '♪' || c == '♫' || c.is_whitespace())
+    [('[', ']'), ('(', ')'), ('*', '*')].iter().any(|&(a, b)| text.starts_with(a) && text.ends_with(b))
+        || text.chars().all(|c| c == '♪' || c == '♫' || c.is_whitespace())
 }
 
 #[cfg(test)]
@@ -386,27 +336,15 @@ mod tests {
     fn compaction_maps_boundaries_without_spanning_removed_pause() {
         let audio = vec![0.5; 160_000];
         let (_, mapping) = compact_audio(&audio, &[(16_000, 32_000), (112_000, 128_000)]);
-        assert_eq!(
-            original_range(&mapping, 200_000, 400_000),
-            Some(Range {
-                start_us: 1_200_000,
-                end_us: 1_400_000
-            })
-        );
+        assert_eq!(original_range(&mapping, 200_000, 400_000), Some(Range { start_us: 1_200_000, end_us: 1_400_000 }));
         assert_eq!(
             original_range(&mapping, 1_200_000, 1_500_000),
-            Some(Range {
-                start_us: 7_000_000,
-                end_us: 7_300_000
-            })
+            Some(Range { start_us: 7_000_000, end_us: 7_300_000 })
         );
         assert_eq!(original_range(&mapping, 1_000_000, 1_200_000), None);
         assert_eq!(
             original_range(&mapping, 900_000, 1_250_000),
-            Some(Range {
-                start_us: 1_900_000,
-                end_us: 2_000_000
-            })
+            Some(Range { start_us: 1_900_000, end_us: 2_000_000 })
         );
     }
 

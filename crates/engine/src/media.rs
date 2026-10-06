@@ -9,11 +9,11 @@ use std::path::Path;
 use std::sync::{Arc, Once};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use ffmpeg_next as ff;
 use ff::codec::packet::side_data::Type as SideDataType;
 use ff::format::stream::Disposition;
 use ff::software::{resampling, scaling};
 use ff::util::{color, format::Pixel, frame};
+use ffmpeg_next as ff;
 
 use crate::model::{Asset, AssetKind, CHANNELS, SAMPLE_RATE};
 
@@ -161,7 +161,8 @@ fn is_full_range(f: &frame::Video) -> bool {
 fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: u32) -> Result<RgbaFrame> {
     let key = (f.format(), f.width(), f.height(), w, h);
     if scaler.as_ref().map(|s| s.key) != Some(key) {
-        let mut ctx = scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
+        let mut ctx =
+            scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
         let src_cs = sws_colorspace(f.color_space(), f.height());
         set_sws_colorspace(&mut ctx, src_cs, is_full_range(f), ff::ffi::SWS_CS_DEFAULT as i32, true);
         *scaler = Some(Scaler { key, ctx });
@@ -244,8 +245,8 @@ impl VideoDecoder {
     /// Jumps to the keyframe at or before `t_us`. The next decoded frames start there.
     pub fn seek(&mut self, t_us: i64) -> Result<()> {
         use ff::util::mathematics::{Rescale, Rounding};
-        let ts = t_us.max(0).saturating_add(self.origin_us)
-            .rescale_with((1, 1_000_000), self.time_base, Rounding::Down);
+        let ts =
+            t_us.max(0).saturating_add(self.origin_us).rescale_with((1, 1_000_000), self.time_base, Rounding::Down);
         // A global-time seek rounds to the nearest stream tick and can skip the covering GOP.
         let result = unsafe {
             ff::ffi::avformat_seek_file(self.input.as_mut_ptr(), self.stream_index as i32, i64::MIN, ts, ts, 0)
@@ -305,7 +306,11 @@ impl VideoDecoder {
 
     /// Returns the frame covering `want` and the next frame, if decoded.
     /// Pass the previous pair when decoding forward; after seeking pass `[None, None]`.
-    pub fn frame_covering(&mut self, want: i64, [mut covering, mut next]: [Option<DecodedFrame>; 2]) -> Result<[Option<DecodedFrame>; 2]> {
+    pub fn frame_covering(
+        &mut self,
+        want: i64,
+        [mut covering, mut next]: [Option<DecodedFrame>; 2],
+    ) -> Result<[Option<DecodedFrame>; 2]> {
         loop {
             let decoded = match next.take() {
                 Some(frame) => Some(frame),
@@ -348,110 +353,113 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let tmp = out.with_file_name(format!(".capopen-pcm-{}.part", crate::edit::new_id()));
     let file = File::options().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
-    let mut writer = BufWriter::with_capacity(1 << 20, file);
-    let mut written: u64 = 0; // sample frames
-    let mut resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))> = None;
-    let mut decoded = frame::Audio::empty();
-    let mut last_progress = 0.0;
-    let mut mono = false;
+        let mut writer = BufWriter::with_capacity(1 << 20, file);
+        let mut written: u64 = 0; // sample frames
+        let mut resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))> = None;
+        let mut decoded = frame::Audio::empty();
+        let mut last_progress = 0.0;
+        let mut mono = false;
 
-    // Writes resampled audio as stereo. Mono sources are resampled as mono and duplicated,
-    // so they keep their level instead of FFmpeg's -3 dB pan.
-    let write_out = |out: &frame::Audio, mono: bool, writer: &mut BufWriter<File>, written: &mut u64| -> Result<()> {
-        let n = out.samples();
-        if n == 0 {
-            return Ok(());
-        }
-        if mono {
-            let src: &[f32] = &bytemuck_slice(out.data(0))[..n];
-            let mut buf = Vec::with_capacity(n * CHANNELS * 4);
-            for s in src {
-                buf.extend_from_slice(&s.to_le_bytes());
-                buf.extend_from_slice(&s.to_le_bytes());
-            }
-            writer.write_all(&buf)?;
-        } else {
-            writer.write_all(&out.data(0)[..n * CHANNELS * 4])?;
-        }
-        *written += n as u64;
-        Ok(())
-    };
+        // Writes resampled audio as stereo. Mono sources are resampled as mono and duplicated,
+        // so they keep their level instead of FFmpeg's -3 dB pan.
+        let write_out =
+            |out: &frame::Audio, mono: bool, writer: &mut BufWriter<File>, written: &mut u64| -> Result<()> {
+                let n = out.samples();
+                if n == 0 {
+                    return Ok(());
+                }
+                if mono {
+                    let src: &[f32] = &bytemuck_slice(out.data(0))[..n];
+                    let mut buf = Vec::with_capacity(n * CHANNELS * 4);
+                    for s in src {
+                        buf.extend_from_slice(&s.to_le_bytes());
+                        buf.extend_from_slice(&s.to_le_bytes());
+                    }
+                    writer.write_all(&buf)?;
+                } else {
+                    writer.write_all(&out.data(0)[..n * CHANNELS * 4])?;
+                }
+                *written += n as u64;
+                Ok(())
+            };
 
-    let write_frame = |f: &frame::Audio,
+        let write_frame = |f: &frame::Audio,
                            resampler: &mut Option<(resampling::Context, (ff::format::Sample, u64, u32))>,
                            mono: &mut bool,
                            writer: &mut BufWriter<File>,
                            written: &mut u64|
-     -> Result<()> {
-        let mut layout = f.channel_layout();
-        if layout.is_empty() {
-            layout = ff::ChannelLayout::default(f.channels() as i32);
-        }
-        let key = (f.format(), layout.bits(), f.rate());
-        if resampler.as_ref().map(|r| r.1) != Some(key) {
-            *mono = layout.channels() == 1;
-            let dst = if *mono { ff::ChannelLayout::MONO } else { ff::ChannelLayout::STEREO };
-            let ctx = resampling::Context::get(f.format(), layout, f.rate(), PCM_FORMAT, dst, SAMPLE_RATE)?;
-            *resampler = Some((ctx, key));
-        }
-        // Align the first samples with the container origin.
-        if *written == 0 {
-            if let Some(pts) = f.timestamp().or(f.pts()) {
-                let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
-                let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
-                writer.write_all(&vec![0u8; pad as usize * CHANNELS * 4])?;
-                *written += pad;
+         -> Result<()> {
+            let mut layout = f.channel_layout();
+            if layout.is_empty() {
+                layout = ff::ChannelLayout::default(f.channels() as i32);
+            }
+            let key = (f.format(), layout.bits(), f.rate());
+            if resampler.as_ref().map(|r| r.1) != Some(key) {
+                *mono = layout.channels() == 1;
+                let dst = if *mono { ff::ChannelLayout::MONO } else { ff::ChannelLayout::STEREO };
+                let ctx = resampling::Context::get(f.format(), layout, f.rate(), PCM_FORMAT, dst, SAMPLE_RATE)?;
+                *resampler = Some((ctx, key));
+            }
+            // Align the first samples with the container origin.
+            if *written == 0 {
+                if let Some(pts) = f.timestamp().or(f.pts()) {
+                    let start_us = (pts as f64 * time_base * 1e6) as i64 - origin;
+                    let pad = (start_us.max(0) as u64 * SAMPLE_RATE as u64) / 1_000_000;
+                    writer.write_all(&vec![0u8; pad as usize * CHANNELS * 4])?;
+                    *written += pad;
+                }
+            }
+            let mut f = f.clone();
+            f.set_channel_layout(layout);
+            let (ctx, _) = resampler.as_mut().unwrap();
+            // ffmpeg-next sizes the output like the input, which drops samples when upsampling
+            // (22.05 or 44.1 kHz to 48 kHz). Allocate for the converted length instead.
+            let capacity = f.samples() * SAMPLE_RATE as usize / f.rate().max(1) as usize + 256;
+            let mut out = frame::Audio::new(PCM_FORMAT, capacity, ctx.output().channel_layout);
+            ctx.run(&f, &mut out)?;
+            write_out(&out, *mono, writer, written)
+        };
+
+        for (s, packet) in input.packets() {
+            if s.index() != stream_index {
+                continue;
+            }
+            if decoder.send_packet(&packet).is_err() {
+                continue;
+            }
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
+            }
+            if let Some(pts) = packet.pts() {
+                let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
+                if p - last_progress > 0.02 {
+                    last_progress = p;
+                    progress(p.clamp(0.0, 1.0));
+                }
             }
         }
-        let mut f = f.clone();
-        f.set_channel_layout(layout);
-        let (ctx, _) = resampler.as_mut().unwrap();
-        // ffmpeg-next sizes the output like the input, which drops samples when upsampling
-        // (22.05 or 44.1 kHz to 48 kHz). Allocate for the converted length instead.
-        let capacity = f.samples() * SAMPLE_RATE as usize / f.rate().max(1) as usize + 256;
-        let mut out = frame::Audio::new(PCM_FORMAT, capacity, ctx.output().channel_layout);
-        ctx.run(&f, &mut out)?;
-        write_out(&out, *mono, writer, written)
-    };
-
-    for (s, packet) in input.packets() {
-        if s.index() != stream_index {
-            continue;
-        }
-        if decoder.send_packet(&packet).is_err() {
-            continue;
-        }
+        decoder.send_eof().ok();
         while decoder.receive_frame(&mut decoded).is_ok() {
             write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
         }
-        if let Some(pts) = packet.pts() {
-            let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
-            if p - last_progress > 0.02 {
-                last_progress = p;
-                progress(p.clamp(0.0, 1.0));
+        if let Some((ctx, _)) = resampler.as_mut() {
+            loop {
+                let mut tail = frame::Audio::new(PCM_FORMAT, 4096, ctx.output().channel_layout);
+                if ctx.flush(&mut tail).is_err() || tail.samples() == 0 {
+                    break;
+                }
+                write_out(&tail, mono, &mut writer, &mut written)?;
             }
         }
-    }
-    decoder.send_eof().ok();
-    while decoder.receive_frame(&mut decoded).is_ok() {
-        write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written)?;
-    }
-    if let Some((ctx, _)) = resampler.as_mut() {
-        loop {
-            let mut tail = frame::Audio::new(PCM_FORMAT, 4096, ctx.output().channel_layout);
-            if ctx.flush(&mut tail).is_err() || tail.samples() == 0 {
-                break;
-            }
-            write_out(&tail, mono, &mut writer, &mut written)?;
-        }
-    }
-    writer.flush()?;
-    drop(writer);
-    std::fs::rename(&tmp, out)?;
-    progress(1.0);
-    Ok(written)
+        writer.flush()?;
+        drop(writer);
+        std::fs::rename(&tmp, out)?;
+        progress(1.0);
+        Ok(written)
     })();
-    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
     result
 }
 
@@ -461,7 +469,6 @@ fn bytemuck_slice(bytes: &[u8]) -> &[f32] {
     bytemuck::cast_slice(&bytes[..bytes.len() / 4 * 4])
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,9 +477,27 @@ mod tests {
     fn seek_before_keyframe_respects_container_start_offset() {
         let path = std::env::temp_dir().join(format!("capopen-seek-{}.mp4", uuid::Uuid::new_v4()));
         let encoded = std::process::Command::new("ffmpeg")
-            .args(["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=25:d=1", "-c:v", "libx264",
-                "-threads", "2", "-g", "10", "-bf", "3", "-output_ts_offset", "5"])
-            .arg(&path).status().is_ok_and(|s| s.success());
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=96x64:r=25:d=1",
+                "-c:v",
+                "libx264",
+                "-threads",
+                "2",
+                "-g",
+                "10",
+                "-bf",
+                "3",
+                "-output_ts_offset",
+                "5",
+            ])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
         if !encoded {
             eprintln!("ffmpeg CLI with libx264 not available, skipping");
             return;
@@ -494,7 +519,9 @@ mod tests {
         for name in ["wide.mp4", "phone_hevc_vfr.mov"] {
             let mut reference = VideoDecoder::open(&root.join(name)).unwrap();
             let mut times = Vec::new();
-            while let Some((t, _)) = reference.next_frame().unwrap() { times.push(t); }
+            while let Some((t, _)) = reference.next_frame().unwrap() {
+                times.push(t);
+            }
             let mut decoder = VideoDecoder::open(&root.join(name)).unwrap();
             let mut pair = [None, None];
             for target in [0, 1, 33_333, 500_001, 900_005, 1_000_000, 2_333_333, 10_000_000] {

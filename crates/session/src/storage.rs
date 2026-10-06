@@ -37,15 +37,23 @@ pub fn lock_project(path: &Path, exclusive: bool) -> Result<File> {
         fs::canonicalize(path).context("Resolving project path")?
     } else {
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        fs::canonicalize(parent).context("Resolving project directory")?
+        fs::canonicalize(parent)
+            .context("Resolving project directory")?
             .join(path.file_name().context("Project needs a filename")?)
     };
-    let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false)
-        .open(sidecar(&path, ".lock")).context("Opening project lock")?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(sidecar(&path, ".lock"))
+        .context("Opening project lock")?;
     let result = if exclusive { lock.try_lock() } else { lock.try_lock_shared() };
     match result {
         Ok(()) => Ok(lock),
-        Err(TryLockError::WouldBlock) => bail!("PROJECT_BUSY: This project is open in another CapOpen window or an AI agent is editing it. Close it there first."),
+        Err(TryLockError::WouldBlock) => bail!(
+            "PROJECT_BUSY: This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
+        ),
         Err(TryLockError::Error(error)) => Err(error).context("Acquiring project lock"),
     }
 }

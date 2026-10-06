@@ -4,19 +4,22 @@ const ZOOM_MAX_SCALE: f32 = 1.5;
 const POP_MAX_SCALE: f32 = 1.1;
 
 pub fn max_animation_scale(clip: &Clip) -> f32 {
-    [(clip.anim_in, false), (clip.anim_out, true)].into_iter().map(|(animation, exiting)| {
-        match animation.filter(|a| a.duration_us > 0).map(|a| a.kind) {
+    [(clip.anim_in, false), (clip.anim_out, true)]
+        .into_iter()
+        .map(|(animation, exiting)| match animation.filter(|a| a.duration_us > 0).map(|a| a.kind) {
             Some(AnimationKind::ZoomIn) if exiting => ZOOM_MAX_SCALE,
             Some(AnimationKind::ZoomOut) if !exiting => ZOOM_MAX_SCALE,
             Some(AnimationKind::Pop) => POP_MAX_SCALE,
             _ => 1.0,
-        }
-    }).product()
+        })
+        .product()
 }
 
 pub fn source_time(clip: &Clip, t_us: i64) -> i64 {
     match clip.content {
-        ClipContent::Media { source_in_us, speed, .. } => source_in_us + ((t_us - clip.start_us).max(0) as f64 * speed as f64).round() as i64,
+        ClipContent::Media { source_in_us, speed, .. } => {
+            source_in_us + ((t_us - clip.start_us).max(0) as f64 * speed as f64).round() as i64
+        }
         _ => 0,
     }
 }
@@ -74,8 +77,10 @@ fn keyframed(clip: &Clip, u: i64) -> Option<Transform> {
             let p = (u - a.t_us) as f32 / (b.t_us - a.t_us).max(1) as f32;
             let lerp = |a: f32, b: f32| a + (b - a) * p;
             return Some(Transform {
-                x: lerp(a.transform.x, b.transform.x), y: lerp(a.transform.y, b.transform.y),
-                scale: lerp(a.transform.scale, b.transform.scale), rotation: lerp(a.transform.rotation, b.transform.rotation),
+                x: lerp(a.transform.x, b.transform.x),
+                y: lerp(a.transform.y, b.transform.y),
+                scale: lerp(a.transform.scale, b.transform.scale),
+                rotation: lerp(a.transform.rotation, b.transform.rotation),
                 opacity: lerp(a.transform.opacity, b.transform.opacity),
             });
         }
@@ -88,15 +93,29 @@ fn animate(t: &mut Transform, kind: AnimationKind, p: f32, exiting: bool) {
     let visible = if exiting { 1.0 - p } else { p };
     t.opacity *= visible;
     let scale = match kind {
-        ZoomIn => if exiting { 1.0 + (ZOOM_MAX_SCALE - 1.0) * p } else { 0.5 + 0.5 * p },
-        ZoomOut => if exiting { 1.0 - 0.5 * p } else { ZOOM_MAX_SCALE - (ZOOM_MAX_SCALE - 1.0) * p },
-        Pop => if p < 0.7 {
-            let start = if exiting { 1.0 } else { 0.0 };
-            start + (POP_MAX_SCALE - start) * p / 0.7
-        } else {
-            let end = if exiting { 0.0 } else { 1.0 };
-            POP_MAX_SCALE + (end - POP_MAX_SCALE) * (p - 0.7) / 0.3
-        },
+        ZoomIn => {
+            if exiting {
+                1.0 + (ZOOM_MAX_SCALE - 1.0) * p
+            } else {
+                0.5 + 0.5 * p
+            }
+        }
+        ZoomOut => {
+            if exiting {
+                1.0 - 0.5 * p
+            } else {
+                ZOOM_MAX_SCALE - (ZOOM_MAX_SCALE - 1.0) * p
+            }
+        }
+        Pop => {
+            if p < 0.7 {
+                let start = if exiting { 1.0 } else { 0.0 };
+                start + (POP_MAX_SCALE - start) * p / 0.7
+            } else {
+                let end = if exiting { 0.0 } else { 1.0 };
+                POP_MAX_SCALE + (end - POP_MAX_SCALE) * (p - 0.7) / 0.3
+            }
+        }
         _ => 1.0,
     };
     t.scale *= scale;
@@ -116,10 +135,21 @@ mod tests {
     use crate::model::{Animation, Keyframe, TransitionKind};
 
     fn clip() -> Clip {
-        Clip::new("test".into(), 1_000_000, 4_000_000, ClipContent::Media {
-            asset_id: "a".into(), source_in_us: 500_000, speed: 2.0, volume: 1.0,
-            transform: Transform::default(), adjust: Default::default(), fade_in_us: 0, fade_out_us: 0,
-        })
+        Clip::new(
+            "test".into(),
+            1_000_000,
+            4_000_000,
+            ClipContent::Media {
+                asset_id: "a".into(),
+                source_in_us: 500_000,
+                speed: 2.0,
+                volume: 1.0,
+                transform: Transform::default(),
+                adjust: Default::default(),
+                fade_in_us: 0,
+                fade_out_us: 0,
+            },
+        )
     }
 
     #[test]
@@ -156,15 +186,29 @@ mod tests {
             for exiting in [false, true] {
                 let mut c = clip();
                 let a = Some(Animation { kind, duration_us: 1_000_000 });
-                if exiting { c.anim_out = a; } else { c.anim_in = a; }
+                if exiting {
+                    c.anim_out = a;
+                } else {
+                    c.anim_in = a;
+                }
                 let start = if exiting { c.end_us() - 1_000_000 } else { c.start_us };
-                for (offset, expected) in [(0, if exiting { 1.0 } else { 0.0 }), (500_000, 0.875), (1_000_000, if exiting { 0.0 } else { 1.0 })] {
+                for (offset, expected) in [
+                    (0, if exiting { 1.0 } else { 0.0 }),
+                    (500_000, 0.875),
+                    (1_000_000, if exiting { 0.0 } else { 1.0 }),
+                ] {
                     assert!((transform_at(&c, start + offset).0.opacity - expected).abs() < 1e-6);
                 }
                 let mid = transform_at(&c, start + 500_000).0;
-                if kind == SlideUp { assert!((mid.y - if exiting { -0.0375 } else { 0.0375 }).abs() < 1e-6); }
-                if kind == ZoomIn { assert!((mid.scale - if exiting { 1.0625 } else { 0.9375 }).abs() < 1e-6); }
-                if kind == ZoomOut { assert!((mid.scale - if exiting { 0.9375 } else { 1.0625 }).abs() < 1e-6); }
+                if kind == SlideUp {
+                    assert!((mid.y - if exiting { -0.0375 } else { 0.0375 }).abs() < 1e-6);
+                }
+                if kind == ZoomIn {
+                    assert!((mid.scale - if exiting { 1.0625 } else { 0.9375 }).abs() < 1e-6);
+                }
+                if kind == ZoomOut {
+                    assert!((mid.scale - if exiting { 0.9375 } else { 1.0625 }).abs() < 1e-6);
+                }
             }
         }
         let mut t = Transform::default();
@@ -176,7 +220,15 @@ mod tests {
     fn centred_transition_progress() {
         let mut b = clip();
         b.transition_in = Some(Transition { kind: TransitionKind::Dissolve, duration_us: 1_000_000 });
-        let track = Track { id: "main".into(), kind: crate::model::TrackKind::Video, name: String::new(), muted: false, hidden: false, keep_in_place: false, clips: vec![clip(), b] };
+        let track = Track {
+            id: "main".into(),
+            kind: crate::model::TrackKind::Video,
+            name: String::new(),
+            muted: false,
+            hidden: false,
+            keep_in_place: false,
+            clips: vec![clip(), b],
+        };
         assert!(transition_at(&track, 499_999).is_none());
         for (t, p) in [(500_000, 0.0), (1_000_000, 0.5), (1_499_999, 0.999999)] {
             assert!((transition_at(&track, t).unwrap().3 - p).abs() < 1e-6);

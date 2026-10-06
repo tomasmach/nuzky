@@ -1,7 +1,7 @@
 use capopen_engine::{
     edit::{EditCmd, TimeRange},
-    model::TextStyle,
     export::Quality,
+    model::TextStyle,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -177,14 +177,18 @@ mod tests {
     fn captions_omit_style_and_grouping_for_reel_defaults() {
         let args: Captions = serde_json::from_value(serde_json::json!({
             "run_id": "run"
-        })).unwrap();
+        }))
+        .unwrap();
         let defaults = capopen_analysis::CaptionGrouping::default();
         assert_eq!(args.grouping().max_words, defaults.max_words);
         assert_eq!(args.grouping().max_chars, defaults.max_chars);
         let style = args.style.unwrap_or_else(reel_style);
-        assert_eq!(serde_json::to_value(style).unwrap(), serde_json::json!({
-            "fontFamily": null, "fontSize": 95.0, "color": "#ffffff", "bold": false,
-            "strokeWidth": 7.5, "strokeColor": "#000000", "background": null
-        }));
+        assert_eq!(
+            serde_json::to_value(style).unwrap(),
+            serde_json::json!({
+                "fontFamily": null, "fontSize": 95.0, "color": "#ffffff", "bold": false,
+                "strokeWidth": 7.5, "strokeColor": "#000000", "background": null
+            })
+        );
     }
 }

@@ -71,14 +71,13 @@ impl Jobs {
         let lifecycle = self.lifecycle.lock().unwrap();
         ensure!(!lifecycle.closing, "APP_CLOSED: host is closing");
         ensure!(!lifecycle.disconnected_clients.contains(owner), "CLIENT_CLOSED: client disconnected");
-        ensure!(run_id.is_none_or(|run| !lifecycle.stopped_runs.contains(run)), "RUN_STOPPED: run was stopped by the user");
+        ensure!(
+            run_id.is_none_or(|run| !lifecycle.stopped_runs.contains(run)),
+            "RUN_STOPPED: run was stopped by the user"
+        );
         let mut entries = self.entries.lock().unwrap();
         ensure!(
-            entries
-                .values()
-                .filter(|j| j.lock().unwrap().status == "running")
-                .count()
-                < MAX_ACTIVE,
+            entries.values().filter(|j| j.lock().unwrap().status == "running").count() < MAX_ACTIVE,
             "JOB_LIMIT: wait for or cancel an active job"
         );
         let id = new_id();
@@ -104,8 +103,7 @@ impl Jobs {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     work(cancel.clone(), Progress(owned.clone()))
                 }));
-                let result =
-                    result.unwrap_or_else(|_| Err(anyhow::anyhow!("JOB_FAILED: worker panicked")));
+                let result = result.unwrap_or_else(|_| Err(anyhow::anyhow!("JOB_FAILED: worker panicked")));
                 let mut state = owned.lock().unwrap();
                 // An export that has already atomically published its file is complete.
                 if cancel.load(Ordering::Relaxed) && !(kind == "export" && result.is_ok()) {
@@ -139,12 +137,11 @@ impl Jobs {
 
     pub fn get_for(&self, client: Option<&str>, id: &str, cancel: bool) -> Result<Value> {
         let entries = self.entries.lock().unwrap();
-        let state = entries
-            .get(id)
-            .context("UNKNOWN_JOB: no such job in this session")?
-            .lock()
-            .unwrap();
-        ensure!(!cancel || client.is_none_or(|client| state.owner == client), "UNAUTHORIZED: job belongs to another client");
+        let state = entries.get(id).context("UNKNOWN_JOB: no such job in this session")?.lock().unwrap();
+        ensure!(
+            !cancel || client.is_none_or(|client| state.owner == client),
+            "UNAUTHORIZED: job belongs to another client"
+        );
         if cancel && state.status == "running" {
             state.cancel.store(true, Ordering::Relaxed);
         }
@@ -167,7 +164,9 @@ impl Jobs {
         lifecycle.stopped_runs.insert(run_id.into());
         for state in self.entries.lock().unwrap().values() {
             let state = state.lock().unwrap();
-            if state.run_id.as_deref() == Some(run_id) { state.cancel.store(true, Ordering::Relaxed); }
+            if state.run_id.as_deref() == Some(run_id) {
+                state.cancel.store(true, Ordering::Relaxed);
+            }
         }
     }
 
@@ -200,19 +199,10 @@ mod tests {
         let jobs = Jobs::default();
         let (tx, rx) = std::sync::mpsc::channel();
         let started = jobs
-            .start(
-                "client",
-                None,
-                "test",
-                Stamp {
-                    revision: 7,
-                    session_epoch: "epoch".into(),
-                },
-                move |_, _| {
-                    rx.recv().unwrap();
-                    Ok(json!({"late":true}))
-                },
-            )
+            .start("client", None, "test", Stamp { revision: 7, session_epoch: "epoch".into() }, move |_, _| {
+                rx.recv().unwrap();
+                Ok(json!({"late":true}))
+            })
             .unwrap();
         let id = started["job_id"].as_str().unwrap();
         let cancel = jobs.get(id, true).unwrap();

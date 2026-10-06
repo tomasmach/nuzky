@@ -58,7 +58,9 @@ pub fn filmstrip(asset: &Asset) -> Result<Option<crate::Filmstrip>> {
             frames = [None, None];
         }
         frames = decoder.frame_covering(target, frames)?;
-        let Some((t, frame)) = frames[0].as_ref().or(frames[1].as_ref()) else { anyhow::bail!("No filmstrip frame at {target} us in {}", asset.path) };
+        let Some((t, frame)) = frames[0].as_ref().or(frames[1].as_ref()) else {
+            anyhow::bail!("No filmstrip frame at {target} us in {}", asset.path)
+        };
         let frame = decoder.convert(frame, *t, dw, dh)?;
         let (rgba, _, _) = rotate(&frame.data, dw, dh, asset.rotation);
         let row = frame_width as usize * 4;
@@ -81,7 +83,9 @@ fn filmstrip_size(asset: &Asset) -> Result<(u32, u32, u32)> {
     let height = 90;
     let width = (asset.width as f64 * height as f64 / asset.height as f64).round().max(2.0) as u64;
     let pixels = width * height as u64;
-    if pixels > MAX_SPRITE_PIXELS { anyhow::bail!("This aspect ratio is too wide for a filmstrip"); }
+    if pixels > MAX_SPRITE_PIXELS {
+        anyhow::bail!("This aspect ratio is too wide for a filmstrip");
+    }
     let count = if asset.kind == AssetKind::Image { 1 } else { (asset.duration_us / 500_000).clamp(1, 40) as u32 };
     Ok((width as u32, height, count.min((MAX_SPRITE_PIXELS / pixels) as u32)))
 }
@@ -116,8 +120,18 @@ mod tests {
 
     #[test]
     fn filmstrip_limits_total_pixels() {
-        let mut asset = Asset { id: "wide".into(), name: String::new(), path: String::new(), kind: AssetKind::Video,
-            duration_us: 600_000_000, width: 10000, height: 100, fps: 25.0, has_audio: false, rotation: 0 };
+        let mut asset = Asset {
+            id: "wide".into(),
+            name: String::new(),
+            path: String::new(),
+            kind: AssetKind::Video,
+            duration_us: 600_000_000,
+            width: 10000,
+            height: 100,
+            fps: 25.0,
+            has_audio: false,
+            rotation: 0,
+        };
         let (w, h, count) = filmstrip_size(&asset).unwrap();
         assert_eq!(count, 4);
         assert!(w as u64 * h as u64 * count as u64 <= MAX_SPRITE_PIXELS);
@@ -143,7 +157,9 @@ mod tests {
     #[test]
     fn rotation_preserves_corner_order() {
         let pixels: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
-        for (angle, expected) in [(90, vec![3, 0, 4, 1, 5, 2]), (180, vec![5, 4, 3, 2, 1, 0]), (270, vec![2, 5, 1, 4, 0, 3])] {
+        for (angle, expected) in
+            [(90, vec![3, 0, 4, 1, 5, 2]), (180, vec![5, 4, 3, 2, 1, 0]), (270, vec![2, 5, 1, 4, 0, 3])]
+        {
             let (out, w, h) = rotate(&pixels, 3, 2, angle);
             assert_eq!(out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), expected);
             assert_eq!((w, h), if angle == 180 { (3, 2) } else { (2, 3) });
@@ -159,11 +175,16 @@ mod tests {
         for name in ["portrait.mp4", "wide.mp4", "phone_hevc_vfr.mov", "music.mp3", "engine-evidence/identity.png"] {
             let asset = capopen_engine::media::probe(&root.join(name), name.into()).unwrap();
             let strip = filmstrip(&asset).unwrap();
-            if asset.kind == AssetKind::Audio { assert!(strip.is_none()); continue; }
+            if asset.kind == AssetKind::Audio {
+                assert!(strip.is_none());
+                continue;
+            }
             let strip = strip.unwrap();
             assert_eq!(strip.frame_height, 90);
             assert!(strip.count <= 40 && strip.interval_us >= 500_000);
-            if asset.kind == AssetKind::Image { assert_eq!(strip.count, 1); }
+            if asset.kind == AssetKind::Image {
+                assert_eq!(strip.count, 1);
+            }
             let bytes = base64::engine::general_purpose::STANDARD.decode(strip.url.split_once(',').unwrap().1).unwrap();
             let reader = png::Decoder::new(std::io::Cursor::new(&bytes)).read_info().unwrap();
             assert_eq!(reader.info().width, strip.frame_width * strip.count);

@@ -17,10 +17,7 @@ impl Workers {
                 index += 1;
             }
         }
-        ensure!(
-            self.0.len() < MAX_IN_FLIGHT,
-            "REQUEST_LIMIT: at most four requests may be in flight"
-        );
+        ensure!(self.0.len() < MAX_IN_FLIGHT, "REQUEST_LIMIT: at most four requests may be in flight");
         self.0.push(
             std::thread::Builder::new()
                 .name("capopen-ipc-request".into())
@@ -57,13 +54,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        assert!(
-            workers
-                .start(|| panic!("must not run"))
-                .unwrap_err()
-                .to_string()
-                .starts_with("REQUEST_LIMIT")
-        );
+        assert!(workers.start(|| panic!("must not run")).unwrap_err().to_string().starts_with("REQUEST_LIMIT"));
         for tx in releases {
             tx.send(()).unwrap();
         }

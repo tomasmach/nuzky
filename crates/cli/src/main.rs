@@ -1,7 +1,7 @@
 //! Headless CapOpen: inspect media, render single frames and export projects.
 
-use std::path::{Path, PathBuf};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -40,11 +40,15 @@ fn resolved_path(path: &Path) -> Result<PathBuf> {
     const MAX_SYMLINKS: usize = 40;
     let mut path = path.to_path_buf();
     for _ in 0..MAX_SYMLINKS {
-        if let Ok(target) = std::fs::canonicalize(&path) { return Ok(target); }
+        if let Ok(target) = std::fs::canonicalize(&path) {
+            return Ok(target);
+        }
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
         match std::fs::read_link(&path) {
             Ok(target) => path = if target.is_absolute() { target } else { parent.join(target) },
-            Err(_) => return Ok(std::fs::canonicalize(parent)?.join(path.file_name().context("Output needs a filename")?)),
+            Err(_) => {
+                return Ok(std::fs::canonicalize(parent)?.join(path.file_name().context("Output needs a filename")?));
+            }
         }
     }
     bail!("Too many symlinks in output path")
@@ -95,7 +99,9 @@ fn main() -> Result<()> {
         ["new", out, media @ ..] if !media.is_empty() => {
             let out = Path::new(out);
             let _lock = capopen_session::lock_project(out, true)?;
-            if out.symlink_metadata().is_ok() { bail!("Project already exists: {}", out.display()); }
+            if out.symlink_metadata().is_ok() {
+                bail!("Project already exists: {}", out.display());
+            }
             let mut project = Project::new("CLI project");
             for m in media {
                 let asset = probe(Path::new(m), new_id())?;
@@ -139,7 +145,12 @@ fn main() -> Result<()> {
             }
             let avg = times.iter().sum::<f64>() / times.len() as f64;
             times.sort_by(f64::total_cmp);
-            println!("{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers", renderer.adapter_name(), times[(times.len() * 95).div_ceil(100).saturating_sub(1)], renderer.late_layers);
+            println!(
+                "{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers",
+                renderer.adapter_name(),
+                times[(times.len() * 95).div_ceil(100).saturating_sub(1)],
+                renderer.late_layers
+            );
         }
         ["render", project, out, rest @ ..] => {
             check_render_output(Path::new(project), Path::new(out))?;
@@ -167,4 +178,3 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
-

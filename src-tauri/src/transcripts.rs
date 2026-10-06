@@ -54,7 +54,10 @@ fn view(host: &Host, pause_us: i64) -> Result<TranscriptView> {
     let pauses = transcript::pauses(&project, &derived, pause_us).unwrap_or_default();
     Ok(TranscriptView {
         key: transcript::word_key(&project, &derived.words),
-        words: derived.words.iter().enumerate()
+        words: derived
+            .words
+            .iter()
+            .enumerate()
             .map(|(i, w)| Word { i, start_us: w.start_us, end_us: w.end_us, text: w.text.clone(), p: w.probability })
             .collect(),
         pauses,
@@ -68,11 +71,16 @@ fn cut(host: &Host, key: &str, target: Target) -> Result<(Vec<String>, i64, i64)
     let derived = transcript::derive(&state.project, &host.transcripts)?;
     transcript::check_key(&state.project, &derived, key)?;
     let ranges = match target {
-        Target::Words(delete) => transcript::edit_ranges(&state.project, &derived, Some(delete.as_slice()), None, None)?,
+        Target::Words(delete) => {
+            transcript::edit_ranges(&state.project, &derived, Some(delete.as_slice()), None, None)?
+        }
         Target::Pauses { pause_us, only } => {
             let pauses = transcript::pauses(&state.project, &derived, pause_us)?;
             let picked = match only {
-                Some(only) => only.iter().map(|&i| pauses.get(i).context("INVALID_PAUSE: no such pause")).collect::<Result<Vec<_>>>()?,
+                Some(only) => only
+                    .iter()
+                    .map(|&i| pauses.get(i).context("INVALID_PAUSE: no such pause"))
+                    .collect::<Result<Vec<_>>>()?,
                 None => pauses.iter().collect(),
             };
             picked.into_iter().map(|p| TimeRange { start_us: p.start_us, end_us: p.end_us }).collect()
@@ -80,7 +88,11 @@ fn cut(host: &Host, key: &str, target: Target) -> Result<(Vec<String>, i64, i64)
     };
     ensure!(!ranges.is_empty(), "Nothing to cut");
     let plan = transcript::plan_cut(&state.project, &derived, ranges)?;
-    let edited = host.session.edit(vec![plan.edit], None, Expect { revision: None, speech_layout_key: Some(state.speech_layout_key) })?;
+    let edited = host.session.edit(
+        vec![plan.edit],
+        None,
+        Expect { revision: None, speech_layout_key: Some(state.speech_layout_key) },
+    )?;
     Ok((edited.outcome.select, plan.ranges[0].start_us, state.project.duration_us() - plan.preview.duration_us()))
 }
 
@@ -90,7 +102,9 @@ fn explain(error: anyhow::Error) -> String {
     match text.split_once(':').map(|(code, _)| code) {
         Some("SPEECH_CHANGED") => "The transcript changed in the meantime. Check the words and try again.".into(),
         Some("TRANSCRIPT_MISSING") => "Transcribe the remaining clips first.".into(),
-        Some("OVERLAPPING_SPEECH" | "UNSAFE_CUT") => "These words overlap other speech, so they cannot be cut on their own.".into(),
+        Some("OVERLAPPING_SPEECH" | "UNSAFE_CUT") => {
+            "These words overlap other speech, so they cannot be cut on their own.".into()
+        }
         _ => text,
     }
 }
@@ -106,16 +120,32 @@ pub async fn transcript_view(app: AppHandle, pause_us: i64) -> CmdResult<Transcr
 }
 
 #[tauri::command]
-pub async fn cut_words(app: AppHandle, key: String, delete: Vec<[usize; 2]>, expected_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+pub async fn cut_words(
+    app: AppHandle,
+    key: String,
+    delete: Vec<[usize; 2]>,
+    expected_epoch: Option<String>,
+) -> CmdResult<TranscriptCut> {
     apply_cut(app, key, Target::Words(delete), expected_epoch).await
 }
 
 #[tauri::command]
-pub async fn remove_pauses(app: AppHandle, key: String, pause_us: i64, only: Option<Vec<usize>>, expected_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+pub async fn remove_pauses(
+    app: AppHandle,
+    key: String,
+    pause_us: i64,
+    only: Option<Vec<usize>>,
+    expected_epoch: Option<String>,
+) -> CmdResult<TranscriptCut> {
     apply_cut(app, key, Target::Pauses { pause_us, only }, expected_epoch).await
 }
 
-async fn apply_cut(app: AppHandle, key: String, target: Target, expected_epoch: Option<String>) -> CmdResult<TranscriptCut> {
+async fn apply_cut(
+    app: AppHandle,
+    key: String,
+    target: Target,
+    expected_epoch: Option<String>,
+) -> CmdResult<TranscriptCut> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let current = crate::lock_session(&state.session, expected_epoch.as_deref())?;
@@ -129,8 +159,16 @@ async fn apply_cut(app: AppHandle, key: String, target: Target, expected_epoch: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::{Project, edit::{EditCmd, new_id}, model::{Asset, AssetKind}, speech};
-    use capopen_session::{Mode, ProjectSession, transcripts::{Record, TranscriptStore, VERSION}};
+    use capopen_engine::{
+        Project,
+        edit::{EditCmd, new_id},
+        model::{Asset, AssetKind},
+        speech,
+    };
+    use capopen_session::{
+        Mode, ProjectSession,
+        transcripts::{Record, TranscriptStore, VERSION},
+    };
 
     /// A 10 s talk with a word every second and its stored transcript, plus music on its own track.
     fn fixture() -> (std::path::PathBuf, Host) {
@@ -139,22 +177,53 @@ mod tests {
         let asset = |id: &str, kind| {
             let path = dir.join(id);
             std::fs::write(&path, id).unwrap();
-            Asset { id: id.into(), name: id.into(), path: path.to_string_lossy().into(), kind,
-                duration_us: 10_000_000, width: 1080, height: 1920, fps: 30.0, has_audio: true, rotation: 0 }
+            Asset {
+                id: id.into(),
+                name: id.into(),
+                path: path.to_string_lossy().into(),
+                kind,
+                duration_us: 10_000_000,
+                width: 1080,
+                height: 1920,
+                fps: 30.0,
+                has_audio: true,
+                rotation: 0,
+            }
         };
         let mut project = Project::new("transcript");
-        project.apply(EditCmd::AddAssets { assets: vec![asset("talk", AssetKind::Video), asset("music", AssetKind::Audio)] }).unwrap();
+        project
+            .apply(EditCmd::AddAssets {
+                assets: vec![asset("talk", AssetKind::Video), asset("music", AssetKind::Audio)],
+            })
+            .unwrap();
         project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "music".into(), start_us: Some(0), track_id: None }).unwrap();
         let path = dir.join("project.capopen");
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
         let store = TranscriptStore::at(dir.join("transcripts")).unwrap();
         let talk = &project.assets[0];
-        let words = (0..8).map(|i| speech::Word {
-            start_us: 500_000 + i * 1_000_000, end_us: 900_000 + i * 1_000_000, text: format!("w{i}"), probability: 0.9,
-        }).collect();
-        store.put(talk, &Record { version: VERSION, fingerprint: store.fingerprint(talk).unwrap(), duration_us: talk.duration_us,
-            model: "fixture".into(), language: "cs".into(), words, segments: vec![] }).unwrap();
+        let words = (0..8)
+            .map(|i| speech::Word {
+                start_us: 500_000 + i * 1_000_000,
+                end_us: 900_000 + i * 1_000_000,
+                text: format!("w{i}"),
+                probability: 0.9,
+            })
+            .collect();
+        store
+            .put(
+                talk,
+                &Record {
+                    version: VERSION,
+                    fingerprint: store.fingerprint(talk).unwrap(),
+                    duration_us: talk.duration_us,
+                    model: "fixture".into(),
+                    language: "cs".into(),
+                    words,
+                    segments: vec![],
+                },
+            )
+            .unwrap();
         let session = ProjectSession::open(&path, Mode::Write, None).unwrap();
         (dir.clone(), Host { session, jobs: Default::default(), transcripts: store, cache_dir: dir.join("cache") })
     }
@@ -177,16 +246,35 @@ mod tests {
         let project = host.session.state().unwrap().project;
         let music = &project.tracks.iter().find(|t| t.keep_in_place).unwrap().clips[0];
         assert_eq!((music.start_us, music.duration_us), (0, 10_000_000));
-        assert!(explain(cut(&host, &first.key, Target::Words(vec![[0, 0]])).unwrap_err()).starts_with("The transcript changed"));
+        assert!(
+            explain(cut(&host, &first.key, Target::Words(vec![[0, 0]])).unwrap_err())
+                .starts_with("The transcript changed")
+        );
 
         // Q over the first second and double speed: the words follow without recognising again.
-        host.session.edit(vec![EditCmd::RippleDeleteRanges { ranges: vec![TimeRange { start_us: 0, end_us: 1_000_000 }], keep_track_ids: None }],
-            None, Expect::default()).unwrap();
+        host.session
+            .edit(
+                vec![EditCmd::RippleDeleteRanges {
+                    ranges: vec![TimeRange { start_us: 0, end_us: 1_000_000 }],
+                    keep_track_ids: None,
+                }],
+                None,
+                Expect::default(),
+            )
+            .unwrap();
         let after_q = placed(&host);
         assert_eq!(after_q.words[0].text, "w1");
         let clip = host.session.state().unwrap().project.tracks[0].clips[0].id.clone();
-        host.session.edit(vec![serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": clip, "speed": 2})).unwrap()],
-            None, Expect::default()).unwrap();
+        host.session
+            .edit(
+                vec![
+                    serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": clip, "speed": 2}))
+                        .unwrap(),
+                ],
+                None,
+                Expect::default(),
+            )
+            .unwrap();
         assert_eq!(placed(&host).words[0].start_us, after_q.words[0].start_us / 2);
 
         host.session.undo().unwrap();
