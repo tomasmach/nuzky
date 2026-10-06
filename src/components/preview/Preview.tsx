@@ -113,7 +113,10 @@ export function Preview() {
       }, 80);
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+    };
   }, []);
 
   const aspect = canvas ? canvas.width / canvas.height : 9 / 16;
