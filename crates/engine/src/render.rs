@@ -105,7 +105,8 @@ fn placement(
                 Some(TransitionRole { kind: TransitionKind::ZoomIn, progress, incoming: false }) => 1.0 + progress,
                 _ => 1.0,
             };
-            let scale = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0, MAX_TEXT_SCALE).log2().ceil());
+            let wanted = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0, MAX_TEXT_SCALE).log2().ceil());
+            let scale = crate::text::raster_scale(&style, wanted);
             let wrap = style.max_width.unwrap_or(canvas.width as f32 * 0.9);
             let image = text_renderer.render(&text[..end], &style, scale, wrap * scale);
             ((image.width as f32 / scale, image.height as f32 / scale), Some(image))
@@ -621,6 +622,34 @@ mod tests {
         let a = placement(&project, visible, 200_000, 1.0, &mut text).unwrap().text.unwrap();
         let b = placement(&project, visible, 201_000, 1.0, &mut text).unwrap().text.unwrap();
         assert!(Arc::ptr_eq(&a.data, &b.data));
+    }
+
+    #[test]
+    fn large_text_keeps_its_size_at_export_resolutions() {
+        let mut project = Project::new("large text");
+        let style = TextStyle {
+            font_family: None,
+            font_size: 300.0,
+            stroke_width: 0.0,
+            background: None,
+            color: "#ffffff".into(),
+            bold: false,
+            stroke_color: "#000000".into(),
+            max_width: None,
+        };
+        let transform = Transform { scale: 3.0, ..Transform::default() };
+        project.tracks[0].clips.push(Clip::new(
+            "big".into(),
+            0,
+            1_000_000,
+            ClipContent::Text { text: "A".into(), style, transform },
+        ));
+        let mut text = TextRenderer::new();
+        let visible = visible_clips(&project.tracks[0], 0).next().unwrap();
+        let base = placement(&project, visible, 0, 1.0, &mut text).unwrap();
+        // 2160p wants 8 output pixels per canvas pixel; the glyph cap lowers that, not the font size.
+        let export = placement(&project, visible, 0, 2.0, &mut text).unwrap();
+        assert!((export.size.0 - base.size.0).abs() <= 1.0 && (export.size.1 - base.size.1).abs() <= 1.0);
     }
 
     #[test]

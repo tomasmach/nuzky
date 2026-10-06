@@ -22,6 +22,13 @@ fn finite_clamp(value: f32, min: f32, max: f32) -> f32 {
     if value.is_finite() { value.clamp(min, max) } else { min }
 }
 
+/// Output pixels per canvas pixel that `style` rasterises at. Large text gets a coarser raster
+/// instead of a smaller font, so callers size the layer and the wrap width with this scale.
+pub fn raster_scale(style: &TextStyle, scale: f32) -> f32 {
+    let size = finite_clamp(style.font_size, 1.0, f32::MAX);
+    finite_clamp(scale, 0.01, MAX_RASTER_SCALE).min(MAX_GLYPH_PX / size).max(0.01)
+}
+
 #[derive(serde::Deserialize)]
 pub struct FontFace {
     pub family: String,
