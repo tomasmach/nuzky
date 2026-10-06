@@ -442,14 +442,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
                 continue;
             }
             while decoder.receive_frame(&mut decoded).is_ok() {
-                write_frame(
-                    &decoded,
-                    &mut resampler,
-                    &mut mono,
-                    &mut writer,
-                    &mut written,
-                    video_end_us.max(MAX_AUDIO_LEAD_US),
-                )?;
+                write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written, max_lead_us(video_end_us))?;
             }
             if let Some(pts) = packet.pts() {
                 let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
@@ -461,14 +454,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
         }
         decoder.send_eof().ok();
         while decoder.receive_frame(&mut decoded).is_ok() {
-            write_frame(
-                &decoded,
-                &mut resampler,
-                &mut mono,
-                &mut writer,
-                &mut written,
-                video_end_us.max(MAX_AUDIO_LEAD_US),
-            )?;
+            write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written, max_lead_us(video_end_us))?;
         }
         if let Some((ctx, _)) = resampler.as_mut() {
             loop {
@@ -494,6 +480,12 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
 /// Audio may start this late even before the video read so far covers it; later starts past the
 /// video are broken timestamps.
 const MAX_AUDIO_LEAD_US: i64 = 600_000_000;
+/// Muxers keep streams this close together in the file (FFmpeg's default max_interleave_delta).
+const MAX_INTERLEAVE_US: i64 = 10_000_000;
+
+fn max_lead_us(video_end_us: i64) -> i64 {
+    video_end_us.saturating_add(MAX_INTERLEAVE_US).max(MAX_AUDIO_LEAD_US)
+}
 
 const PCM_FORMAT: ff::format::Sample = ff::format::Sample::F32(ff::format::sample::Type::Packed);
 

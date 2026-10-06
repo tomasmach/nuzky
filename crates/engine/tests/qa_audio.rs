@@ -178,15 +178,16 @@ fn microphone_switched_on_late_in_a_long_recording_is_kept() {
     }
     let d = dir("late-microphone");
     let source = d.join("long.mkv");
-    // 11 minutes of video with sound from 10:50, past the fallback limit but inside the video.
+    // 11 minutes of video with sound from 10:50, past the fallback limit but inside the video,
+    // stored a second ahead of the video like many muxers do.
     ff(
         &[
             "-f",
             "lavfi",
             "-i",
-            "color=red:s=64x64:r=1:d=660",
+            "color=red:s=64x64:r=25:d=660",
             "-itsoffset",
-            "650",
+            "650.005",
             "-f",
             "lavfi",
             "-i",
@@ -195,6 +196,8 @@ fn microphone_switched_on_late_in_a_long_recording_is_kept() {
             "libx264",
             "-c:a",
             "aac",
+            "-audio_preload",
+            "1000000",
         ],
         &source,
     );
