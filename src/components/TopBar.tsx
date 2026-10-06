@@ -166,12 +166,13 @@ function JobIndicator() {
   return (
     <button
       type="button"
-      role="status"
       title={j.kind === "export" ? "Show export progress" : j.kind === "transcript" ? "Show transcript" : "Show captions"}
       onClick={() => (j.kind === "export" ? useEditor.setState({ exportOpen: true }) : useEditor.setState({ panelTab: j.kind === "transcript" ? "transcript" : "captions" }))}
-      className="flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg hover:bg-raised"
+      className="flex h-8 items-center rounded-md px-2 text-[12px] text-fg hover:bg-raised"
     >
-      {body}
+      <span className="flex items-center gap-1.5" role="status">
+        {body}
+      </span>
     </button>
   );
 }
