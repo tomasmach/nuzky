@@ -18,13 +18,21 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
   for (let i = from; i < to; i++) {
     const t = tokens[i];
     const selected = i >= lo && i <= hi;
-    const tone = i === active ? "text-accent" : selected ? "text-fg" : "";
-    const fill = selected ? "bg-accent/30" : "hover:bg-raised";
+    const playing = i === active;
+    // Accent text on the accent selection is hard to read, so there the word playing is black on accent.
+    const look = selected ? (playing ? "bg-accent text-black" : "bg-accent/30 text-fg") : playing ? "text-accent" : "";
     items.push(
       <Fragment key={i}>
-        {i > from && " "}
+        {/* The space between two selected tokens is filled too, so the selection reads as one band. */}
+        {i > from && (i > lo && i <= hi ? <span className="bg-accent/30"> </span> : " ")}
         {t.kind === "word" ? (
-          <span id={optionId(i)} data-t={i} role="option" aria-selected={selected} className={`cursor-pointer rounded-sm ${fill} ${tone}`}>
+          <span
+            id={optionId(i)}
+            data-t={i}
+            role="option"
+            aria-selected={selected}
+            className={`cursor-pointer ${selected ? `${i === lo ? "rounded-l-sm" : ""} ${i === hi ? "rounded-r-sm" : ""}` : "rounded-sm hover:bg-raised"} ${look}`}
+          >
             {t.text}
           </span>
         ) : (
@@ -35,7 +43,7 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
             aria-selected={selected}
             aria-label={`Pause, ${formatSeconds(t.gapUs)}`}
             title={`Pause of ${formatSeconds(t.gapUs)}`}
-            className={`tabular cursor-pointer rounded px-1 py-px text-[11px] ${selected ? "bg-accent/30" : "bg-raised hover:bg-line"} ${tone || "text-muted"}`}
+            className={`tabular cursor-pointer rounded px-1 py-px text-[11px] ${selected ? look : `bg-raised hover:bg-line ${playing ? "text-accent" : "text-muted"}`}`}
           >
             {formatSeconds(t.gapUs)}
           </span>

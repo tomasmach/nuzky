@@ -55,7 +55,7 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 - **Toasts**: bottom-left above the timeline, over the media panel and no wider than it (316 px), so they never cover the video frame or the transport. While the transcript's Delete bar shows, they sit above it.
 - **Font picker**: looks like a select: `raised` field, family name at 15 px in its own face, chevron. The list opens below (above when there is no room) with a search field on top; groups "Built in" (each name in its face, 15 px) then "On this computer" (UI font, 13 px), headed like a section at 11 px. The keyboard or pointer position is `raised`; the current font has an `accent` check. A font missing on this computer shows a `warn` triangle with the reason in the tooltip.
 - **Mixed value**: with several clips selected, a number field whose clips differ shows "—"; the slider thumb sits at the first clip's value.
-- **Transcript**: 13 px text on a 22 px line, `fg` at 90 %. Each paragraph starts with an 11 px `muted` timecode. Hover is `raised` behind the word; selected words get `accent` at 30 % behind them; the word playing is `accent` text. Pause chips are 11 px tabular `muted` on `raised`. Out of date, the whole text drops to 40 % and the note above it carries a `warn` icon.
+- **Transcript**: 13 px text on a 22 px line, `fg` at 90 %. Each paragraph starts with an 11 px `muted` timecode. Hover is `raised` behind the word; selected words and the spaces between them get `accent` at 30 %, one band; the word playing is `accent` text, black on `accent` inside the selection. Pause chips are 11 px tabular `muted` on `raised`. Out of date, the whole text drops to 40 % and the note above it carries a `warn` icon.
 
 ## States
 
