@@ -69,7 +69,7 @@ pub fn transcribe_words_cancellable(
     let audio = match source {
         AudioSource::Asset { asset, cache } => {
             let pcm = open_pcm(asset, cache)?;
-            // A 3-frame box filter matches the engine caption path's 48->16 kHz conversion.
+            // Average three 48 kHz stereo frames (six channel samples) into one 16 kHz mono sample.
             converted = pcm
                 .samples()
                 .chunks(6)

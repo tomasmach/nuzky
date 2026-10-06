@@ -1,4 +1,4 @@
-//! CPU text rasterisation with outline and background box, cached per clip and size.
+//! CPU text rasterisation with outline and background box, cached by text content, style and output size.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};

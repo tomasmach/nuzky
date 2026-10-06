@@ -1,5 +1,5 @@
 //! Long-running work off the UI path: audio preparation, export, transcripts and auto captions.
-//! Every job reports through `job` events and can be cancelled.
+//! Every job reports through `job` events. Audio preparation cannot be cancelled.
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -213,7 +213,8 @@ pub struct CaptionRequest {
     /// ISO code such as "cs", or "auto".
     pub language: String,
     pub style: TextStyle,
-    /// Most words on screen at once (reels use 1–3); `None` keeps whole phrases.
+    /// Most words on screen at once (reels use 1–3); `None` uses phrase grouping,
+    /// capped by PHRASE_MAX_WORDS and PHRASE_MAX_CHARS unless a limit is supplied.
     #[serde(default)]
     pub max_words: Option<u8>,
     /// Most characters per caption; `None` uses the phrase limit of 42.

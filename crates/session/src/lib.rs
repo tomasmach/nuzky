@@ -36,7 +36,7 @@ use run::Run;
 use writer::Writer;
 
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-/// Matches the desktop autosave quiet period in src-tauri/src/store.rs.
+/// Save user edits after 800 ms without another edit; explicit flushes and agent edits save immediately.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(800);
 
 struct Request {

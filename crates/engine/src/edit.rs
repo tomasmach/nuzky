@@ -683,13 +683,13 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &
         .collect()
 }
 
-/// Owns the current project and its undo history.
 /// One undo or redo entry: the project to return to and the coalesce key that made it.
 struct Step {
     project: Project,
     key: Option<String>,
 }
 
+/// Owns the current project and its undo history.
 pub struct Editor {
     pub project: Project,
     undo: Vec<Step>,
