@@ -2,4 +2,74 @@
 
 # CapOpen
 
-Created in [T3 Code](https://t3.codes).
+An open-source desktop video editor in the spirit of CapCut, with a native Rust engine. Free, GPLv3, runs locally.
+
+**Status: prototype.** Editing, playback, captions and export work on Linux. macOS and Windows builds are not tested yet.
+
+## What it does
+
+- Vertical-first canvas (9:16) with 16:9, 1:1 and 4:5 formats
+- Import video, audio and images, including rotated and variable-frame-rate phone footage (HEVC/H.264)
+- Magnetic main track, overlay video tracks, audio tracks and text tracks
+- Move, trim, split and delete with snapping, undo and redo
+- Text clips with outline, background box, size, colour, position, rotation and opacity
+- Auto captions with Whisper running on your computer, with voice detection so music and silence stay uncaptioned
+- Real-time preview with sound; the sound card clock keeps picture and audio in sync
+- MP4 export (H.264 + AAC) using the same renderer as the preview, so the export matches what you saw
+- Automatic saving after every edit
+
+## Architecture
+
+```
+crates/engine   project model, edits + undo, FFmpeg decoding, wgpu compositor,
+                text rendering, audio mixing, MP4 export
+crates/cli      `capopen` headless CLI on top of the engine
+src-tauri       desktop shell: preview thread, audio output, background jobs, autosave
+src             React + TypeScript UI
+```
+
+- The engine renders every frame offscreen with wgpu. The preview streams those frames to the webview over a loopback WebSocket that only accepts the app's own origin and a per-launch secret. Export reuses the same renderer at full resolution.
+- Each video clip decodes on its own thread with exact seeking on real timestamps, so cuts and variable frame rates stay frame accurate.
+- Audio of each file is decoded once into a 48 kHz cache. Playback, waveforms, export and captions all mix from it.
+- The Rust side owns the project. The UI sends edit commands and receives the new project back.
+
+More detail: [docs/INTERACTION.md](docs/INTERACTION.md) (behaviour), [DESIGN.md](DESIGN.md) (visual tokens).
+
+## Build and run (Linux)
+
+Requirements: Rust 1.90+, Node 22+, FFmpeg 8 shared libraries with headers, ALSA headers, clang (for bindgen), cmake (for whisper.cpp), WebKitGTK 4.1.
+
+Fedora / Nobara:
+
+```sh
+sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel
+```
+
+Without root, `scripts/setup-linux-deps.sh` downloads the FFmpeg and ALSA headers into `~/.cache/capopen/deps` and writes a local `.cargo/config.toml`. Install cmake with `pip install --user cmake`.
+
+```sh
+npm install
+npm run tauri dev
+```
+
+## CLI
+
+```sh
+cargo run -p capopen-cli -- probe clip.mov
+cargo run -p capopen-cli -- new project.capopen a.mp4 b.mov
+cargo run -p capopen-cli -- frame project.capopen 2.5 frame.png 540
+cargo run -p capopen-cli -- render project.capopen out.mp4
+```
+
+Projects are JSON files, so the same project renders identically in the app and on a server.
+
+## Tests
+
+```sh
+cargo test --workspace
+npm run typecheck
+```
+
+## License
+
+GPL-3.0-or-later. FFmpeg with x264 is GPL and compatible with this licence. The export uses FFmpeg's native AAC encoder because `libfdk_aac` is not GPL compatible.

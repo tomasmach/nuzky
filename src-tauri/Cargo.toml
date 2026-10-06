@@ -1,0 +1,37 @@
+[package]
+name = "capopen-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CapOpen desktop video editor"
+
+[lib]
+name = "capopen_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "capopen-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+capopen-engine.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+tauri = { version = "2.12.1", features = [] }
+tauri-plugin-dialog = "2.8.1"
+tauri-plugin-opener = "2.7.0"
+env_logger = "0.11"
+tungstenite = "0.30"
+cpal = "0.18.2"
+rtrb = "0.4"
+png = "0.18"
+base64 = "0.23"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+whisper-rs = "0.16.0"
+ureq = "3.4.2"

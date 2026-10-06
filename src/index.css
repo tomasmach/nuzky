@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0d0e10;
+  --color-panel: #15171a;
+  --color-raised: #1d2024;
+  --color-line: #2a2e34;
+  --color-fg: #e9ebee;
+  --color-muted: #9aa1a9;
+  --color-subtle: #656c75;
+  --color-accent: #10b981;
+  --color-accent-strong: #059669;
+  --color-danger: #f05252;
+  --color-warn: #f5a524;
+  --color-clip-video: #25435a;
+  --color-clip-image: #3a3f63;
+  --color-clip-audio: #1f4a3a;
+  --color-clip-text: #5a4520;
+  --color-clip-captions: #4a3460;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Inter", "Noto Sans", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  color-scheme: dark;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin, dark scrollbars that do not shift layout. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2f343a;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+
+@keyframes skeleton {
+  from {
+    background-position: -200px 0;
+  }
+  to {
+    background-position: 200px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, #1d2024 0, #262a2f 50%, #1d2024 100%) no-repeat;
+  background-size: 400px 100%;
+  animation: skeleton 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
