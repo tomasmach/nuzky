@@ -100,7 +100,7 @@ impl AppState {
 
     pub fn apply(&self, cmd: EditCmd, coalesce: Option<String>) -> Result<Snapshot, String> {
         let mut editor = self.editor.lock().unwrap();
-        let EditOutcome { select } = editor.apply(cmd, coalesce).map_err(err)?;
+        let EditOutcome { select, .. } = editor.apply(cmd, coalesce).map_err(err)?;
         Ok(self.commit(&editor, select))
     }
 

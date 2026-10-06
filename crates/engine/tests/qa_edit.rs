@@ -227,7 +227,7 @@ fn fast_trim_stays_inside_source() {
 #[test]
 fn equal_start_captions_do_not_overlap() {
     let mut e = editor();
-    let style = TextStyle {
+    let style = TextStyle { font_family: None,
         font_size: 40.0,
         color: "#fff".into(),
         bold: false,

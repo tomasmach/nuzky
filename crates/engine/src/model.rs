@@ -239,6 +239,9 @@ impl Default for Transform {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TextStyle {
+    /// Font family name; `None` uses the default sans-serif.
+    #[serde(default)]
+    pub font_family: Option<String>,
     /// Pixels at canvas resolution.
     pub font_size: f32,
     /// `#rrggbb`
@@ -332,7 +335,7 @@ mod tests {
             transition_in: None,
             content: ClipContent::Text {
                 text: "Ahoj světe".into(),
-                style: TextStyle {
+                style: TextStyle { font_family: None,
                     font_size: 80.0,
                     color: "#ffffff".into(),
                     bold: true,

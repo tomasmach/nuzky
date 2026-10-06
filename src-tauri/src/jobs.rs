@@ -210,6 +210,12 @@ pub struct CaptionRequest {
     /// ISO code such as "cs", or "auto".
     pub language: String,
     pub style: TextStyle,
+    /// Most words on screen at once (reels use 1–3); `None` keeps whole phrases.
+    #[serde(default)]
+    pub max_words: Option<u8>,
+    /// Most characters per caption; `None` means no limit.
+    #[serde(default)]
+    pub max_chars: Option<u8>,
 }
 
 #[tauri::command]

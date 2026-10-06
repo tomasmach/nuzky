@@ -13,6 +13,7 @@ const UNDO_LIMIT: usize = 200;
 const MIN_SPEED: f32 = 0.1;
 const MAX_SPEED: f32 = 10.0;
 const MAX_TRANSITION_US: i64 = 2_000_000;
+const CAPTION_Y: f32 = 0.15;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +87,10 @@ pub enum AnimationSlot {
 pub struct EditOutcome {
     /// Clips the UI should select after the edit, e.g. a newly added clip.
     pub select: Vec<String>,
+    /// Clip ids that exist after the edit but not before (including split halves).
+    pub created: Vec<String>,
+    /// Clip ids that existed before the edit but not after.
+    pub removed: Vec<String>,
 }
 
 pub fn new_id() -> String {
@@ -554,6 +559,15 @@ impl Project {
     }
 }
 
+/// Clip ids added and removed between two versions, in timeline order.
+fn clip_changes(before: &Project, after: &Project) -> (Vec<String>, Vec<String>) {
+    let ids = |p: &Project| p.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.id.clone())).collect::<Vec<_>>();
+    let (old, new) = (ids(before), ids(after));
+    let created = new.iter().filter(|id| !old.contains(id)).cloned().collect();
+    let removed = old.iter().filter(|id| !new.contains(id)).cloned().collect();
+    (created, removed)
+}
+
 /// Sorted, non-empty, non-overlapping ranges.
 fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
     ranges.retain(|r| r.end_us > r.start_us.max(0));
@@ -593,7 +607,8 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, min: i64)
     merged
         .into_iter()
         .map(|s| {
-            let transform = Transform { y: 0.28, ..Transform::default() };
+            // Where CapCut puts auto captions on a reel: a bit below the middle.
+            let transform = Transform { y: CAPTION_Y, ..Transform::default() };
             let content = ClipContent::Text { text: s.text, style: style.clone(), transform };
             Clip::new(new_id(), s.start_us, (s.end_us - s.start_us).max(min), content)
         })
@@ -636,6 +651,7 @@ impl Editor {
                 }
             }
         }
+        (outcome.created, outcome.removed) = clip_changes(&before, &self.project);
         if self.project == before {
             return Ok(outcome);
         }
@@ -911,6 +927,18 @@ mod tests {
     }
 
     #[test]
+    fn outcome_reports_created_and_removed_clips() {
+        let mut e = Editor::new(project());
+        let added = e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+        let id = e.project.tracks[0].clips[0].id.clone();
+        assert_eq!((added.created, added.removed), (vec![id.clone()], vec![]));
+        let split = e.apply(EditCmd::SplitClip { clip_id: id.clone(), at_us: 1_000_000 }, None).unwrap();
+        assert_eq!(split.created, split.select);
+        let gone = e.apply(EditCmd::DeleteClips { clip_ids: vec![id.clone()] }, None).unwrap();
+        assert_eq!(gone.removed, vec![id]);
+    }
+
+    #[test]
     fn batches_are_atomic_and_one_undo_step() {
         let mut e = Editor::new(project());
         e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
@@ -957,7 +985,7 @@ mod tests {
     #[test]
     fn captions_replace_previous_caption_track() {
         let mut p = project();
-        let style = TextStyle {
+        let style = TextStyle { font_family: None,
             font_size: 70.0,
             color: "#fff".into(),
             bold: true,
@@ -980,7 +1008,7 @@ mod tests {
 
     #[test]
     fn captions_with_equal_starts_merge_instead_of_overlapping() {
-        let style = TextStyle {
+        let style = TextStyle { font_family: None,
             font_size: 40.0,
             color: "#fff".into(),
             bold: false,
@@ -1001,7 +1029,7 @@ mod tests {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
         p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
-        let style = TextStyle { font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None };
+        let style = TextStyle { font_family: None, font_size: 40.0, color: "#fff".into(), bold: false, stroke_width: 0.0, stroke_color: "#000".into(), background: None };
         p.apply(EditCmd::AddText { start_us: 2_000_000, text: "hi".into(), style }).unwrap();
         let music = p.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().id.clone();
         let ranges = vec![

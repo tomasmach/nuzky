@@ -411,7 +411,7 @@ mod tests {
     fn text_scale_keeps_wrapping_bounds_and_animation_cache() {
         use crate::model::{Animation, AnimationKind, Transition};
         let mut project = Project::new("scaled text");
-        let style = TextStyle { font_size: 60.0, stroke_width: 2.5, background: Some("#222222".into()), color: "#ffffff".into(), bold: true, stroke_color: "#000000".into() };
+        let style = TextStyle { font_family: None, font_size: 60.0, stroke_width: 2.5, background: Some("#222222".into()), color: "#ffffff".into(), bold: true, stroke_color: "#000000".into() };
         for (id, start) in [("out", 0), ("in", 1_000_000)] {
             let mut clip = Clip::new(id.into(), start, 1_000_000, ClipContent::Text {
                 text: "A long wrapped title with accents: Příliš žluťoučký kůň".into(), style: style.clone(),
@@ -470,7 +470,7 @@ mod tests {
     fn text_bounds_match_canvas_raster_and_hidden_tracks_are_excluded() {
         let mut project = Project::new("bounds");
         let mut text = TextRenderer::new();
-        let style = TextStyle { font_size: 60.0, color: "#ffffff".into(), bold: true, stroke_width: 3.0, stroke_color: "#000000".into(), background: None };
+        let style = TextStyle { font_family: None, font_size: 60.0, color: "#ffffff".into(), bold: true, stroke_width: 3.0, stroke_color: "#000000".into(), background: None };
         let image = text.render("Ahoj světe", &style, 1.0, 972.0);
         let clip = Clip::new("text".into(), 0, 1_000_000, ClipContent::Text { text: "Ahoj světe".into(), style, transform: Transform { scale: 1.5, x: 0.1, ..Transform::default() } });
         project.tracks.push(Track { id: "text".into(), kind: TrackKind::Text, name: String::new(), muted: false, hidden: false, clips: vec![clip] });

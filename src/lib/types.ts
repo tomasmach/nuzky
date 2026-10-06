@@ -24,6 +24,8 @@ export interface Transform {
 }
 
 export interface TextStyle {
+  /** Font family; null or missing uses the default sans-serif. */
+  fontFamily?: string | null;
   fontSize: number;
   color: string;
   bold: boolean;
