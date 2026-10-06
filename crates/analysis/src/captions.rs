@@ -34,7 +34,7 @@ pub fn group_words(words: &[Word], grouping: CaptionGrouping) -> Vec<CaptionSegm
     for word in words.iter().filter(|w| !w.text.trim().is_empty()) {
         match groups.last_mut() {
             Some(group) if !hard_break(group, word, grouping) && fits(group, word, grouping) => group.push(word),
-            // "Opus 5.5": a number starts its caption together with the word it belongs to.
+            // "iPhone 17": a number starts its caption together with the word it belongs to.
             Some(group) if !hard_break(group, word, grouping) && starts_with_digit(word) && group.len() > 1
                 && fits(&group[group.len() - 1..], word, grouping) =>
             {
@@ -76,7 +76,7 @@ fn fits(group: &[&Word], next: &Word, grouping: CaptionGrouping) -> bool {
 }
 
 /// A phrase does not end on a lone word when the caption before can give it one:
-/// "programuje fakt | skvěle." becomes "programuje | fakt skvěle.".
+/// "natáčí fakt | skvěle." becomes "natáčí | fakt skvěle.".
 fn balance_phrase_end(groups: &mut [Vec<&Word>], grouping: CaptionGrouping) {
     let [.., before, last] = groups else { return };
     if last.len() != 1 || before.len() < 2 || hard_break(before, last[0], grouping) {
@@ -113,11 +113,11 @@ mod tests {
     #[test]
     fn breaks_on_word_count_characters_punctuation_and_pauses() {
         let words = [
-            word(0, 200, "Opus"),
-            word(200, 400, "5.5"),
-            word(420, 600, "za"),
-            word(600, 800, "mě"),
-            word(800, 1300, "programuje"),
+            word(0, 200, "iPhone"),
+            word(200, 400, "17"),
+            word(420, 600, "mi"),
+            word(600, 800, "dnes"),
+            word(800, 1300, "natáčí"),
             word(1300, 1500, "fakt"),
             word(1500, 1900, "skvěle."),
             word(1950, 2300, "Největší"),
@@ -126,18 +126,18 @@ mod tests {
         ];
         assert_eq!(
             texts(&words, CaptionGrouping::default()),
-            ["Opus 5.5", "za mě", "programuje", "fakt skvěle.", "Největší rozdíl", "je"]
+            ["iPhone 17", "mi dnes", "natáčí", "fakt skvěle.", "Největší rozdíl", "je"]
         );
         let one = CaptionGrouping { max_words: 1, ..CaptionGrouping::default() };
-        assert_eq!(texts(&words[..2], one), ["Opus", "5.5"]);
+        assert_eq!(texts(&words[..2], one), ["iPhone", "17"]);
         let three = CaptionGrouping { max_words: 3, ..CaptionGrouping::default() };
-        assert_eq!(texts(&words[..5], three), ["Opus 5.5 za", "mě programuje"]);
+        assert_eq!(texts(&words[..5], three), ["iPhone 17 mi", "dnes natáčí"]);
     }
 
     #[test]
     fn numbers_stay_with_their_word_and_phrases_do_not_end_on_a_lone_word() {
-        let words = [word(0, 300, "přišel"), word(300, 600, "Opus"), word(600, 900, "5.5"), word(900, 1100, "a"), word(1100, 1500, "konec.")];
-        assert_eq!(texts(&words, CaptionGrouping::default()), ["přišel", "Opus 5.5", "a konec."]);
+        let words = [word(0, 300, "přišel"), word(300, 600, "iPhone"), word(600, 900, "17"), word(900, 1100, "a"), word(1100, 1500, "konec.")];
+        assert_eq!(texts(&words, CaptionGrouping::default()), ["přišel", "iPhone 17", "a konec."]);
         // Across a pause the lone word keeps its own caption.
         let paused = [word(0, 300, "fakt"), word(300, 600, "dobře"), word(1200, 1500, "jo.")];
         assert_eq!(texts(&paused, CaptionGrouping::default()), ["fakt dobře", "jo."]);
