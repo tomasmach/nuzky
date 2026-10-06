@@ -4,7 +4,7 @@ use capopen_engine::{
     export::Quality,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -109,10 +109,12 @@ pub struct GetTranscript {
     /// Half-open timeline interval; word indices remain global.
     pub range_us: Option<[i64; 2]>,
 }
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditTranscript {
     pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without cutting twice.
+    pub request_id: Option<String>,
     pub speech_key: String,
     /// Inclusive zero-based word indices [from,to].
     pub delete: Option<Vec<[usize; 2]>>,

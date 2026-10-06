@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -23,12 +24,20 @@ use crate::{
 
 const PREVIEW_CHARS: usize = 400;
 
+struct PreparedTranscriptEdit {
+    arguments: Value,
+    edit: EditCmd,
+    expect: Expect,
+    response: Value,
+}
+
 pub struct Backend {
     pub host: Host,
     client_id: String,
     project_dir: PathBuf,
     project_path: PathBuf,
     export_queue: Arc<Mutex<()>>,
+    transcript_requests: Mutex<HashMap<(String, String), PreparedTranscriptEdit>>,
 }
 
 impl Backend {
@@ -54,6 +63,7 @@ impl Backend {
             project_dir,
             project_path,
             export_queue: Arc::new(Mutex::new(())),
+            transcript_requests: Mutex::default(),
         })
     }
 
@@ -291,6 +301,32 @@ impl Backend {
 
     fn edit_transcript(&self, args: EditTranscript, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if !args.dry_run && let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == serde_json::to_value(&args)?,
+                "REQUEST_CONFLICT: request_id was used with different transcript arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let prepared = self.prepare_transcript_edit(&args, state)?;
+        if args.dry_run { return Ok(prepared.response); }
+        // Retain the original ranges and expectations even if the live edit's save fails.
+        let prepared = requests.entry(key).or_insert(prepared);
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
+    }
+
+    fn apply_transcript_edit(&self, run_id: &str, request_id: &str, prepared: &PreparedTranscriptEdit) -> Result<Value> {
+        let applied = self.host.session.apply_edits(run_id, request_id,
+            vec![prepared.edit.clone()], prepared.expect.clone())?;
+        let mut response = prepared.response.clone();
+        response["revision"] = json!(applied.stamp.revision);
+        response["session_epoch"] = json!(applied.stamp.session_epoch);
+        Ok(response)
+    }
+
+    fn prepare_transcript_edit(&self, args: &EditTranscript, state: &SessionState) -> Result<PreparedTranscriptEdit> {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
         ensure!(args.speech_key == transcript::word_key(&state.project, &derived.words),
@@ -313,13 +349,14 @@ impl Backend {
         ensure!(identities(&words) == identities(&retained),
             "UNSAFE_CUT: kept tracks or sub-frame fragments would change the selected words");
         let preview_text: String = words.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ").chars().take(PREVIEW_CHARS).collect();
-        let revision = if args.dry_run { state.stamp.revision } else {
-            self.host.session.apply_edits(&args.run_id, &new_id(), vec![edit],
-                Expect { revision: Some(state.stamp.revision), speech_key: Some(state.speech_key.clone()) })?.stamp.revision
-        };
-        Ok(json!({"duration_us":{"before":before,"after":preview.duration_us()},
-            "removed_us":before-preview.duration_us(),"ranges":ranges,"preview_text":preview_text,
-            "speech_key":transcript::word_key(&preview, &words),"revision":revision,"dry_run":args.dry_run}))
+        Ok(PreparedTranscriptEdit {
+            arguments: serde_json::to_value(args)?,
+            edit,
+            expect: Expect { revision: Some(state.stamp.revision), speech_key: Some(state.speech_key.clone()) },
+            response: json!({"duration_us":{"before":before,"after":preview.duration_us()},
+                "removed_us":before-preview.duration_us(),"ranges":ranges,"preview_text":preview_text,
+                "speech_key":transcript::word_key(&preview, &words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
+        })
     }
 
     fn captions(&self, args: Captions, state: &SessionState) -> Result<Value> {
@@ -501,8 +538,7 @@ mod tests {
 mod transcript_tests {
     use super::*;
 
-    #[test]
-    fn dry_run_stale_key_and_multiple_clip_slips_are_one_undo() {
+    fn fixture() -> (PathBuf, Backend, Project) {
         let dir = std::env::temp_dir().join(format!("transcript-tools-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (mut project, sources) = transcript::tests::fixture();
@@ -522,8 +558,14 @@ mod transcript_tests {
             host: Host { session: ProjectSession::open(&path, Mode::Write, None).unwrap(),
                 jobs: Default::default(), transcripts: store, cache_dir: dir.join("cache") },
             client_id: "test".into(), project_dir: dir.clone(), project_path: path,
-            export_queue: Arc::default(),
+            export_queue: Arc::default(), transcript_requests: Mutex::default(),
         };
+        (dir, backend, project)
+    }
+
+    #[test]
+    fn dry_run_stale_key_and_multiple_clip_slips_are_one_undo() {
+        let (dir, backend, project) = fixture();
         let run = backend.host.session.begin_run("remove slips".into()).unwrap();
         let state = backend.host.session.state().unwrap();
         let initial = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap();
@@ -554,4 +596,35 @@ mod transcript_tests {
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn transcript_request_id_retries_failed_save_without_cutting_again() {
+        let (dir, backend, before) = fixture();
+        let run = backend.host.session.begin_run("retry transcript".into()).unwrap();
+        let initial = backend.host.session.state().unwrap();
+        let transcript = backend.get_transcript(GetTranscript { range_us: None }, &initial).unwrap();
+        let args = json!({"run_id":run.run_id,"request_id":"cut-once","speech_key":transcript["speech_key"],"delete":[[1,2]]});
+        std::fs::remove_file(&backend.project_path).unwrap();
+        std::fs::create_dir(&backend.project_path).unwrap();
+        let error = backend.dispatch("edit_transcript", args.clone(), &initial).unwrap_err();
+        assert!(format!("{error:#}").contains("SAVE_FAILED"));
+        let live = backend.host.session.state().unwrap();
+        assert_ne!(live.project, before);
+        assert_eq!(live.stamp.revision, initial.stamp.revision + 1);
+        std::fs::remove_dir(&backend.project_path).unwrap();
+        let saved = backend.dispatch("edit_transcript", args.clone(), &live).unwrap();
+        let disk: Project = serde_json::from_slice(&std::fs::read(&backend.project_path).unwrap()).unwrap();
+        assert_eq!(disk, live.project);
+        assert_eq!(backend.host.session.state().unwrap().project, live.project);
+        assert_eq!(saved["revision"], live.stamp.revision);
+        assert_eq!(backend.dispatch("edit_transcript", args.clone(), &live).unwrap(), saved);
+        let mut conflict = args;
+        conflict["delete"] = json!([[0,0]]);
+        assert!(backend.dispatch("edit_transcript", conflict, &live).unwrap_err().to_string().contains("REQUEST_CONFLICT"));
+        backend.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep).unwrap();
+        backend.host.session.undo_run(&run.run_id).unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project, before);
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }
