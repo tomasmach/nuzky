@@ -10,7 +10,8 @@ function MediaItem({ asset }: { asset: Asset }) {
   const thumb = useEditor((s) => s.thumbs[asset.id]);
   const job = useEditor((s) => s.jobs[`audio:${asset.id}`]);
   const [confirm, setConfirm] = useState(false);
-  useEffect(() => useEditor.getState().loadThumb(asset.id), [asset.id]);
+  const epoch = useEditor((s) => s.snap?.sessionEpoch);
+  useEffect(() => useEditor.getState().loadThumb(asset.id), [asset.id, epoch]);
   const preparing = job?.status === "running";
 
   return (

@@ -195,6 +195,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       saveState: switched ? "saved" : changed ? "saving" : get().saveState,
       timeUs: Math.min(get().timeUs, projectDuration(snap.project)),
       aiRun: snap.openRunLabel,
+      // A copied project can reuse asset ids for other files, so media previews start over.
+      ...(switched ? { thumbs: {}, filmstrips: {}, waveforms: {} } : {}),
     });
   },
 
@@ -244,35 +246,39 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 
+  // Loads are per project: a reply that arrives after another project opened is dropped.
   loadThumb: (assetId) => {
-    const key = `thumb:${assetId}`;
+    const epoch = get().snap?.sessionEpoch;
+    const key = `thumb:${epoch}:${assetId}`;
     if (assetId in get().thumbs || pending.has(key)) return;
     pending.add(key);
+    const keep = (url: string | null) => get().snap?.sessionEpoch === epoch && set({ thumbs: { ...get().thumbs, [assetId]: url } });
     api
       .thumbnail(assetId)
-      .then((url) => set({ thumbs: { ...get().thumbs, [assetId]: url } }))
-      .catch(() => set({ thumbs: { ...get().thumbs, [assetId]: null } }))
+      .then(keep, () => keep(null))
       .finally(() => pending.delete(key));
   },
 
   loadFilmstrip: (assetId) => {
-    const key = `strip:${assetId}`;
+    const epoch = get().snap?.sessionEpoch;
+    const key = `strip:${epoch}:${assetId}`;
     if (assetId in get().filmstrips || pending.has(key)) return;
     pending.add(key);
+    const keep = (strip: Filmstrip | null) => get().snap?.sessionEpoch === epoch && set({ filmstrips: { ...get().filmstrips, [assetId]: strip } });
     api
       .filmstrip(assetId)
-      .then((strip) => set({ filmstrips: { ...get().filmstrips, [assetId]: strip } }))
-      .catch(() => set({ filmstrips: { ...get().filmstrips, [assetId]: null } }))
+      .then(keep, () => keep(null))
       .finally(() => pending.delete(key));
   },
 
   loadWaveform: (assetId, force = false) => {
-    const key = `wave:${assetId}`;
+    const epoch = get().snap?.sessionEpoch;
+    const key = `wave:${epoch}:${assetId}`;
     if ((!force && get().waveforms[assetId]) || pending.has(key)) return;
     pending.add(key);
     api
       .waveform(assetId)
-      .then((peaks) => peaks && set({ waveforms: { ...get().waveforms, [assetId]: peaks } }))
+      .then((peaks) => peaks && get().snap?.sessionEpoch === epoch && set({ waveforms: { ...get().waveforms, [assetId]: peaks } }))
       .finally(() => pending.delete(key));
   },
 }));

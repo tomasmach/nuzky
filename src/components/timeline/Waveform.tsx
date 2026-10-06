@@ -24,7 +24,8 @@ export function Waveform({
 }) {
   const peaks = useEditor((s) => s.waveforms[assetId]);
   const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => useEditor.getState().loadWaveform(assetId), [assetId]);
+  const epoch = useEditor((s) => s.snap?.sessionEpoch);
+  useEffect(() => useEditor.getState().loadWaveform(assetId), [assetId, epoch]);
   useEffect(() => {
     const el = ref.current;
     if (!el || !peaks) return;
