@@ -20,4 +20,3 @@ dirs = "6"
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
 capopen-analysis = { workspace = true, features = ["gpu"] }
-

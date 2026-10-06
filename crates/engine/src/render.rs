@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(quad[3][1] - quad[0][1], image.height as f32 * 1.5);
         assert!(((quad[0][0] + quad[2][0]) / 2.0 - 648.0).abs() < 1e-4);
         let mut renderer = Renderer::new().unwrap();
-        let layer = renderer.layer_for(&project, VisibleClip { clip: &project.tracks[1].clips[0], transition: None }, 500_000, 0.5, Wait::Exact, false).unwrap();
+        let layer = renderer.layer_for(&project, VisibleClip { clip: &project.tracks[1].clips[0], transition: None }, 500_000, 0.5, Wait::Exact, false).unwrap().unwrap();
         assert_eq!(layer.corners, quad.map(|p| [p[0] * 0.5, p[1] * 0.5]));
         project.tracks[1].hidden = true;
         assert!(layer_bounds(&project, 500_000, &mut text).is_empty());

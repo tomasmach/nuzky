@@ -521,6 +521,25 @@ fn caption_stats(project: &Project) -> Value {
 mod tests {
     use super::*;
     #[test]
+    fn inspect_frames_reports_deleted_image_name() {
+        let dir = std::env::temp_dir().join(format!("inspect-missing-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("deleted.ppm");
+        std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+        let mut project = Project::new("missing image");
+        project.apply(EditCmd::AddAssets { assets: vec![probe(&image, "image".into()).unwrap()] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "image".into(), start_us: None, track_id: None }).unwrap();
+        let path = dir.join("project.capopen");
+        std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
+        std::fs::remove_file(image).unwrap();
+        let backend = Backend::open(&path, false, dir.join("cache")).unwrap();
+        let error = backend.call("inspect_frames", json!({"times_us": [0], "width": 64})).unwrap_err();
+        assert!(format!("{error:#}").contains("deleted.ppm"), "{error:#}");
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn caption_stats_count_unicode_characters_and_exclude_titles() {
         let mut project = Project::new("stats");
         let style = capopen_engine::model::TextStyle {
