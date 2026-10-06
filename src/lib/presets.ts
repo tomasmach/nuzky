@@ -99,3 +99,13 @@ export function adjustCss(a: Adjust): { filter: string; tint: string | null; vig
 export const SPEED_PRESETS = [0.5, 1, 1.5, 2, 3];
 export const MIN_SPEED = 0.1;
 export const MAX_SPEED = 10;
+
+/**
+ * Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of the
+ * top bar, the like and comment rail and the caption and buttons at the bottom. The same rule as the
+ * engine's `Canvas::safe_area` (250 / 180 / 500 / 60 px of 1080×1920); null for other formats.
+ */
+export function safeArea(width: number, height: number): { left: number; top: number; right: number; bottom: number } | null {
+  if (height < width * 1.7) return null;
+  return { left: (width * 60) / 1080, top: (height * 250) / 1920, right: width - (width * 180) / 1080, bottom: height - (height * 500) / 1920 };
+}

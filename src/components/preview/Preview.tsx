@@ -1,13 +1,33 @@
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward, Smartphone } from "lucide-react";
 import { api } from "../../lib/api";
 import { projectDuration, useEditor } from "../../lib/store";
+import { safeArea } from "../../lib/presets";
 import { formatTime } from "../../lib/time";
 import { IconButton } from "../ui";
 import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
 
 const HEADER = 24;
+const SAFE_ZONE_KEY = "capopen.safeZone";
+
+/** The parts of the frame Reels and TikTok cover with their interface, dimmed, around the free area. */
+function SafeZone({ area, width, height }: { area: NonNullable<ReturnType<typeof safeArea>>; width: number; height: number }) {
+  const pct = (v: number, of: number) => `${(v / of) * 100}%`;
+  const band = "pointer-events-none absolute bg-black/45";
+  return (
+    <>
+      <div className={`${band} inset-x-0 top-0`} style={{ height: pct(area.top, height) }} />
+      <div className={`${band} inset-x-0 bottom-0`} style={{ height: pct(height - area.bottom, height) }} />
+      <div className={`${band} left-0`} style={{ top: pct(area.top, height), bottom: pct(height - area.bottom, height), width: pct(area.left, width) }} />
+      <div className={`${band} right-0`} style={{ top: pct(area.top, height), bottom: pct(height - area.bottom, height), width: pct(width - area.right, width) }} />
+      <div
+        className="pointer-events-none absolute border border-dashed border-fg/50"
+        style={{ left: pct(area.left, width), top: pct(area.top, height), width: pct(area.right - area.left, width), height: pct(area.bottom - area.top, height) }}
+      />
+    </>
+  );
+}
 
 /** Receives rendered frames from the engine and paints the newest one per display frame. */
 function useFrameStream(url: string, canvas: React.RefObject<HTMLCanvasElement | null>) {
@@ -97,6 +117,12 @@ export function Preview() {
   }, []);
 
   const aspect = canvas ? canvas.width / canvas.height : 9 / 16;
+  const area = canvas ? safeArea(canvas.width, canvas.height) : null;
+  const [showSafe, setShowSafe] = useState(() => localStorage.getItem(SAFE_ZONE_KEY) === "1");
+  const toggleSafe = () => {
+    localStorage.setItem(SAFE_ZONE_KEY, showSafe ? "0" : "1");
+    setShowSafe(!showSafe);
+  };
   const fit = box.w / box.h > aspect ? { h: box.h, w: box.h * aspect } : { w: box.w, h: box.w / aspect };
   const empty = duration === 0;
 
@@ -108,6 +134,7 @@ export function Preview() {
           <div className="relative" style={{ width: fit.w, height: fit.h }}>
             <div className="absolute inset-0 overflow-hidden rounded-sm bg-black shadow-[0_0_0_1px_var(--color-line)]">
               <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
+              {showSafe && area && canvas && <SafeZone area={area} width={canvas.width} height={canvas.height} />}
               {empty && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center">
                   <p className="text-[13px] text-fg">Your video appears here</p>
@@ -150,7 +177,17 @@ export function Preview() {
             <SkipForward size={16} />
           </IconButton>
         </div>
-        <div className="flex justify-end">{canvas && <RatioMenu />}</div>
+        <div className="flex items-center justify-end gap-1">
+          <IconButton
+            label={area ? (showSafe ? "Hide the Reels and TikTok safe zone" : "Show the Reels and TikTok safe zone") : "The safe zone applies to vertical videos"}
+            active={showSafe && !!area}
+            disabled={!area}
+            onClick={toggleSafe}
+          >
+            <Smartphone size={16} />
+          </IconButton>
+          {canvas && <RatioMenu />}
+        </div>
       </div>
     </section>
   );
