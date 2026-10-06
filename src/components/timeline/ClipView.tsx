@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { AudioLines, Film, Gauge, Image as ImageIcon, Type } from "lucide-react";
-import { isCaptionTrack, useEditor } from "../../lib/store";
+import { MAIN_TRACK, isCaptionTrack, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Asset, Clip, Filmstrip, Project, Track } from "../../lib/types";
 import { Waveform } from "./Waveform";
@@ -161,8 +161,9 @@ export function ClipView({
         />
       )}
 
+      {/* The main track's cut markers sit at mid-height, so its diamonds run along the bottom. All stay clear of the trim handles. */}
       {selected && !ghost && clip.keyframes.length > 0 && (
-        <div className="absolute inset-x-0 top-1/2">
+        <div className={`absolute inset-x-0 ${track.id === MAIN_TRACK ? "bottom-[7px]" : "top-1/2"}`}>
           {clip.keyframes.map((k) => (
             <button
               key={k.tUs}
@@ -174,7 +175,7 @@ export function ClipView({
                 useEditor.getState().seek(clip.startUs + k.tUs);
               }}
               className="absolute -top-[5px] h-[10px] w-[10px] -translate-x-1/2 rotate-45 rounded-[1px] border border-black/70 bg-fg hover:bg-accent"
-              style={{ left: Math.max(5, Math.min(width - 5, (k.tUs / US) * zoom)) }}
+              style={{ left: Math.max(EDGE + 7, Math.min(width - EDGE - 7, (k.tUs / US) * zoom)) }}
             />
           ))}
         </div>

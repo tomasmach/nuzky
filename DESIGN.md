@@ -49,7 +49,7 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 - **Preset tile**: preview on top, 11 px label below. Selected: accent border plus a check badge.
 - **Checkbox**: dark custom box, accent fill with a black check when on.
 - **Track toggles** (hide, mute): the off state swaps the icon (eye-off, speaker-off) and shows `fg` on `raised`. Accent is reserved for selection and "on" features, so a hidden track never looks active. Fixed columns, eye then speaker; a track without one keeps an empty slot so the columns line up.
-- **Keyframe diamond**: outline when no keyframe sits at the playhead, filled accent when one does. Timeline diamonds are `fg` with a dark border on the selected clip.
+- **Keyframe diamond**: outline when no keyframe sits at the playhead, filled accent when one does. Timeline diamonds are `fg` with a dark border on the selected clip, at mid-height, or along the bottom on the main track so the cut markers never cover them, and clear of the trim handles.
 - **Transition marker**: an 18 px square on the cut. Empty: dark with a faint border, "+" on hover. Set: `fg` square with the kind icon, a darkened band shows the transition length; selected: accent.
 - **Preview selection box**: 1.5 px `fg` outline, 10 px square corner handles, a round rotate handle above the top edge. It may extend past the frame but never past the preview area; a handle that would leave the area is pinned to its edge.
 - **Toasts**: bottom-left above the timeline, over the media panel and no wider than it (316 px), so they never cover the video frame or the transport. While the transcript's Delete bar shows, they sit above it.
