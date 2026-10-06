@@ -17,9 +17,7 @@ pub struct Host {
 
 impl Host {
     pub fn stop_run(&self) -> Result<crate::RunResult> {
-        let run = self.session.stop_run()?;
-        self.jobs.cancel_run(&run.run_id);
-        Ok(run)
+        self.session.stop_run_with(|run_id| self.jobs.cancel_run(run_id))
     }
 
     pub fn start_job(
@@ -63,6 +61,31 @@ mod tests {
     use capopen_engine::{Project, edit::new_id};
     use serde_json::json;
     use std::sync::mpsc;
+
+    #[test]
+    fn stop_cancels_jobs_even_when_saving_fails() {
+        let dir = std::env::temp_dir().join(format!("host-stop-{}", new_id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("p.capopen");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("stop")).unwrap()).unwrap();
+        let host = Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap();
+        let run = host.session.begin_run("export".into()).unwrap();
+        let (release, wait) = mpsc::channel();
+        let job = host.start_job("client", Some(&run.run_id), "export", run.stamp.clone(), move |_, _| {
+            wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap(); Ok(json!({}))
+        }).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = host.stop_run().unwrap_err();
+        let cancelled = host.jobs.get(job["job_id"].as_str().unwrap(), false).unwrap()["cancel_requested"].clone();
+        release.send(()).unwrap();
+        assert!(error.to_string().contains("SAVE_FAILED"));
+        assert_eq!(cancelled, true);
+        assert!(host.start_job("client", Some(&run.run_id), "export", run.stamp, |_, _| panic!())
+            .unwrap_err().to_string().starts_with("RUN_STOPPED"));
+        drop(host);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn client_disconnect_and_run_stop_cancel_only_owned_jobs() {

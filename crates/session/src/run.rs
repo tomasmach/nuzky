@@ -128,6 +128,10 @@ impl ProjectSession {
     }
 
     pub fn stop_run(&self) -> Result<RunResult> {
+        self.stop_run_with(|_| {})
+    }
+
+    pub(crate) fn stop_run_with(&self, revoked: impl FnOnce(&str)) -> Result<RunResult> {
         let mut inner = self.inner.lock().unwrap();
         inner.writable()?;
         let run_id = inner
@@ -138,6 +142,7 @@ impl ProjectSession {
             .run_id
             .clone();
         inner.stopped_runs.insert(run_id.clone());
+        revoked(&run_id);
         inner.finish(EndAction::Keep)?;
         Ok(RunResult {
             run_id,
