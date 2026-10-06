@@ -39,8 +39,8 @@ function TransitionPreview({ kind, a, b }: { kind: TransitionKind; a?: string | 
   const m = MOTION[kind];
   return (
     <span className="absolute inset-0 overflow-hidden">
-      <span className={`absolute inset-0 ${m.a ? "pv" : ""}`} style={{ ...layer(a, "#25435a"), animationName: m.a }} />
-      <span className="pv absolute inset-0" style={{ ...layer(b, "#5a4520"), animationName: m.b }} />
+      <span className={`absolute inset-0 ${m.a ? "pv" : ""}`} style={{ ...layer(a, "var(--color-clip-video)"), animationName: m.a }} />
+      <span className="pv absolute inset-0" style={{ ...layer(b, "var(--color-clip-title)"), animationName: m.b }} />
       {m.flash && <span className="pv absolute inset-0" style={{ background: m.flash, animationName: "t-flash" }} />}
     </span>
   );

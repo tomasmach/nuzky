@@ -61,7 +61,7 @@ export function CaptionsTab() {
               disabled={busy}
               title={busy ? "Wait for speech recognition to finish" : hasCaptions ? `Apply ${s.name} to all captions` : `Use ${s.name} for new captions`}
               onClick={() => pickStyle(i)}
-              className={`flex h-12 min-w-0 items-center justify-center rounded-md border bg-[#2b3036] disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`flex h-12 min-w-0 items-center justify-center rounded-md border bg-line disabled:cursor-not-allowed disabled:opacity-40 ${
                 i === current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line enabled:hover:border-muted"
               }`}
             >
