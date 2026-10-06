@@ -330,7 +330,7 @@ impl Backend {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
         ensure!(args.speech_key == transcript::word_key(&state.project, &derived.words),
-            "SPEECH_CHANGED: timeline speech or recognised words changed");
+            "SPEECH_CHANGED: speech changed or wrong key; use get_transcript's speech_key (get_state's key is for apply_edits)");
         let before = state.project.duration_us();
         let ranges = transcript::edit_ranges(&state.project, &derived, args.delete.as_deref(),
             args.keep.as_deref(), args.shorten_pauses_us.unwrap_or(transcript::DEFAULT_PAUSE_US))?;
@@ -622,6 +622,20 @@ mod transcript_tests {
         assert!(backend.dispatch("edit_transcript", conflict, &live).unwrap_err().to_string().contains("REQUEST_CONFLICT"));
         backend.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep).unwrap();
         backend.host.session.undo_run(&run.run_id).unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project, before);
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn wrong_transcript_key_explains_which_tool_to_use() {
+        let (dir, backend, before) = fixture();
+        let run = backend.host.session.begin_run("wrong key".into()).unwrap();
+        let state = backend.host.session.state().unwrap();
+        let args = json!({"run_id":run.run_id,"speech_key":state.speech_key,"dry_run":true});
+        let error = backend.dispatch("edit_transcript", args, &state).unwrap_err().to_string();
+        assert!(error.contains("SPEECH_CHANGED"));
+        assert!(error.contains("use get_transcript's speech_key"));
         assert_eq!(backend.host.session.state().unwrap().project, before);
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();

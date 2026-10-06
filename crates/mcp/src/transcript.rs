@@ -261,11 +261,15 @@ pub fn caption_edit(
     ensure!(grouping.max_words > 0 && grouping.max_chars > 0, "INVALID_GROUPING: caption limits must be positive");
     let mut segments = Vec::new();
     let min_caption_us = project.frame_duration_us().ceil() as i64;
-    for clip in project.tracks.iter().flat_map(|t| &t.clips) {
-        let clip_words: Vec<_> = words.iter().filter(|w| w.clip_id == clip.id).map(|w| Word {
-            start_us: w.start_us, end_us: w.end_us, text: w.text.clone(), probability: w.probability,
-        }).collect();
-        let mut grouped = group_words(&clip_words, grouping);
+    let mut by_clip: HashMap<&str, Vec<Word>> = HashMap::new();
+    for word in words {
+        by_clip.entry(&word.clip_id).or_default().push(Word {
+            start_us: word.start_us, end_us: word.end_us, text: word.text.clone(), probability: word.probability,
+        });
+    }
+    for clip in project.tracks.iter().flat_map(|t| &t.clips).filter(|c| c.duration_us >= min_caption_us) {
+        let Some(clip_words) = by_clip.get(clip.id.as_str()) else { continue };
+        let mut grouped = group_words(clip_words, grouping);
         for segment in &mut grouped {
             segment.end_us = segment.end_us.min(clip.end_us());
             // The engine enforces a one-frame minimum; borrow time before a short tail word.
@@ -409,6 +413,31 @@ pub(crate) mod tests {
         project.apply(edit).unwrap();
         let caption = &project.tracks.iter().find(|t| t.name == "Captions").unwrap().clips[0];
         assert_eq!(caption.end_us(), 5_000_000);
+    }
+
+    #[test]
+    fn captions_group_by_clip_and_skip_subframe_clips() {
+        let (mut project, _) = fixture();
+        let mut short = project.tracks[0].clips[0].clone();
+        short.id = "short".into();
+        short.duration_us = 10_000;
+        project.tracks[0].clips[0].start_us = short.end_us();
+        project.tracks[0].clips.insert(0, short);
+        let words: Vec<_> = project.tracks[0].clips.iter().map(|clip| TimelineWord {
+            start_us: clip.start_us, end_us: clip.start_us + 5_000, text: clip.id.clone(),
+            probability: 1.0, clip_id: clip.id.clone(), asset_id: "talk".into(), source_start_us: 0,
+        }).collect();
+        let (edit, count) = caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping::default()).unwrap();
+        assert_eq!(count, 1);
+        let EditCmd::AddCaptions { segments, .. } = &edit else { panic!() };
+        assert_eq!(segments[0].text, words[1].text);
+        assert!(segments[0].start_us >= 10_000);
+        project.apply(edit).unwrap();
+        let captions = &project.tracks.iter().find(|t| t.name == "Captions").unwrap().clips;
+        assert_eq!(captions.len(), 1);
+        assert!(captions[0].start_us >= 10_000);
+        assert!(caption_edit(&words[..1], &project, crate::params::reel_style(), CaptionGrouping::default())
+            .unwrap_err().to_string().contains("NO_CAPTIONS"));
     }
 
     #[test]
