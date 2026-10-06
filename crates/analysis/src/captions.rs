@@ -150,7 +150,7 @@ mod tests {
         // "Ahoj světe." ends at a full stop; the next caption is 1.2 s later, so it ends after a short tail.
         assert_eq!((captions[0].start_us, captions[0].end_us), (0, 950_000));
         assert_eq!((captions[1].start_us, captions[1].end_us), (2_000_000, 2_550_000));
-        let close = [word(0, 400, "jsem"), word(500, 900, "se"), word(950, 1300, "sakra,"), word(1350, 1700, "snažit")];
+        let close = [word(0, 400, "musím"), word(500, 900, "se"), word(950, 1300, "víc,"), word(1350, 1700, "snažit")];
         let captions = group_words(&close, CaptionGrouping::default());
         assert_eq!(captions[0].end_us, captions[1].start_us);
     }
