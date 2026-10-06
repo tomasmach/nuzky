@@ -123,6 +123,80 @@ pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
     Ok(json!({"words":numbered,"sentences":sentences,"pauses":pauses,"untranscribed":derived.untranscribed}))
 }
 
+struct WordFragment {
+    timeline: TimeRange,
+    source_start: f64,
+    source_end: f64,
+    owner: Option<usize>,
+}
+
+/// Midpoint ownership numbers a word once; editing must also preserve its other audible pieces.
+fn editing_bounds(project: &Project, derived: &Derived) -> (Vec<TimelineWord>, Vec<TimeRange>) {
+    let mut bounds = derived.words.clone();
+    let mut unnumbered = Vec::new();
+    let owners: HashMap<_, _> = derived.words.iter().enumerate()
+        .map(|(i, w)| ((w.clip_id.as_str(), w.source_start_us, w.text.as_str()), i)).collect();
+    for (asset, words) in &derived.sources {
+        for word in words {
+            let mut fragments = Vec::new();
+            for track in &project.tracks {
+                for clip in track.clips.iter().filter(|c| is_heard(project, track, c)) {
+                    let ClipContent::Media { asset_id, source_in_us, speed, .. } = &clip.content else { continue };
+                    if asset_id != asset { continue; }
+                    let speed = f64::from(*speed);
+                    let source_start = (word.start_us as f64).max(*source_in_us as f64);
+                    let source_end = (word.end_us as f64).min(*source_in_us as f64 + clip.duration_us as f64 * speed);
+                    if source_end <= source_start { continue; }
+                    let map = |t: f64| clip.start_us + ((t - *source_in_us as f64) / speed).round() as i64;
+                    fragments.push(WordFragment {
+                        timeline: TimeRange { start_us: map(source_start).max(clip.start_us), end_us: map(source_end).min(clip.end_us()) },
+                        source_start, source_end,
+                        owner: owners.get(&(clip.id.as_str(), word.start_us, word.text.as_str())).copied(),
+                    });
+                }
+            }
+            fragments.sort_by_key(|f| (f.timeline.start_us, f.timeline.end_us));
+            let mut from = 0;
+            for i in 0..fragments.len() {
+                let current = &fragments[i];
+                if fragments.get(i + 1).is_none_or(|next|
+                    current.timeline.end_us != next.timeline.start_us || current.source_end != next.source_start)
+                {
+                    let interval = TimeRange { start_us: fragments[from].timeline.start_us, end_us: current.timeline.end_us };
+                    let mut numbered = false;
+                    for owner in fragments[from..=i].iter().filter_map(|f| f.owner) {
+                        bounds[owner].start_us = interval.start_us;
+                        bounds[owner].end_us = interval.end_us;
+                        numbered = true;
+                    }
+                    if !numbered { unnumbered.push(interval); }
+                    from = i + 1;
+                }
+            }
+        }
+    }
+    (bounds, unnumbered)
+}
+
+pub fn edit_ranges(
+    project: &Project, derived: &Derived, delete: Option<&[[usize; 2]]>,
+    keep: Option<&[[usize; 2]]>, pause: i64,
+) -> Result<Vec<TimeRange>> {
+    let (bounds, unnumbered) = editing_bounds(project, derived);
+    let mut ranges = deletion_ranges(&bounds, project.duration_us(), delete, keep, pause)?;
+    // A surviving fragment whose midpoint was cut away has no selectable index. Keep it audible.
+    for protected in unnumbered {
+        ranges = ranges.into_iter().flat_map(|range| {
+            if range.end_us <= protected.start_us || range.start_us >= protected.end_us { return vec![range]; }
+            let mut pieces = Vec::new();
+            if range.start_us < protected.start_us { pieces.push(TimeRange { start_us: range.start_us, end_us: protected.start_us }); }
+            if range.end_us > protected.end_us { pieces.push(TimeRange { start_us: protected.end_us, end_us: range.end_us }); }
+            pieces
+        }).collect();
+    }
+    Ok(ranges)
+}
+
 pub fn deletion_ranges(
     words: &[TimelineWord], duration: i64, delete: Option<&[[usize; 2]]>,
     keep: Option<&[[usize; 2]]>, pause: i64,
@@ -285,6 +359,40 @@ pub(crate) mod tests {
                 words.iter().any(|w| w.clip_id == c.id) && segment.start_us >= c.start_us && segment.end_us <= c.end_us()
             }));
             assert!(!(segment.start_us < 3_000_000 && segment.end_us > 3_000_000));
+        }
+    }
+
+    #[test]
+    fn protect_word_fragments_at_clip_boundaries_and_speed() {
+        for speed in [1.0, 0.5, 2.0] {
+            for (word_start, word_end) in [(4_800_000, 5_400_000), (4_600_000, 5_200_000)] {
+            for edge in [false, true] {
+                let (mut project, mut sources) = fixture();
+                let id = project.tracks[0].clips[0].id.clone();
+                project.apply(EditCmd::SplitClip { clip_id: id, at_us: 5_000_000 }).unwrap();
+                for clip in project.tracks[0].clips.clone() {
+                    project.apply(serde_json::from_value(json!({"type":"updateClip","clipId":clip.id,"speed":speed})).unwrap()).unwrap();
+                }
+                let mut words = vec![Word { start_us: word_start, end_us: word_end, text: "whole".into(), probability: 1.0 }];
+                if !edge { words.insert(0, Word { start_us: 4_000_000, end_us: 4_400_000, text: "before".into(), probability: 1.0 }); }
+                sources.insert("talk".into(), words);
+                let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+                if word_start == 4_800_000 {
+                    assert_eq!(derived.words.last().unwrap().start_us, (5_000_000.0 / speed) as i64);
+                }
+                let ranges = edit_ranges(&project, &derived, None, None, DEFAULT_PAUSE_US).unwrap();
+                let protected = TimeRange { start_us: (word_start as f64 / speed) as i64, end_us: (word_end as f64 / speed) as i64 };
+                assert!(ranges.iter().all(|r| r.end_us <= protected.start_us || r.start_us >= protected.end_us), "{speed} {edge}: {ranges:?}");
+                project.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+                let audible_us: i64 = project.tracks[0].clips.iter().map(|c| {
+                    let ClipContent::Media { source_in_us, speed, .. } = c.content else { return 0 };
+                    let start = source_in_us.max(word_start);
+                    let end = (source_in_us + (c.duration_us as f64 * f64::from(speed)).round() as i64).min(word_end);
+                    (end - start).max(0)
+                }).sum();
+                assert_eq!(audible_us, 600_000);
+            }
+            }
         }
     }
 

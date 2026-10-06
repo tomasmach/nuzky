@@ -296,7 +296,7 @@ impl Backend {
         ensure!(args.speech_key == transcript::word_key(&state.project, &derived.words),
             "SPEECH_CHANGED: timeline speech or recognised words changed");
         let before = state.project.duration_us();
-        let ranges = transcript::deletion_ranges(&derived.words, before, args.delete.as_deref(),
+        let ranges = transcript::edit_ranges(&state.project, &derived, args.delete.as_deref(),
             args.keep.as_deref(), args.shorten_pauses_us.unwrap_or(transcript::DEFAULT_PAUSE_US))?;
         let edit = EditCmd::RippleDeleteRanges { ranges: ranges.clone(), keep_track_ids: None };
         let mut preview = state.project.clone();
