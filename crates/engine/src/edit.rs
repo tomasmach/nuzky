@@ -801,6 +801,10 @@ impl Project {
                 self.tracks[ti].clips = clips;
             }
             EditCmd::RippleDeleteRanges { ranges, keep_track_ids } => {
+                // A mistyped id would silently cut the track the caller meant to keep.
+                if let Some(unknown) = keep_track_ids.iter().flatten().find(|id| self.track_index(id).is_none()) {
+                    bail!("Unknown track in keepTrackIds: {unknown}");
+                }
                 let kept: Vec<bool> = match &keep_track_ids {
                     Some(ids) => self.tracks.iter().map(|t| ids.contains(&t.id)).collect(),
                     None => self.tracks.iter().map(|t| t.keep_in_place).collect(),
@@ -1736,6 +1740,19 @@ mod tests {
         assert_eq!(spans, vec![(0, 1_500_000), (1_500_000, 3_000_000)]);
         let ClipContent::Text { text, .. } = &clips[0].content else { panic!() };
         assert_eq!(text, "first second");
+    }
+
+    #[test]
+    fn ripple_delete_rejects_unknown_kept_tracks() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let before = p.clone();
+        let cut = EditCmd::RippleDeleteRanges {
+            ranges: vec![TimeRange { start_us: 0, end_us: 500_000 }],
+            keep_track_ids: Some(vec!["musci".into()]),
+        };
+        assert!(p.apply(cut).unwrap_err().to_string().contains("Unknown track in keepTrackIds: musci"));
+        assert_eq!(p, before);
     }
 
     #[test]
