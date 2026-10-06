@@ -197,13 +197,19 @@ export function LayerOverlay({ width, height }: { width: number; height: number 
   const selected = selection.length === 1 ? bounds.find((b) => b.clipId === selection[0]) : undefined;
   const corners = live?.corners ?? (selected?.corners as Pt[] | undefined);
   const screen = corners?.map(([x, y]) => [x * k, y * k] as Pt);
-  // Rotation handle sits above the middle of the top edge, along the box's own "up".
+  // Rotation handle sits above the middle of the top edge, along the box's own "up". When that
+  // would leave the frame (a layer filling the canvas), it moves just inside the edge instead.
   const top = screen && ([(screen[0][0] + screen[1][0]) / 2, (screen[0][1] + screen[1][1]) / 2] as Pt);
   const c = screen && centreOf(screen);
-  const up = top && c && (() => {
-    const len = Math.hypot(top[0] - c[0], top[1] - c[1]) || 1;
-    return [top[0] + ((top[0] - c[0]) / len) * ROTATE_GAP, top[1] + ((top[1] - c[1]) / len) * ROTATE_GAP] as Pt;
-  })();
+  const up =
+    top &&
+    c &&
+    (() => {
+      const len = Math.hypot(top[0] - c[0], top[1] - c[1]) || 1;
+      const out: Pt = [top[0] + ((top[0] - c[0]) / len) * ROTATE_GAP, top[1] + ((top[1] - c[1]) / len) * ROTATE_GAP];
+      const fits = out[0] > -HANDLE && out[0] < width + HANDLE && out[1] > -HANDLE && out[1] < height + HANDLE;
+      return fits ? out : ([top[0] - ((top[0] - c[0]) / len) * ROTATE_GAP, top[1] - ((top[1] - c[1]) / len) * ROTATE_GAP] as Pt);
+    })();
 
   return (
     <div ref={ref} className="absolute inset-0" style={{ cursor: selected ? "move" : "default" }} onPointerDown={onPointerDown} data-testid="layer-overlay">
