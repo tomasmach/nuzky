@@ -1,6 +1,7 @@
 //! Headless CapOpen: inspect media, render single frames and export projects.
 
 use std::path::{Path, PathBuf};
+use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
@@ -64,6 +65,21 @@ fn check_render_output(project: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+fn publish_new_project(out: &Path, project: &Project) -> Result<()> {
+    let tmp = out.with_file_name(format!(".capopen-new-{}.tmp", new_id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = (|| {
+        file.write_all(&serde_json::to_vec_pretty(project)?)?;
+        file.sync_all()?;
+        // Unlike rename, hard_link refuses a destination created since the existence check.
+        std::fs::hard_link(&tmp, out).context("Publishing new project")?;
+        Ok(())
+    })();
+    drop(file);
+    let _ = std::fs::remove_file(tmp);
+    result
+}
+
 fn main() -> Result<()> {
     // Vulkan FP16 moves Whisper word times by up to 330 ms; FP32 is as fast. ggml reads this when
     // its backend starts, so it is set here, before any other thread exists.
@@ -77,6 +93,9 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
         }
         ["new", out, media @ ..] if !media.is_empty() => {
+            let out = Path::new(out);
+            let _lock = capopen_session::lock_project(out, true)?;
+            if out.symlink_metadata().is_ok() { bail!("Project already exists: {}", out.display()); }
             let mut project = Project::new("CLI project");
             for m in media {
                 let asset = probe(Path::new(m), new_id())?;
@@ -84,7 +103,7 @@ fn main() -> Result<()> {
                 project.apply(EditCmd::AddAssets { assets: vec![asset] })?;
                 project.apply(EditCmd::AddClip { asset_id: id, start_us: None, track_id: None })?;
             }
-            std::fs::write(out, serde_json::to_string_pretty(&project)?)?;
+            publish_new_project(out, &project)?;
         }
         ["frame", project, secs, out, rest @ ..] => {
             let project = load(project)?;
