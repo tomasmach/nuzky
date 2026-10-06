@@ -244,13 +244,19 @@ impl Project {
     }
 
     /// A track of `kind` free over [start, end) that is kept in place or not, creating one if needed.
+    /// Captions tracks only take generated captions, so regenerating them never removes a title.
     fn free_track(&mut self, kind: TrackKind, start: i64, end: i64, keep_in_place: bool) -> usize {
         let found = self
             .tracks
             .iter()
             .enumerate()
             .skip(1)
-            .find(|(i, t)| t.kind == kind && t.keep_in_place == keep_in_place && self.is_free(*i, start, end, None))
+            .find(|(i, t)| {
+                t.kind == kind
+                    && !t.is_captions()
+                    && t.keep_in_place == keep_in_place
+                    && self.is_free(*i, start, end, None)
+            })
             .map(|(i, _)| i);
         found.unwrap_or_else(|| {
             let at = match kind {
@@ -347,7 +353,7 @@ impl Project {
     fn caption_track(&mut self, track_id: &str) -> Result<usize> {
         self.track_index(track_id)
             .filter(|&i| self.tracks[i].is_captions())
-            .ok_or_else(|| anyhow!("Unknown captions track"))
+            .ok_or_else(|| anyhow!("Unknown captions track: replaceCaptions needs a text track named Captions"))
     }
 
     /// Revalidate fades and both sides of transitions after duration or adjacency changes.
@@ -1690,8 +1696,9 @@ mod tests {
         // Adding never removes an existing captions track.
         p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_000_000, "Druhá")], style: style.clone() }).unwrap();
         assert_eq!(p.tracks.iter().filter(|t| t.name == "Captions").count(), 2);
-        // A title track is not a captions track, so its text is never replaced.
-        p.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style: style.clone() }).unwrap();
+        // A title added where a captions track is free still gets its own track, so replacing
+        // the captions never removes it.
+        p.apply(EditCmd::AddText { start_us: 5_000_000, text: "Title".into(), style: style.clone() }).unwrap();
         let titles = p.tracks.iter().find(|t| t.kind == TrackKind::Text && !t.is_captions()).unwrap().id.clone();
         let replace =
             EditCmd::ReplaceCaptions { track_id: titles.clone(), segments: vec![seg(0, 1_000_000, "X")], style };
