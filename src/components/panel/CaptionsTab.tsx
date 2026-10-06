@@ -41,7 +41,14 @@ export function CaptionsTab() {
       <SpeechFields disabled={busy} />
       <div className="flex flex-col gap-1.5">
         <span className="text-[12px] text-muted">{hasCaptions ? "Words per caption · applies when you regenerate" : "Words per caption"}</span>
-        <Segmented label="Words per caption" value={captionWords} onChange={(n) => useSpeech.setState({ captionWords: n })} options={WORDS} />
+        <Segmented
+          label="Words per caption"
+          value={captionWords}
+          onChange={(n) => useSpeech.setState({ captionWords: n })}
+          options={WORDS}
+          disabled={busy}
+          disabledReason="Wait for speech recognition to finish"
+        />
       </div>
       <div className="flex flex-col gap-1.5">
         <span className="text-[12px] text-muted">Style</span>

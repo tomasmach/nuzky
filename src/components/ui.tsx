@@ -346,11 +346,15 @@ export function Segmented<T extends string | number>({
   value,
   onChange,
   label,
+  disabled = false,
+  disabledReason,
 }: {
   options: { id: T; label: ReactNode; title?: string }[];
   value: T | null;
   onChange: (id: T) => void;
   label: string;
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   return (
     <div role="group" aria-label={label} className="flex gap-1 rounded-md bg-bg p-0.5">
@@ -359,10 +363,11 @@ export function Segmented<T extends string | number>({
           key={o.id}
           type="button"
           aria-pressed={o.id === value}
-          title={o.title}
+          title={disabled ? disabledReason : o.title}
+          disabled={disabled}
           onClick={() => onChange(o.id)}
-          className={`tabular h-7 flex-1 rounded px-2 text-[12px] transition-colors duration-[120ms] ease-out ${
-            o.id === value ? "bg-line font-medium text-fg" : "text-muted hover:text-fg"
+          className={`tabular h-7 flex-1 rounded px-2 text-[12px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+            o.id === value ? "bg-line font-medium text-fg" : "text-muted enabled:hover:text-fg"
           }`}
         >
           {o.label}
