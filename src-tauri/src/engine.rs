@@ -187,7 +187,7 @@ fn run(
             let (w, h) = preview_size(&st.project, st.box_size.0, st.box_size.1);
             let wait = if playing { Wait::Ready } else { Wait::Exact };
             let started = Instant::now();
-            match renderer.render(&st.project, st.t_us, w, h, wait, playing) {
+            match renderer.render(&st.project, last_frame_at_end(&st.project, st.t_us), w, h, wait, playing) {
                 Ok(rgba) => {
                     server.publish(w, h, if playing { FLAG_PLAYING } else { 0 }, st.t_us, &rgba);
                     let took = started.elapsed();
@@ -200,4 +200,10 @@ fn run(
             st.dirty = false;
         }
     }
+}
+
+/// The playhead may rest on the very end, where no clip plays; the preview then keeps the last frame.
+fn last_frame_at_end(project: &Project, t_us: i64) -> i64 {
+    let end = project.duration_us();
+    if end > 0 && t_us >= end { end - 1 } else { t_us }
 }

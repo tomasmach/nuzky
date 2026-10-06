@@ -784,6 +784,16 @@ mod tests {
     }
 
     #[test]
+    fn the_video_ends_with_its_last_picture_and_music_past_it_is_cut() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
+        // Sound alone sets the length.
+        assert_eq!(p.duration_us(), 20_000_000);
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        assert_eq!(p.duration_us(), 5_000_000);
+    }
+
+    #[test]
     fn audio_goes_to_its_own_track() {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();

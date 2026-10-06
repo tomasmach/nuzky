@@ -305,12 +305,18 @@ impl Project {
     }
 
     /// End of the last clip on any track.
+    /// Where the video ends: at the last picture or text, or at the last sound when there is
+    /// no picture. Music running past the picture is cut, as in CapCut, so an export never ends
+    /// on black.
     pub fn duration_us(&self) -> i64 {
-        self.tracks
-            .iter()
-            .flat_map(|t| t.clips.iter().map(Clip::end_us))
-            .max()
-            .unwrap_or(0)
+        let end = |audio: bool| {
+            self.tracks
+                .iter()
+                .filter(|t| (t.kind == TrackKind::Audio) == audio)
+                .flat_map(|t| t.clips.iter().map(Clip::end_us))
+                .max()
+        };
+        end(false).or(end(true)).unwrap_or(0)
     }
 
     pub fn frame_duration_us(&self) -> f64 {

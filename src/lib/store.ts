@@ -242,7 +242,18 @@ export function allClips(project: Project): Clip[] {
   return project.tracks.flatMap((t) => t.clips);
 }
 
+/**
+ * Where the video ends: at the last picture or text, or at the last sound when there is no
+ * picture. Music running past the picture is cut, like the engine's `Project::duration_us`.
+ */
 export function projectDuration(project: Project): number {
+  const end = (audio: boolean) =>
+    project.tracks.filter((t) => (t.kind === "audio") === audio).reduce((m, t) => t.clips.reduce((n, c) => Math.max(n, c.startUs + c.durationUs), m), 0);
+  return end(false) || end(true);
+}
+
+/** The end of the last clip of any kind, so the timeline also shows music past the video's end. */
+export function contentEnd(project: Project): number {
   return allClips(project).reduce((m, c) => Math.max(m, c.startUs + c.durationUs), 0);
 }
 

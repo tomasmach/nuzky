@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftToLine, ArrowRightToLine, AudioLines, Captions, Copy, Eye, EyeOff, Film, Magnet, Maximize2, Scissors, Trash2, Type, Volume2, VolumeX, ZoomIn, ZoomOut } from "lucide-react";
-import { MAIN_TRACK, allClips, deleteSelection, deleteSide, displayTracks, duplicateSelection, isCaptionTrack, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
+import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, isCaptionTrack, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
@@ -103,7 +103,7 @@ export function Timeline({ height }: { height: number }) {
   const closeMenu = useCallback(() => setMenu(null), []);
 
   const tracks = useMemo(() => (project ? displayTracks(project) : []), [project]);
-  const duration = project ? projectDuration(project) : 0;
+  const duration = project ? contentEnd(project) : 0;
   const fps = project?.canvas.fps ?? 30;
   const minUs = Math.ceil(US / fps);
   const laneWidth = Math.max(view.width - HEADER_W, (duration / US + 30) * zoom);
