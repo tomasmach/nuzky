@@ -1,8 +1,6 @@
 //! Timeline edits and undo history. The main track is magnetic like in CapCut:
 //! its clips always sit back to back from zero, so deleting or moving closes gaps.
 
-use std::time::{Duration, Instant};
-
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +10,6 @@ pub const MAIN_TRACK: &str = "main";
 const IMAGE_DURATION_US: i64 = 3_000_000;
 const TEXT_DURATION_US: i64 = 3_000_000;
 const UNDO_LIMIT: usize = 200;
-const COALESCE_WINDOW: Duration = Duration::from_millis(1500);
 const MIN_SPEED: f32 = 0.1;
 const MAX_SPEED: f32 = 10.0;
 const MAX_TRANSITION_US: i64 = 2_000_000;
@@ -99,13 +96,6 @@ fn track_kind_for(asset: &Asset) -> TrackKind {
     match asset.kind {
         AssetKind::Audio => TrackKind::Audio,
         AssetKind::Video | AssetKind::Image => TrackKind::Video,
-    }
-}
-
-fn clip_track_kind(project: &Project, clip: &Clip) -> TrackKind {
-    match &clip.content {
-        ClipContent::Text { .. } => TrackKind::Text,
-        ClipContent::Media { asset_id, .. } => project.asset(asset_id).map(track_kind_for).unwrap_or(TrackKind::Video),
     }
 }
 
@@ -292,7 +282,8 @@ impl Project {
             }
             EditCmd::MoveClip { clip_id, track_id, start_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                let kind = clip_track_kind(self, &self.tracks[ti].clips[ci]);
+                // Clips always sit on a track of their kind; detached sound is a video asset on an audio track.
+                let kind = self.tracks[ti].kind;
                 let mut clip = self.tracks[ti].clips.remove(ci);
                 let start = start_us.max(0);
                 clip.start_us = start;
@@ -479,6 +470,9 @@ impl Project {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let clip = self.tracks[ti].clips[ci].clone();
                 let ClipContent::Media { asset_id, volume, .. } = &clip.content else { bail!("Only video clips have sound to detach") };
+                if self.tracks[ti].kind != TrackKind::Video {
+                    bail!("This clip is already sound on its own track");
+                }
                 let asset = self.asset(asset_id).ok_or_else(|| anyhow!("Unknown media"))?;
                 if asset.kind != AssetKind::Video || !asset.has_audio || *volume <= 0.0 {
                     bail!("This clip has no sound to detach");
@@ -593,7 +587,7 @@ pub struct Editor {
     pub project: Project,
     undo: Vec<Project>,
     redo: Vec<Project>,
-    coalesce: Option<(String, Instant)>,
+    coalesce: Option<String>,
     pub revision: u64,
 }
 
@@ -602,8 +596,8 @@ impl Editor {
         Self { project, undo: Vec::new(), redo: Vec::new(), coalesce: None, revision: 0 }
     }
 
-    /// Applies `cmd`. Edits sharing a `coalesce` key in quick succession (slider drags,
-    /// typing) form a single undo step.
+    /// Applies `cmd`. Consecutive edits with the same `coalesce` key form one undo step, so
+    /// callers scope keys to a gesture (one slider drag, one typing burst).
     pub fn apply(&mut self, cmd: EditCmd, coalesce: Option<String>) -> Result<EditOutcome> {
         let before = self.project.clone();
         let outcome = match self.project.apply(cmd) {
@@ -617,17 +611,14 @@ impl Editor {
         if self.project == before {
             return Ok(outcome);
         }
-        let merge = match (&coalesce, &self.coalesce) {
-            (Some(k), Some((last, at))) => k == last && at.elapsed() < COALESCE_WINDOW,
-            _ => false,
-        };
+        let merge = coalesce.is_some() && coalesce == self.coalesce;
         if !merge {
             self.undo.push(before);
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
             }
         }
-        self.coalesce = coalesce.map(|k| (k, Instant::now()));
+        self.coalesce = coalesce;
         self.redo.clear();
         self.revision += 1;
         Ok(outcome)
@@ -867,11 +858,16 @@ mod tests {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
         let a = p.tracks[0].clips[0].id.clone();
-        p.apply(EditCmd::DetachAudio { clip_id: a.clone() }).unwrap();
+        let sound = p.apply(EditCmd::DetachAudio { clip_id: a.clone() }).unwrap().select[0].clone();
         let ClipContent::Media { volume, .. } = &p.tracks[0].clips[0].content else { panic!() };
         assert_eq!(*volume, 0.0);
         assert_eq!(p.tracks[1].kind, TrackKind::Audio);
         assert!(p.apply(EditCmd::DetachAudio { clip_id: a }).is_err());
+        // The detached sound is audio: it cannot be detached again and moves along audio tracks.
+        assert!(p.apply(EditCmd::DetachAudio { clip_id: sound.clone() }).is_err());
+        p.apply(EditCmd::MoveClip { clip_id: sound.clone(), track_id: None, start_us: 1_000_000 }).unwrap();
+        let track = p.tracks.iter().find(|t| t.clips.iter().any(|c| c.id == sound)).unwrap();
+        assert_eq!(track.kind, TrackKind::Audio);
     }
 
     #[test]

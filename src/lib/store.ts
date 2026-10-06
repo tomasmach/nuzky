@@ -61,6 +61,12 @@ interface EditorState {
 let toastId = 0;
 const pending = new Set<string>();
 
+let gesture = 0;
+if (typeof window !== "undefined") {
+  window.addEventListener("pointerdown", () => gesture++, true);
+  window.addEventListener("focusin", () => gesture++, true);
+}
+
 export const useEditor = create<EditorState>((set, get) => ({
   snap: null,
   previewUrl: "",
@@ -96,7 +102,8 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   edit: async (cmd, coalesce) => {
     try {
-      const snap = await api.applyEdit(cmd, coalesce);
+      // Keys are scoped to a gesture: one drag or one focus session is one undo step.
+      const snap = await api.applyEdit(cmd, coalesce && `${coalesce}#${gesture}`);
       get().setSnap(snap);
       return snap;
     } catch (e) {
