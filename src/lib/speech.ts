@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errorText } from "./api";
-import { US } from "./time";
 import { currentEpoch, enqueue, useEditor, whenIdle } from "./store";
 import type { Project, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
@@ -152,8 +151,4 @@ export function tokenAt(tokens: Token[], t: number): number {
   if (found < 0) return -1;
   const next = tokens[found + 1];
   return t < tokens[found].endUs || (tokens[found].kind === "word" && next?.kind === "word") ? found : -1;
-}
-
-export function formatSeconds(us: number) {
-  return `${(us / US).toFixed(1)} s`;
 }

@@ -13,7 +13,7 @@ export function formatTime(us: number, withFraction = true): string {
 
 export function formatDuration(us: number): string {
   const s = us / US;
-  return s < 60 ? `${s.toFixed(1)}s` : formatTime(us, false);
+  return s < 60 ? `${s.toFixed(1)} s` : formatTime(us, false);
 }
 
 export function snapToFrame(us: number, fps: number): number {

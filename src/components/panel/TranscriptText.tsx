@@ -1,8 +1,8 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Trash2 } from "lucide-react";
-import { formatSeconds, paragraphs, tokenAt, type Token } from "../../lib/speech";
+import { paragraphs, tokenAt, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
-import { formatTime } from "../../lib/time";
+import { formatDuration, formatTime } from "../../lib/time";
 import { Button } from "../ui";
 
 interface Selection {
@@ -41,11 +41,11 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
             data-t={i}
             role="option"
             aria-selected={selected}
-            aria-label={`Pause, ${formatSeconds(t.gapUs)}`}
-            title={`Pause of ${formatSeconds(t.gapUs)}`}
-            className={`tabular cursor-pointer rounded px-1 py-px text-[11px] ${selected ? look : `bg-raised hover:bg-line ${playing ? "text-accent" : "text-muted"}`}`}
+            aria-label={`Pause, ${formatDuration(t.gapUs)}`}
+            title={`Pause of ${formatDuration(t.gapUs)}`}
+            className={`tabular cursor-pointer whitespace-nowrap rounded px-1 py-px text-[11px] ${selected ? look : `bg-raised hover:bg-line ${playing ? "text-accent" : "text-muted"}`}`}
           >
-            {formatSeconds(t.gapUs)}
+            {formatDuration(t.gapUs)}
           </span>
         )}
       </Fragment>,
@@ -201,7 +201,7 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
       {lo >= 0 && (
         <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
           <span className="tabular flex-1 text-[12px] text-muted">
-            {summary} · {formatSeconds(lengthUs)}
+            {summary} · {formatDuration(lengthUs)}
           </span>
           <span title={blocker ?? "Cut from the timeline (Delete)"}>
             <Button variant="danger" className="h-7" disabled={!!blocker} onClick={remove}>
