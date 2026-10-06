@@ -82,7 +82,7 @@ fn placement(project: &Project, visible: VisibleClip, t_us: i64, k: f32, text_re
     let canvas = &project.canvas;
     let (size, text) = match &clip.content {
         ClipContent::Media { asset_id, .. } => {
-            let Some(asset) = project.asset(asset_id) else { return Ok(None) };
+            let asset = project.asset(asset_id)?;
             if asset.kind == AssetKind::Audio || asset.width == 0 || asset.height == 0 {
                 return None;
             }
