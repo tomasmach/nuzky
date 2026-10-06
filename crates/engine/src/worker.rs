@@ -29,8 +29,6 @@ struct State {
     epoch: u64,
     error: Option<String>,
     shutdown: bool,
-    source_size: Option<(u32, u32)>,
-    rotation: u32,
 }
 
 impl State {
@@ -91,12 +89,6 @@ impl VideoWorker {
             .spawn(move || run(s, path))
             .expect("spawn decoder thread");
         Self { shared, thread: Some(thread), last_used: Instant::now(), exact: false }
-    }
-
-    /// Source size (before rotation) once the file is open.
-    pub fn source_info(&self) -> Option<((u32, u32), u32)> {
-        let st = self.shared.state.lock().unwrap();
-        st.source_size.map(|s| (s, st.rotation))
     }
 
     pub fn error(&self) -> Option<String> {
@@ -167,12 +159,6 @@ fn run(shared: Arc<Shared>, path: PathBuf) {
             return;
         }
     };
-    {
-        let mut st = shared.state.lock().unwrap();
-        st.source_size = Some(decoder.source_size());
-        st.rotation = decoder.rotation;
-        shared.cv.notify_all();
-    }
 
     loop {
         let (want, size, seek, epoch) = {

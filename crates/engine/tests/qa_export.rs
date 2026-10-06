@@ -277,3 +277,26 @@ fn failed_final_rename_leaves_no_temporary_export() {
         "complete temporary export remains after failed rename"
     );
 }
+
+#[test]
+fn missing_image_fails_exact_render_and_export_but_preview_survives() {
+    let d = dir(&format!("missing-image-{}", capopen_engine::edit::new_id()));
+    let path = d.join("deleted-image.ppm");
+    std::fs::write(&path, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+    let mut project = Project::new("missing image");
+    project.canvas.width = 64;
+    project.canvas.height = 64;
+    project.assets.push(probe(&path, "image".into()).unwrap());
+    project.tracks[0].clips.push(clip("clip", "image", 0, 100_000));
+    std::fs::remove_file(&path).unwrap();
+    let mut renderer = capopen_engine::Renderer::new().unwrap();
+    let error = renderer.render(&project, 0, 64, 64, capopen_engine::Wait::Exact, false).unwrap_err();
+    assert!(error.to_string().contains("deleted-image.ppm"), "{error}");
+    renderer.render(&project, 0, 64, 64, capopen_engine::Wait::Ready, false).unwrap();
+    let out = d.join("export.mp4");
+    let error = export(&project, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap_err();
+    assert!(error.to_string().contains("deleted-image.ppm"), "{error}");
+    assert!(!out.exists());
+    assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0);
+    std::fs::remove_dir_all(d).unwrap();
+}

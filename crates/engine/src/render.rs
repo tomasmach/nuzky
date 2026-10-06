@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::effects::{max_animation_scale, source_time, transform_at, transition_at, transition_window};
 use crate::gpu::{Draw, Gpu, Image, Layer};
@@ -82,7 +82,7 @@ fn placement(project: &Project, visible: VisibleClip, t_us: i64, k: f32, text_re
     let canvas = &project.canvas;
     let (size, text) = match &clip.content {
         ClipContent::Media { asset_id, .. } => {
-            let asset = project.asset(asset_id)?;
+            let Some(asset) = project.asset(asset_id) else { return Ok(None) };
             if asset.kind == AssetKind::Audio || asset.width == 0 || asset.height == 0 {
                 return None;
             }
@@ -185,7 +185,7 @@ impl Renderer {
                 let p = transition.progress;
                 let mut pair = [None, None];
                 for (index, visible) in std::iter::once(first).chain(visible).enumerate() {
-                    let mut layer = self.layer_for(project, visible, t_us, k, wait, playing);
+                    let mut layer = self.layer_for(project, visible, t_us, k, wait, playing)?;
                     if let (Some(layer), Some(role)) = (&mut layer, visible.transition) {
                         apply_transition(layer, role.kind, role.progress, role.incoming, out_w, out_h);
                     }
@@ -205,7 +205,7 @@ impl Renderer {
                     pair[if p < 0.5 { 1 } else { 0 }] = Some(colour);
                 }
                 draws.push(Draw::Transition(pair.map(|layer| layer.unwrap_or_else(|| solid(&self.solids[0], out_w, out_h)))));
-            } else if let Some(layer) = self.layer_for(project, first, t_us, k, wait, playing) {
+            } else if let Some(layer) = self.layer_for(project, first, t_us, k, wait, playing)? {
                 if track.id == crate::edit::MAIN_TRACK && canvas.background_blur > 0.0 {
                     draws.push(Draw::Layer(self.background(&layer, canvas.background_blur, out_w, out_h, &mut blur_used)));
                 }
@@ -248,25 +248,32 @@ impl Renderer {
         }
     }
 
-    fn layer_for(&mut self, project: &Project, visible: VisibleClip, t_us: i64, k: f32, wait: Wait, playing: bool) -> Option<Layer> {
+    fn layer_for(&mut self, project: &Project, visible: VisibleClip, t_us: i64, k: f32, wait: Wait, playing: bool) -> Result<Option<Layer>> {
         let clip = visible.clip;
-        let place = placement(project, visible, t_us, k, &mut self.text)?;
+        let Some(place) = placement(project, visible, t_us, k, &mut self.text) else { return Ok(None) };
         let corners = placement_quad(project, &place, k);
         let (image, rotation, adjust) = match &clip.content {
             ClipContent::Media { asset_id, adjust, .. } => {
-                let asset = project.asset(asset_id)?;
+                let Some(asset) = project.asset(asset_id) else { return Ok(None) };
                 // A stable conversion size avoids flushing the decoder queue on every animation frame.
                 let size = decode_resolution(project, clip, asset, k);
                 let source_t = if asset.kind == AssetKind::Image { 0 } else { source_time(clip, t_us).min((asset.duration_us - 1).max(0)) };
                 let worker = self.workers.entry(clip.id.clone()).or_insert_with(|| VideoWorker::spawn(PathBuf::from(&asset.path)));
                 let frame = worker.get(source_t, size, playing, wait == Wait::Exact);
+                if wait == Wait::Exact {
+                    if let Some(error) = worker.error() { bail!("Cannot decode {}: {error}", asset.path); }
+                    if !worker.exact || frame.is_none() { bail!("Timed out waiting for frame at {source_t} us in {}", asset.path); }
+                }
                 if playing && !worker.exact { self.late_layers += 1; }
-                let frame = frame?;
+                let Some(frame) = frame else { return Ok(None) };
                 (Image { width: frame.width, height: frame.height, data: frame.data }, asset.rotation, *adjust)
             }
-            ClipContent::Text { .. } => (place.text?, 0, Adjust::default()),
+            ClipContent::Text { .. } => {
+                let Some(text) = place.text else { return Ok(None) };
+                (text, 0, Adjust::default())
+            },
         };
-        Some(Layer { image, corners, uv_rotation: rotation, opacity: place.transform.opacity, adjust, blur: 0.0, clip: None })
+        Ok(Some(Layer { image, corners, uv_rotation: rotation, opacity: place.transform.opacity, adjust, blur: 0.0, clip: None }))
     }
 }
 
