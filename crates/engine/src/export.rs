@@ -13,9 +13,29 @@ use crate::media::{init, set_sws_colorspace};
 use crate::model::{CHANNELS, Project, SAMPLE_RATE};
 use crate::render::{Renderer, Wait};
 
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Quality {
+    High,
+    Recommended,
+    Small,
+}
+
+impl Quality {
+    pub fn crf(self) -> u8 {
+        match self {
+            Self::High => 17,
+            Self::Recommended => 21,
+            Self::Small => 26,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExportOptions {
     pub crf: u8,
+    pub replace_existing: bool,
     pub preset: String,
     /// Short side of the output in pixels (720, 1080, 1440, 2160); `None` keeps the canvas size.
     pub resolution: Option<u32>,
@@ -25,7 +45,7 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { crf: 20, preset: "veryfast".into(), resolution: None, fps: None }
+        Self { crf: Quality::Recommended.crf(), replace_existing: false, preset: "veryfast".into(), resolution: None, fps: None }
     }
 }
 
@@ -64,7 +84,7 @@ pub fn export(
         }
     };
     let result = encode(project, cache_dir, &tmp, options, cancel, &mut progress, duration)
-        .and_then(|()| std::fs::rename(&tmp, out).with_context(|| format!("Cannot write {}", out.display())));
+        .and_then(|()| publish(&tmp, out, options.replace_existing, cancel));
     if result.is_err() {
         // Report why the export failed, not a secondary cleanup problem.
         if let Err(e) = std::fs::remove_file(&tmp) {
@@ -79,6 +99,26 @@ fn check_source_path(project: &Project, path: &Path) -> Result<()> {
         if project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target)) {
             bail!("{} is used in this project. Choose another file name.", path.display());
         }
+    }
+    Ok(())
+}
+
+fn publish(tmp: &Path, out: &Path, replace_existing: bool, cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        bail!("Export cancelled");
+    }
+    if replace_existing {
+        std::fs::rename(tmp, out).with_context(|| format!("Cannot write {}", out.display()))?;
+    } else {
+        // Linking on the same filesystem atomically refuses an existing destination.
+        std::fs::hard_link(tmp, out).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow!("OUTPUT_EXISTS: choose a new export path")
+            } else {
+                anyhow!(error).context(format!("Cannot write {}", out.display()))
+            }
+        })?;
+        std::fs::remove_file(tmp).context("Removing published export temporary file")?;
     }
     Ok(())
 }
@@ -268,6 +308,58 @@ fn encode_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publish_refuses_late_collision_unless_replace_was_confirmed() {
+        let dir = std::env::temp_dir().join(format!("capopen-publish-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = dir.join("rendered.mp4");
+        let out = dir.join("out.mp4");
+        let cancel = AtomicBool::new(false);
+        std::fs::write(&tmp, b"rendered").unwrap();
+        std::fs::write(&out, b"appeared during rendering").unwrap();
+        assert!(!ExportOptions::default().replace_existing);
+        assert!(publish(&tmp, &out, false, &cancel).unwrap_err().to_string().contains("OUTPUT_EXISTS"));
+        assert_eq!(std::fs::read(&out).unwrap(), b"appeared during rendering");
+        assert!(tmp.exists());
+        publish(&tmp, &out, true, &cancel).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"rendered");
+        assert!(!tmp.exists());
+        std::fs::remove_file(&out).unwrap();
+        std::fs::write(&tmp, b"new render").unwrap();
+        publish(&tmp, &out, false, &cancel).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"new render");
+        assert!(!tmp.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn publish_honors_cancel_after_rendering_in_both_modes() {
+        let dir = std::env::temp_dir().join(format!("capopen-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = dir.join("rendered.mp4");
+        let out = dir.join("out.mp4");
+        std::fs::write(&tmp, b"finished render").unwrap();
+        let cancel = AtomicBool::new(false);
+        cancel.store(true, Ordering::Relaxed);
+        for replace in [false, true] {
+            assert!(publish(&tmp, &out, replace, &cancel).unwrap_err().to_string().contains("cancelled"));
+            assert!(!out.exists());
+            std::fs::write(&out, b"original").unwrap();
+            assert!(publish(&tmp, &out, replace, &cancel).is_err());
+            assert_eq!(std::fs::read(&out).unwrap(), b"original");
+            std::fs::remove_file(&out).unwrap();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn quality_matches_desktop_presets() {
+        assert_eq!(Quality::High.crf(), 17);
+        assert_eq!(Quality::Recommended.crf(), 21);
+        assert_eq!(Quality::Small.crf(), 26);
+        assert_eq!(ExportOptions::default().crf, Quality::Recommended.crf());
+    }
 
     #[test]
     fn frames_start_on_the_rounded_times_cuts_are_made_at() {

@@ -1,0 +1,219 @@
+//! Headless stdio MCP. No app IPC or network listener is started here.
+mod jobs;
+mod media;
+mod params;
+mod tools;
+mod transcript;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
+use schemars::{JsonSchema, schema_for};
+use serde_json::Value;
+
+use tools::Backend;
+
+const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
+
+#[derive(Clone)]
+struct Server {
+    backend: Arc<Backend>,
+    tools: Arc<Vec<Tool>>,
+}
+
+pub fn serve(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
+    let backend = Arc::new(Backend::open(project, allow_write, cache)?);
+    let server = Server {
+        backend: backend.clone(),
+        tools: Arc::new(catalog()?),
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("Starting MCP runtime")?;
+    let result = runtime.block_on(async {
+        let service = server
+            .serve(rmcp::transport::stdio())
+            .await
+            .context("MCP initialization")?;
+        service.waiting().await.context("MCP transport")?;
+        Ok(())
+    });
+    let finish = backend.session.disconnect();
+    backend.jobs.shutdown();
+    result.and(finish)
+}
+
+fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<Tool> {
+    let schema = schema_for!(T);
+    let object = schema
+        .as_object()
+        .context("Tool schema must be an object")?
+        .clone();
+    let read_only = matches!(name, "get_state" | "inspect_frames");
+    let annotations = ToolAnnotations::new()
+        .read_only(read_only)
+        .destructive(matches!(
+            name,
+            "apply_edits" | "end_run" | "undo_run" | "build_captions" | "resolve_recovery"
+        ))
+        .idempotent(matches!(
+            name,
+            "get_state" | "inspect_frames" | "apply_edits"
+        ))
+        .open_world(false);
+    Ok(Tool::new(name, description, object).with_annotations(annotations))
+}
+
+fn catalog() -> Result<Vec<Tool>> {
+    Ok(vec![
+        tool::<params::State>(
+            "get_state",
+            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
+        )?,
+        tool::<params::Begin>(
+            "begin_run",
+            "Begin one reversible editing run and persist its checkpoint. Requires --allow-write. Only this run may mutate the project. End with keep or discard. Two minutes without tool calls auto-keeps the run; plan or transcribe before opening a run. Every response includes revision and session_epoch. Revision changes only when the project changes; beginning a run leaves it unchanged.",
+        )?,
+        tool::<params::Recovery>(
+            "resolve_recovery",
+            "Resolve get_state.recovery_checkpoint after a crash. Ask the user before choosing: keep preserves the current project file; restore validates and saves the checkpoint project. Both remove the checkpoint. Requires --allow-write and no open run. Revision changes only if the project changes.",
+        )?,
+        tool::<params::Apply>(
+            "apply_edits",
+            "Atomically apply EditCmd JSON (camelCase fields and type tags). All times are integer microseconds. Supply a unique request_id within this run; retry identical content with the same id while the run is open for the stored result. Ended runs reject retries with INVALID_RUN. expected_revision rejects stale edits. Main track is magnetic and repacks after edits. rippleDeleteRanges removes the union of half-open timeline ranges from ALL tracks except keepTrackIds, then closes gaps; ranges refer to the timeline BEFORE this command. Source analysis times must first be mapped through sourceInUs, startUs and speed. addCaptions creates a new track; replaceCaptions replaces only the named caption track. Batch failures roll back everything. Result contains created/changed/removed ids and actual resulting clip times.",
+        )?,
+        tool::<params::End>(
+            "end_run",
+            "End the owning run: keep saves all its edits as ONE undo entry; discard restores and saves the checkpoint. The run id is then revoked. A clean disconnect keeps changes too. Keep leaves revision unchanged; discard increments it only if the project changes.",
+        )?,
+        tool::<params::Undo>(
+            "undo_run",
+            "Restore the state before this run only if it is the LAST history entry and no run is open. Saves the restored project. History belongs to this session epoch. Revision increments only if the project changes.",
+        )?,
+        tool::<params::Import>(
+            "import_media",
+            "Probe existing local file paths and add assets through the owning run. Relative paths resolve beside the project. Returns asset_ids; follow with addClip edits to place them. No uploads, downloads or automatic insertion.",
+        )?,
+        tool::<params::Inspect>(
+            "inspect_frames",
+            "Render 1–16 timeline times_us (integer microseconds) with exact frames. Returns ONE PNG contact sheet with seconds.microseconds labels and snapshot revision. width is per-frame pixels (96–1280; default 320). Fails if referenced media is missing. Check captions, face framing and cut boundaries before exporting.",
+        )?,
+        tool::<params::Analyze>(
+            "analyze",
+            "Start a local analysis job for an asset. Poll job(get) for results. Returned ranges/cuts use SOURCE integer microseconds, not current timeline time. silences: padded quiet ranges; params threshold_db, min_silence_us (400000), pad_us (120000). loudness: RMS dBFS with window_us (100000), not LUFS. scenes: cuts with threshold (0.18), min_gap_us (300000). fillers: requires params.transcript_id from a completed asset transcription; suggestions need context review. Cancellation of analysis/transcription takes effect after the current engine operation.",
+        )?,
+        tool::<params::Transcribe>(
+            "transcribe",
+            "Start LOCAL word-timestamp transcription; returns a job id. target is 'timeline' or an asset id. Prefer asset transcription before cutting: build_captions maps its words through the retained main-track source ranges and speed. Timeline transcripts become stale when timeline audio changes. language e.g. 'cs', 'en', 'auto'; model is an installed Whisper name or absolute local .bin path (Silero .bin alongside it). Poll job(get), spaced a few seconds apart; completed job id is transcript_id. Word times are integer microseconds in the target's coordinates. No automatic model download.",
+        )?,
+        tool::<params::Job>(
+            "job",
+            "Read job progress/result or request cancellation. Results carry the snapshot revision and session_epoch. Transcription returns words and segments; its job_id is the transcript_id. Poll with pauses, not a tight loop. Cancellation is cooperative; cancel_requested can remain true while the current engine operation finishes. No cancelled transcript is published.",
+        )?,
+        tool::<params::Captions>(
+            "build_captions",
+            "Group transcript words deterministically into caption clips inside the owning run. Defaults to CaptionGrouping defaults (2 words, 15 characters). A single longer word remains intact. Asset transcripts map SOURCE integer microseconds through current main-track cuts/speed. Timeline transcripts require unchanged audio. Adds one Captions track, or REPLACES that single track; other text tracks are untouched. Multiple Captions tracks require explicit replaceCaptions via apply_edits. After manual text corrections, check get_state.caption_stats again; corrections can exceed the original grouping limits. style is optional and uses canvas pixels. Default is the app Reel preset: size 95, white, regular weight, black stroke 7.5, no background, default Inter. Prefer it unless the user asks for another look. Inspect rendered frames.",
+        )?,
+        tool::<params::Export>(
+            "export_video",
+            "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. resolution is the SHORT side in pixels (1080 gives 1080x1920 on a portrait canvas), fps=1..240, quality high/recommended/small. path must be new; relative paths resolve beside the project. Requires --allow-write. Poll job(get) until done before reporting success.",
+        )?,
+    ])
+}
+
+impl ServerHandler for Server {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(Implementation::new("capopen", env!("CARGO_PKG_VERSION")))
+        .with_instructions(GUIDE)
+    }
+
+    async fn list_tools(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone()))
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tools.iter().find(|t| t.name == name).cloned()
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        Ok(tools::call(
+            self.backend.clone(),
+            request.name.to_string(),
+            Value::Object(request.arguments.unwrap_or_default()),
+        )
+        .await
+        .into())
+    }
+
+    async fn list_resources(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult::with_all_items(vec![
+            Resource::new("capopen://guide", "Editing guide").with_mime_type("text/markdown"),
+            Resource::new("capopen://schema", "Project JSON schema")
+                .with_mime_type("application/schema+json"),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let text = match request.uri.as_str() {
+            "capopen://guide" => GUIDE.into(),
+            "capopen://schema" => schema_for!(capopen_engine::Project).to_value().to_string(),
+            _ => return Err(ErrorData::invalid_params("Unknown CapOpen resource", None)),
+        };
+        Ok(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri)]).into())
+    }
+
+    async fn list_prompts(
+        &self,
+        _: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        Ok(ListPromptsResult::with_all_items(vec![Prompt::new(
+            "edit_selected",
+            Some("Edit the selected clips toward a goal"),
+            Some(vec![PromptArgument::new("goal").with_required(true)]),
+        )]))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        if request.name != "edit_selected" {
+            return Err(ErrorData::invalid_params("Unknown prompt", None));
+        }
+        let goal = request
+            .arguments
+            .as_ref()
+            .and_then(|a| a.get("goal"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| ErrorData::invalid_params("goal is required", None))?;
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, format!("{goal}\n\nRead get_state and use its selection. Headless selection is empty: use the whole timeline.\n\n{GUIDE}"))]).into())
+    }
+}

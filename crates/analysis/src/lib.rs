@@ -19,3 +19,7 @@ pub struct Range {
     pub start_us: i64,
     pub end_us: i64,
 }
+
+pub fn models_dir() -> std::path::PathBuf {
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen").join("models")
+}

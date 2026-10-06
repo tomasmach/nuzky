@@ -29,6 +29,7 @@ fn source(path: &Path) {
 fn options() -> ExportOptions {
     ExportOptions {
         preset: "ultrafast".into(),
+        replace_existing: true,
         ..ExportOptions::default()
     }
 }

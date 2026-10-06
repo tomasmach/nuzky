@@ -11,7 +11,8 @@ use anyhow::Context;
 use capopen_analysis::{AudioSource, CaptionGrouping, Transcript, group_words, transcribe_words};
 use capopen_engine::audio::{Mixer, ensure_pcm, has_audio, us_to_samples};
 use capopen_engine::edit::{CaptionSegment, EditCmd, new_id};
-use capopen_engine::export::{ExportOptions, export};
+use capopen_engine::export::{ExportOptions, Quality, export};
+use capopen_analysis::models_dir;
 use capopen_engine::model::{AssetKind, CHANNELS, Clip, ClipContent, Project, TextStyle, Track};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -138,17 +139,12 @@ pub struct ExportRequest {
     pub resolution: u32,
     pub fps: u32,
     /// "high" | "recommended" | "small"
-    pub quality: String,
+    pub quality: Quality,
 }
 
 impl ExportRequest {
     fn options(&self) -> ExportOptions {
-        let crf = match self.quality.as_str() {
-            "high" => 17,
-            "small" => 26,
-            _ => 21,
-        };
-        ExportOptions { crf, resolution: Some(self.resolution), fps: Some(self.fps), ..ExportOptions::default() }
+        ExportOptions { crf: self.quality.crf(), replace_existing: true, resolution: Some(self.resolution), fps: Some(self.fps), ..ExportOptions::default() }
     }
 }
 
@@ -194,10 +190,6 @@ const MODELS: &[(&str, &str, u32)] = &[
     ("small", "Balanced", 466),
     ("large-v3-turbo-q5_0", "Most accurate", 547),
 ];
-
-fn models_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen").join("models")
-}
 
 fn model_path(id: &str) -> PathBuf {
     models_dir().join(format!("ggml-{id}.bin"))
@@ -567,6 +559,17 @@ mod tests {
     use capopen_engine::model::{Asset, TrackKind};
     use capopen_analysis::Word;
     use capopen_engine::Editor;
+
+    #[test]
+    fn export_uses_shared_quality_and_confirmed_replacement() {
+        for (quality, crf) in [("high", 17), ("recommended", 21), ("small", 26)] {
+            let request: ExportRequest = serde_json::from_value(serde_json::json!({
+                "resolution": 1080, "fps": 30, "quality": quality
+            })).unwrap();
+            assert_eq!(request.options().crf, crf);
+            assert!(request.options().replace_existing);
+        }
+    }
 
     fn request(max_words: Option<u8>, max_chars: Option<u8>) -> CaptionRequest {
         CaptionRequest { model: "small".into(), language: "cs".into(), max_words, max_chars,

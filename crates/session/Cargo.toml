@@ -1,20 +1,11 @@
 [package]
-name = "capopen-analysis"
+name = "capopen-session"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
-[features]
-gpu = ["whisper-rs/vulkan"]
 
 [dependencies]
 capopen-engine.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-dirs = "6"
-whisper-rs = "0.16.0"
-
-[[bin]]
-name = "capopen-analyze"
-path = "src/main.rs"

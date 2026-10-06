@@ -24,6 +24,7 @@ pub struct AppState {
     app: AppHandle,
     editor: Mutex<Editor>,
     project_path: Mutex<PathBuf>,
+    project_lock: Mutex<Arc<std::fs::File>>,
     engine: Engine,
     saver: Saver,
     preview_url: String,
@@ -96,7 +97,7 @@ impl AppState {
         self.preview_locks.lock().unwrap().retain(|id, _| editor.project.asset(id).is_some());
         self.engine.send(Msg::Project(Arc::new(editor.project.clone())));
         let path = self.project_path.lock().unwrap().clone();
-        self.saver.schedule(path, editor.project.clone(), editor.revision);
+        self.saver.schedule(path, editor.project.clone(), editor.revision, self.project_lock.lock().unwrap().clone());
         self.snapshot(editor, select)
     }
 
@@ -127,13 +128,14 @@ impl AppState {
         Ok(value)
     }
 
-    fn replace_project(&self, project: Project, path: PathBuf) -> Snapshot {
+    fn replace_project(&self, project: Project, path: PathBuf, lock: Arc<std::fs::File>) -> Snapshot {
         let mut editor = self.editor.lock().unwrap();
         *editor = Editor::new(project);
         self.thumbs.lock().unwrap().clear();
         self.filmstrips.lock().unwrap().clear();
         self.preview_locks.lock().unwrap().clear();
         *self.project_path.lock().unwrap() = path;
+        *self.project_lock.lock().unwrap() = lock;
         self.engine.send(Msg::Seek(0));
         let snap = self.commit(&editor, Vec::new());
         jobs::ensure_audio(self, &editor.project);
@@ -276,15 +278,21 @@ fn new_project(state: State<'_, AppState>, width: u32, height: u32) -> CmdResult
     project.canvas.width = width & !1;
     project.canvas.height = height & !1;
     let path = store::new_project_path();
-    store::save(&path, &project).map_err(err)?;
-    Ok(state.replace_project(project, path))
+    let lock = store::create(&path, &project).map_err(err)?;
+    Ok(state.replace_project(project, path, lock))
 }
 
 #[tauri::command]
 fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot> {
-    let path = PathBuf::from(path);
-    let project = store::load(&path).map_err(err)?;
-    Ok(state.replace_project(project, path))
+    let path = std::fs::canonicalize(path).map_err(err)?;
+    {
+        let editor = state.editor.lock().unwrap();
+        if *state.project_path.lock().unwrap() == path {
+            return Ok(state.snapshot(&editor, Vec::new()));
+        }
+    }
+    let (project, lock) = store::open(&path).map_err(err)?;
+    Ok(state.replace_project(project, path, lock))
 }
 
 #[tauri::command]
@@ -342,14 +350,21 @@ fn cancel_job(state: State<'_, AppState>, id: String) {
     }
 }
 
-fn initial_project() -> (Project, PathBuf) {
+/// The most recent project, or a new one when it cannot be opened, e.g. while an agent edits it.
+fn initial_project() -> anyhow::Result<(Project, PathBuf, Arc<std::fs::File>)> {
     if let Some(recent) = store::list().first() {
-        let path = PathBuf::from(&recent.path);
-        if let Ok(p) = store::load(&path) {
-            return (p, path);
+        let opened = std::fs::canonicalize(&recent.path)
+            .map_err(anyhow::Error::from)
+            .and_then(|path| store::open(&path).map(|(project, lock)| (project, path, lock)));
+        match opened {
+            Ok(found) => return Ok(found),
+            Err(error) => log::warn!("Starting with a new project: {error:#}"),
         }
     }
-    (Project::new("Untitled project"), store::new_project_path())
+    let project = Project::new("Untitled project");
+    let path = store::new_project_path();
+    let lock = store::create(&path, &project)?;
+    Ok((project, path, lock))
 }
 
 pub fn run() {
@@ -359,13 +374,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let server = Arc::new(PreviewServer::start()?);
-            let (project, path) = initial_project();
+            let (project, path, lock) = initial_project()?;
             let cache_dir = store::cache_dir();
             let engine = Engine::start(app.handle().clone(), server.clone(), Arc::new(project.clone()), cache_dir.clone());
             let state = AppState {
                 app: app.handle().clone(),
                 editor: Mutex::new(Editor::new(project)),
                 project_path: Mutex::new(path),
+                project_lock: Mutex::new(lock),
                 engine,
                 saver: Saver::start(app.handle().clone()),
                 preview_url: server.url.clone(),

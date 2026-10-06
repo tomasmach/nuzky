@@ -11,6 +11,7 @@ use capopen_engine::media::probe;
 use capopen_engine::{Project, Renderer, Wait};
 
 const USAGE: &str = "Usage:
+  capopen mcp --project <path> [--allow-write] [--cache <dir>]
   capopen probe <media>
   capopen new <project.json> <media>...     main-track project from media files
   capopen frame <project.json> <seconds> <out.png> [width]
@@ -35,8 +36,14 @@ fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Vulkan FP16 moves Whisper word times by up to 330 ms; FP32 is as fast. ggml reads this when
+    // its backend starts, so it is set here, before any other thread exists.
+    if std::env::var_os("GGML_VK_DISABLE_F16").is_none() {
+        unsafe { std::env::set_var("GGML_VK_DISABLE_F16", "1") };
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["mcp", rest @ ..] => serve_mcp(rest)?,
         ["probe", media] => {
             println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
         }
@@ -94,6 +101,8 @@ fn main() -> Result<()> {
             let options = ExportOptions {
                 resolution: rest.first().map(|s| s.parse()).transpose()?,
                 fps: rest.get(1).map(|s| s.parse()).transpose()?,
+                // The output path was typed on purpose, as with any command-line tool.
+                replace_existing: true,
                 ..ExportOptions::default()
             };
             export(&project, &cache_dir(), Path::new(out), &options, &cancel, |p| {
@@ -108,4 +117,21 @@ fn main() -> Result<()> {
         _ => bail!("{USAGE}"),
     }
     Ok(())
+}
+
+fn serve_mcp(args: &[&str]) -> Result<()> {
+    let mut project = None;
+    let mut cache = cache_dir();
+    let mut allow_write = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match *arg {
+            "--project" => project = Some(PathBuf::from(args.next().context("--project requires a path")?)),
+            "--cache" => cache = PathBuf::from(args.next().context("--cache requires a directory")?),
+            "--allow-write" => allow_write = true,
+            _ => bail!("Unknown MCP argument: {arg}\n{USAGE}"),
+        }
+    }
+    let project = project.context("mcp requires --project <path>")?;
+    capopen_mcp::serve(&project, allow_write, cache)
 }
