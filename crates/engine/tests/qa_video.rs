@@ -311,6 +311,8 @@ fn preview_decodes_new_media_after_a_clip_is_relinked() {
     p.assets[0].path = red.to_string_lossy().into_owned();
     let after = centre(&renderer.render(&p, 0, 64, 64, Wait::Exact, false).unwrap());
     assert!(after[0] > 200 && after[2] < 50, "red: {after:?}");
+    // The decoder of the old file goes at once, not after idling.
+    assert_eq!(renderer.decoders(), 1);
 }
 
 #[test]

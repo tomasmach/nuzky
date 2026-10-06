@@ -211,6 +211,11 @@ impl Renderer {
         &self.gpu.adapter_name
     }
 
+    /// Live video decoder threads, for diagnostics.
+    pub fn decoders(&self) -> usize {
+        self.workers.len()
+    }
+
     pub fn max_texture_dimension(&self) -> u32 {
         self.gpu.max_texture_dimension()
     }
@@ -274,7 +279,14 @@ impl Renderer {
         if playing {
             self.prefetch(project, t_us, k);
         }
-        self.workers.retain(|_, w| w.last_used.elapsed() < IDLE_WORKER);
+        // Decoders of removed or relinked clips go at once; others after idling.
+        let current = |clip_id: &str, path: &str| {
+            project.tracks.iter().flat_map(|t| &t.clips).any(|c| {
+                c.id == clip_id
+                    && matches!(&c.content, ClipContent::Media { asset_id, .. } if project.asset(asset_id).is_some_and(|a| a.path == path))
+            })
+        };
+        self.workers.retain(|(clip_id, path), w| w.last_used.elapsed() < IDLE_WORKER && current(clip_id, path));
         self.blurred.retain(|key, _| blur_used.contains(key));
         self.gpu.render(out_w, out_h, parse_color(&canvas.background), &draws)
     }
