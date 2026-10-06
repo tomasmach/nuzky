@@ -633,10 +633,16 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, min: i64)
 }
 
 /// Owns the current project and its undo history.
+/// One undo or redo entry: the project to return to and the coalesce key that made it.
+struct Step {
+    project: Project,
+    key: Option<String>,
+}
+
 pub struct Editor {
     pub project: Project,
-    undo: Vec<Project>,
-    redo: Vec<Project>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
     coalesce: Option<String>,
     pub revision: u64,
 }
@@ -647,7 +653,7 @@ impl Editor {
     }
 
     /// Applies `cmd`. Consecutive edits with the same `coalesce` key form one undo step, so
-    /// callers scope keys to a gesture (one slider drag, one typing burst).
+    /// callers scope keys to a gesture (one slider drag, one typing burst) or to an AI run.
     pub fn apply(&mut self, cmd: EditCmd, coalesce: Option<String>) -> Result<EditOutcome> {
         self.apply_batch(vec![cmd], coalesce)
     }
@@ -673,7 +679,7 @@ impl Editor {
         }
         let merge = coalesce.is_some() && coalesce == self.coalesce;
         if !merge {
-            self.undo.push(before);
+            self.undo.push(Step { project: before, key: coalesce.clone() });
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
             }
@@ -685,18 +691,46 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
-        let Some(prev) = self.undo.pop() else { return false };
-        self.redo.push(std::mem::replace(&mut self.project, prev));
+        let Some(step) = self.undo.pop() else { return false };
+        let current = std::mem::replace(&mut self.project, step.project);
+        self.redo.push(Step { project: current, key: step.key });
         self.coalesce = None;
         self.revision += 1;
         true
     }
 
     pub fn redo(&mut self) -> bool {
-        let Some(next) = self.redo.pop() else { return false };
-        self.undo.push(std::mem::replace(&mut self.project, next));
+        let Some(step) = self.redo.pop() else { return false };
+        let current = std::mem::replace(&mut self.project, step.project);
+        self.undo.push(Step { project: current, key: step.key });
         self.coalesce = None;
         self.revision += 1;
+        true
+    }
+
+    /// Ends the current undo step, so the next edit starts a new one even with the same key.
+    pub fn seal(&mut self) {
+        self.coalesce = None;
+    }
+
+    /// The coalesce key of the newest undo step.
+    pub fn last_key(&self) -> Option<&str> {
+        self.undo.last().and_then(|step| step.key.as_deref())
+    }
+
+    /// Reverts the newest undo step if `key` made it, leaving nothing to redo: discarding an
+    /// AI run must not offer it back, and redo steps were made on top of it. False when the
+    /// newest step belongs to something else.
+    pub fn drop_last(&mut self, key: &str) -> bool {
+        if self.last_key() != Some(key) {
+            return false;
+        }
+        if let Some(step) = self.undo.pop() {
+            self.project = step.project;
+            self.redo.clear();
+            self.coalesce = None;
+            self.revision += 1;
+        }
         true
     }
 
@@ -996,6 +1030,37 @@ mod tests {
         assert!(e.project.tracks[0].clips.is_empty());
         assert!(e.redo());
         assert_eq!(e.project.tracks[0].clips.len(), 1);
+    }
+
+    #[test]
+    fn a_run_is_one_sealed_step_that_can_be_dropped_without_redo() {
+        let mut e = Editor::new(project());
+        e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, Some("user".into())).unwrap();
+        let after_user = e.project.clone();
+        e.seal();
+        let run = "run:1";
+        for asset in ["b", "a"] {
+            e.apply(EditCmd::AddClip { asset_id: asset.into(), start_us: None, track_id: None }, Some(run.into())).unwrap();
+        }
+        e.seal();
+        assert_eq!(e.last_key(), Some(run));
+        // After sealing, the same key starts a new step instead of joining the run.
+        e.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }, Some(run.into())).unwrap();
+        assert!(e.undo());
+        assert_eq!(e.project.tracks[0].clips.len(), 3);
+        assert!(!e.drop_last("run:2"));
+        assert!(e.drop_last(run));
+        assert_eq!(e.project, after_user);
+        assert!(!e.can_redo());
+        assert_eq!(e.last_key(), Some("user"));
+        // A whole run comes back with one redo.
+        e.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }, Some(run.into())).unwrap();
+        e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, Some(run.into())).unwrap();
+        assert!(e.undo());
+        assert_eq!(e.project, after_user);
+        assert!(e.redo());
+        assert_eq!(e.project.tracks[0].clips.len(), 3);
+        assert_eq!(e.last_key(), Some(run));
     }
 
     #[test]
