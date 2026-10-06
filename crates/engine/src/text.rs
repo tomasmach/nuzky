@@ -47,13 +47,14 @@ impl TextRenderer {
     }
 
     fn rasterize(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> Image {
-        let size = (style.font_size * scale).max(1.0);
-        let stroke = (style.stroke_width * scale).max(0.0);
+        // Layout stays in canvas pixels; only glyph rasterisation uses the output scale.
+        let size = style.font_size.max(1.0);
+        let stroke = style.stroke_width.max(0.0);
         let pad_box = if style.background.is_some() { size * 0.3 } else { 0.0 };
         let pad = (stroke.ceil() + pad_box.ceil() + 2.0) as i32;
 
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(size, size * 1.2));
-        let wrap = (max_width - 2.0 * pad as f32).max(size);
+        let wrap = (max_width / scale - 2.0 * pad as f32).max(size);
         buffer.set_size(Some(wrap), None);
         let attrs = Attrs::new().family(Family::SansSerif).weight(if style.bold { Weight::BOLD } else { Weight::NORMAL });
         let text = if text.trim().is_empty() { " " } else { text };
@@ -68,34 +69,32 @@ impl TextRenderer {
         }
         // Glyphs are centred inside `wrap`, so crop to the widest line.
         let x0 = ((wrap - line_w) / 2.0).floor() as i32;
-        let w = (line_w.ceil() as i32 + 2 * pad).max(1) as usize;
-        let h = (text_h.ceil() as i32 + 2 * pad).max(1) as usize;
+        let w = ((line_w.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize;
+        let h = ((text_h.ceil() + 2.0 * pad as f32).max(1.0) * scale).ceil() as usize;
 
         let mut fill = vec![0u8; w * h];
-        buffer.draw(&mut self.fonts, &mut self.swash, Color::rgb(255, 255, 255), |gx, gy, gw, gh, color| {
-            let a = color.a();
-            if a == 0 {
-                return;
-            }
-            for yy in gy..gy + gh as i32 {
-                for xx in gx..gx + gw as i32 {
-                    let (px, py) = (xx - x0 + pad, yy + pad);
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs {
+                let offset = ((pad - x0) as f32 * scale, (run.line_y + pad as f32) * scale);
+                let physical = glyph.physical(offset, scale);
+                self.swash.with_pixels(&mut self.fonts, physical.cache_key, Color::rgb(255, 255, 255), |x, y, color| {
+                    let (px, py) = (x + physical.x, y + physical.y);
                     if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
                         let i = py as usize * w + px as usize;
-                        fill[i] = fill[i].max(a);
+                        fill[i] = fill[i].max(color.a());
                     }
-                }
+                });
             }
-        });
+        }
 
-        let outline = if stroke > 0.0 { Some(dilate(&fill, w, h, stroke)) } else { None };
+        let outline = if stroke > 0.0 { Some(dilate(&fill, w, h, stroke * scale)) } else { None };
         let fill_c = parse_color(&style.color);
         let stroke_c = parse_color(&style.stroke_color);
         let bg_c = style.background.as_deref().map(parse_color);
 
         // Premultiplied "over" compositing, converted back to straight alpha at the end.
         let mut out = vec![0u8; w * h * 4];
-        let radius = size * 0.25;
+        let radius = size * scale * 0.25;
         for y in 0..h {
             for x in 0..w {
                 let i = y * w + x;

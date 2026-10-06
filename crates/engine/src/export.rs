@@ -50,24 +50,37 @@ pub fn export(
     if duration <= 0 {
         bail!("The timeline is empty");
     }
-    if let Ok(target) = std::fs::canonicalize(out) {
-        if project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target)) {
-            bail!("{} is used in this project. Choose another file name.", out.display());
-        }
-    }
+    check_source_path(project, out)?;
     for asset in project.assets.iter().filter(|a| has_audio(a)) {
         ensure_pcm(cache_dir, asset, |_| {})?;
     }
-    // Render into a temporary file so a failed export never touches an existing file.
-    let tmp = out.with_extension("capopen-part.mp4");
-    let result = encode(project, cache_dir, &tmp, options, cancel, &mut progress, duration);
-    match result {
-        Ok(()) => std::fs::rename(&tmp, out).with_context(|| format!("Cannot write {}", out.display())),
-        Err(e) => {
-            std::fs::remove_file(&tmp).ok();
-            Err(e)
+    // Reserve beside the destination so rename stays on the same filesystem.
+    let tmp = loop {
+        let path = out.with_file_name(format!(".capopen-part-{}.mp4", uuid::Uuid::new_v4()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => break path,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).context("Cannot reserve temporary export file"),
+        }
+    };
+    let result = encode(project, cache_dir, &tmp, options, cancel, &mut progress, duration)
+        .and_then(|()| std::fs::rename(&tmp, out).with_context(|| format!("Cannot write {}", out.display())));
+    if result.is_err() {
+        // Report why the export failed, not a secondary cleanup problem.
+        if let Err(e) = std::fs::remove_file(&tmp) {
+            log::warn!("Cannot remove temporary export {}: {e}", tmp.display());
         }
     }
+    result
+}
+
+fn check_source_path(project: &Project, path: &Path) -> Result<()> {
+    if let Ok(target) = std::fs::canonicalize(path) {
+        if project.assets.iter().any(|a| std::fs::canonicalize(&a.path).ok().as_ref() == Some(&target)) {
+            bail!("{} is used in this project. Choose another file name.", path.display());
+        }
+    }
+    Ok(())
 }
 
 fn output_size(project: &Project, options: &ExportOptions, max_dimension: u32) -> Result<(u32, u32)> {
@@ -172,6 +185,7 @@ fn encode(
         let mut packet = ff::Packet::empty();
         while enc.receive_packet(&mut packet).is_ok() {
             packet.set_stream(index);
+            if index == vindex { packet.set_duration(1); }
             packet.rescale_ts(from, to);
             packet.write_interleaved(octx)?;
         }

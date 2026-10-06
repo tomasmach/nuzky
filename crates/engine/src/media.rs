@@ -186,7 +186,7 @@ pub struct VideoDecoder {
     input: ff::format::context::Input,
     stream_index: usize,
     decoder: ff::decoder::Video,
-    time_base: f64,
+    time_base: ff::Rational,
     origin_us: i64,
     sent_eof: bool,
     eof: bool,
@@ -207,7 +207,7 @@ impl VideoDecoder {
         let stream = video_stream(&input).ok_or_else(|| anyhow!("{} has no video", path.display()))?;
         let stream_index = stream.index();
         let rotation = display_rotation(&stream);
-        let time_base = f64::from(stream.time_base());
+        let time_base = stream.time_base();
         let rate = stream.avg_frame_rate();
         let fps = if rate.numerator() > 0 && rate.denominator() > 0 { f64::from(rate) } else { 30.0 };
         let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())?;
@@ -243,9 +243,15 @@ impl VideoDecoder {
 
     /// Jumps to the keyframe at or before `t_us`. The next decoded frames start there.
     pub fn seek(&mut self, t_us: i64) -> Result<()> {
-        let ts = t_us.max(0) + self.origin_us;
+        use ff::util::mathematics::{Rescale, Rounding};
+        let ts = t_us.max(0).saturating_add(self.origin_us)
+            .rescale_with((1, 1_000_000), self.time_base, Rounding::Down);
+        // A global-time seek rounds to the nearest stream tick and can skip the covering GOP.
+        let result = unsafe {
+            ff::ffi::avformat_seek_file(self.input.as_mut_ptr(), self.stream_index as i32, i64::MIN, ts, ts, 0)
+        };
         // Seeking images and tiny files can fail harmlessly; decoding restarts from the start.
-        if self.input.seek(ts, ..ts).is_err() {
+        if result < 0 {
             self.input.seek(0, ..).ok();
         }
         self.decoder.flush();
@@ -264,7 +270,7 @@ impl VideoDecoder {
             match self.decoder.receive_frame(&mut f) {
                 Ok(()) => {
                     let pts = f.timestamp().or(f.pts()).unwrap_or(0);
-                    let t = (pts as f64 * self.time_base * 1e6).round() as i64 - self.origin_us;
+                    let t = (pts as f64 * f64::from(self.time_base) * 1e6).round() as i64 - self.origin_us;
                     return Ok(Some((t, f)));
                 }
                 Err(ff::Error::Eof) => {
@@ -458,6 +464,27 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seek_before_keyframe_respects_container_start_offset() {
+        let path = std::env::temp_dir().join(format!("capopen-seek-{}.mp4", uuid::Uuid::new_v4()));
+        let encoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=96x64:r=25:d=1", "-c:v", "libx264",
+                "-threads", "2", "-g", "10", "-bf", "3", "-output_ts_offset", "5"])
+            .arg(&path).status().is_ok_and(|s| s.success());
+        if !encoded {
+            eprintln!("ffmpeg CLI with libx264 not available, skipping");
+            return;
+        }
+        let mut decoder = VideoDecoder::open(&path).unwrap();
+        assert_eq!(decoder.origin_us, 5_000_000);
+        decoder.seek(399_999).unwrap();
+        let [covering, next] = decoder.frame_covering(399_999, [None, None]).unwrap();
+        assert_eq!(covering.unwrap().0, 360_000);
+        assert_eq!(next.unwrap().0, 400_000);
+        drop(decoder);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     #[ignore = "requires the local tmp-test media fixtures"]

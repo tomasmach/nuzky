@@ -10,10 +10,17 @@ use anyhow::Result;
 use crate::effects::{max_animation_scale, source_time, transform_at, transition_at, transition_window};
 use crate::gpu::{Draw, Gpu, Image, Layer};
 use crate::media::decode_size;
-use crate::model::{Adjust, Asset, AssetKind, Clip, ClipContent, Project, TrackKind, Transform, TransitionKind, parse_color};
+use crate::model::{Adjust, Asset, AssetKind, Clip, ClipContent, Project, Track, TrackKind, Transform, TransitionKind, parse_color};
 use crate::text::TextRenderer;
 use crate::worker::VideoWorker;
 
+const BACKGROUND_SIZE: f32 = 96.0;
+/// Samples per block side when shrinking a frame for the background blur.
+const BLOCK_SAMPLES: usize = 4;
+const BACKGROUND_BLUR_PASSES: usize = 3;
+const BACKGROUND_MAX_RADIUS: f32 = 9.0;
+const BACKGROUND_BRIGHTNESS: f32 = 0.85;
+const MAX_TEXT_SCALE: f32 = 8.0;
 const PREFETCH_US: i64 = 1_000_000;
 const IDLE_WORKER: Duration = Duration::from_secs(5);
 
@@ -29,7 +36,7 @@ pub struct Renderer {
     gpu: Gpu,
     text: TextRenderer,
     workers: HashMap<String, VideoWorker>,
-    blurred: HashMap<usize, (Image, Image)>,
+    blurred: HashMap<(usize, usize), (Image, Image)>,
     solids: [Image; 3],
     pub late_layers: u64,
 }
@@ -40,7 +47,34 @@ struct Placement {
     text: Option<Image>,
 }
 
-fn placement(project: &Project, clip: &Clip, t_us: i64, text_renderer: &mut TextRenderer) -> Option<Placement> {
+#[derive(Clone, Copy)]
+struct TransitionRole {
+    kind: TransitionKind,
+    progress: f32,
+    incoming: bool,
+}
+
+#[derive(Clone, Copy)]
+struct VisibleClip<'a> {
+    clip: &'a Clip,
+    transition: Option<TransitionRole>,
+}
+
+fn visible_clips(track: &Track, t_us: i64) -> impl Iterator<Item = VisibleClip<'_>> {
+    let clips = if track.hidden || track.kind == TrackKind::Audio {
+        [None, None]
+    } else if let Some((a, b, transition, progress)) = transition_at(track, t_us) {
+        [(a, false), (b, true)].map(|(clip, incoming)| Some(VisibleClip {
+            clip, transition: Some(TransitionRole { kind: transition.kind, progress, incoming }),
+        }))
+    } else {
+        [track.clips.iter().find(|c| c.contains(t_us)).map(|clip| VisibleClip { clip, transition: None }), None]
+    };
+    clips.into_iter().flatten()
+}
+
+fn placement(project: &Project, visible: VisibleClip, t_us: i64, k: f32, text_renderer: &mut TextRenderer) -> Option<Placement> {
+    let clip = visible.clip;
     let (transform, reveal) = transform_at(clip, t_us);
     if transform.opacity <= 0.0 || transform.scale <= 0.0 || reveal <= 0.0 {
         return None;
@@ -58,9 +92,13 @@ fn placement(project: &Project, clip: &Clip, t_us: i64, text_renderer: &mut Text
         ClipContent::Text { text, style, .. } => {
             let count = (text.chars().count() as f32 * reveal).ceil() as usize;
             let end = text.char_indices().nth(count).map(|(i, _)| i).unwrap_or(text.len());
-            // Rasterise in canvas pixels so preview, export and selection use identical wrapping.
-            let image = text_renderer.render(&text[..end], style, 1.0, canvas.width as f32 * 0.9);
-            ((image.width as f32, image.height as f32), Some(image))
+            let zoom = match visible.transition {
+                Some(TransitionRole { kind: TransitionKind::ZoomIn, progress, incoming: false }) => 1.0 + progress,
+                _ => 1.0,
+            };
+            let scale = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0, MAX_TEXT_SCALE).log2().ceil());
+            let image = text_renderer.render(&text[..end], style, scale, canvas.width as f32 * 0.9 * scale);
+            ((image.width as f32 / scale, image.height as f32 / scale), Some(image))
         }
     };
     Some(Placement { transform, size, text })
@@ -68,31 +106,21 @@ fn placement(project: &Project, clip: &Clip, t_us: i64, text_renderer: &mut Text
 
 pub fn layer_bounds(project: &Project, t_us: i64, text: &mut TextRenderer) -> Vec<(String, [[f32; 2]; 4])> {
     let mut bounds = Vec::new();
-    for track in &project.tracks {
-        if track.hidden || track.kind == TrackKind::Audio { continue; }
-        if let Some((a, b, transition, p)) = transition_at(track, t_us) {
-            for (clip, incoming) in [(a, false), (b, true)] {
-                if let Some(place) = placement(project, clip, t_us, text) {
-                    let (corners, opacity, clip_rect) = transition_geometry(placement_quad(project, &place, 1.0), place.transform.opacity,
-                        transition.kind, p, incoming, project.canvas.width, project.canvas.height);
-                    let rect = clip_rect.unwrap_or([0.0, 0.0, project.canvas.width as f32, project.canvas.height as f32]);
-                    if opacity > 0.0 && intersects_rect(&corners, rect) {
-                        bounds.push((clip.id.clone(), corners));
-                    }
-                }
-            }
-        } else if let Some(clip) = track.clips.iter().find(|c| c.contains(t_us)) {
-            if let Some(place) = placement(project, clip, t_us, text) {
-                let corners = placement_quad(project, &place, 1.0);
-                if intersects_canvas(project, &corners) { bounds.push((clip.id.clone(), corners)); }
-            }
+    for visible in project.tracks.iter().flat_map(|track| visible_clips(track, t_us)) {
+        let Some(place) = placement(project, visible, t_us, 1.0, text) else { continue };
+        let mut corners = placement_quad(project, &place, 1.0);
+        let mut opacity = place.transform.opacity;
+        let mut clip_rect = None;
+        if let Some(role) = visible.transition {
+            (corners, opacity, clip_rect) = transition_geometry(corners, opacity, role.kind, role.progress,
+                role.incoming, project.canvas.width, project.canvas.height);
+        }
+        let rect = clip_rect.unwrap_or([0.0, 0.0, project.canvas.width as f32, project.canvas.height as f32]);
+        if opacity > 0.0 && intersects_rect(&corners, rect) {
+            bounds.push((visible.clip.id.clone(), corners));
         }
     }
     bounds
-}
-
-fn intersects_canvas(project: &Project, corners: &[[f32; 2]; 4]) -> bool {
-    intersects_rect(corners, [0.0, 0.0, project.canvas.width as f32, project.canvas.height as f32])
 }
 
 fn intersects_rect(corners: &[[f32; 2]; 4], rect: [f32; 4]) -> bool {
@@ -150,14 +178,15 @@ impl Renderer {
         let mut draws = Vec::new();
         let mut blur_used = Vec::new();
         for track in &project.tracks {
-            if track.hidden || track.kind == TrackKind::Audio { continue; }
-            let transition = transition_at(track, t_us);
-            if let Some((a, b, transition, p)) = transition {
+            let mut visible = visible_clips(track, t_us);
+            let Some(first) = visible.next() else { continue };
+            if let Some(transition) = first.transition {
+                let p = transition.progress;
                 let mut pair = [None, None];
-                for (index, (clip, incoming)) in [(a, false), (b, true)].into_iter().enumerate() {
-                    let mut layer = self.layer_for(project, clip, t_us, k, wait, playing);
-                    if let Some(layer) = &mut layer {
-                        apply_transition(layer, transition.kind, p, incoming, out_w, out_h);
+                for (index, visible) in std::iter::once(first).chain(visible).enumerate() {
+                    let mut layer = self.layer_for(project, visible, t_us, k, wait, playing);
+                    if let (Some(layer), Some(role)) = (&mut layer, visible.transition) {
+                        apply_transition(layer, role.kind, role.progress, role.incoming, out_w, out_h);
                     }
                     pair[index] = layer;
                 }
@@ -175,13 +204,11 @@ impl Renderer {
                     pair[if p < 0.5 { 1 } else { 0 }] = Some(colour);
                 }
                 draws.push(Draw::Transition(pair.map(|layer| layer.unwrap_or_else(|| solid(&self.solids[0], out_w, out_h)))));
-            } else if let Some(clip) = track.clips.iter().find(|c| c.contains(t_us)) {
-                if let Some(layer) = self.layer_for(project, clip, t_us, k, wait, playing) {
-                    if track.id == crate::edit::MAIN_TRACK && canvas.background_blur > 0.0 {
-                        draws.push(Draw::Layer(self.background(&layer, canvas.background_blur, out_w, out_h, &mut blur_used)));
-                    }
-                    draws.push(Draw::Layer(layer));
+            } else if let Some(layer) = self.layer_for(project, first, t_us, k, wait, playing) {
+                if track.id == crate::edit::MAIN_TRACK && canvas.background_blur > 0.0 {
+                    draws.push(Draw::Layer(self.background(&layer, canvas.background_blur, out_w, out_h, &mut blur_used)));
                 }
+                draws.push(Draw::Layer(layer));
             }
         }
         if playing { self.prefetch(project, t_us, k); }
@@ -190,16 +217,17 @@ impl Renderer {
         self.gpu.render(out_w, out_h, parse_color(&canvas.background), &draws)
     }
 
-    fn background(&mut self, layer: &Layer, strength: f32, w: u32, h: u32, used: &mut Vec<usize>) -> Layer {
-        let key = Arc::as_ptr(&layer.image.data) as usize;
+    fn background(&mut self, layer: &Layer, strength: f32, w: u32, h: u32, used: &mut Vec<(usize, usize)>) -> Layer {
+        let radius = (1.0 + strength.clamp(0.0, 1.0) * (BACKGROUND_MAX_RADIUS - 1.0)).round() as usize;
+        let key = (Arc::as_ptr(&layer.image.data) as usize, radius);
         used.push(key);
-        let image = self.blurred.entry(key).or_insert_with(|| (layer.image.clone(), small_image(&layer.image))).1.clone();
+        let image = self.blurred.entry(key).or_insert_with(|| (layer.image.clone(), small_image(&layer.image, radius))).1.clone();
         let (iw, ih) = if layer.uv_rotation % 180 == 90 { (image.height, image.width) } else { (image.width, image.height) };
         let cover = (w as f32 / iw as f32).max(h as f32 / ih as f32);
         Layer {
             image, corners: quad(&Transform::default(), (iw as f32 * cover, ih as f32 * cover), w as f32, h as f32, 1.0),
             uv_rotation: layer.uv_rotation, opacity: layer.opacity, adjust: layer.adjust,
-            blur: 0.5 + strength.clamp(0.0, 1.0) * 4.0, clip: layer.clip,
+            blur: 0.0, clip: layer.clip,
         }
     }
 
@@ -219,8 +247,9 @@ impl Renderer {
         }
     }
 
-    fn layer_for(&mut self, project: &Project, clip: &Clip, t_us: i64, k: f32, wait: Wait, playing: bool) -> Option<Layer> {
-        let place = placement(project, clip, t_us, &mut self.text)?;
+    fn layer_for(&mut self, project: &Project, visible: VisibleClip, t_us: i64, k: f32, wait: Wait, playing: bool) -> Option<Layer> {
+        let clip = visible.clip;
+        let place = placement(project, visible, t_us, k, &mut self.text)?;
         let corners = placement_quad(project, &place, k);
         let (image, rotation, adjust) = match &clip.content {
             ClipContent::Media { asset_id, adjust, .. } => {
@@ -285,21 +314,70 @@ fn solid(image: &Image, w: u32, h: u32) -> Layer {
     }
 }
 
-fn small_image(image: &Image) -> Image {
-    let scale = (64.0 / image.width.max(image.height) as f32).min(1.0);
-    let w = (image.width as f32 * scale).round().max(1.0) as u32;
-    let h = (image.height as f32 * scale).round().max(1.0) as u32;
-    let mut data = vec![0; (w * h * 4) as usize];
+fn small_image(image: &Image, radius: usize) -> Image {
+    let scale = (BACKGROUND_SIZE / image.width.max(image.height) as f32).min(1.0);
+    let w = (image.width as f32 * scale).round().max(1.0) as usize;
+    let h = (image.height as f32 * scale).round().max(1.0) as usize;
+    let (sw, sh) = (image.width as usize, image.height as usize);
+    let mut pixels = vec![[0.0; 4]; w * h];
     for y in 0..h {
         for x in 0..w {
-            let sx = x * image.width / w;
-            let sy = y * image.height / h;
-            let src = ((sy * image.width + sx) * 4) as usize;
-            let dst = ((y * w + x) * 4) as usize;
-            data[dst..dst + 4].copy_from_slice(&image.data[src..src + 4]);
+            let (x0, x1) = (x * sw / w, (x + 1) * sw / w);
+            let (y0, y1) = (y * sh / h, (y + 1) * sh / h);
+            // A grid of samples per block is enough: the result is blurred heavily anyway, and
+            // reading every source pixel would cost milliseconds on each new playback frame.
+            let (step_x, step_y) = (((x1 - x0) / BLOCK_SAMPLES).max(1), ((y1 - y0) / BLOCK_SAMPLES).max(1));
+            let mut sum = [0u64; 4];
+            let mut count = 0u64;
+            for sy in (y0..y1.max(y0 + 1)).step_by(step_y) {
+                for sx in (x0..x1.max(x0 + 1)).step_by(step_x) {
+                    let src = &image.data[(sy * sw + sx) * 4..(sy * sw + sx) * 4 + 4];
+                    let alpha = src[3] as u64;
+                    sum[0] += src[0] as u64 * alpha;
+                    sum[1] += src[1] as u64 * alpha;
+                    sum[2] += src[2] as u64 * alpha;
+                    sum[3] += alpha;
+                    count += 1;
+                }
+            }
+            let count = count as f32;
+            // Filter premultiplied colours so transparent pixels cannot bleed into the blur.
+            pixels[y * w + x] = std::array::from_fn(|c| sum[c] as f32 / count / if c == 3 { 1.0 } else { 255.0 });
         }
     }
-    Image { width: w, height: h, data: Arc::new(data) }
+    let mut scratch = vec![[0.0; 4]; w * h];
+    for _ in 0..BACKGROUND_BLUR_PASSES {
+        box_blur(&pixels, &mut scratch, w, h, radius, true);
+        box_blur(&scratch, &mut pixels, w, h, radius, false);
+    }
+    let mut data = Vec::with_capacity(w * h * 4);
+    for pixel in pixels {
+        let alpha = pixel[3].clamp(0.0, 255.0);
+        for channel in &pixel[..3] {
+            let value = if alpha > 0.0 { channel * 255.0 / alpha * BACKGROUND_BRIGHTNESS } else { 0.0 };
+            data.push(value.clamp(0.0, 255.0).round() as u8);
+        }
+        data.push(alpha.round() as u8);
+    }
+    Image { width: w as u32, height: h as u32, data: Arc::new(data) }
+}
+
+fn box_blur(src: &[[f32; 4]], dst: &mut [[f32; 4]], w: usize, h: usize, radius: usize, horizontal: bool) {
+    let (lines, length, stride) = if horizontal { (h, w, 1) } else { (w, h, w) };
+    let divisor = (2 * radius + 1) as f32;
+    for line in 0..lines {
+        let base = if horizontal { line * w } else { line };
+        let mut sum = src[base].map(|v| v * (radius + 1) as f32);
+        for offset in 1..=radius {
+            for c in 0..4 { sum[c] += src[base + offset.min(length - 1) * stride][c]; }
+        }
+        for pos in 0..length {
+            dst[base + pos * stride] = sum.map(|v| v / divisor);
+            let remove = base + pos.saturating_sub(radius) * stride;
+            let add = base + (pos + radius + 1).min(length - 1) * stride;
+            for c in 0..4 { sum[c] += src[add][c] - src[remove][c]; }
+        }
+    }
 }
 
 /// Corner positions (tl, tr, br, bl) in output pixels for a layer of `size` output pixels.
@@ -315,6 +393,58 @@ fn quad(t: &Transform, size: (f32, f32), cw: f32, ch: f32, k: f32) -> [[f32; 2];
 mod tests {
     use super::*;
     use crate::model::{TextStyle, Track};
+
+    #[test]
+    fn background_averages_pixels_and_preserves_alpha() {
+        let image = Image { width: 192, height: 108, data: Arc::new((0..108).flat_map(|y| {
+            (0..192).flat_map(move |x| if (x + y) % 2 == 0 { [255, 255, 255, 255] } else { [0, 0, 0, 255] })
+        }).collect()) };
+        let blurred = small_image(&image, 3);
+        assert_eq!((blurred.width, blurred.height), (96, 54));
+        assert!(blurred.data.chunks_exact(4).all(|px| px == [108, 108, 108, 255]));
+        let transparent = Image { width: 2, height: 1, data: Arc::new(vec![255, 0, 0, 0, 0, 255, 0, 255]) };
+        let blurred = small_image(&transparent, 3);
+        assert!(blurred.data.chunks_exact(4).all(|px| px[0] == 0 && px[1] == 217 && px[2] == 0 && px[3] > 0));
+    }
+
+    #[test]
+    fn text_scale_keeps_wrapping_bounds_and_animation_cache() {
+        use crate::model::{Animation, AnimationKind, Transition};
+        let mut project = Project::new("scaled text");
+        let style = TextStyle { font_size: 60.0, stroke_width: 2.5, background: Some("#222222".into()), color: "#ffffff".into(), bold: true, stroke_color: "#000000".into() };
+        for (id, start) in [("out", 0), ("in", 1_000_000)] {
+            let mut clip = Clip::new(id.into(), start, 1_000_000, ClipContent::Text {
+                text: "A long wrapped title with accents: Příliš žluťoučký kůň".into(), style: style.clone(),
+                transform: Transform { scale: 1.5, rotation: 12.0, ..Transform::default() },
+            });
+            clip.anim_in = Some(Animation { kind: AnimationKind::Pop, duration_us: 400_000 });
+            project.tracks[0].clips.push(clip);
+        }
+        project.tracks[0].clips[1].transition_in = Some(Transition { kind: TransitionKind::ZoomIn, duration_us: 400_000 });
+        let mut text = TextRenderer::new();
+        for t in [200_000, 201_000, 800_000, 900_000, 1_100_000] {
+            let bounds = layer_bounds(&project, t, &mut text);
+            for visible in visible_clips(&project.tracks[0], t) {
+                let Some(base) = placement(&project, visible, t, 1.0, &mut text) else { continue };
+                for k in [0.5, 1.0, 2.0, 4.0] {
+                    let place = placement(&project, visible, t, k, &mut text).unwrap();
+                    assert_eq!(place.size, base.size);
+                    let mut corners = placement_quad(&project, &place, k);
+                    if let Some(role) = visible.transition {
+                        corners = transition_geometry(corners, place.transform.opacity, role.kind, role.progress, role.incoming,
+                            (project.canvas.width as f32 * k) as u32, (project.canvas.height as f32 * k) as u32).0;
+                    }
+                    if let Some((_, expected)) = bounds.iter().find(|(id, _)| *id == visible.clip.id) {
+                        assert_eq!(corners.map(|p| [p[0] / k, p[1] / k]), *expected);
+                    }
+                }
+            }
+        }
+        let visible = visible_clips(&project.tracks[0], 200_000).next().unwrap();
+        let a = placement(&project, visible, 200_000, 1.0, &mut text).unwrap().text.unwrap();
+        let b = placement(&project, visible, 201_000, 1.0, &mut text).unwrap().text.unwrap();
+        assert!(Arc::ptr_eq(&a.data, &b.data));
+    }
 
     #[test]
     fn wipe_bounds_exclude_layers_outside_visible_rect() {
@@ -350,7 +480,7 @@ mod tests {
         assert_eq!(quad[3][1] - quad[0][1], image.height as f32 * 1.5);
         assert!(((quad[0][0] + quad[2][0]) / 2.0 - 648.0).abs() < 1e-4);
         let mut renderer = Renderer::new().unwrap();
-        let layer = renderer.layer_for(&project, &project.tracks[1].clips[0], 500_000, 0.5, Wait::Exact, false).unwrap();
+        let layer = renderer.layer_for(&project, VisibleClip { clip: &project.tracks[1].clips[0], transition: None }, 500_000, 0.5, Wait::Exact, false).unwrap();
         assert_eq!(layer.corners, quad.map(|p| [p[0] * 0.5, p[1] * 0.5]));
         project.tracks[1].hidden = true;
         assert!(layer_bounds(&project, 500_000, &mut text).is_empty());

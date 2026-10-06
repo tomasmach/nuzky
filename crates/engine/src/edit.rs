@@ -206,6 +206,14 @@ impl Project {
         }
     }
 
+    /// Source length a media clip may read, or `None` for images and text, which have no end.
+    fn source_limit(&self, clip: &Clip) -> Option<i64> {
+        match &clip.content {
+            ClipContent::Media { asset_id, .. } => self.asset(asset_id).filter(|a| a.kind != AssetKind::Image).map(|a| a.duration_us),
+            ClipContent::Text { .. } => None,
+        }
+    }
+
     fn caption_track(&mut self, track_id: &str) -> Result<usize> {
         self.track_index(track_id).filter(|&i| self.tracks[i].kind == TrackKind::Text).ok_or_else(|| anyhow!("Unknown captions track"))
     }
@@ -311,11 +319,10 @@ impl Project {
             }
             EditCmd::TrimClip { clip_id, start_us, duration_us, source_in_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                let (limit, speed) = match &self.tracks[ti].clips[ci].content {
-                    ClipContent::Media { asset_id, speed, .. } => {
-                        (self.asset(asset_id).filter(|a| a.kind != AssetKind::Image).map(|a| a.duration_us), *speed as f64)
-                    }
-                    ClipContent::Text { .. } => (None, 1.0),
+                let limit = self.source_limit(&self.tracks[ti].clips[ci]);
+                let speed = match &self.tracks[ti].clips[ci].content {
+                    ClipContent::Media { speed, .. } => *speed as f64,
+                    ClipContent::Text { .. } => 1.0,
                 };
                 let clip = &mut self.tracks[ti].clips[ci];
                 let (old_start, old_end) = (clip.start_us, clip.end_us());
@@ -379,10 +386,11 @@ impl Project {
             EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed, adjust, fade_in_us, fade_out_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let changes_length = speed.is_some();
+                let limit = self.source_limit(&self.tracks[ti].clips[ci]);
                 let clip = &mut self.tracks[ti].clips[ci];
                 let half = clip.duration_us / 2;
                 match &mut clip.content {
-                    ClipContent::Media { transform: tr, volume: v, speed: sp, adjust: adj, fade_in_us: fi, fade_out_us: fo, .. } => {
+                    ClipContent::Media { source_in_us: src, transform: tr, volume: v, speed: sp, adjust: adj, fade_in_us: fi, fade_out_us: fo, .. } => {
                         if let Some(x) = transform {
                             *tr = x;
                         }
@@ -405,6 +413,15 @@ impl Project {
                             clip.duration_us = ((clip.duration_us as f64 * ratio).round() as i64).max(min);
                             for k in &mut clip.keyframes {
                                 k.t_us = (k.t_us as f64 * ratio).round() as i64;
+                            }
+                            // A one-frame clip covers more source when sped up; move its start back
+                            // rather than read past the end of the file.
+                            if let Some(limit) = limit {
+                                let span = (clip.duration_us as f64 * x as f64).ceil() as i64;
+                                if span > limit {
+                                    bail!("This clip is too short for that speed");
+                                }
+                                *src = (*src).min(limit - span);
                             }
                         }
                     }
