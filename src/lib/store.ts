@@ -74,6 +74,8 @@ export type EditInput = EditCmd | EditCmd[] | ((project: Project) => EditCmd | E
 
 let toastId = 0;
 const pending = new Set<string>();
+/** Forced waveform reloads asked for while a load was pending; they run when it ends. */
+const reloadWaveforms = new Set<string>();
 
 /**
  * Edits, undo and redo run one at a time in the order they were made. An entry with the same
@@ -274,12 +276,20 @@ export const useEditor = create<EditorState>((set, get) => ({
   loadWaveform: (assetId, force = false) => {
     const epoch = get().snap?.sessionEpoch;
     const key = `wave:${epoch}:${assetId}`;
-    if ((!force && get().waveforms[assetId]) || pending.has(key)) return;
+    if (!force && get().waveforms[assetId]) return;
+    // The pending load may have asked before the audio was ready, so a forced one runs after it.
+    if (pending.has(key)) {
+      if (force) reloadWaveforms.add(key);
+      return;
+    }
     pending.add(key);
     api
       .waveform(assetId)
       .then((peaks) => peaks && get().snap?.sessionEpoch === epoch && set({ waveforms: { ...get().waveforms, [assetId]: peaks } }))
-      .finally(() => pending.delete(key));
+      .finally(() => {
+        pending.delete(key);
+        if (reloadWaveforms.delete(key) && get().snap?.sessionEpoch === epoch) get().loadWaveform(assetId, true);
+      });
   },
 }));
 
