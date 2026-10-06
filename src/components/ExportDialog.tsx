@@ -72,8 +72,9 @@ export function ExportDialog() {
 
   // Options start from the project each time the dialog opens; resolution and quality are remembered.
   useEffect(() => {
-    if (open && project) setOptions(loadOptions(project.canvas));
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    const canvas = useEditor.getState().snap?.project.canvas;
+    if (open && canvas) setOptions(loadOptions(canvas));
+  }, [open]);
 
   const close = () => {
     setError(null);

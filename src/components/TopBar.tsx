@@ -32,10 +32,6 @@ function ProjectName() {
   const name = useEditor((s) => s.snap?.project.name ?? "");
   const edit = useEditor((s) => s.edit);
   const [draft, setDraft] = useState<string | null>(null);
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (draft !== null) ref.current?.select();
-  }, [draft !== null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (draft === null)
     return (
@@ -54,9 +50,10 @@ function ProjectName() {
   };
   return (
     <input
-      ref={ref}
+      autoFocus
       aria-label="Project name"
       value={draft}
+      onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
