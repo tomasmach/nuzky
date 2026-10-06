@@ -35,6 +35,35 @@ fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn resolved_path(path: &Path) -> Result<PathBuf> {
+    const MAX_SYMLINKS: usize = 40;
+    let mut path = path.to_path_buf();
+    for _ in 0..MAX_SYMLINKS {
+        if let Ok(target) = std::fs::canonicalize(&path) { return Ok(target); }
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        match std::fs::read_link(&path) {
+            Ok(target) => path = if target.is_absolute() { target } else { parent.join(target) },
+            Err(_) => return Ok(std::fs::canonicalize(parent)?.join(path.file_name().context("Output needs a filename")?)),
+        }
+    }
+    bail!("Too many symlinks in output path")
+}
+
+fn check_render_output(project: &Path, out: &Path) -> Result<()> {
+    let target = resolved_path(out)?;
+    let canonical = std::fs::canonicalize(project)?;
+    for base in [project, canonical.as_path()] {
+        for suffix in ["", ".lock", ".checkpoint.json", ".tmp"] {
+            let mut path = base.as_os_str().to_os_string();
+            path.push(suffix);
+            if target == resolved_path(Path::new(&path))? {
+                bail!("Output would overwrite the project or its sidecar: {}", out.display());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Vulkan FP16 moves Whisper word times by up to 330 ms; FP32 is as fast. ggml reads this when
     // its backend starts, so it is set here, before any other thread exists.
@@ -94,6 +123,7 @@ fn main() -> Result<()> {
             println!("{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers", renderer.adapter_name(), times[(times.len() * 95).div_ceil(100).saturating_sub(1)], renderer.late_layers);
         }
         ["render", project, out, rest @ ..] => {
+            check_render_output(Path::new(project), Path::new(out))?;
             let project = load(project)?;
             let start = Instant::now();
             let cancel = AtomicBool::new(false);
