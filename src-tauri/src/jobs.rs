@@ -123,7 +123,28 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
     }
 }
 
-pub fn start_export(app: &AppHandle, out: PathBuf) -> Result<String, String> {
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportRequest {
+    /// Short side in pixels: 720, 1080, 1440 or 2160.
+    pub resolution: u32,
+    pub fps: u32,
+    /// "high" | "recommended" | "small"
+    pub quality: String,
+}
+
+impl ExportRequest {
+    fn options(&self) -> ExportOptions {
+        let crf = match self.quality.as_str() {
+            "high" => 17,
+            "small" => 26,
+            _ => 21,
+        };
+        ExportOptions { crf, resolution: Some(self.resolution), fps: Some(self.fps), ..ExportOptions::default() }
+    }
+}
+
+pub fn start_export(app: &AppHandle, out: PathBuf, request: ExportRequest) -> Result<String, String> {
     let state = app.state::<AppState>();
     let project = state.editor.lock().unwrap().project.clone();
     if project.duration_us() <= 0 {
@@ -138,7 +159,7 @@ pub fn start_export(app: &AppHandle, out: PathBuf) -> Result<String, String> {
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let mut rep = Reporter::new(&app, &job_id, "export", format!("Exporting {name}"));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                export(&project, &cache, &out, &ExportOptions::default(), &cancel, |p| {
+                export(&project, &cache, &out, &request.options(), &cancel, |p| {
                     rep.progress(p.frame as f32 / p.total_frames.max(1) as f32, Some("Rendering"));
                 })
             }))

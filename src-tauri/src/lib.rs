@@ -238,8 +238,27 @@ fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot>
 }
 
 #[tauri::command]
-fn start_export(app: AppHandle, path: String) -> CmdResult<String> {
-    jobs::start_export(&app, PathBuf::from(path))
+fn start_export(app: AppHandle, path: String, options: jobs::ExportRequest) -> CmdResult<String> {
+    jobs::start_export(&app, PathBuf::from(path), options)
+}
+
+/// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Filmstrip {
+    /// PNG or JPEG data URL of `count` frames side by side.
+    url: String,
+    frame_width: u32,
+    frame_height: u32,
+    /// Source time between consecutive frames.
+    interval_us: i64,
+    count: u32,
+}
+
+#[tauri::command]
+async fn filmstrip(_app: AppHandle, _asset_id: String) -> CmdResult<Option<Filmstrip>> {
+    // Contract stub: implemented by the backend workstream.
+    Ok(None)
 }
 
 #[tauri::command]
@@ -303,6 +322,7 @@ pub fn run() {
             new_project,
             open_project,
             start_export,
+            filmstrip,
             cancel_job,
             jobs::start_captions,
             jobs::caption_models,

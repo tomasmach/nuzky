@@ -248,7 +248,7 @@ export const CAPTION_STYLES: { name: string; style: TextStyle }[] = [
 
 function CaptionsTab() {
   const [models, setModels] = useState<CaptionModel[]>([]);
-  const [model, setModel] = useState("small");
+  const [model, setModel] = useState("large-v3-turbo-q5_0");
   const [language, setLanguage] = useState("cs");
   const [styleIdx, setStyleIdx] = useState(0);
   const jobs = useEditor((s) => s.jobs);

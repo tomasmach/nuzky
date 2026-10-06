@@ -28,6 +28,10 @@ pub struct Canvas {
     pub fps: u32,
     /// `#rrggbb`
     pub background: String,
+    /// 0 keeps the solid background. Above 0 a blurred, canvas-filling copy of the
+    /// main-track frame shows behind it (CapCut "Canvas: Blur"); 1 is the strongest blur.
+    #[serde(default)]
+    pub background_blur: f32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -86,9 +90,91 @@ pub struct Clip {
     pub start_us: i64,
     pub duration_us: i64,
     pub content: ClipContent,
+    /// Entry animation over the first `duration_us` of the clip.
+    #[serde(default)]
+    pub anim_in: Option<Animation>,
+    /// Exit animation over the last `duration_us` of the clip.
+    #[serde(default)]
+    pub anim_out: Option<Animation>,
+    /// Transform keyframes, `t_us` relative to the clip start. When present they replace
+    /// the content transform and are interpolated linearly; outside the range the nearest
+    /// keyframe holds.
+    #[serde(default)]
+    pub keyframes: Vec<Keyframe>,
+    /// Main track only: transition from the previous clip, centred on the cut.
+    #[serde(default)]
+    pub transition_in: Option<Transition>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationKind {
+    Fade,
+    ZoomIn,
+    ZoomOut,
+    SlideUp,
+    SlideDown,
+    SlideLeft,
+    SlideRight,
+    Pop,
+    /// Text only; media clips treat it as Fade.
+    Typewriter,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Animation {
+    pub kind: AnimationKind,
+    pub duration_us: i64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Keyframe {
+    pub t_us: i64,
+    pub transform: Transform,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TransitionKind {
+    Dissolve,
+    FadeBlack,
+    FadeWhite,
+    SlideLeft,
+    SlideUp,
+    ZoomIn,
+    WipeLeft,
+    Blur,
+}
+
+/// Plays across [cut - d/2, cut + d/2]. The outgoing clip continues past its out point
+/// (holding its last frame when the source ends) and the incoming clip starts early
+/// (holding its first frame), so the timeline length does not change. Audio crossfades.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Transition {
+    pub kind: TransitionKind,
+    pub duration_us: i64,
+}
+
+/// Colour adjustments, all 0 by default (no change). Ranges are -1..=1 except vignette 0..=1.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Adjust {
+    pub brightness: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+    /// Negative cools (blue), positive warms (orange).
+    pub temperature: f32,
+    pub vignette: f32,
 }
 
 impl Clip {
+    pub fn new(id: String, start_us: i64, duration_us: i64, content: ClipContent) -> Self {
+        Self { id, start_us, duration_us, content, anim_in: None, anim_out: None, keyframes: Vec::new(), transition_in: None }
+    }
+
     pub fn end_us(&self) -> i64 {
         self.start_us + self.duration_us
     }
@@ -109,6 +195,17 @@ pub enum ClipContent {
         volume: f32,
         #[serde(default)]
         transform: Transform,
+        /// Playback speed; the clip covers `duration_us * speed` of source. Audio follows
+        /// (pitch changes with speed).
+        #[serde(default = "one")]
+        speed: f32,
+        #[serde(default)]
+        adjust: Adjust,
+        /// Audio fades at the clip edges.
+        #[serde(default)]
+        fade_in_us: i64,
+        #[serde(default)]
+        fade_out_us: i64,
     },
     #[serde(rename_all = "camelCase")]
     Text {
@@ -171,7 +268,7 @@ impl Project {
         Self {
             version: PROJECT_VERSION,
             name: name.into(),
-            canvas: Canvas { width: 1080, height: 1920, fps: 30, background: "#000000".into() },
+            canvas: Canvas { width: 1080, height: 1920, fps: 30, background: "#000000".into(), background_blur: 0.0 },
             assets: Vec::new(),
             tracks: vec![Track {
                 id: "main".into(),
@@ -229,6 +326,10 @@ mod tests {
             id: "c1".into(),
             start_us: 0,
             duration_us: 2_000_000,
+            anim_in: Some(Animation { kind: AnimationKind::Pop, duration_us: 400_000 }),
+            anim_out: None,
+            keyframes: Vec::new(),
+            transition_in: None,
             content: ClipContent::Text {
                 text: "Ahoj světe".into(),
                 style: TextStyle {

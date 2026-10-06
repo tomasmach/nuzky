@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, CaptionModel, EditCmd, ProjectSummary, Snapshot, TextStyle } from "./types";
+import type { Boot, CaptionModel, EditCmd, ExportRequest, Filmstrip, ProjectSummary, Snapshot, TextStyle } from "./types";
 
 export const api = {
   boot: () => invoke<Boot>("boot"),
@@ -17,7 +17,8 @@ export const api = {
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
-  startExport: (path: string) => invoke<string>("start_export", { path }),
+  startExport: (path: string, options: ExportRequest) => invoke<string>("start_export", { path, options }),
+  filmstrip: (assetId: string) => invoke<Filmstrip | null>("filmstrip", { assetId }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   captionModels: () => invoke<CaptionModel[]>("caption_models"),
   startCaptions: (model: string, language: string, style: TextStyle) =>

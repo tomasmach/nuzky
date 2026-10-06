@@ -32,15 +32,73 @@ export interface TextStyle {
   background: string | null;
 }
 
+/** All 0 = unchanged. -1..1, vignette 0..1. */
+export interface Adjust {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  temperature: number;
+  vignette: number;
+}
+
 export type ClipContent =
-  | { type: "media"; assetId: string; sourceInUs: number; volume: number; transform: Transform }
+  | {
+      type: "media";
+      assetId: string;
+      sourceInUs: number;
+      volume: number;
+      transform: Transform;
+      /** Clip covers durationUs * speed of source; 0.1..10 */
+      speed: number;
+      adjust: Adjust;
+      fadeInUs: number;
+      fadeOutUs: number;
+    }
   | { type: "text"; text: string; style: TextStyle; transform: Transform };
+
+export type AnimationKind = "fade" | "zoomIn" | "zoomOut" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "pop" | "typewriter";
+export interface Animation {
+  kind: AnimationKind;
+  durationUs: number;
+}
+
+/** tUs is relative to the clip start. When keyframes exist they replace content.transform. */
+export interface Keyframe {
+  tUs: number;
+  transform: Transform;
+}
+
+export type TransitionKind = "dissolve" | "fadeBlack" | "fadeWhite" | "slideLeft" | "slideUp" | "zoomIn" | "wipeLeft" | "blur";
+/** Centred on the cut before the clip that owns it; main track only, never on the first clip. */
+export interface Transition {
+  kind: TransitionKind;
+  durationUs: number;
+}
 
 export interface Clip {
   id: string;
   startUs: number;
   durationUs: number;
   content: ClipContent;
+  animIn: Animation | null;
+  animOut: Animation | null;
+  keyframes: Keyframe[];
+  transitionIn: Transition | null;
+}
+
+export interface Filmstrip {
+  url: string;
+  frameWidth: number;
+  frameHeight: number;
+  intervalUs: number;
+  count: number;
+}
+
+export interface ExportRequest {
+  /** Short side in px: 720, 1080, 1440, 2160 */
+  resolution: number;
+  fps: number;
+  quality: "high" | "recommended" | "small";
 }
 
 export type TrackKind = "video" | "audio" | "text";
@@ -59,6 +117,8 @@ export interface Canvas {
   height: number;
   fps: number;
   background: string;
+  /** 0 = solid colour; above 0 a blurred copy of the main-track frame fills the background. 0..1 */
+  backgroundBlur: number;
 }
 
 export interface Project {
@@ -135,7 +195,16 @@ export type EditCmd =
       volume?: number | null;
       text?: string | null;
       style?: TextStyle | null;
+      speed?: number | null;
+      adjust?: Adjust | null;
+      fadeInUs?: number | null;
+      fadeOutUs?: number | null;
     }
+  | { type: "setAnimation"; clipId: string; slot: "in" | "out"; animation: Animation | null }
+  | { type: "setTransition"; clipId: string; transition: Transition | null }
+  | { type: "setKeyframes"; clipId: string; keyframes: Keyframe[] }
+  | { type: "duplicateClip"; clipId: string }
+  | { type: "detachAudio"; clipId: string }
   | { type: "updateTrack"; trackId: string; muted?: boolean | null; hidden?: boolean | null }
-  | { type: "setCanvas"; width: number; height: number; background?: string | null }
+  | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
   | { type: "renameProject"; name: string };

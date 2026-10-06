@@ -51,7 +51,7 @@ export function ExportDialog() {
     if (!path) return;
     try {
       startedAt.current = Date.now();
-      setJobId(await api.startExport(path.endsWith(".mp4") ? path : `${path}.mp4`));
+      setJobId(await api.startExport(path.endsWith(".mp4") ? path : `${path}.mp4`, { resolution: Math.min(project.canvas.width, project.canvas.height), fps: project.canvas.fps, quality: "recommended" }));
     } catch (e) {
       setError(errorText(e));
     }

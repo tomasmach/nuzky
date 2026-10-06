@@ -17,11 +17,15 @@ use crate::render::{Renderer, Wait};
 pub struct ExportOptions {
     pub crf: u8,
     pub preset: String,
+    /// Short side of the output in pixels (720, 1080, 1440, 2160); `None` keeps the canvas size.
+    pub resolution: Option<u32>,
+    /// Output frame rate; `None` uses the project frame rate.
+    pub fps: Option<u32>,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { crf: 20, preset: "veryfast".into() }
+        Self { crf: 20, preset: "veryfast".into(), resolution: None, fps: None }
     }
 }
 

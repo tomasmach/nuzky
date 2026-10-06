@@ -6,13 +6,16 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Asset, AssetKind, Clip, ClipContent, Project, TextStyle, Track, TrackKind, Transform};
+use crate::model::{Adjust, Animation, Asset, AssetKind, Clip, ClipContent, Keyframe, Project, TextStyle, Track, TrackKind, Transform, Transition};
 
 pub const MAIN_TRACK: &str = "main";
 const IMAGE_DURATION_US: i64 = 3_000_000;
 const TEXT_DURATION_US: i64 = 3_000_000;
 const UNDO_LIMIT: usize = 200;
 const COALESCE_WINDOW: Duration = Duration::from_millis(1500);
+const MIN_SPEED: f32 = 0.1;
+const MAX_SPEED: f32 = 10.0;
+const MAX_TRANSITION_US: i64 = 2_000_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,11 +43,31 @@ pub enum EditCmd {
         volume: Option<f32>,
         text: Option<String>,
         style: Option<TextStyle>,
+        /// Changing speed keeps the source range, so the clip gets shorter or longer.
+        speed: Option<f32>,
+        adjust: Option<Adjust>,
+        fade_in_us: Option<i64>,
+        fade_out_us: Option<i64>,
     },
+    SetAnimation { clip_id: String, slot: AnimationSlot, animation: Option<Animation> },
+    /// Main-track clips only, and not the first one.
+    SetTransition { clip_id: String, transition: Option<Transition> },
+    SetKeyframes { clip_id: String, keyframes: Vec<Keyframe> },
+    /// Places a copy right after the clip.
+    DuplicateClip { clip_id: String },
+    /// Moves a video clip's sound to an audio track and silences the video clip.
+    DetachAudio { clip_id: String },
     UpdateTrack { track_id: String, muted: Option<bool>, hidden: Option<bool> },
-    SetCanvas { width: u32, height: u32, background: Option<String> },
+    SetCanvas { width: u32, height: u32, background: Option<String>, background_blur: Option<f32> },
     AddCaptions { segments: Vec<CaptionSegment>, style: TextStyle },
     RenameProject { name: String },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationSlot {
+    In,
+    Out,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -169,12 +192,16 @@ impl Project {
                 let asset = self.asset(&asset_id).ok_or_else(|| anyhow!("Unknown media"))?.clone();
                 let kind = track_kind_for(&asset);
                 let duration = if asset.kind == AssetKind::Image { IMAGE_DURATION_US } else { asset.duration_us.max(min) };
-                let clip = Clip {
-                    id: new_id(),
-                    start_us: 0,
-                    duration_us: duration,
-                    content: ClipContent::Media { asset_id, source_in_us: 0, volume: 1.0, transform: Transform::default() },
-                };
+                let clip = Clip::new(new_id(), 0, duration, ClipContent::Media {
+                    asset_id,
+                    source_in_us: 0,
+                    volume: 1.0,
+                    transform: Transform::default(),
+                    speed: 1.0,
+                    adjust: Adjust::default(),
+                    fade_in_us: 0,
+                    fade_out_us: 0,
+                });
                 out.select.push(clip.id.clone());
                 let requested = track_id.and_then(|id| self.track_index(&id)).filter(|&i| self.tracks[i].kind == kind);
                 let target = match (kind, requested) {
@@ -196,12 +223,11 @@ impl Project {
             EditCmd::AddText { start_us, text, style } => {
                 let start = start_us.max(0);
                 let t = self.free_track(TrackKind::Text, start, start + TEXT_DURATION_US);
-                let clip = Clip {
-                    id: new_id(),
-                    start_us: start,
-                    duration_us: TEXT_DURATION_US,
-                    content: ClipContent::Text { text, style, transform: Transform { y: 0.3, ..Transform::default() } },
-                };
+                let clip = Clip::new(new_id(), start, TEXT_DURATION_US, ClipContent::Text {
+                    text,
+                    style,
+                    transform: Transform { y: 0.3, ..Transform::default() },
+                });
                 out.select.push(clip.id.clone());
                 self.tracks[t].clips.push(clip);
             }
@@ -234,11 +260,11 @@ impl Project {
             }
             EditCmd::TrimClip { clip_id, start_us, duration_us, source_in_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                let limit = match &self.tracks[ti].clips[ci].content {
-                    ClipContent::Media { asset_id, .. } => {
-                        self.asset(asset_id).filter(|a| a.kind != AssetKind::Image).map(|a| a.duration_us)
+                let (limit, speed) = match &self.tracks[ti].clips[ci].content {
+                    ClipContent::Media { asset_id, speed, .. } => {
+                        (self.asset(asset_id).filter(|a| a.kind != AssetKind::Image).map(|a| a.duration_us), *speed as f64)
                     }
-                    ClipContent::Text { .. } => None,
+                    ClipContent::Text { .. } => (None, 1.0),
                 };
                 let clip = &mut self.tracks[ti].clips[ci];
                 let (old_start, old_end) = (clip.start_us, clip.end_us());
@@ -248,16 +274,21 @@ impl Project {
                     let mut new_src = source_in_us.unwrap_or(*src).max(0);
                     if source_in_us.is_some() && start_us != old_start {
                         // Trimming the left edge: keep the right edge in place.
-                        let shift = new_src - *src;
+                        let shift = ((new_src - *src) as f64 / speed).round() as i64;
                         start = (old_start + shift).max(0);
-                        new_src = *src + (start - old_start);
+                        new_src = *src + ((start - old_start) as f64 * speed).round() as i64;
                         duration = (old_end - start).max(min);
                     }
                     if let Some(limit) = limit {
                         new_src = new_src.min((limit - min).max(0));
-                        duration = duration.min(limit - new_src).max(min);
+                        duration = duration.min(((limit - new_src) as f64 / speed) as i64).max(min);
                     }
                     *src = new_src;
+                }
+                // Keyframes stay attached to the content when the left edge moves.
+                let shift = start - old_start;
+                for k in &mut clip.keyframes {
+                    k.t_us -= shift;
                 }
                 clip.start_us = start;
                 clip.duration_us = duration;
@@ -275,13 +306,21 @@ impl Project {
                     bail!("Move the playhead inside the clip to split it");
                 }
                 let mut second = clip.clone();
+                let offset = at_us - clip.start_us;
                 second.id = new_id();
                 second.start_us = at_us;
                 second.duration_us = clip.end_us() - at_us;
-                if let ClipContent::Media { source_in_us, .. } = &mut second.content {
-                    *source_in_us += at_us - clip.start_us;
+                if let ClipContent::Media { source_in_us, speed, .. } = &mut second.content {
+                    *source_in_us += (offset as f64 * *speed as f64).round() as i64;
                 }
-                clip.duration_us = at_us - clip.start_us;
+                // The first half keeps the entry animation, the second the exit.
+                clip.anim_out = None;
+                second.anim_in = None;
+                second.transition_in = None;
+                for k in &mut second.keyframes {
+                    k.t_us -= offset;
+                }
+                clip.duration_us = offset;
                 out.select.push(second.id.clone());
                 self.tracks[ti].clips.insert(ci + 1, second);
             }
@@ -290,15 +329,35 @@ impl Project {
                     t.clips.retain(|c| !clip_ids.contains(&c.id));
                 }
             }
-            EditCmd::UpdateClip { clip_id, transform, volume, text, style } => {
+            EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed, adjust, fade_in_us, fade_out_us } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
-                match &mut self.tracks[ti].clips[ci].content {
-                    ClipContent::Media { transform: tr, volume: v, .. } => {
+                let clip = &mut self.tracks[ti].clips[ci];
+                let half = clip.duration_us / 2;
+                match &mut clip.content {
+                    ClipContent::Media { transform: tr, volume: v, speed: sp, adjust: adj, fade_in_us: fi, fade_out_us: fo, .. } => {
                         if let Some(x) = transform {
                             *tr = x;
                         }
                         if let Some(x) = volume {
                             *v = x.clamp(0.0, 4.0);
+                        }
+                        if let Some(x) = adjust {
+                            *adj = x;
+                        }
+                        if let Some(x) = fade_in_us {
+                            *fi = x.clamp(0, half);
+                        }
+                        if let Some(x) = fade_out_us {
+                            *fo = x.clamp(0, half);
+                        }
+                        if let Some(x) = speed {
+                            let x = x.clamp(MIN_SPEED, MAX_SPEED);
+                            let ratio = *sp as f64 / x as f64;
+                            *sp = x;
+                            clip.duration_us = ((clip.duration_us as f64 * ratio).round() as i64).max(min);
+                            for k in &mut clip.keyframes {
+                                k.t_us = (k.t_us as f64 * ratio).round() as i64;
+                            }
                         }
                     }
                     ClipContent::Text { transform: tr, text: tx, style: st } => {
@@ -314,6 +373,68 @@ impl Project {
                     }
                 }
             }
+            EditCmd::SetAnimation { clip_id, slot, animation } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                let clip = &mut self.tracks[ti].clips[ci];
+                let animation = animation.map(|a| Animation { duration_us: a.duration_us.clamp(min, clip.duration_us), ..a });
+                match slot {
+                    AnimationSlot::In => clip.anim_in = animation,
+                    AnimationSlot::Out => clip.anim_out = animation,
+                }
+            }
+            EditCmd::SetTransition { clip_id, transition } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                if self.tracks[ti].id != MAIN_TRACK || ci == 0 {
+                    bail!("Transitions go between two clips on the main track");
+                }
+                let shortest = self.tracks[ti].clips[ci - 1].duration_us.min(self.tracks[ti].clips[ci].duration_us);
+                self.tracks[ti].clips[ci].transition_in = transition
+                    .map(|t| Transition { duration_us: t.duration_us.clamp(min, MAX_TRANSITION_US.min(shortest).max(min)), ..t });
+            }
+            EditCmd::SetKeyframes { clip_id, mut keyframes } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                keyframes.sort_by_key(|k| k.t_us);
+                keyframes.dedup_by_key(|k| k.t_us);
+                self.tracks[ti].clips[ci].keyframes = keyframes;
+            }
+            EditCmd::DuplicateClip { clip_id } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                let mut copy = self.tracks[ti].clips[ci].clone();
+                copy.id = new_id();
+                copy.start_us = self.tracks[ti].clips[ci].end_us();
+                copy.transition_in = None;
+                out.select.push(copy.id.clone());
+                let target = if ti == 0 || self.is_free(ti, copy.start_us, copy.end_us(), None) {
+                    ti
+                } else {
+                    let kind = self.tracks[ti].kind;
+                    self.free_track(kind, copy.start_us, copy.end_us())
+                };
+                if target == 0 {
+                    moved = Some((copy.id.clone(), copy.start_us));
+                }
+                self.tracks[target].clips.push(copy);
+            }
+            EditCmd::DetachAudio { clip_id } => {
+                let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                let clip = self.tracks[ti].clips[ci].clone();
+                let ClipContent::Media { asset_id, volume, .. } = &clip.content else { bail!("Only video clips have sound to detach") };
+                let asset = self.asset(asset_id).ok_or_else(|| anyhow!("Unknown media"))?;
+                if asset.kind != AssetKind::Video || !asset.has_audio || *volume <= 0.0 {
+                    bail!("This clip has no sound to detach");
+                }
+                let mut sound = Clip::new(new_id(), clip.start_us, clip.duration_us, clip.content.clone());
+                if let ClipContent::Media { transform, adjust, .. } = &mut sound.content {
+                    *transform = Transform::default();
+                    *adjust = Adjust::default();
+                }
+                if let ClipContent::Media { volume, .. } = &mut self.tracks[ti].clips[ci].content {
+                    *volume = 0.0;
+                }
+                let target = self.free_track(TrackKind::Audio, clip.start_us, clip.end_us());
+                out.select.push(sound.id.clone());
+                self.tracks[target].clips.push(sound);
+            }
             EditCmd::UpdateTrack { track_id, muted, hidden } => {
                 let i = self.track_index(&track_id).ok_or_else(|| anyhow!("Unknown track"))?;
                 let t = &mut self.tracks[i];
@@ -324,7 +445,10 @@ impl Project {
                     t.hidden = h;
                 }
             }
-            EditCmd::SetCanvas { width, height, background } => {
+            EditCmd::SetCanvas { width, height, background, background_blur } => {
+                if let Some(b) = background_blur {
+                    self.canvas.background_blur = b.clamp(0.0, 1.0);
+                }
                 if width < 16 || height < 16 || width > 7680 || height > 7680 {
                     bail!("Unsupported canvas size");
                 }
@@ -339,15 +463,12 @@ impl Project {
                 let clips: Vec<Clip> = segments
                     .into_iter()
                     .filter(|s| s.end_us > s.start_us && !s.text.trim().is_empty())
-                    .map(|s| Clip {
-                        id: new_id(),
-                        start_us: s.start_us.max(0),
-                        duration_us: (s.end_us - s.start_us).max(min),
-                        content: ClipContent::Text {
+                    .map(|s| {
+                        Clip::new(new_id(), s.start_us.max(0), (s.end_us - s.start_us).max(min), ClipContent::Text {
                             text: s.text.trim().to_string(),
                             style: style.clone(),
                             transform: Transform { y: 0.28, ..Transform::default() },
-                        },
+                        })
                     })
                     .collect();
                 // Whisper segments can overlap by a few ms; trim each to the next start.
@@ -583,13 +704,85 @@ mod tests {
         assert_eq!(e.project, before);
     }
 
+    fn update(id: &str) -> EditCmd {
+        EditCmd::UpdateClip {
+            clip_id: id.into(),
+            transform: None,
+            volume: None,
+            text: None,
+            style: None,
+            speed: None,
+            adjust: None,
+            fade_in_us: None,
+            fade_out_us: None,
+        }
+    }
+
+    #[test]
+    fn speed_changes_length_and_split_keeps_source() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let id = p.tracks[0].clips[0].id.clone();
+        let EditCmd::UpdateClip { clip_id, transform, volume, text, style, adjust, fade_in_us, fade_out_us, .. } = update(&id) else { unreachable!() };
+        p.apply(EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed: Some(2.0), adjust, fade_in_us, fade_out_us }).unwrap();
+        assert_eq!(main_layout(&p), vec![(0, 2500)]);
+        p.apply(EditCmd::SplitClip { clip_id: id, at_us: 1_000_000 }).unwrap();
+        let ClipContent::Media { source_in_us, .. } = &p.tracks[0].clips[1].content else { panic!() };
+        assert_eq!(*source_in_us, 2_000_000);
+    }
+
+    #[test]
+    fn duplicate_lands_right_after_the_original() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }).unwrap();
+        let a = p.tracks[0].clips[0].id.clone();
+        let out = p.apply(EditCmd::DuplicateClip { clip_id: a }).unwrap();
+        assert_eq!(p.tracks[0].clips[1].id, out.select[0]);
+        assert_eq!(main_layout(&p), vec![(0, 5000), (5000, 5000), (10000, 3000)]);
+    }
+
+    #[test]
+    fn detach_audio_silences_the_video_clip() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let a = p.tracks[0].clips[0].id.clone();
+        p.apply(EditCmd::DetachAudio { clip_id: a.clone() }).unwrap();
+        let ClipContent::Media { volume, .. } = &p.tracks[0].clips[0].content else { panic!() };
+        assert_eq!(*volume, 0.0);
+        assert_eq!(p.tracks[1].kind, TrackKind::Audio);
+        assert!(p.apply(EditCmd::DetachAudio { clip_id: a }).is_err());
+    }
+
+    #[test]
+    fn transitions_only_between_main_clips() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }).unwrap();
+        let (a, b) = (p.tracks[0].clips[0].id.clone(), p.tracks[0].clips[1].id.clone());
+        let t = Transition { kind: crate::model::TransitionKind::Dissolve, duration_us: 9_000_000 };
+        assert!(p.apply(EditCmd::SetTransition { clip_id: a, transition: Some(t) }).is_err());
+        p.apply(EditCmd::SetTransition { clip_id: b, transition: Some(t) }).unwrap();
+        assert_eq!(p.tracks[0].clips[1].transition_in.unwrap().duration_us, 2_000_000);
+    }
+
     #[test]
     fn undo_redo_and_coalescing() {
         let mut e = Editor::new(project());
         e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
         let id = e.project.tracks[0].clips[0].id.clone();
         for v in [0.5, 0.6, 0.7] {
-            let cmd = EditCmd::UpdateClip { clip_id: id.clone(), transform: None, volume: Some(v), text: None, style: None };
+            let cmd = EditCmd::UpdateClip {
+                clip_id: id.clone(),
+                transform: None,
+                volume: Some(v),
+                text: None,
+                style: None,
+                speed: None,
+                adjust: None,
+                fade_in_us: None,
+                fade_out_us: None,
+            };
             e.apply(cmd, Some("vol".into())).unwrap();
         }
         assert!(e.undo());
