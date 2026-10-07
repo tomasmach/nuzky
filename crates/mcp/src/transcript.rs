@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, OpenOptions, TryLockError};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +56,8 @@ pub fn best_model() -> &'static str {
 }
 
 /// Recognises the whole file in its own time and stores its words, replacing an older record.
+/// `waiting(true)` reports that another recognition holds the slot, `waiting(false)` that it was freed.
+#[allow(clippy::too_many_arguments)]
 pub fn recognise(
     store: &TranscriptStore,
     asset: &Asset,
@@ -63,7 +66,9 @@ pub fn recognise(
     (model_path, vad): &(PathBuf, PathBuf),
     language: &str,
     cancel: &AtomicBool,
+    waiting: impl FnMut(bool),
 ) -> Result<Record> {
+    let _slot = recognition_slot(&capopen_analysis::models_dir().join(".recognition.lock"), cancel, waiting)?;
     let fingerprint = store.fingerprint(asset)?;
     let result = capopen_analysis::transcribe_words_cancellable(
         AudioSource::Asset { asset, cache },
@@ -88,6 +93,37 @@ pub fn recognise(
     };
     store.put(asset, &record)?;
     Ok(record)
+}
+
+/// One speech recognition at a time on this computer: the app and agents, attached or headless,
+/// would otherwise each load a Whisper model. Later ones wait and stay cancellable. The slot is
+/// best effort; recognition still runs when the lock file cannot be opened.
+fn recognition_slot(path: &Path, cancel: &AtomicBool, mut waiting: impl FnMut(bool)) -> Result<Option<File>> {
+    let lock = path
+        .parent()
+        .map(std::fs::create_dir_all)
+        .transpose()
+        .and_then(|_| OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path));
+    let Ok(lock) = lock else { return Ok(None) };
+    let mut waited = false;
+    loop {
+        check_cancel(cancel)?;
+        match lock.try_lock() {
+            Ok(()) => {
+                if waited {
+                    waiting(false);
+                }
+                return Ok(Some(lock));
+            }
+            Err(TryLockError::WouldBlock) => {
+                if !std::mem::replace(&mut waited, true) {
+                    waiting(true);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(TryLockError::Error(_)) => return Ok(None),
+        }
+    }
 }
 
 pub fn heard_assets(project: &Project) -> HashSet<String> {
@@ -817,5 +853,34 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("OVERLAPPING_SPEECH")
         );
+    }
+
+    #[test]
+    fn one_recognition_at_a_time_and_waiting_stays_cancellable() {
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("recognition-slot-{}", capopen_engine::edit::new_id()));
+        let lock = dir.join(".recognition.lock");
+        let first = recognition_slot(&lock, &AtomicBool::new(false), |_| panic!("the slot was free")).unwrap();
+        assert!(first.is_some());
+        let waiter = |cancel: Arc<AtomicBool>| {
+            let (tx, rx) = mpsc::channel();
+            let lock = lock.clone();
+            let worker = std::thread::spawn(move || {
+                recognition_slot(&lock, &cancel, |waiting| tx.send(waiting).unwrap()).map(|slot| slot.is_some())
+            });
+            (rx, worker)
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (waiting, worker) = waiter(cancel.clone());
+        assert!(waiting.recv_timeout(Duration::from_secs(2)).unwrap());
+        cancel.store(true, Ordering::Relaxed);
+        assert!(worker.join().unwrap().unwrap_err().to_string().starts_with("CANCELLED"));
+        let (waiting, worker) = waiter(Arc::new(AtomicBool::new(false)));
+        assert!(waiting.recv_timeout(Duration::from_secs(2)).unwrap());
+        drop(first);
+        assert!(!waiting.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(worker.join().unwrap().unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

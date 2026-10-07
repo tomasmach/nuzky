@@ -351,7 +351,12 @@ impl Backend {
                         continue;
                     }
                     let models = model_paths.as_ref().context("MODEL_MISSING: transcription model")?;
-                    let record = transcript::recognise(&store, &asset, &cache, &name, models, &language, &cancel)?;
+                    let fraction = Some(i as f32 / count as f32);
+                    let wait = |waiting| {
+                        progress.set(if waiting { "waiting_for_other_transcription" } else { "transcribing" }, fraction)
+                    };
+                    let record =
+                        transcript::recognise(&store, &asset, &cache, &name, models, &language, &cancel, wait)?;
                     recognised.push(json!({"asset_id":asset.id,"words":record.words.len(),"language":record.language}));
                 }
                 Ok(json!({"assets":recognised}))

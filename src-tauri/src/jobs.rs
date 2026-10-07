@@ -434,7 +434,9 @@ fn recognise(
             continue;
         }
         rep.progress(i as f32 / assets.len() as f32, Some("Recognising speech"));
-        transcript::recognise(store, asset, cache, &request.model, &models, &request.language, cancel)
+        let phase = |waiting| if waiting { "Waiting for another transcription" } else { "Recognising speech" };
+        let wait = |waiting| rep.progress(i as f32 / assets.len() as f32, Some(phase(waiting)));
+        transcript::recognise(store, asset, cache, &request.model, &models, &request.language, cancel, wait)
             .with_context(|| format!("Transcribing {}", asset.name))?;
     }
     Ok(())
