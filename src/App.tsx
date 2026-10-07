@@ -348,11 +348,11 @@ async function startEditor() {
   if (boot.engineError) useEditor.setState({ engineError: boot.engineError });
   useEditor.getState().setSnap(boot.snapshot, true, true);
   useEditor.setState({ saveState: "saved" });
-  // An error toast stays until dismissed, so the reason a different project opened is not missed.
+  // A warning stays until dismissed, so the reason a different project opened is not missed.
   // Once per launch: StrictMode and Try again can start the editor more than once.
   if (boot.startupNotice && !startupNoticeShown) {
     startupNoticeShown = true;
-    useEditor.getState().toast({ kind: "error", text: boot.startupNotice });
+    useEditor.getState().toast({ kind: "warning", text: boot.startupNotice });
   }
 }
 

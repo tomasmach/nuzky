@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import { useEditor, type Toast } from "../lib/store";
 
-/** How long a toast stays, in ms; an error stays until it is dismissed. */
-const lifetime = (t: Toast) => (t.kind === "error" ? null : t.action ? 7000 : 5000);
+/** How long a toast stays, in ms; errors, warnings and sticky notices stay until dismissed. */
+const lifetime = (t: Toast) => (t.kind === "error" || t.kind === "warning" || t.sticky ? null : t.action ? 7000 : 5000);
 
 /** One toast. Its time runs only while the stack is neither hovered nor focused. */
 function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolean; dismiss: (id: number) => void }) {
@@ -19,6 +19,11 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
     };
   }, [paused, onDismiss]);
   const action = t.action && (t.action.valid?.() ?? true) ? t.action : null;
+  // A toast about an action that no longer applies, such as Undo after another change, goes.
+  const expired = !!t.action && !action;
+  useEffect(() => {
+    if (expired) onDismiss();
+  }, [expired, onDismiss]);
   return (
     <div
       data-toast
@@ -27,11 +32,13 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
       // Only the keyboard (F8, Esc) focuses a toast, so it always shows the focus outline; a click on its text does not focus it.
       onMouseDown={(e) => !(e.target as Element).closest("button") && e.preventDefault()}
       className={`pointer-events-auto flex max-w-full items-center gap-2 rounded-lg border bg-raised px-3 py-2 text-[13px] text-fg shadow-xl shadow-black/50 focus:outline-2 focus:outline-offset-1 focus:outline-accent ${
-        t.kind === "error" ? "border-danger/50" : "border-line"
+        t.kind === "error" ? "border-danger/50" : t.kind === "warning" ? "border-warn/50" : "border-line"
       }`}
     >
       {t.kind === "error" ? (
         <AlertCircle size={16} className="shrink-0 text-danger" />
+      ) : t.kind === "warning" ? (
+        <AlertTriangle size={16} className="shrink-0 text-warn" />
       ) : t.kind === "success" ? (
         <CheckCircle2 size={16} className="shrink-0 text-accent" />
       ) : (

@@ -63,7 +63,13 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   RUN_ACTIVE: "AI is editing. Stop it to edit yourself.",
   RUN_BUSY: "An AI edit is still open. Stop it first.",
   EPOCH_CHANGED: "Another project was opened meanwhile, so this did not happen.",
-  EDIT_REJECTED: (detail) => `${sentence(detail.replace(/; project unchanged$/, "").replace(/\.$/, ""))}. The project is unchanged.`,
+  EDIT_REJECTED: (detail) => {
+    const what = detail.replace(/; project unchanged$/, "").replace(/\.$/, "");
+    // A clip, track or media item that went away meanwhile, e.g. through Undo or an AI edit.
+    const gone = /^unknown (clip|track|asset|media)\b/i.exec(what);
+    if (gone) return `That ${gone[1] === "asset" ? "media item" : gone[1].toLowerCase()} was removed meanwhile, so nothing changed.`;
+    return `${sentence(what)}. The project is unchanged.`;
+  },
   INVALID_PROJECT: (detail) => `That change would break the project (${detail}), so it was not made.`,
   SPEECH_CHANGED: "The speech on the timeline changed meanwhile. Select the words again and retry.",
   TRANSCRIPT_MISSING: "Transcribe the timeline first, then try again.",

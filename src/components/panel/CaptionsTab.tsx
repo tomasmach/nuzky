@@ -3,7 +3,7 @@ import { CAPTION_STYLES, sameStyle } from "../../lib/presets";
 import { speechBlocker, startSpeech, useSpeech } from "../../lib/speech";
 import { applyCaptionFont, applyCaptionStyle, isCaptionTrack, useEditor } from "../../lib/store";
 import { FontPicker } from "../FontPicker";
-import { Button, Segmented, TextSwatch } from "../ui";
+import { Button, Segmented, TextSwatch, useLockReason } from "../ui";
 import { JobError, SpeechFields, SpeechJobCard, useSpeechJobs } from "./SpeechControls";
 
 const WORDS = [
@@ -14,6 +14,7 @@ const WORDS = [
 ];
 
 export function CaptionsTab() {
+  const lock = useLockReason();
   const captionWords = useSpeech((s) => s.captionWords);
   const styleIdx = useSpeech((s) => s.captionStyle);
   const newFont = useSpeech((s) => s.captionFont);
@@ -59,11 +60,11 @@ export function CaptionsTab() {
               key={s.name}
               type="button"
               aria-pressed={i === current}
-              aria-disabled={busy || undefined}
-              title={busy ? "Wait for speech recognition to finish" : hasCaptions ? `Apply ${s.name} to all captions` : `Use ${s.name} for new captions`}
-              onClick={busy ? undefined : () => pickStyle(i)}
+              aria-disabled={busy || !!lock || undefined}
+              title={lock ?? (busy ? "Wait for speech recognition to finish" : hasCaptions ? `Apply ${s.name} to all captions` : `Use ${s.name} for new captions`)}
+              onClick={busy || lock ? undefined : () => pickStyle(i)}
               className={`flex h-12 min-w-0 items-center justify-center rounded-md border bg-line disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
-                i === current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : busy ? "border-line" : "border-line enabled:hover:border-muted"
+                i === current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : busy || lock ? "border-line" : "border-line enabled:hover:border-muted"
               }`}
             >
               <TextSwatch style={{ ...s.style, fontFamily: font }} label={s.name} />

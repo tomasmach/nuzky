@@ -6,7 +6,8 @@ import { MAIN_TRACK, aiLocked, allClips, currentEpoch, findClip, undoAction, use
 import type { Asset } from "../../lib/types";
 
 export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
-export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif", "bmp"];
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, ...IMAGE_EXTENSIONS];
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 const extension = (path: string) => path.split(".").pop()?.toLowerCase() ?? "";
@@ -36,7 +37,8 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
   if (paths.length === 0 || aiLocked()) return;
   const epoch = currentEpoch();
   // Placeholders show at once, while the files are probed.
-  const pending = paths.map((p) => ({ key: ++importKey, name: fileName(p), audio: AUDIO_EXTENSIONS.includes(extension(p)) }));
+  const kind = (p: string): Asset["kind"] => (AUDIO_EXTENSIONS.includes(extension(p)) ? "audio" : IMAGE_EXTENSIONS.includes(extension(p)) ? "image" : "video");
+  const pending = paths.map((p) => ({ key: ++importKey, name: fileName(p), kind: kind(p) }));
   useEditor.setState({ importing: [...useEditor.getState().importing, ...pending] });
   const done = () => useEditor.setState({ importing: useEditor.getState().importing.filter((i) => !pending.includes(i)) });
   try {
@@ -62,7 +64,7 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
 }
 
 /** A file being imported: the name and a skeleton where its thumbnail will be. */
-export function ImportPlaceholder({ name, audio, compact }: { name: string; audio: boolean; compact?: boolean }) {
+export function ImportPlaceholder({ name, kind, compact }: { name: string; kind: Asset["kind"]; compact?: boolean }) {
   if (compact)
     return (
       <div className="flex items-center gap-2 rounded-md p-1.5" role="status" aria-label={`Importing ${name}`}>
@@ -74,7 +76,7 @@ export function ImportPlaceholder({ name, audio, compact }: { name: string; audi
     <div className="flex flex-col gap-1 rounded-md p-1" role="status" aria-label={`Importing ${name}`}>
       <div className="skeleton aspect-video rounded" />
       <div className="flex items-center gap-1 px-0.5 text-[12px] text-muted">
-        <KindIcon kind={audio ? "audio" : "video"} size={12} />
+        <KindIcon kind={kind} size={12} />
         <span className="truncate">{name}</span>
       </div>
     </div>

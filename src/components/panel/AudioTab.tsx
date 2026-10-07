@@ -3,11 +3,12 @@ import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { Waveform } from "../timeline/Waveform";
-import { Button, ProgressBar } from "../ui";
+import { Button, ProgressBar, lockedProps, useLockReason } from "../ui";
 import { ImportPlaceholder, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 function AudioItem({ asset }: { asset: Asset }) {
   const job = useEditor((s) => s.jobs[`audio:${asset.id}`]);
+  const lock = useLockReason();
   return (
     <div
       onPointerDown={assetDragHandler(asset.id)}
@@ -34,7 +35,8 @@ function AudioItem({ asset }: { asset: Asset }) {
         aria-label={`Remove ${asset.name}`}
         title="Remove from project, with its clips"
         onClick={() => removeAsset(asset)}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
+        {...lockedProps(lock)}
+        className="aria-disabled:cursor-not-allowed flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <Trash2 size={14} />
       </button>
@@ -43,7 +45,8 @@ function AudioItem({ asset }: { asset: Asset }) {
         aria-label={`Add ${asset.name} at playhead`}
         title="Add at playhead"
         onClick={() => addAtPlayhead(asset.id)}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-fg group-hover:opacity-100 group-focus-within:opacity-100"
+        {...lockedProps(lock)}
+        className="aria-disabled:cursor-not-allowed flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-fg group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <Plus size={16} />
       </button>
@@ -54,7 +57,7 @@ function AudioItem({ asset }: { asset: Asset }) {
 export function AudioTab() {
   const assets = useEditor((s) => s.snap?.project.assets);
   const audio = (assets ?? []).filter((a) => a.kind === "audio");
-  const importing = useEditor((s) => s.importing.filter((i) => i.audio));
+  const importing = useEditor((s) => s.importing.filter((i) => i.kind === "audio"));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="p-3">
@@ -74,7 +77,7 @@ export function AudioTab() {
             <AudioItem key={a.id} asset={a} />
           ))}
           {importing.map((i) => (
-            <ImportPlaceholder key={i.key} name={i.name} audio compact />
+            <ImportPlaceholder key={i.key} name={i.name} kind="audio" compact />
           ))}
         </div>
       )}

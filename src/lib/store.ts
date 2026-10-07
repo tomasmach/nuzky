@@ -2,12 +2,14 @@ import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition } from "./types";
+import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition } from "./types";
 
 export interface Toast {
   id: number;
-  kind: "info" | "success" | "error";
+  /** Errors and warnings stay until dismissed; info and success close by themselves unless `sticky`. */
+  kind: "info" | "success" | "warning" | "error";
   text: string;
+  sticky?: boolean;
   /** `valid`: the action is offered only while it holds, e.g. Undo while its step is still the newest. */
   action?: { label: string; run: () => void; valid?: () => boolean };
 }
@@ -46,7 +48,7 @@ interface EditorState {
   /** Where files dragged in from the desktop are over the window, in CSS pixels, while they include media. */
   fileDrag: { x: number; y: number } | null;
   /** Files being probed by an import, shown as placeholders until they arrive. */
-  importing: { key: number; name: string; audio: boolean }[];
+  importing: { key: number; name: string; kind: Asset["kind"] }[];
   exportOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
@@ -150,13 +152,13 @@ export function undoAction(snap: Snapshot): NonNullable<Toast["action"]> {
 /** Why editing is locked while an agent's run is open. */
 export const AI_EDITING = "AI is editing. Stop it to edit yourself.";
 
-let aiNoticeShown = false;
-
-/** Says once per run that the AI is editing, with a way to take over; further refused edits stay quiet. */
+/**
+ * Says that the AI is editing, with a way to take over. It stays until the run ends; dismissed,
+ * it comes back with the next refused edit, so an edit never goes unanswered.
+ */
 function noticeAiRun() {
-  if (aiNoticeShown) return;
-  aiNoticeShown = true;
-  useEditor.getState().toast({ kind: "info", text: AI_EDITING, action: { label: "Stop and edit", run: stopAiRun, valid: () => !!useEditor.getState().aiRun } });
+  if (useEditor.getState().toasts.some((t) => t.text === AI_EDITING)) return;
+  useEditor.getState().toast({ kind: "info", sticky: true, text: AI_EDITING, action: { label: "Stop and edit", run: stopAiRun, valid: () => !!useEditor.getState().aiRun } });
 }
 
 /** True while an agent's run is open: the edit is not sent, and the notice shows once. */
@@ -288,8 +290,15 @@ export const useEditor = create<EditorState>((set, get) => ({
   toast: (t) => {
     const id = ++toastId;
     if (t.kind === "error") t = { ...t, text: plainError(t.text) };
+    // A toast whose action no longer applies, or one saying the same again, makes room.
+    let kept = get().toasts.filter((o) => (o.action?.valid?.() ?? true) && !(o.kind === t.kind && o.text === t.text && !o.action));
+    // Four at most. Routine news goes first, so errors and warnings stay until they are dismissed.
+    while (kept.length >= 4) {
+      const routine = kept.findIndex((o) => (o.kind === "info" || o.kind === "success") && !o.sticky);
+      kept = kept.filter((_, i) => i !== Math.max(0, routine));
+    }
     // The toast times itself out (Toasts.tsx), so hovering or focusing it can pause the clock.
-    set({ toasts: [...get().toasts.slice(-3), { ...t, id }] });
+    set({ toasts: [...kept, { ...t, id }] });
   },
 
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
@@ -339,10 +348,9 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 }));
 
-// When the run ends its notice goes, and the next run may show one again.
+// When the run ends its notice goes.
 useEditor.subscribe((s, prev) => {
   if (!prev.aiRun || s.aiRun) return;
-  aiNoticeShown = false;
   if (s.toasts.some((t) => t.text === AI_EDITING)) useEditor.setState({ toasts: s.toasts.filter((t) => t.text !== AI_EDITING) });
 });
 
@@ -473,7 +481,8 @@ export async function deleteSelection() {
   if (selection.length === 0) return;
   const snap = await edit({ type: "deleteClips", clipIds: selection });
   if (snap) {
-    select([]);
+    // Drops only the deleted clips: the timeline may already have selected the clip that took focus.
+    select(useEditor.getState().selection.filter((id) => !selection.includes(id)));
     toast({ kind: "info", text: selection.length === 1 ? "Clip deleted" : `${selection.length} clips deleted`, action: undoAction(snap) });
   }
 }

@@ -39,9 +39,9 @@ function ProjectName() {
       <button
         type="button"
         title={locked ? AI_EDITING : "Rename project"}
-        disabled={locked}
-        onClick={() => setDraft(name)}
-        className="max-w-[260px] truncate rounded px-1.5 py-0.5 text-[13px] font-medium text-fg enabled:hover:bg-raised disabled:cursor-not-allowed"
+        aria-disabled={locked || undefined}
+        onClick={locked ? undefined : () => setDraft(name)}
+        className="max-w-[260px] truncate rounded px-1.5 py-0.5 text-[13px] font-medium text-fg hover:bg-raised aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
       >
         {name}
       </button>

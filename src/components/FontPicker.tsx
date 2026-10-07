@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { AlertTriangle, Check, ChevronDown } from "lucide-react";
 import { DEFAULT_FONT, fontCss, useFontFamilies } from "../lib/fonts";
+import { useLockReason } from "./ui";
 
 const MENU_W = 260;
 const MENU_H = 340;
@@ -23,6 +24,9 @@ export function FontPicker({
   disabled?: boolean;
   disabledReason?: string;
 }) {
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
+  disabledReason = lock ?? disabledReason;
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const { fonts } = useFontFamilies();

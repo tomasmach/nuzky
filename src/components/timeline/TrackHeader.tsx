@@ -11,9 +11,10 @@ function TrackToggle({ off, label, onIcon, offIcon, onClick, locked }: { off: bo
       aria-label={locked ? `${label}: the AI is editing` : label}
       title={locked ? `${label}: the AI is editing` : label}
       aria-pressed={off}
-      disabled={locked}
-      onClick={onClick}
-      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${off ? "bg-raised text-fg" : "text-muted enabled:hover:bg-raised enabled:hover:text-fg"}`}
+      // Focusable while locked, so the keyboard reaches it and its reason.
+      aria-disabled={locked || undefined}
+      onClick={locked ? undefined : onClick}
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${off ? "bg-raised text-fg" : locked ? "text-muted" : "text-muted hover:bg-raised hover:text-fg"}`}
     >
       {off ? offIcon : onIcon}
     </button>

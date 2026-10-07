@@ -41,6 +41,17 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
   const locked = useAiLocked();
   const splittable = useEditor((s) => picked.filter((c) => canSplitClip(c, s.timeUs, project.canvas.fps)).length);
 
+  // Focus goes back where it was when the menu opened, unless an action moved it elsewhere.
+  const [opener] = useState(() => document.activeElement as HTMLElement | null);
+  useLayoutEffect(
+    () => () => {
+      const active = document.activeElement;
+      const lost = !active || active === document.body || !!ref.current?.contains(active);
+      if (lost && opener?.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    },
+    [opener],
+  );
+
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -103,7 +114,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
       {/* Split takes the selected clips under the playhead, like S. */}
       <Item
         icon={<Scissors size={14} />}
-        label={n === 1 || splittable === 0 ? "Split at playhead" : `Split ${splittable} clip${splittable === 1 ? "" : "s"}`}
+        label={n === 1 || splittable === 0 ? "Split at playhead" : splittable === n ? `Split ${n} clips` : `Split ${splittable} of ${n} clips at playhead`}
         shortcut="S"
         disabled={locked || splittable === 0}
         reason={locked ? AI_EDITING : n === 1 ? "Move the playhead over this clip to split it" : "Move the playhead over the selected clips to split them"}

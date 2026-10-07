@@ -1,11 +1,12 @@
 import { ChevronDown } from "lucide-react";
 import { formatLabel } from "../../lib/presets";
 import { useEditor } from "../../lib/store";
-import { ColorInput, Section, Segmented, Slider } from "../ui";
+import { ColorInput, Section, Segmented, Slider, lockedProps, useLockReason } from "../ui";
 
 const DEFAULT_BLUR = 0.5;
 
 export function ProjectSection() {
+  const lock = useLockReason();
   const canvas = useEditor((s) => s.snap!.project.canvas);
   const edit = useEditor((s) => s.edit);
   // Size comes from the latest confirmed canvas, so a Ratio change made a moment ago is kept.
@@ -24,7 +25,8 @@ export function ProjectSection() {
               aria-haspopup="menu"
               title="Change the canvas ratio"
               onClick={() => useEditor.setState({ ratioOpen: true })}
-              className="-mx-1.5 inline-flex h-6 items-center gap-1 rounded px-1.5 text-fg transition-colors duration-[120ms] ease-out hover:bg-raised"
+              {...lockedProps(lock)}
+              className="-mx-1.5 inline-flex h-6 items-center gap-1 rounded px-1.5 text-fg transition-colors duration-[120ms] ease-out hover:bg-raised aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent"
             >
               {formatLabel(canvas.width, canvas.height)} · {canvas.width}×{canvas.height}
               <ChevronDown size={13} className="text-muted" />

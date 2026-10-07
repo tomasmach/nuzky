@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Copy, Magnet, Maximize2, PanelLeftClose, PanelRightClose, Scissors, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, editClip, mainClips, projectDuration, splitAtPlayhead, splitTargets, useAiLocked, useEditor } from "../../lib/store";
+import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, editClip, findClip, mainClips, projectDuration, splitAtPlayhead, splitTargets, useAiLocked, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, EditCmd, Project, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
@@ -153,6 +153,8 @@ export function Timeline({ height }: { height: number }) {
   const [menu, setMenu] = useState<MenuAt | null>(null);
   /** The clip keyboard focus was on last; it stays the timeline's tab stop. */
   const [focusId, setFocusId] = useState<string | null>(null);
+  /** Where the focused clip was, so focus can move on when it is deleted; null once focus left. */
+  const focusPlace = useRef<{ id: string; trackId: string; startUs: number } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
 
   const tracks = useMemo(() => (project ? displayTracks(project) : []), [project]);
@@ -237,6 +239,20 @@ export function Timeline({ height }: { height: number }) {
 
   const { drag, startClipDrag, startScrub } = useTimelineGestures({ project, zoom, snapping, minUs, rows, timeAt });
 
+  // When the focused clip is deleted, focus and select the clip that took its place on the track,
+  // else the one before it, so the keyboard keeps its place.
+  useLayoutEffect(() => {
+    const place = focusPlace.current;
+    if (!project || !place || findClip(project, place.id)) return;
+    focusPlace.current = null;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const clips = project.tracks.find((t) => t.id === place.trackId)?.clips ?? [];
+    const next = clips.find((c) => c.startUs >= place.startUs) ?? clips[clips.length - 1];
+    if (!next) return;
+    select([next.id]);
+    scroller.current?.querySelector<HTMLElement>(`[data-clip-id="${next.id}"]`)?.focus({ preventScroll: true });
+  }, [project, select]);
+
   const openMenu = useCallback((e: React.MouseEvent, clip: Clip) => {
     e.preventDefault();
     if (!useEditor.getState().selection.includes(clip.id)) useEditor.getState().select([clip.id]);
@@ -294,15 +310,29 @@ export function Timeline({ height }: { height: number }) {
     else if (r.bottom > bottom) box.scrollTop += r.bottom - bottom;
   };
 
-  // Arrows move between clips, Enter selects (Shift adds or removes), Alt+arrows nudge. The keys
-  // stop here, so the playhead does not also step; Delete, S, Q, W and Space work as everywhere.
+  // Arrows move between clips and select the one they reach, so Delete, S, Q, W and Ctrl+D act on
+  // the clip with focus. Ctrl+arrows move focus only, to add clips with Shift+Enter; Alt+arrows
+  // nudge; the Menu key or Shift+F10 opens the clip menu. The keys stop here, so the playhead does
+  // not also step.
   const onClipKey = (e: React.KeyboardEvent) => {
     const id = (e.target as HTMLElement).getAttribute?.("data-clip-id");
     const found = id ? tracks.flatMap((t) => t.clips.map((c) => [t, c] as const)).find(([, c]) => c.id === id) : undefined;
-    if (!found || e.ctrlKey || e.metaKey) return;
+    if (!found || e.metaKey) return;
     const [track, clip] = found;
     const arrow = e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown";
-    if (arrow && e.altKey) {
+    if ((e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!useEditor.getState().selection.includes(clip.id)) select([clip.id]);
+      const r = (e.target as HTMLElement).getBoundingClientRect();
+      setMenu({ clipId: clip.id, x: r.left + 8, y: r.bottom - 4 });
+    } else if (e.ctrlKey) {
+      if (!arrow || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const next = neighbour(tracks, track, clip, e.key);
+      if (next) focusClip(next.id);
+    } else if (arrow && e.altKey) {
       if (e.key === "ArrowUp" || e.key === "ArrowDown") return;
       e.preventDefault();
       e.stopPropagation();
@@ -311,7 +341,10 @@ export function Timeline({ height }: { height: number }) {
       e.preventDefault();
       e.stopPropagation();
       const next = neighbour(tracks, track, clip, e.key);
-      if (next) focusClip(next.id);
+      if (next) {
+        focusClip(next.id);
+        select([next.id]);
+      }
     } else if (e.key === "Enter") {
       e.preventDefault();
       const sel = useEditor.getState().selection;
@@ -421,8 +454,13 @@ export function Timeline({ height }: { height: number }) {
             onKeyDown={onClipKey}
             onFocus={(e) => {
               const id = (e.target as HTMLElement).getAttribute?.("data-clip-id");
-              if (id) setFocusId(id);
+              if (!id) return;
+              setFocusId(id);
+              const found = findClip(project, id);
+              focusPlace.current = found ? { id, trackId: found.track.id, startUs: found.clip.startUs } : null;
             }}
+            // A removed element fires no blur, so a deleted clip keeps its place for the effect below.
+            onBlur={(e) => e.target.isConnected && (focusPlace.current = null)}
           >
             {drag?.moved && drag.target === null && dragKind !== "audio" && <div className="ml-[132px] h-0.5 bg-accent" title="Drop to create a new track" />}
             {tracks.map((track) => {
@@ -539,7 +577,11 @@ export function Timeline({ height }: { height: number }) {
           <Playhead zoom={zoom} scroller={scroller} />
 
           {drag?.moved && ghostTiming && (
-            <div className="tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg" style={{ left: HEADER_W + (ghostTiming.startUs / US) * zoom, top: 2 }}>
+            // Pinned to the edge being dragged: the start for a move or left trim, the end for a right trim.
+            <div
+              className={`tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg ${drag.mode === "trimR" ? "-translate-x-full" : ""}`}
+              style={{ left: HEADER_W + ((drag.mode === "trimR" ? ghostTiming.startUs + ghostTiming.durationUs : ghostTiming.startUs) / US) * zoom, top: 2 }}
+            >
               {drag.mode === "move" ? formatTime(layout?.slotUs ?? ghostTiming.startUs) : formatDuration(ghostTiming.durationUs)}
             </div>
           )}

@@ -31,13 +31,14 @@ export const CutMarkers = memo(function CutMarkers({ project, zoom, locked }: { 
               aria-label={t ? `${name} transition, ${formatDuration(t.durationUs)}` : "Add transition"}
               title={t ? `${name} · ${formatDuration(t.durationUs)}` : locked ? "Add transition: the AI is editing" : "Add transition (Dissolve)"}
               aria-pressed={on}
-              disabled={locked && !t}
+              aria-disabled={(locked && !t) || undefined}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={async () => {
+                if (locked && !t) return;
                 if (!t && !(await edit({ type: "setTransition", clipId: cut.clipId, transition: { kind: "dissolve", durationUs: DEFAULT_TRANSITION_US } }))) return;
                 selectCut(cut.clipId);
               }}
-              className={`absolute top-1/2 z-20 flex h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[4px] border transition-colors duration-[120ms] ease-out ${
+              className={`absolute top-1/2 z-20 flex h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[4px] border transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed ${
                 t
                   ? on
                     ? "border-accent bg-accent text-black"

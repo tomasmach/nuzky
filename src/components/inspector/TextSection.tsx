@@ -3,7 +3,7 @@ import { CAPTION_STYLES, TEXT_PRESETS, sameStyle } from "../../lib/presets";
 import { editClip, useEditor } from "../../lib/store";
 import type { Clip, TextStyle } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
-import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch } from "../ui";
+import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch, useLockReason } from "../ui";
 
 /** Label column of the inspector's property rows, next to a full-width control. */
 export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -22,9 +22,12 @@ export function FieldRow({ label, children }: { label: string; children: React.R
 function TextField({ clipId, text }: { clipId: string; text: string }) {
   const edit = useEditor((s) => s.edit);
   const [draft, setDraft] = useState<string | null>(null);
+  const lock = useLockReason();
   return (
     <textarea
       aria-label="Text"
+      disabled={!!lock}
+      title={lock ?? undefined}
       value={draft ?? text}
       rows={3}
       onChange={(e) => {

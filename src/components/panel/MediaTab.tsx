@@ -3,7 +3,7 @@ import { AudioLines, Film, Plus, Trash2, Upload } from "lucide-react";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
-import { Button, ProgressBar } from "../ui";
+import { Button, ProgressBar, lockedProps, useLockReason } from "../ui";
 import { ImportPlaceholder, KindIcon, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 function MediaItem({ asset }: { asset: Asset }) {
@@ -12,6 +12,7 @@ function MediaItem({ asset }: { asset: Asset }) {
   const epoch = useEditor((s) => s.snap?.sessionEpoch);
   useEffect(() => useEditor.getState().loadThumb(asset.id), [asset.id, epoch]);
   const preparing = job?.status === "running";
+  const lock = useLockReason();
 
   return (
     <div
@@ -42,7 +43,8 @@ function MediaItem({ asset }: { asset: Asset }) {
           aria-label={`Add ${asset.name} at playhead`}
           title="Add at playhead"
           onClick={() => addAtPlayhead(asset.id)}
-          className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-accent text-black opacity-0 shadow transition-opacity duration-[120ms] hover:bg-accent-strong group-hover:opacity-100 group-focus-within:opacity-100"
+          {...lockedProps(lock)}
+          className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-accent text-black opacity-0 shadow transition-opacity duration-[120ms] hover:bg-accent-strong group-hover:opacity-100 group-focus-within:opacity-100 aria-disabled:cursor-not-allowed aria-disabled:bg-line aria-disabled:text-muted"
         >
           <Plus size={16} />
         </button>
@@ -51,7 +53,8 @@ function MediaItem({ asset }: { asset: Asset }) {
           aria-label={`Remove ${asset.name}`}
           title="Remove from project, with its clips"
           onClick={() => removeAsset(asset)}
-          className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/70 text-fg opacity-0 transition-opacity duration-[120ms] hover:bg-black/90 hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
+          {...lockedProps(lock)}
+          className="aria-disabled:cursor-not-allowed absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/70 text-fg opacity-0 transition-opacity duration-[120ms] hover:bg-black/90 hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
         >
           <Trash2 size={14} />
         </button>
@@ -91,7 +94,7 @@ export function MediaTab() {
             <MediaItem key={a.id} asset={a} />
           ))}
           {importing.map((i) => (
-            <ImportPlaceholder key={i.key} name={i.name} audio={i.audio} />
+            <ImportPlaceholder key={i.key} name={i.name} kind={i.kind} />
           ))}
         </div>
       )}

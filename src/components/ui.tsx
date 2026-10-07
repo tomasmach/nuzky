@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { fontCss } from "../lib/fonts";
-import { useAiLocked } from "../lib/store";
+import { AI_EDITING, useAiLocked } from "../lib/store";
 import type { TextStyle } from "../lib/types";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
@@ -16,11 +16,17 @@ const variants: Record<Variant, string> = {
 /** Drops hover styles, so a disabled control does not react to the pointer. */
 const idle = (classes: string) => classes.split(" ").filter((c) => !c.startsWith("hover:")).join(" ");
 
+/** Why the controls inside an `AiLock` are locked, or null. */
+const LockReason = createContext<string | null>(null);
+export const useLockReason = () => useContext(LockReason);
+
+/** For a plain button inside an `AiLock`: focusable, inert to clicks, the reason as its tooltip. */
+export const lockedProps = (reason: string | null) => (reason ? { "aria-disabled": true as const, title: reason, onClick: undefined } : {});
+
 /**
  * A disabled button here stays focusable (`aria-disabled` rather than `disabled`), so the keyboard
  * and screen readers reach it and its reason: the tooltip, the description, and the hint shown on
- * keyboard focus (`DisabledHint`). A click on it does nothing. Inside a disabled fieldset the
- * browser still disables it outright.
+ * keyboard focus (`DisabledHint`). A click on it does nothing.
  */
 function disabledProps(disabled: boolean | undefined, onClick: ButtonHTMLAttributes<HTMLButtonElement>["onClick"], reasonId?: string) {
   return disabled ? { "aria-disabled": true, onClick: undefined, "aria-describedby": reasonId } : { onClick };
@@ -37,7 +43,9 @@ export function Button({
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; disabledReason?: string }) {
   const reasonId = useId();
-  const reason = disabled ? (disabledReason ?? title) : undefined;
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
+  const reason = lock ?? (disabled ? (disabledReason ?? title) : undefined);
   return (
     <>
       <button
@@ -74,11 +82,13 @@ export function IconButton({
   onClick,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
   return (
     <button
       type="button"
       aria-label={label}
-      title={label}
+      title={lock ?? label}
       aria-pressed={active}
       {...disabledProps(disabled, onClick)}
       className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
@@ -97,18 +107,23 @@ export function IconButton({
  */
 export function DisabledHint() {
   const [hint, setHint] = useState<{ text: string; x: number; y: number; above: boolean } | null>(null);
+  const keyboard = useRef(false);
+  const show = (el: HTMLElement | null) => {
+    const text = el?.getAttribute("aria-disabled") === "true" ? el.getAttribute("title") : null;
+    if (!el || !text || !keyboard.current) return setHint(null);
+    const r = el.getBoundingClientRect();
+    const above = r.bottom + 40 > window.innerHeight;
+    setHint({ text, x: Math.max(138, Math.min(window.innerWidth - 138, r.left + r.width / 2)), y: above ? r.top - 6 : r.bottom + 6, above });
+  };
+  // A run that starts or ends locks or unlocks the focused control, so its hint follows.
+  const locked = useAiLocked();
   useEffect(() => {
-    let keyboard = false;
-    const onKey = () => (keyboard = true);
-    const onPointer = () => (keyboard = false);
-    const onFocus = (e: FocusEvent) => {
-      const el = e.target instanceof HTMLElement ? e.target : null;
-      const text = el?.getAttribute("aria-disabled") === "true" ? el.getAttribute("title") : null;
-      if (!el || !text || !keyboard) return setHint(null);
-      const r = el.getBoundingClientRect();
-      const above = r.bottom + 40 > window.innerHeight;
-      setHint({ text, x: Math.max(138, Math.min(window.innerWidth - 138, r.left + r.width / 2)), y: above ? r.top - 6 : r.bottom + 6, above });
-    };
+    if (document.activeElement instanceof HTMLElement) show(document.activeElement);
+  }, [locked]);
+  useEffect(() => {
+    const onKey = () => (keyboard.current = true);
+    const onPointer = () => (keyboard.current = false);
+    const onFocus = (e: FocusEvent) => show(e.target instanceof HTMLElement ? e.target : null);
     const hide = () => setHint(null);
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("pointerdown", onPointer, true);
@@ -135,14 +150,13 @@ export function DisabledHint() {
   );
 }
 
-/** Disables every control inside while an agent's run is open; the layout is unaffected. */
+/**
+ * Locks the editing controls inside while an agent's run is open. Buttons stay focusable and give
+ * the reason; fields are disabled with the reason as their tooltip.
+ */
 export function AiLock({ children }: { children: ReactNode }) {
   const locked = useAiLocked();
-  return (
-    <fieldset disabled={locked} className="contents">
-      {children}
-    </fieldset>
-  );
+  return <LockReason.Provider value={locked ? AI_EDITING : null}>{children}</LockReason.Provider>;
 }
 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
@@ -190,6 +204,8 @@ export function NumberInput({
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const cancel = useRef(false);
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
   const clamp = (v: number) => Math.max(min, Math.min(max, v));
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") e.currentTarget.blur();
@@ -256,6 +272,7 @@ export function RangeInput({
   valueText?: string;
   className?: string;
 }) {
+  disabled = disabled || !!useLockReason();
   const frac = (v: number) => (max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0);
   const twoSided = min < 0 && max > 0;
   const origin = twoSided ? frac(0) : 0;
@@ -310,8 +327,10 @@ export function Slider({
   mixed?: boolean;
   title?: string;
 }) {
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
   return (
-    <div className="flex items-center gap-2" title={title}>
+    <div className="flex items-center gap-2" title={lock ?? title}>
       <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
       <RangeInput
         label={label}
@@ -345,14 +364,16 @@ export function Section({ title, children, actions }: { title: string; children:
 }
 
 export function ColorInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const lock = useLockReason();
   return (
-    <label className="flex items-center justify-between gap-2 has-[:disabled]:opacity-40">
+    <label className="flex items-center justify-between gap-2 has-[:disabled]:opacity-40" title={lock ?? undefined}>
       <span className="text-[12px] text-muted">{label}</span>
       <span className="flex items-center gap-2">
         <span className="tabular text-[12px] text-muted">{value.slice(0, 7).toUpperCase()}</span>
         <input
           type="color"
           aria-label={label}
+          disabled={!!lock}
           value={value.slice(0, 7)}
           onChange={(e) => onChange(e.target.value + value.slice(7))}
           className="h-7 w-9 cursor-pointer rounded border border-line bg-raised p-0.5 disabled:cursor-not-allowed"
@@ -375,8 +396,10 @@ export function Checkbox({
   disabled?: boolean;
   title?: string;
 }) {
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
   return (
-    <label className="flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40" title={title}>
+    <label className="flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40" title={lock ?? title}>
       <span className="relative inline-flex">
         <input
           type="checkbox"
@@ -490,7 +513,9 @@ export function Segmented<T extends string | number>({
   disabledReason?: string;
 }) {
   const reasonId = useId();
-  const reason = disabled ? disabledReason : undefined;
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
+  const reason = lock ?? (disabled ? disabledReason : undefined);
   return (
     <div role="group" aria-label={label} className="flex gap-1 rounded-md bg-bg p-0.5">
       {options.map((o) => (
@@ -532,11 +557,13 @@ export function PresetTile({
   title?: string;
   children: ReactNode;
 }) {
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
   return (
     <button
       type="button"
       aria-pressed={selected}
-      title={title ?? label}
+      title={lock ?? title ?? label}
       {...disabledProps(disabled, onClick)}
       className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
     >
