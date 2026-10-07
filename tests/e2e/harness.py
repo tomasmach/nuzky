@@ -187,7 +187,11 @@ def run_flow(name):
     try:
         if before:
             before(r)
-        driver = start([DRIVER, '--port', '4444', '--native-driver', WEBKIT_DRIVER], r.work / 'driver.log', r.env)
+        # tauri-driver forwards to its own WebKitWebDriver on 4445; a stranger there would launch the app outside this run.
+        if not wait(lambda: not any(port_busy(port) for port in (4444, 4445)), 10):
+            raise RuntimeError('port 4444 or 4445 is in use by another session')
+        driver = start([DRIVER, '--port', '4444', '--native-port', '4445', '--native-driver', WEBKIT_DRIVER],
+                       r.work / 'driver.log', r.env)
         if not wait(lambda: port_busy(4444), 20):
             raise RuntimeError('tauri-driver did not start, see driver.log')
         r.s = Session()

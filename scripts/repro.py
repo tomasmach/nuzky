@@ -12,7 +12,7 @@ joins their running CapOpen. It runs inside headless gamescope with D-Bus switch
 dialog or notification reaches the desktop. Media and models come from scripts/fixtures.sh.
 
 Needs gamescope, WebKitWebDriver, tauri-driver (`cargo install tauri-driver --locked`), Pillow and
-python-xlib. Vite takes port 1420 (the app's dev URL) and tauri-driver 4444. A busy port belongs to
+python-xlib. Vite takes port 1420 (the app's dev URL), tauri-driver 4444 and its WebKitWebDriver 4445. A busy port belongs to
 another session, so the run stops instead of touching it.
 """
 import importlib, json, os, shutil, subprocess, sys
@@ -39,7 +39,7 @@ def preflight(names):
             problems.append(f'Python package {package} is missing')
     if not (FIXTURES / 'talk.mp4').exists() or ('captions' in names and not (MODELS / 'ggml-small.bin').exists()):
         problems.append('test media or models are missing: run scripts/fixtures.sh')
-    problems += [f'port {port} is in use by another session' for port in (1420, 4444) if port_busy(port)]
+    problems += [f'port {port} is in use by another session' for port in (1420, 4444, 4445) if port_busy(port)]
     return problems
 
 

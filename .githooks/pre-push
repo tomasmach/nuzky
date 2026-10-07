@@ -11,8 +11,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # Deleting a remote branch pushes no commits.
   [ "$local_sha" = "$zero" ] && continue
   gitleaks git --redact=100 --no-banner --log-opts="$local_sha --not --remotes" . || exit 1
-  media=$(git log --format= --name-only --diff-filter=AR "$local_sha" --not --remotes |
-    grep -iE '\.(mp4|mov|m4v|mkv|webm|avi|mts|wav|mp3|m4a|aac|flac|ogg|opus|heic)$' | sort -u)
+  # Unquoted names, so "něčí-video.mp4" ends in .mp4; names with quotes or control characters stay quoted.
+  media=$(git -c core.quotePath=false log --format= --name-only --diff-filter=AR "$local_sha" --not --remotes |
+    grep -iE '\.(mp4|mov|m4v|mkv|webm|avi|mts|wav|mp3|m4a|aac|flac|ogg|opus|heic)"?$' | sort -u)
   if [ -n "$media" ]; then
     echo "pre-push: these commits add video or audio files. Generate test media with scripts/fixtures.sh instead:" >&2
     echo "$media" >&2

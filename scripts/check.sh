@@ -25,15 +25,21 @@ own_node_modules() {
   fi
 }
 
+# Tests must not touch the user's CapOpen transcripts, caches or the socket of their running app.
+runtime=$(mktemp -d "${TMPDIR:-/tmp}/capopen-check.XXXXXX")
+trap 'rm -rf "$runtime"' EXIT
+isolated() {
+  env XDG_DATA_HOME="$PWD/tmp-test/xdg/data" XDG_CACHE_HOME="$PWD/tmp-test/xdg/cache" XDG_RUNTIME_DIR="$runtime" "$@"
+}
+
 step "Own node_modules" own_node_modules
 step "npm install from the lockfile" npm ci --no-audit --no-fund
 step "Rust format" cargo fmt --all --check
 step "Frontend types and build" npm run build
 step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
-step "Rust tests" cargo test --workspace --locked
+step "Rust tests" isolated cargo test --workspace --locked
 step "Test media and models" scripts/fixtures.sh
-step "Rust tests with media and models" env XDG_DATA_HOME="$PWD/tmp-test/xdg/data" \
-  cargo test --workspace --locked -- --ignored
+step "Rust tests with media and models" isolated cargo test --workspace --locked -- --ignored
 step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
 step "UI flows" python3 scripts/repro.py --all
