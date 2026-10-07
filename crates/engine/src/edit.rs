@@ -1077,6 +1077,7 @@ mod tests {
             fps: 30.0,
             has_audio: true,
             rotation: 0,
+            mirror: false,
         }
     }
 

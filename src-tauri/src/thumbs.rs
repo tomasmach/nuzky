@@ -29,7 +29,7 @@ pub fn thumbnail(asset: &Asset) -> Result<Option<String>> {
     let display = (asset.width as f32 * THUMB_HEIGHT / asset.height as f32, THUMB_HEIGHT);
     let (w, h) = decode_size(decoder.source_size(), asset.rotation, display, u32::MAX);
     let frame = decoder.convert(&f, t, w, h)?;
-    let (rgba, w, h) = rotate(&frame.data, frame.width, frame.height, asset.rotation);
+    let (rgba, w, h) = orient(&frame.data, frame.width, frame.height, asset);
 
     let mut png_bytes = Vec::new();
     {
@@ -62,7 +62,7 @@ pub fn filmstrip(asset: &Asset) -> Result<Option<crate::Filmstrip>> {
             anyhow::bail!("No filmstrip frame at {target} us in {}", asset.path)
         };
         let frame = decoder.convert(frame, *t, dw, dh)?;
-        let (rgba, _, _) = rotate(&frame.data, dw, dh, asset.rotation);
+        let (rgba, _, _) = orient(&frame.data, dw, dh, asset);
         let row = frame_width as usize * 4;
         for y in 0..frame_height as usize {
             let offset = (y * width as usize + i as usize * frame_width as usize) * 4;
@@ -88,6 +88,18 @@ fn filmstrip_size(asset: &Asset) -> Result<(u32, u32, u32)> {
     }
     let count = if asset.kind == AssetKind::Image { 1 } else { (asset.duration_us / 500_000).clamp(1, 40) as u32 };
     Ok((width as u32, height, count.min((MAX_SPRITE_PIXELS / pixels) as u32)))
+}
+
+/// Turns tightly packed RGBA the way the asset is shown: its rotation, then its mirroring.
+fn orient(src: &[u8], w: u32, h: u32, asset: &Asset) -> (Vec<u8>, u32, u32) {
+    let (mut out, w, h) = rotate(src, w, h, asset.rotation);
+    if asset.mirror {
+        for row in out.chunks_exact_mut(w as usize * 4) {
+            let pixels: Vec<[u8; 4]> = row.chunks_exact(4).rev().map(|p| [p[0], p[1], p[2], p[3]]).collect();
+            row.copy_from_slice(pixels.as_flattened());
+        }
+    }
+    (out, w, h)
 }
 
 /// Rotates tightly packed RGBA clockwise by 0/90/180/270 degrees.
@@ -131,6 +143,7 @@ mod tests {
             fps: 25.0,
             has_audio: false,
             rotation: 0,
+            mirror: false,
         };
         let (w, h, count) = filmstrip_size(&asset).unwrap();
         assert_eq!(count, 4);
@@ -164,6 +177,32 @@ mod tests {
             assert_eq!(out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), expected);
             assert_eq!((w, h), if angle == 180 { (3, 2) } else { (2, 3) });
         }
+    }
+
+    /// A mirrored quarter turn is a transpose: stored rows become columns, in order.
+    #[test]
+    fn mirroring_follows_the_rotation() {
+        let pixels: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
+        let mut asset = Asset {
+            id: "x".into(),
+            name: "x".into(),
+            path: "/x.jpg".into(),
+            kind: AssetKind::Image,
+            duration_us: 0,
+            width: 2,
+            height: 3,
+            fps: 0.0,
+            has_audio: false,
+            rotation: 90,
+            mirror: true,
+        };
+        let (out, w, h) = orient(&pixels, 3, 2, &asset);
+        assert_eq!((out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), w, h), (vec![0, 3, 1, 4, 2, 5], 2, 3));
+        asset.mirror = false;
+        assert_eq!(
+            orient(&pixels, 3, 2, &asset).0.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            vec![3, 0, 4, 1, 5, 2]
+        );
     }
 
     #[test]

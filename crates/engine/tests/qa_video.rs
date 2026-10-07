@@ -408,12 +408,24 @@ fn exif_orientation_of_still_images_matches_ffmpeg_autorotate() {
     ff(&["-f", "lavfi", "-i", "testsrc2=size=96x64", "-frames:v", "1", "-q:v", "2"], &source);
     let jpeg = std::fs::read(&source).unwrap();
     let mut renderer = Renderer::new().unwrap();
-    for (orientation, rotation) in [(1, 0), (3, 180), (6, 90), (8, 270)] {
+    // Orientations 2, 4, 5 and 7 mirror, as front cameras ask for.
+    let all = [
+        (1, 0, false),
+        (2, 0, true),
+        (3, 180, false),
+        (4, 180, true),
+        (5, 90, true),
+        (6, 90, false),
+        (7, 270, true),
+        (8, 270, false),
+    ];
+    for (orientation, rotation, mirror) in all {
         let path = d.join(format!("orientation-{orientation}.jpg"));
         std::fs::write(&path, with_exif_orientation(&jpeg, orientation)).unwrap();
         let p = project(&path, 200_000);
         let (w, h) = if rotation % 180 == 90 { (64, 96) } else { (96, 64) };
-        assert_eq!((p.assets[0].width, p.assets[0].height, p.assets[0].rotation), (w, h, rotation), "{orientation}");
+        let a = &p.assets[0];
+        assert_eq!((a.width, a.height, a.rotation, a.mirror), (w, h, rotation, mirror), "{orientation}");
         let got = renderer.render(&p, 0, w, h, Wait::Exact, false).unwrap();
         let expected = raw(&path, &["-frames:v", "1"]);
         let error = mae(&got, &expected);

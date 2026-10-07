@@ -175,6 +175,8 @@ pub struct Layer {
     pub corners: [[f32; 2]; 4],
     /// Clockwise rotation of the image inside the quad (0, 90, 180, 270).
     pub uv_rotation: u32,
+    /// Mirrors the rotated image left to right.
+    pub mirror: bool,
     pub opacity: f32,
     pub adjust: Adjust,
     pub blur: f32,
@@ -390,7 +392,9 @@ impl Gpu {
         // Triangle strip order: top-left, top-right, bottom-left, bottom-right.
         for (slot, cyclic) in [0usize, 1, 3, 2].into_iter().enumerate() {
             let p = layer.corners[cyclic];
-            let uv = base[(cyclic + 4 - shift) % 4];
+            // Mirrored, each corner shows what its left-right partner would.
+            let source = if layer.mirror { [1, 0, 3, 2][cyclic] } else { cyclic };
+            let uv = base[(source + 4 - shift) % 4];
             corners[slot] = [p[0] / w as f32 * 2.0 - 1.0, 1.0 - p[1] / h as f32 * 2.0, uv[0], uv[1]];
         }
         let a = layer.adjust;
@@ -583,6 +587,7 @@ mod tests {
             image: Image { width: 1, height: 1, data: Arc::new(vec![80, 100, 120, 255]) },
             corners: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]],
             uv_rotation: 0,
+            mirror: false,
             opacity: 0.5,
             adjust: Adjust::default(),
             blur: 0.0,
@@ -613,6 +618,7 @@ mod tests {
             image: Image { width: 2, height: 1, data: Arc::new(vec![255, 255, 255, 255, 0, 0, 0, 0]) },
             corners: [[0.0, 0.0], [64.0, 0.0], [64.0, 2.0], [0.0, 2.0]],
             uv_rotation: 0,
+            mirror: false,
             opacity: 1.0,
             adjust: Adjust::default(),
             blur: 0.0,
@@ -641,6 +647,7 @@ mod tests {
             image: Image { width: 2, height: 2, data: Arc::new(pixels.clone()) },
             corners: [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
             uv_rotation: 0,
+            mirror: false,
             opacity: 1.0,
             adjust: Adjust::default(),
             blur: 0.0,

@@ -343,6 +343,7 @@ impl Renderer {
             image,
             corners: quad(&Transform::default(), (iw as f32 * cover, ih as f32 * cover), w as f32, h as f32, 1.0),
             uv_rotation: layer.uv_rotation,
+            mirror: layer.mirror,
             opacity: layer.opacity,
             adjust: layer.adjust,
             blur: 0.0,
@@ -397,7 +398,7 @@ impl Renderer {
         let clip = visible.clip;
         let Some(place) = placement(project, visible, t_us, k, &mut self.text) else { return Ok(None) };
         let corners = placement_quad(project, &place, k);
-        let (image, rotation, adjust, transfer) = match &clip.content {
+        let (image, (rotation, mirror), adjust, transfer) = match &clip.content {
             ClipContent::Media { asset_id, adjust, .. } => {
                 let Some(asset) = project.asset(asset_id) else { return Ok(None) };
                 // A stable conversion size avoids flushing the decoder queue on every animation frame.
@@ -422,17 +423,18 @@ impl Renderer {
                 }
                 let Some(frame) = frame else { return Ok(None) };
                 let image = Image { width: frame.width, height: frame.height, data: frame.data };
-                (image, asset.rotation, *adjust, frame.transfer)
+                (image, (asset.rotation, asset.mirror), *adjust, frame.transfer)
             }
             ClipContent::Text { .. } => {
                 let Some(text) = place.text else { return Ok(None) };
-                (text, 0, Adjust::default(), Transfer::Sdr)
+                (text, (0, false), Adjust::default(), Transfer::Sdr)
             }
         };
         Ok(Some(Layer {
             image,
             corners,
             uv_rotation: rotation,
+            mirror,
             opacity: place.transform.opacity,
             adjust,
             blur: 0.0,
@@ -500,6 +502,7 @@ fn solid(image: &Image, w: u32, h: u32) -> Layer {
         image: image.clone(),
         corners: [[0.0, 0.0], [w as f32, 0.0], [w as f32, h as f32], [0.0, h as f32]],
         uv_rotation: 0,
+        mirror: false,
         opacity: 1.0,
         adjust: Adjust::default(),
         blur: 0.0,
@@ -727,6 +730,7 @@ mod tests {
             fps: 30.0,
             has_audio: false,
             rotation: 0,
+            mirror: false,
         });
         for (id, start, x) in [("a", 0, 0.3), ("b", 1_000_000, -0.3)] {
             project.tracks[0].clips.push(Clip::new(

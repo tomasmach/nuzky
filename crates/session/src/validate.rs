@@ -243,6 +243,7 @@ mod tests {
             fps: 30.0,
             has_audio: true,
             rotation: 0,
+            mirror: false,
         });
         validate(&project).unwrap();
         for path in [
@@ -327,6 +328,7 @@ mod tests {
             fps: 0.0,
             has_audio: false,
             rotation: 0,
+            mirror: false,
         });
         project.apply(EditCmd::AddClip { asset_id: "ramp".into(), start_us: None, track_id: None }).unwrap();
         validate(&project).unwrap();

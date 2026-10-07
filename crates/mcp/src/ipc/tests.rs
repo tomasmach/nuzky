@@ -215,6 +215,7 @@ fn cancelled_transcription_never_loads_models() {
         fps: 0.0,
         has_audio: true,
         rotation: 0,
+        mirror: false,
     };
     let error = capopen_analysis::transcribe_words_cancellable(
         capopen_analysis::AudioSource::Asset { asset: &asset, cache: missing },

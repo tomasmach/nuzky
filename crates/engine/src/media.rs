@@ -77,42 +77,57 @@ fn video_stream(input: &ff::format::context::Input) -> Option<ff::format::stream
         .find(|s| !s.disposition().contains(Disposition::ATTACHED_PIC))
 }
 
-/// Clockwise rotation in degrees from a display matrix, snapped to 0/90/180/270.
-fn matrix_rotation(matrix: &[u8]) -> Option<u32> {
+/// How to show the stored picture: rotated clockwise by 0/90/180/270 degrees, then mirrored left
+/// to right when `.1` is set.
+type Orientation = (u32, bool);
+
+/// The orientation a display matrix asks for, snapped to quarter turns.
+fn matrix_orientation(matrix: &[u8]) -> Option<Orientation> {
     if matrix.len() < 36 {
         return None;
     }
-    let ccw = unsafe { ff::ffi::av_display_rotation_get(matrix.as_ptr() as *const i32) };
+    let mut m: [i32; 9] = std::array::from_fn(|i| i32::from_ne_bytes(matrix[i * 4..i * 4 + 4].try_into().unwrap()));
+    // FFmpeg maps (p, q) to (a p + c q, b p + d q), with a, b, c, d at 0, 1, 3, 4. A negative
+    // determinant mirrors; mirroring the output back (negating a and c) leaves the rotation.
+    let mirror = i64::from(m[0]) * i64::from(m[4]) - i64::from(m[1]) * i64::from(m[3]) < 0;
+    if mirror {
+        (m[0], m[3]) = (-m[0], -m[3]);
+    }
+    let ccw = unsafe { ff::ffi::av_display_rotation_get(m.as_ptr()) };
     if ccw.is_nan() {
-        return Some(0);
+        return Some((0, false));
     }
     let cw = (-ccw).rem_euclid(360.0);
-    Some(((cw / 90.0).round() as u32 % 4) * 90)
+    Some((((cw / 90.0).round() as u32 % 4) * 90, mirror))
 }
 
-fn display_rotation(stream: &ff::format::stream::Stream) -> u32 {
+fn display_orientation(stream: &ff::format::stream::Stream) -> Orientation {
     stream
         .side_data()
         .filter(|sd| sd.kind() == SideDataType::DisplayMatrix)
-        .find_map(|sd| matrix_rotation(sd.data()))
-        .unwrap_or(0)
+        .find_map(|sd| matrix_orientation(sd.data()))
+        .unwrap_or((0, false))
 }
 
 /// Still images carry EXIF orientation only on the decoded frame.
-fn frame_rotation(f: &frame::Video) -> Option<u32> {
-    matrix_rotation(f.side_data(frame::side_data::Type::DisplayMatrix)?.data())
+fn frame_orientation(f: &frame::Video) -> Option<Orientation> {
+    matrix_orientation(f.side_data(frame::side_data::Type::DisplayMatrix)?.data())
 }
 
 /// Decodes the first frame of a still image to read its EXIF orientation.
-fn image_rotation(input: &mut ff::format::context::Input, index: usize, mut decoder: ff::decoder::Video) -> u32 {
+fn image_orientation(
+    input: &mut ff::format::context::Input,
+    index: usize,
+    mut decoder: ff::decoder::Video,
+) -> Orientation {
     let mut f = frame::Video::empty();
     for (stream, packet) in input.packets() {
         if stream.index() == index && decoder.send_packet(&packet).is_ok() && decoder.receive_frame(&mut f).is_ok() {
-            return frame_rotation(&f).unwrap_or(0);
+            return frame_orientation(&f).unwrap_or((0, false));
         }
     }
     decoder.send_eof().ok();
-    if decoder.receive_frame(&mut f).is_ok() { frame_rotation(&f).unwrap_or(0) } else { 0 }
+    if decoder.receive_frame(&mut f).is_ok() { frame_orientation(&f).unwrap_or((0, false)) } else { (0, false) }
 }
 
 pub fn probe(path: &Path, id: String) -> Result<Asset> {
@@ -141,21 +156,22 @@ pub fn probe(path: &Path, id: String) -> Result<Asset> {
         fps: 0.0,
         has_audio: audio.is_some() && !is_image,
         rotation: 0,
+        mirror: false,
     };
 
     if let Some(stream) = video {
         let decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().video()?;
-        let mut rotation = display_rotation(&stream);
+        let (mut rotation, mut mirror) = display_orientation(&stream);
         let (w, h) = (decoder.width(), decoder.height());
         let rate = stream.avg_frame_rate();
         let rate = if rate.denominator() == 0 || rate.numerator() == 0 { stream.rate() } else { rate };
         asset.fps = if rate.denominator() == 0 { 0.0 } else { f64::from(rate) };
-        if is_image && rotation == 0 {
+        if is_image && (rotation, mirror) == (0, false) {
             let index = stream.index();
-            rotation = image_rotation(&mut input, index, decoder);
+            (rotation, mirror) = image_orientation(&mut input, index, decoder);
         }
         (asset.width, asset.height) = if rotation % 180 == 90 { (h, w) } else { (w, h) };
-        asset.rotation = rotation;
+        (asset.rotation, asset.mirror) = (rotation, mirror);
     }
     Ok(asset)
 }
@@ -288,7 +304,7 @@ impl VideoDecoder {
         let is_image = is_image_format(&input);
         let stream = video_stream(&input).ok_or_else(|| anyhow!("{} has no video", path.display()))?;
         let stream_index = stream.index();
-        let rotation = display_rotation(&stream);
+        let rotation = display_orientation(&stream).0;
         let time_base = stream.time_base();
         let rate = stream.avg_frame_rate();
         let fps = if rate.numerator() > 0 && rate.denominator() > 0 { f64::from(rate) } else { 30.0 };
@@ -390,7 +406,7 @@ impl VideoDecoder {
             match self.decoder.receive_frame(&mut f) {
                 Ok(()) => {
                     if self.is_image
-                        && let Some(rotation) = frame_rotation(&f)
+                        && let Some((rotation, _)) = frame_orientation(&f)
                     {
                         self.rotation = rotation;
                     }

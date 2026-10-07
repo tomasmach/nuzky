@@ -13,6 +13,8 @@ export interface Asset {
   fps: number;
   hasAudio: boolean;
   rotation: number;
+  /** Mirrored left to right after the rotation; absent when not. */
+  mirror?: boolean;
 }
 
 export interface Transform {

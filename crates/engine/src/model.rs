@@ -98,6 +98,9 @@ pub struct Asset {
     /// Clockwise rotation from container metadata (0, 90, 180, 270).
     #[serde(default)]
     pub rotation: u32,
+    /// Mirrored left to right after the rotation, as front-camera photos can ask in EXIF.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mirror: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
