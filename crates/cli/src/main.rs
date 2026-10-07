@@ -11,13 +11,16 @@ use capopen_engine::export::{ExportOptions, check_source_path, export};
 use capopen_engine::media::probe;
 use capopen_engine::{Project, Renderer, Wait};
 
+mod style;
+
 const USAGE: &str = "Usage:
   capopen mcp --project <path> [--allow-write] [--cache <dir>]
   capopen probe <media>
   capopen new <project.json> <media>...     main-track project from media files
   capopen frame <project.json> <seconds> <out.png> [width]
   capopen bench <project.json> [width] [seconds]
-  capopen render <project.json> <out.mp4> [resolution] [fps]";
+  capopen render <project.json> <out.mp4> [resolution] [fps]
+";
 
 fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
@@ -226,7 +229,8 @@ fn main() -> Result<()> {
             })?;
             eprintln!("Exported {out} in {:?}", start.elapsed());
         }
-        _ => bail!("{USAGE}"),
+        ["style", ..] => style::run(&args[1..], &cache_dir())?,
+        _ => bail!("{USAGE}{}", style::USAGE),
     }
     Ok(())
 }

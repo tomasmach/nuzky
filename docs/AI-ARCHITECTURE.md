@@ -68,7 +68,16 @@ All times are integer microseconds on the timeline unless a field says `source`.
 
 `RippleDeleteRanges { ranges, keep_track_ids? }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` never deletes other tracks.
 
-Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema). Prompt: `edit_selected(goal)`.
+Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema) and, when the creator has one, `capopen://style` (their `EDIT.md`). Prompt: `edit_selected(goal)`.
+
+## Creator style
+
+- `capopen style learn <recording> <cut>...` turns pairs of a raw recording and the creator's finished cut into `<data dir>/capopen/EDIT.md`: what gets cut (restarted sentences, repeats, slips, fillers, dropped passages, calls to action), pauses, pace, cuts, captions and zoom, each rule in numbers and shown on at least three moments of the recordings. Rarer things are listed as seen, not as rules. The same input always gives the same file, and an existing file is only replaced with `--replace`, since the creator may have edited it.
+- Where the cut came from is found by sound (`crates/analysis/src/style/align.rs`): the spectral shape of 20 ms windows, which a clip's own volume does not change, matched by a Viterbi path over candidate places in the recording. Retakes repeat the same words, so text alone cannot place a cut. A recording word counts as kept when its middle lies in a kept piece, or when the cut's own recognition heard the same word within a second of it: recognition times can be that far off next to pauses, where cuts are.
+- Captions are found in the cut's picture as white pixels next to black ones, in the band where they are most common, and their words are counted from the gaps between them. Zoom and framing compare each moment of the cut with the same moment of the recording; scale, x and y are in CapOpen transform terms.
+- The MCP server reads `EDIT.md` on each request. With it, the instructions start with a pointer to the style, and the instructions, `capopen://guide` and `edit_selected` end with it; `capopen://style` serves it alone. Its rules override the guide's defaults. Without it, everything is exactly as before.
+- `capopen style compare <recording> <cut> <project>` scores a project by the recording's words: recall is the share of the creator's kept words the project plays, precision the share of the project's words the creator kept. It also lists the passages that differ.
+- Recordings, transcripts and `EDIT.md` stay on the computer. An agent connected through MCP reads `EDIT.md`, which quotes the recordings, the same way it reads transcripts.
 
 ## Agent setup
 
