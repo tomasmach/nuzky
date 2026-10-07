@@ -107,7 +107,26 @@ export function Timeline({ height }: { height: number }) {
     return () => ro.disconnect();
   }, []);
 
-  // Ctrl + wheel zooms around the pointer.
+  // Zooming keeps one moment where it is on screen: the one under the pointer for Ctrl + wheel,
+  // otherwise the playhead, which comes to the middle when it was out of view.
+  const zoomAnchor = useRef<{ t: number; px: number } | null>(null);
+  const shownZoom = useRef(zoom);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const before = shownZoom.current;
+    shownZoom.current = zoom;
+    if (!el || before === zoom) return;
+    const lane = el.clientWidth - HEADER_W;
+    let anchor = zoomAnchor.current;
+    zoomAnchor.current = null;
+    if (!anchor) {
+      const t = useEditor.getState().timeUs / US;
+      const px = t * before - el.scrollLeft;
+      anchor = { t, px: px >= 0 && px <= lane ? px : lane / 2 };
+    }
+    el.scrollLeft = Math.max(0, anchor.t * zoom - anchor.px);
+  }, [zoom]);
+
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -115,12 +134,11 @@ export function Timeline({ height }: { height: number }) {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const z = useEditor.getState().zoom;
-      const rect = el.getBoundingClientRect();
-      const px = e.clientX - rect.left - HEADER_W;
-      const t = (el.scrollLeft + px) / z;
-      const next = Math.max(4, Math.min(600, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-      setZoom(next);
-      requestAnimationFrame(() => (el.scrollLeft = Math.max(0, t * next - px)));
+      const px = e.clientX - el.getBoundingClientRect().left - HEADER_W;
+      zoomAnchor.current = { t: (el.scrollLeft + px) / z, px };
+      setZoom(z * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+      // Already at the limit: nothing moves, and the next zoom anchors on the playhead again.
+      if (useEditor.getState().zoom === z) zoomAnchor.current = null;
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -217,8 +235,12 @@ export function Timeline({ height }: { height: number }) {
           disabled={duration === 0}
           onClick={() => {
             const w = (scroller.current?.clientWidth ?? 800) - HEADER_W - 40;
+            zoomAnchor.current = { t: 0, px: 0 };
             setZoom(w / Math.max(1, duration / US));
-            if (scroller.current) scroller.current.scrollLeft = 0;
+            if (useEditor.getState().zoom === zoom && scroller.current) {
+              zoomAnchor.current = null;
+              scroller.current.scrollLeft = 0;
+            }
           }}
         >
           <Maximize2 size={15} />

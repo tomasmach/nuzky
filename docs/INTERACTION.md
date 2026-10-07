@@ -115,7 +115,7 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` | Undo / redo |
 | `←` `→` (`Shift`) | Step a frame (a second) |
 | `Home` / `End` | Start / end |
-| `Ctrl` + wheel, `+` / `-` | Zoom timeline |
+| `Ctrl` + wheel, `+` / `-` | Zoom timeline; the playhead stays where it is on screen (moved to the middle if it was out of view), with the wheel the moment under the pointer does |
 | `Ctrl+I` | Import |
 | `Ctrl+E` | Export |
 | `Esc` | Cancel a drag or close the open menu or dialog; with none of those, clear the selection |
