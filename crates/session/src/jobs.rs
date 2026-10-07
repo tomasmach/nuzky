@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::JoinHandle;
 
@@ -11,6 +11,8 @@ use capopen_engine::edit::new_id;
 use serde_json::{Value, json};
 
 const MAX_ACTIVE: usize = 4;
+/// Results of the most recent finished jobs stay readable; older ones are forgotten.
+const MAX_FINISHED: usize = 32;
 
 pub struct JobState {
     pub id: String,
@@ -24,6 +26,7 @@ pub struct JobState {
     pub result: Option<Value>,
     pub error: Option<String>,
     pub cancel: Arc<AtomicBool>,
+    sequence: u64,
 }
 
 impl JobState {
@@ -57,6 +60,7 @@ pub struct Jobs {
     lifecycle: Mutex<Lifecycle>,
     entries: Mutex<HashMap<String, Arc<Mutex<JobState>>>>,
     workers: Mutex<Vec<JoinHandle<()>>>,
+    started: AtomicU64,
 }
 
 impl Jobs {
@@ -80,6 +84,17 @@ impl Jobs {
             entries.values().filter(|j| j.lock().unwrap().status == "running").count() < MAX_ACTIVE,
             "JOB_LIMIT: wait for or cancel an active job"
         );
+        let mut finished: Vec<_> = entries
+            .iter()
+            .filter_map(|(id, state)| {
+                let state = state.lock().unwrap();
+                (state.status != "running").then(|| (state.sequence, id.clone()))
+            })
+            .collect();
+        finished.sort_unstable();
+        for (_, id) in finished.iter().take(finished.len().saturating_sub(MAX_FINISHED)) {
+            entries.remove(id);
+        }
         let id = new_id();
         let state = Arc::new(Mutex::new(JobState {
             id: id.clone(),
@@ -93,6 +108,7 @@ impl Jobs {
             result: None,
             error: None,
             cancel: Arc::new(AtomicBool::new(false)),
+            sequence: self.started.fetch_add(1, Ordering::Relaxed),
         }));
         let response = state.lock().unwrap().json();
         let owned = state.clone();
@@ -127,7 +143,13 @@ impl Jobs {
             })
             .context("JOB_FAILED: starting thread")?;
         entries.insert(id, state);
-        self.workers.lock().unwrap().push(worker);
+        let mut workers = self.workers.lock().unwrap();
+        let (done, running): (Vec<_>, Vec<_>) = workers.drain(..).partition(|worker| worker.is_finished());
+        *workers = running;
+        workers.push(worker);
+        for worker in done {
+            let _ = worker.join();
+        }
         Ok(response)
     }
 
@@ -200,6 +222,26 @@ pub fn check_cancel(cancel: &AtomicBool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finished_jobs_and_their_threads_are_pruned() {
+        let jobs = Jobs::default();
+        let mut ids = Vec::new();
+        for _ in 0..MAX_FINISHED + 8 {
+            let stamp = Stamp { revision: 1, session_epoch: "epoch".into() };
+            let started = jobs.start("client", None, "test", stamp, |_, _| Ok(json!({}))).unwrap();
+            let id = started["job_id"].as_str().unwrap().to_owned();
+            while jobs.get(&id, false).unwrap()["status"] == "running" {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            ids.push(id);
+        }
+        assert!(jobs.entries.lock().unwrap().len() <= MAX_FINISHED + 1);
+        assert!(jobs.workers.lock().unwrap().len() < 8);
+        assert!(jobs.get(&ids[0], false).unwrap_err().to_string().starts_with("UNKNOWN_JOB"));
+        assert_eq!(jobs.get(ids.last().unwrap(), false).unwrap()["status"], "done");
+        assert_eq!(jobs.get(&ids[ids.len() - MAX_FINISHED], false).unwrap()["status"], "done");
+    }
     #[test]
     fn cancel_does_not_publish_late_results() {
         let jobs = Jobs::default();
