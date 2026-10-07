@@ -13,7 +13,7 @@ FIXTURES = ROOT / 'tmp-test'
 MODELS = FIXTURES / 'xdg/data/capopen/models'
 OUT = ROOT / 'tmp-test/repro'
 TARGET = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target'))
-APP, CLI = TARGET / 'debug/capopen-app', TARGET / 'debug/capopen'
+APP, CLI, ANALYZE = TARGET / 'debug/capopen-app', TARGET / 'debug/capopen', TARGET / 'debug/capopen-analyze'
 WEBKIT_DRIVER = shutil.which('WebKitWebDriver') or '/usr/bin/WebKitWebDriver'
 AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
@@ -365,10 +365,10 @@ class Bridge:
             stop(self.process)
 
 
-def link_models(r):
+def link_models(r, names=('ggml-small.bin', 'ggml-silero-v5.1.2.bin')):
     models = r.work / 'data/capopen/models'
     models.mkdir(parents=True)
-    for name in ('ggml-small.bin', 'ggml-silero-v5.1.2.bin'):
+    for name in names:
         try:
             os.link(MODELS / name, models / name)
         except OSError:
