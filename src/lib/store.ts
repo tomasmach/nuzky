@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition } from "./types";
+import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
 
 export interface Toast {
   id: number;
@@ -631,6 +631,27 @@ export function applyCaptionFont(fontFamily: string) {
     (project) =>
       project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...c.content.style, fontFamily } }] : [])) ?? null,
   );
+}
+
+/**
+ * Punches in on the suggested sentences after the edits queued before, as one undo step, and offers
+ * Undo. Clips with keyframes keep their motion and the toast says so. Resolves to whether it ran.
+ */
+export async function applyZooms(key: string, zooms: { from: number; to: number; scale: number }[]): Promise<boolean> {
+  if (aiLocked()) return false;
+  const out: { done?: ZoomsApplied } = {};
+  await enqueue(async (epoch) => (out.done = await api.applyZooms(key, zooms, epoch)).snapshot);
+  const done = out.done;
+  if (!done) return false;
+  const clips = (n: number) => `${n} clip${n === 1 ? "" : "s"} with keyframes`;
+  if (!done.changed) {
+    useEditor.getState().toast({ kind: "info", text: `Nothing zoomed: the sentences lie on ${clips(done.skipped)}, which keep their own motion.` });
+    return true;
+  }
+  const kept = done.skipped > 0 ? `; ${clips(done.skipped)} kept their own motion` : "";
+  const text = `Zoomed in on ${zooms.length} sentence${zooms.length === 1 ? "" : "s"}${kept}`;
+  useEditor.getState().toast({ kind: "info", text, action: undoAction(done.snapshot) });
+  return true;
 }
 
 export function openExport() {

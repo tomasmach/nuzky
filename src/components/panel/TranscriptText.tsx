@@ -1,10 +1,23 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Trash2 } from "lucide-react";
+import { Trash2, ZoomIn } from "lucide-react";
 import { followPointer } from "../../lib/drag";
 import { MAX_WORD_CHARS, paragraphs, tokenAt, type Token } from "../../lib/speech";
 import { aiLocked, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
 import { Button, useLockReason } from "../ui";
+import { zoomLabel } from "./TranscriptZooms";
+
+/** A suggested zoom: the time of its sentence and its scale. */
+export interface ZoomMark {
+  startUs: number;
+  endUs: number;
+  scale: number;
+}
+
+const NO_MARKS: ZoomMark[] = [];
+
+/** The quiet accent line under a suggested zoom, spaces included, so its sentence reads as one. */
+const MARK = "underline decoration-accent/60 decoration-2 underline-offset-4";
 
 interface Selection {
   anchor: number;
@@ -46,7 +59,7 @@ function WordField({ word, onDone }: { word: string; onDone: (text: string | nul
   );
 }
 
-/** One paragraph; re-renders only when the current word, the selection or the word being corrected inside it changes. */
+/** One paragraph; re-renders only when the current word, the selection, the word being corrected or the zooms inside it change. */
 const Paragraph = memo(function Paragraph({
   tokens,
   from,
@@ -56,6 +69,8 @@ const Paragraph = memo(function Paragraph({
   hi,
   editing,
   onEdited,
+  zoomOf,
+  marks,
 }: {
   tokens: Token[];
   from: number;
@@ -65,28 +80,42 @@ const Paragraph = memo(function Paragraph({
   hi: number;
   editing: number;
   onEdited: (text: string | null) => void;
+  zoomOf: number[];
+  marks: ZoomMark[];
 }) {
   const items = [];
   for (let i = from; i < to; i++) {
     const t = tokens[i];
     const selected = i >= lo && i <= hi;
     const playing = i === active;
+    const mark = zoomOf[i] >= 0 ? marks[zoomOf[i]] : null;
+    // The token before belongs to the same suggested zoom.
+    const joined = !!mark && i > from && zoomOf[i - 1] === zoomOf[i];
+    const spaceSelected = i > lo && i <= hi;
     // Accent text on the accent selection is hard to read, so there the word playing is black on accent.
     const look = selected ? (playing ? "bg-accent text-black" : "bg-accent/30 text-fg") : playing ? "text-accent" : "";
     items.push(
       <Fragment key={i}>
         {/* The space between two selected tokens is filled too, so the selection reads as one band. */}
-        {i > from && (i > lo && i <= hi ? <span className="bg-accent/30"> </span> : " ")}
+        {i > from && (spaceSelected || joined ? <span className={`${spaceSelected ? "bg-accent/30" : ""} ${joined ? MARK : ""}`}> </span> : " ")}
+        {mark && !joined && (
+          <span aria-hidden title={`Suggested zoom, ${zoomLabel(mark.scale)}`} className="tabular mr-1 inline-flex items-center gap-0.5 text-[11px] text-accent">
+            <ZoomIn size={11} />
+            {zoomLabel(mark.scale)}
+          </span>
+        )}
         {t.kind === "word" && i === editing ? (
           <WordField word={t.text} onDone={onEdited} />
         ) : t.kind === "word" ? (
           <span
             id={optionId(i)}
             data-t={i}
+            data-zoom={mark ? zoomOf[i] : undefined}
             role="option"
             aria-selected={selected}
             title={t.original ? `Recognised as “${t.original}”` : undefined}
-            className={`cursor-pointer ${selected ? `${i === lo ? "rounded-l-sm" : ""} ${i === hi ? "rounded-r-sm" : ""}` : "rounded-sm hover:bg-raised"} ${t.original ? "underline decoration-muted decoration-dotted underline-offset-3" : ""} ${look}`}
+            aria-description={mark ? `Suggested zoom ${zoomLabel(mark.scale)}` : undefined}
+            className={`cursor-pointer ${selected ? `${i === lo ? "rounded-l-sm" : ""} ${i === hi ? "rounded-r-sm" : ""}` : "rounded-sm hover:bg-raised"} ${mark ? MARK : t.original ? "underline decoration-muted decoration-dotted underline-offset-3" : ""} ${look}`}
           >
             {t.text}
           </span>
@@ -127,12 +156,14 @@ export function TranscriptText({
   blocker,
   onDelete,
   onCorrect,
+  marks,
 }: {
   tokens: Token[];
   blocker: string | null;
   onDelete: (lo: number, hi: number) => Promise<boolean>;
   /** `i` is the word's index in the view. */
   onCorrect: (i: number, text: string, shown: string) => Promise<boolean>;
+  marks?: ZoomMark[] | null;
 }) {
   const [sel, setSel] = useState<Selection | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
@@ -144,6 +175,9 @@ export function TranscriptText({
   const active = useEditor((s) => tokenAt(tokens, s.timeUs));
   const playing = useEditor((s) => s.playing);
   const paras = useMemo(() => paragraphs(tokens), [tokens]);
+  const zooms = marks ?? NO_MARKS;
+  // The suggested zoom each token lies in, or -1.
+  const zoomOf = useMemo(() => tokens.map((t) => zooms.findIndex((z) => t.startUs >= z.startUs && t.endUs <= z.endUs)), [tokens, zooms]);
   // Fewer tokens can arrive before the effect below clears the selection.
   const live = sel && sel.anchor < tokens.length && sel.focus < tokens.length ? sel : null;
   const lo = live ? Math.min(live.anchor, live.focus) : -1;
@@ -307,6 +341,8 @@ export function TranscriptText({
             hi={hi >= from && lo < to ? hi : -1}
             editing={editing !== null && editing >= from && editing < to ? editing : -1}
             onEdited={onEdited}
+            zoomOf={zoomOf}
+            marks={zooms}
           />
         ))}
       </div>

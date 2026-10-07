@@ -299,6 +299,38 @@ export interface TranscriptCut {
   removedUs: number;
 }
 
+/** A sentence said with emphasis, proposed for a punch-in. `from`/`to` are inclusive word numbers of the transcript view. */
+export interface SuggestedZoom {
+  from: number;
+  to: number;
+  startUs: number;
+  endUs: number;
+  text: string;
+  score: number;
+  scale: number;
+}
+
+export interface ZoomSuggestions {
+  /** The transcript view's key the word numbers belong to; applying is refused once it changed. */
+  key: string;
+  zooms: SuggestedZoom[];
+}
+
+export interface ZoomsApplied {
+  snapshot: Snapshot;
+  /** False when every clip in reach has keyframes, so nothing changed. */
+  changed: boolean;
+  /** Clips with keyframes the zooms left alone. */
+  skipped: number;
+}
+
+/** A punch-in over the timeline range [startUs, endUs): the main track's picture scaled by `scale`. */
+export interface ZoomRange {
+  startUs: number;
+  endUs: number;
+  scale: number;
+}
+
 /** Timeline range [startUs, endUs). */
 export interface TimeRange {
   startUs: number;
@@ -347,7 +379,9 @@ export type EditCmd =
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
   | { type: "renameProject"; name: string }
   /** Text equal to `original` removes the correction. */
-  | { type: "correctWords"; corrections: WordCorrection[] };
+  | { type: "correctWords"; corrections: WordCorrection[] }
+  /** Splits main-track clips at the range edges and multiplies the scale inside; clips with keyframes stay as they are. */
+  | { type: "zoomRanges"; ranges: ZoomRange[] };
 
 /** An agent CapOpen can be connected to, and the state of its `capopen` MCP entry. */
 export type AgentKind = "claudeCode" | "codex";

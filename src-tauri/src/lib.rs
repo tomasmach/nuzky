@@ -7,6 +7,7 @@ mod preview_server;
 mod store;
 mod thumbs;
 mod transcripts;
+mod zooms;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -790,6 +791,8 @@ pub fn run() {
             transcripts::transcript_view,
             transcripts::cut_words,
             transcripts::remove_pauses,
+            zooms::suggest_zooms,
+            zooms::apply_zooms,
             agent_connections,
             connect_agent,
             transcripts::correct_words,

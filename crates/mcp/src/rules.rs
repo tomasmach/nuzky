@@ -34,8 +34,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("undo_run", Never, true, false, false),
     rules("import_media", Never, false, false, false),
     rules("inspect_frames", Always, false, true, false),
-    // Retakes only read stored words and answer at once.
-    rules("analyze", When(|args| args["kind"] == "retakes"), false, false, true),
+    // Retakes and emphasis only read stored words and sound and answer at once.
+    rules("analyze", When(|args| args["kind"] == "retakes" || args["kind"] == "emphasis"), false, false, true),
     rules("transcribe", Never, false, false, true),
     rules("get_transcript", Always, false, true, false),
     rules("edit_transcript", When(|args| args["dry_run"] == true), true, false, false),
@@ -43,6 +43,7 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("correct_words", Never, false, false, false),
     rules("job", When(|args| args["action"] == "get"), false, false, false),
     rules("build_captions", Never, true, false, false),
+    rules("apply_zooms", Never, true, false, false),
     rules("export_video", Never, false, false, true),
 ];
 
@@ -78,7 +79,15 @@ mod tests {
         assert_eq!(names(|r| matches!(r.reads, Always)), set(&["get_state", "get_transcript", "inspect_frames"]));
         assert_eq!(
             names(|r| r.destructive),
-            set(&["apply_edits", "edit_transcript", "end_run", "undo_run", "build_captions", "resolve_recovery"])
+            set(&[
+                "apply_edits",
+                "edit_transcript",
+                "end_run",
+                "undo_run",
+                "build_captions",
+                "apply_zooms",
+                "resolve_recovery"
+            ])
         );
         assert_eq!(names(|r| r.idempotent), set(&["get_state", "get_transcript", "inspect_frames", "apply_edits"]));
         assert_eq!(names(|r| r.run_job), set(&["analyze", "transcribe", "export_video"]));
@@ -88,6 +97,7 @@ mod tests {
         assert!(edit.reads(&json!({"dry_run":true})) && !edit.reads(&json!({})));
         let analyze = find("analyze").unwrap();
         assert!(analyze.reads(&json!({"kind":"retakes"})) && !analyze.reads(&json!({"kind":"silences"})));
+        assert!(analyze.reads(&json!({"kind":"emphasis"})));
         assert!(find("unknown").is_none());
     }
 }

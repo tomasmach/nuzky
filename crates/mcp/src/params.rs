@@ -80,6 +80,8 @@ pub enum AnalysisKind {
     Fillers,
     /// Restarted sentences and leading fillers over the whole timeline, returned at once.
     Retakes,
+    /// Sentences said with emphasis, for a punch-in, over the whole timeline, returned at once.
+    Emphasis,
 }
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -95,7 +97,7 @@ pub struct AnalysisParams {
 #[serde(deny_unknown_fields)]
 pub struct Analyze {
     pub kind: AnalysisKind,
-    /// Required for silences, loudness, scenes and fillers. Omit for retakes.
+    /// Required for silences, loudness, scenes and fillers. Omit for retakes and emphasis.
     pub asset_id: Option<String>,
     #[serde(default)]
     pub params: AnalysisParams,
@@ -146,6 +148,17 @@ pub struct WordFix {
     pub i: usize,
     /// What the word should read, punctuation included: one line, at most 100 characters.
     pub text: String,
+}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyZooms {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without zooming twice.
+    pub request_id: Option<String>,
+    /// get_transcript's transcript_key, also returned by analyze(kind: "emphasis").
+    pub transcript_key: String,
+    /// Punch-ins on INCLUSIVE word ranges, such as analyze(kind: "emphasis").zooms.
+    pub zooms: Vec<crate::zooms::WordZoom>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

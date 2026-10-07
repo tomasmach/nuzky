@@ -7,6 +7,7 @@ import type { Clip, Project } from "../../lib/types";
 import { Button, Checkbox, IconButton, NumberInput } from "../ui";
 import { JobError, SpeechFields, SpeechJobCard, useSpeechJobs } from "./SpeechControls";
 import { TranscriptText } from "./TranscriptText";
+import { SuggestZoomsButton, ZoomBar, useZoomSuggestions } from "./TranscriptZooms";
 
 /** Audio tracks with a checkbox: checked ones are not cut, so music keeps playing across cuts. */
 function KeepTracks({ project }: { project: Project }) {
@@ -61,6 +62,7 @@ export function TranscriptTab() {
   const missing = view ? missingClips(project, view.untranscribed) : 0;
   const cutBlocker = missing > 0 ? "Transcribe the remaining clips first" : null;
   const busy = !!running;
+  const zooms = useZoomSuggestions(view);
 
   const removeAll = () => view && removePauses(view.key, pauseUs, null, describe(pauses));
   const deleteRange = async (lo: number, hi: number) => {
@@ -109,6 +111,7 @@ export function TranscriptTab() {
       <div className="flex shrink-0 flex-col gap-3 border-b border-line p-3">
         <div className="flex items-center gap-2">
           <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} word{view.words.length === 1 ? "" : "s"}</span>
+          <SuggestZoomsButton state={zooms} blocker={cutBlocker ?? (busy ? "Wait for speech recognition to finish" : null)} />
           <IconButton label={blocker ?? (busy ? "Wait for speech recognition to finish" : "Transcribe again")} className="h-7 w-7" disabled={!!blocker || busy} onClick={() => startSpeech(null, true)}>
             <RefreshCw size={14} />
           </IconButton>
@@ -144,7 +147,14 @@ export function TranscriptTab() {
         {!running && <JobError job={last} />}
         {errorNote}
       </div>
-      <TranscriptText tokens={tokens} blocker={cutBlocker} onDelete={deleteRange} onCorrect={(i, text, shown) => (view ? correctWord(view.key, i, text, shown) : Promise.resolve(false))} />
+      <ZoomBar state={zooms} blocker={cutBlocker} />
+      <TranscriptText
+        tokens={tokens}
+        blocker={cutBlocker}
+        onDelete={deleteRange}
+        marks={zooms.zooms}
+        onCorrect={(i, text, shown) => (view ? correctWord(view.key, i, text, shown) : Promise.resolve(false))}
+      />
     </div>
   );
 }

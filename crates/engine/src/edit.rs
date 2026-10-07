@@ -175,7 +175,31 @@ pub enum EditCmd {
     CorrectWords {
         corrections: Vec<WordCorrection>,
     },
+    /// Punch-ins on the main track: the picture of each range is scaled by its `scale`, which
+    /// multiplies the clip's own scale and keeps its position and rotation. Clips are split at the
+    /// range edges. An edge that would leave a piece shorter than 0.3 s, or shorter than a
+    /// transition, animation or fade the piece carries, moves to the clip's edge. Clips with
+    /// keyframes are left alone and listed in the outcome's `skipped`. Ranges must not overlap.
+    ZoomRanges {
+        ranges: Vec<ZoomRange>,
+    },
 }
+
+/// A punch-in over the timeline range `[start_us, end_us)`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoomRange {
+    pub start_us: i64,
+    pub end_us: i64,
+    /// Multiplies the clip's scale; 1.15–1.3 is a subtle punch-in.
+    pub scale: f64,
+}
+
+/// Zoom factors a range may have.
+pub const ZOOM_SCALES: std::ops::RangeInclusive<f64> = 0.25..=4.0;
+/// The shortest piece a zoom leaves of a clip, so it never flashes for a few frames.
+pub const MIN_ZOOM_PIECE_US: i64 = 300_000;
 
 /// Timeline range `[start_us, end_us)`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -204,6 +228,9 @@ pub struct EditOutcome {
     pub created: Vec<String>,
     /// Clip ids that existed before the edit but not after.
     pub removed: Vec<String>,
+    /// Clips the edit left alone on purpose, such as clips with keyframes inside a zoom range.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
 }
 
 pub fn new_id() -> String {
@@ -434,6 +461,7 @@ impl Project {
                 self.apply_captions(cmd, &mut out)?
             }
             EditCmd::CorrectWords { corrections } => self.correct_words(corrections)?,
+            EditCmd::ZoomRanges { ranges } => self.zoom_ranges(ranges, &mut out)?,
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();
@@ -916,6 +944,85 @@ impl Project {
         }
         Ok(())
     }
+
+    /// Splits main-track clips at the range edges and scales the pieces inside. Each piece keeps
+    /// what it carries whole: the first piece of a clip its transition, entry animation and fade
+    /// in, the last its exit animation, fade out and the next clip's transition. Split halves play
+    /// their sound on as one, so the sound does not change.
+    fn zoom_ranges(&mut self, mut ranges: Vec<ZoomRange>, out: &mut EditOutcome) -> Result<()> {
+        ensure!(!ranges.is_empty(), "Give at least one range to zoom");
+        for r in &ranges {
+            ensure!(
+                r.start_us >= 0 && r.end_us > r.start_us,
+                "A zoom range must start at 0 or later and end after it starts"
+            );
+            ensure!(
+                r.scale.is_finite() && ZOOM_SCALES.contains(&r.scale),
+                "Zoom must be between {}x and {}x",
+                ZOOM_SCALES.start(),
+                ZOOM_SCALES.end()
+            );
+        }
+        ranges.sort_by_key(|r| r.start_us);
+        ensure!(ranges.windows(2).all(|pair| pair[0].end_us <= pair[1].start_us), "Zoom ranges must not overlap");
+        let Some(main) = self.track_index(MAIN_TRACK) else { return Ok(()) };
+        // Where the previous range's zoom ended, so a piece is never zoomed twice.
+        let mut zoomed_until = 0;
+        for range in ranges {
+            let start = range.start_us.max(zoomed_until);
+            let ids: Vec<String> = self.tracks[main]
+                .clips
+                .iter()
+                .filter(|c| c.start_us < range.end_us && c.end_us() > start)
+                .map(|c| c.id.clone())
+                .collect();
+            for id in ids {
+                let Some(ci) = self.tracks[main].clips.iter().position(|c| c.id == id) else { continue };
+                let clips = &self.tracks[main].clips;
+                let clip = &clips[ci];
+                if !matches!(clip.content, ClipContent::Media { .. }) {
+                    continue;
+                }
+                if !clip.keyframes.is_empty() {
+                    if !out.skipped.contains(&id) {
+                        out.skipped.push(id);
+                    }
+                    continue;
+                }
+                let (c0, c1) = (clip.start_us, clip.end_us());
+                let (fade_in, fade_out) = match &clip.content {
+                    ClipContent::Media { fade_in_us, fade_out_us, .. } => (*fade_in_us, *fade_out_us),
+                    ClipContent::Text { .. } => (0, 0),
+                };
+                let length = |a: Option<Animation>| a.map_or(0, |a| a.duration_us);
+                let transition = |c: Option<&Clip>| c.and_then(|c| c.transition_in).map_or(0, |t| t.duration_us);
+                let head = length(clip.anim_in).max(transition(Some(clip))).max(2 * fade_in);
+                let tail = length(clip.anim_out).max(transition(clips.get(ci + 1))).max(2 * fade_out);
+                let (mut a, mut b) = (start.max(c0), range.end_us.min(c1));
+                if a > c0 && a - c0 < MIN_ZOOM_PIECE_US.max(head) {
+                    a = c0;
+                }
+                if b < c1 && c1 - b < MIN_ZOOM_PIECE_US.max(tail) {
+                    b = c1;
+                }
+                // A sliver of a range at the edge of a clip is not worth a cut.
+                let whole = a == c0 && b == c1;
+                let needs = MIN_ZOOM_PIECE_US.max(if a == c0 { head } else { 0 }).max(if b == c1 { tail } else { 0 });
+                if !whole && b - a < needs {
+                    continue;
+                }
+                if b < c1 {
+                    self.split_clip(main, ci, b);
+                }
+                let zi = if a > c0 { self.split_clip(main, ci, a) } else { ci };
+                if let ClipContent::Media { transform, .. } = &mut self.tracks[main].clips[zi].content {
+                    transform.scale = (f64::from(transform.scale) * range.scale) as f32;
+                }
+                zoomed_until = zoomed_until.max(b);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Clip ids added and removed between two versions, in timeline order.
@@ -1065,7 +1172,9 @@ impl Editor {
         let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut outcome = EditOutcome::default();
             for cmd in cmds {
-                outcome.select.extend(self.project.apply(cmd)?.select);
+                let step = self.project.apply(cmd)?;
+                outcome.select.extend(step.select);
+                outcome.skipped.extend(step.skipped);
             }
             check(&self.project)?;
             Ok(outcome)
@@ -2296,5 +2405,191 @@ mod tests {
             serde_json::json!([{"assetId": "a", "sourceStartUs": 1, "original": "oka", "text": "okna"}])
         );
         assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
+    }
+
+    /// Main-track pieces as (start ms, end ms, scale).
+    fn zoom_layout(p: &Project) -> Vec<(i64, i64, f32)> {
+        p.tracks[0]
+            .clips
+            .iter()
+            .map(|c| {
+                let ClipContent::Media { transform, .. } = &c.content else { panic!() };
+                (c.start_us / 1000, c.end_us() / 1000, (transform.scale * 1000.0).round() / 1000.0)
+            })
+            .collect()
+    }
+
+    fn changes(id: &str, fields: serde_json::Value) -> EditCmd {
+        let mut cmd = serde_json::json!({"type": "updateClip", "clipId": id});
+        cmd.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        serde_json::from_value(cmd).unwrap()
+    }
+
+    fn zoom(ranges: &[(i64, i64, f64)]) -> EditCmd {
+        EditCmd::ZoomRanges {
+            ranges: ranges.iter().map(|&(start_us, end_us, scale)| ZoomRange { start_us, end_us, scale }).collect(),
+        }
+    }
+
+    #[test]
+    fn zoom_ranges_split_at_the_edges_and_scale_only_inside() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
+        let style = TextStyle {
+            font_family: None,
+            font_size: 64.0,
+            color: "#fff".into(),
+            bold: false,
+            stroke_width: 0.0,
+            stroke_color: "#000".into(),
+            background: None,
+            max_width: None,
+            highlight: None,
+        };
+        p.apply(EditCmd::AddText { start_us: 500_000, text: "Title".into(), style }).unwrap();
+        let first = p.tracks[0].clips[0].id.clone();
+        let framed = Transform { x: 0.1, y: -0.05, scale: 1.1, rotation: 5.0, opacity: 1.0 };
+        p.apply(changes(&first, serde_json::json!({"transform": framed}))).unwrap();
+        let before = p.clone();
+        // The second range starts 0.2 s before the cut: too little of the first clip to zoom, so
+        // the punch-in starts at the cut.
+        p.apply(zoom(&[(1_000_000, 2_500_000, 1.2), (4_800_000, 6_000_000, 1.25)])).unwrap();
+        assert_eq!(
+            zoom_layout(&p),
+            [(0, 1000, 1.1), (1000, 2500, 1.32), (2500, 5000, 1.1), (5000, 6000, 1.25), (6000, 8000, 1.0)]
+        );
+        let ClipContent::Media { transform, .. } = &p.tracks[0].clips[1].content else { panic!() };
+        assert_eq!((transform.x, transform.y, transform.rotation), (0.1, -0.05, 5.0));
+        // Nothing but the main track changed, and its pieces play the same source back to back.
+        assert_eq!(p.tracks[1..], before.tracks[1..]);
+        let sources: Vec<i64> = p.tracks[0]
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Media { source_in_us, .. } => *source_in_us,
+                ClipContent::Text { .. } => panic!(),
+            })
+            .collect();
+        assert_eq!(sources, [0, 1_000_000, 2_500_000, 0, 1_000_000]);
+    }
+
+    #[test]
+    fn zoom_edges_move_to_the_clip_edge_instead_of_leaving_a_sliver() {
+        let mut p = project();
+        for _ in 0..2 {
+            p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        }
+        let (first, second) = (p.tracks[0].clips[0].id.clone(), p.tracks[0].clips[1].id.clone());
+        let dissolve = Transition { kind: crate::model::TransitionKind::Dissolve, duration_us: 500_000 };
+        p.apply(EditCmd::SetTransition { clip_id: second, transition: Some(dissolve) }).unwrap();
+        p.apply(changes(&first, serde_json::json!({"fadeInUs": 1_000_000}))).unwrap();
+        let fade = |p: &Project| match p.tracks[0].clips[0].content {
+            ClipContent::Media { fade_in_us, .. } => fade_in_us,
+            ClipContent::Text { .. } => panic!(),
+        };
+        // 0.1 s after a clip starts, and 0.2 s before it ends: both edges go to the cuts.
+        let mut q = p.clone();
+        q.apply(zoom(&[(5_100_000, 9_800_000, 1.2)])).unwrap();
+        assert_eq!(zoom_layout(&q), [(0, 5000, 1.0), (5000, 10000, 1.2)]);
+        // 1.5 s into a clip that fades in over 1 s would halve the fade, and 0.4 s before a 0.5 s
+        // dissolve would shorten it: the zoom takes those pieces in.
+        let mut q = p.clone();
+        q.apply(zoom(&[(1_500_000, 4_600_000, 1.2)])).unwrap();
+        assert_eq!(zoom_layout(&q), [(0, 5000, 1.2), (5000, 10000, 1.0)]);
+        assert_eq!(fade(&q), 1_000_000);
+        assert_eq!(q.tracks[0].clips[1].transition_in.unwrap().duration_us, 500_000);
+        // A range that barely reaches into a clip leaves that clip alone.
+        let mut q = p.clone();
+        q.apply(zoom(&[(2_000_000, 5_150_000, 1.2)])).unwrap();
+        assert_eq!(zoom_layout(&q), [(0, 2000, 1.0), (2000, 5000, 1.2), (5000, 10000, 1.0)]);
+        assert_eq!(fade(&q), 1_000_000);
+    }
+
+    #[test]
+    fn zoom_leaves_clips_with_keyframes_alone_and_names_them() {
+        let mut e = Editor::new(project());
+        for _ in 0..2 {
+            e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+        }
+        let keyed = e.project.tracks[0].clips[0].id.clone();
+        let keyframes = vec![
+            Keyframe { t_us: 0, transform: Transform::default() },
+            Keyframe { t_us: 4_000_000, transform: Transform { scale: 1.5, ..Transform::default() } },
+        ];
+        e.apply(EditCmd::SetKeyframes { clip_id: keyed.clone(), keyframes }, None).unwrap();
+        let before = e.project.clone();
+        let outcome = e.apply(zoom(&[(1_000_000, 2_000_000, 1.2), (6_000_000, 8_000_000, 1.2)]), None).unwrap();
+        assert_eq!(outcome.skipped, std::slice::from_ref(&keyed));
+        assert_eq!(e.project.tracks[0].clips[0], before.tracks[0].clips[0]);
+        assert_eq!(zoom_layout(&e.project), [(0, 5000, 1.0), (5000, 6000, 1.0), (6000, 8000, 1.2), (8000, 10000, 1.0)]);
+        assert_eq!(serde_json::to_value(&outcome).unwrap()["skipped"], serde_json::json!([keyed]));
+        // Two ranges, three new pieces: one undo step takes all of it back.
+        assert!(e.undo());
+        assert_eq!(e.project, before);
+    }
+
+    #[test]
+    fn zoom_rejects_overlapping_or_unusable_ranges_and_changes_nothing() {
+        let mut e = Editor::new(project());
+        e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+        let before = e.project.clone();
+        for bad in [
+            zoom(&[]),
+            zoom(&[(1_000_000, 3_000_000, 1.2), (2_000_000, 4_000_000, 1.2)]),
+            zoom(&[(2_000_000, 1_000_000, 1.2)]),
+            zoom(&[(-1, 1_000_000, 1.2)]),
+            zoom(&[(1_000_000, 2_000_000, f64::NAN)]),
+            zoom(&[(1_000_000, 2_000_000, 0.0)]),
+            zoom(&[(1_000_000, 2_000_000, 9.0)]),
+        ] {
+            assert!(e.apply(bad.clone(), None).is_err(), "{bad:?}");
+            assert_eq!(e.project, before);
+        }
+        assert!(!e.can_redo() && e.can_undo());
+    }
+
+    /// Split halves play on from each other, so zooming changes no sample of the mix, fades,
+    /// volume and the dissolve into the next clip included.
+    #[test]
+    fn zoom_keeps_the_sound_sample_for_sample() {
+        use crate::audio::{Mixer, pcm_path};
+        use crate::model::CHANNELS;
+        let cache = std::env::temp_dir().join(format!("capopen-zoom-sound-{}", new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let mut p = project();
+        for id in ["a", "b"] {
+            let asset = p.asset(id).unwrap().clone();
+            let frames = (asset.duration_us * 48 / 1000) as usize;
+            // A chirp, so any shift or step between pieces shows.
+            let samples: Vec<f32> = (0..frames)
+                .flat_map(|i| {
+                    let t = i as f32 / 48_000.0;
+                    [0.4 * (t * (300.0 + 200.0 * t) * std::f32::consts::TAU).sin(); CHANNELS]
+                })
+                .collect();
+            std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&samples)).unwrap();
+            p.apply(EditCmd::AddClip { asset_id: id.into(), start_us: None, track_id: None }).unwrap();
+        }
+        let (first, second) = (p.tracks[0].clips[0].id.clone(), p.tracks[0].clips[1].id.clone());
+        p.apply(changes(&first, serde_json::json!({"volume": 0.8, "fadeInUs": 300_000, "fadeOutUs": 200_000})))
+            .unwrap();
+        let dissolve = Transition { kind: crate::model::TransitionKind::Dissolve, duration_us: 400_000 };
+        p.apply(EditCmd::SetTransition { clip_id: second, transition: Some(dissolve) }).unwrap();
+        let mix = |p: &Project| {
+            let mut out = vec![0.0; 8 * 48_000 * CHANNELS];
+            Mixer::new(cache.clone()).mix(p, 0, &mut out);
+            out
+        };
+        let before = mix(&p);
+        p.apply(zoom(&[(1_234_567, 2_345_678, 1.2), (4_100_000, 5_900_000, 1.3), (6_500_000, 7_000_000, 1.15)]))
+            .unwrap();
+        assert_eq!(p.tracks[0].clips.len(), 8, "{:?}", zoom_layout(&p));
+        let after = mix(&p);
+        std::fs::remove_dir_all(&cache).unwrap();
+        let difference = before.iter().zip(&after).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(before.iter().any(|s| s.abs() > 0.1), "the mix is silent");
+        assert!(difference < 1e-6, "zooming changed the sound by {difference}");
     }
 }

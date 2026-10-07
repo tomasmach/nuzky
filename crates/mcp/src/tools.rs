@@ -207,6 +207,7 @@ impl Backend {
                 self.host.jobs.get_for(Some(&self.client.id), &a.job_id, matches!(a.action, JobAction::Cancel))
             }
             "build_captions" => self.captions(parse(arguments)?, state),
+            "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
         }
@@ -294,6 +295,15 @@ impl Backend {
             result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
             return Ok(result);
         }
+        if matches!(args.kind, AnalysisKind::Emphasis) {
+            // Reads stored words and the prepared sound of their files, so it answers at once too.
+            ensure!(args.asset_id.is_none(), "INVALID_ARGUMENTS: emphasis reads the whole timeline; omit asset_id");
+            let project = self.media_project(&state.project);
+            let derived = transcript::derive(&project, &self.host.transcripts)?;
+            let zooms = crate::zooms::suggest(&project, &derived, &self.host.cache_dir)?;
+            return Ok(json!({"zooms": zooms, "time_basis": "timeline",
+                "transcript_key": transcript::word_key(&state.project, &derived.words)}));
+        }
         let asset_id = args.asset_id.context("INVALID_ARGUMENTS: asset_id is required for this kind")?;
         let mut asset = state.project.asset(&asset_id).with_context(|| format!("UNKNOWN_ASSET: {asset_id}"))?.clone();
         asset.path = self.resolve(&asset.path).to_string_lossy().into_owned();
@@ -324,7 +334,7 @@ impl Backend {
                 }
                 AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
-                AnalysisKind::Retakes => anyhow::bail!("Retakes are answered without a job"),
+                AnalysisKind::Retakes | AnalysisKind::Emphasis => anyhow::bail!("This kind is answered without a job"),
             };
             check_cancel(&cancel)?;
             Ok(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result}))
@@ -513,6 +523,40 @@ impl Backend {
         Ok(
             json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "caption_count": result.outcome.created.len(), "created": result.outcome.created, "removed": result.outcome.removed}),
         )
+    }
+
+    /// Punch-ins on word ranges as one edit of the run. Splitting clips moves the speech layout and
+    /// so the transcript key; a retry with the same request_id applies the zoom planned the first
+    /// time instead of planning it again.
+    fn apply_zooms(&self, args: ApplyZooms, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({ "apply_zooms": &args });
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == arguments, "REQUEST_CONFLICT: request_id was used with different arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        transcript::check_key(&state.project, &derived, &args.transcript_key)?;
+        let ranges = crate::zooms::ranges(&state.project, &derived.words, &args.zooms)?;
+        let edit = EditCmd::ZoomRanges { ranges: ranges.clone() };
+        let mut preview = state.project.clone();
+        let outcome = preview.apply(edit.clone()).map_err(|e| anyhow!("EDIT_REJECTED: {e:#}"))?;
+        let words = capopen_engine::speech::map_words(&preview, &derived.sources);
+        let prepared = requests.entry(key).or_insert(PreparedTranscriptEdit {
+            arguments,
+            edits: vec![edit],
+            expect: Expect {
+                revision: Some(state.stamp.revision),
+                speech_layout_key: Some(state.speech_layout_key.clone()),
+            },
+            response: json!({"ranges": ranges, "skipped": outcome.skipped,
+                "transcript_key": transcript::word_key(&preview, &words)}),
+        });
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
     }
 
     fn export(&self, args: Export, state: &SessionState) -> Result<Value> {
