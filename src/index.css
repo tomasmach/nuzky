@@ -187,4 +187,9 @@ button:focus-visible .pv {
     transition: none !important;
     animation: none !important;
   }
+  /* A still sweep would read as a third done; a full striped bar says "in progress" instead. */
+  .indeterminate {
+    width: 100%;
+    background: repeating-linear-gradient(135deg, var(--color-accent) 0 4px, color-mix(in srgb, var(--color-accent) 35%, transparent) 4px 8px);
+  }
 }

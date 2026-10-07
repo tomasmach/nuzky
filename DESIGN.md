@@ -60,7 +60,7 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 
 ## States
 
-Focus is a 2 px `accent` outline on every focusable element; never remove it without a replacement. Disabled controls drop to 40 % opacity and explain why in a tooltip. Errors use `danger` plus an icon plus text. Background work shows progress; at 0 % it shows an indeterminate bar.
+Focus is a 2 px `accent` outline on every focusable element; never remove it without a replacement. Disabled controls drop to 40 % opacity and explain why in a tooltip. Errors use `danger` plus an icon plus text. Background work shows progress; at 0 % it shows an indeterminate bar, which with reduced motion is a full bar of diagonal `accent` stripes, so it never reads as a third done.
 
 ## Motion
 
