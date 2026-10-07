@@ -113,7 +113,20 @@ fn publish_new_project(out: &Path, project: &Project) -> Result<()> {
         file.write_all(&serde_json::to_vec_pretty(project)?)?;
         file.sync_all()?;
         // Unlike rename, hard_link refuses a destination created since the existence check.
-        std::fs::hard_link(&tmp, out).context("Publishing new project")?;
+        match std::fs::hard_link(&tmp, out) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(anyhow::Error::new(error).context("Publishing new project"));
+            }
+            // FAT32 and exFAT have no hard links: claim the name first, so nothing is replaced.
+            Err(_) => {
+                std::fs::OpenOptions::new().write(true).create_new(true).open(out).context("Publishing new project")?;
+                if let Err(error) = std::fs::rename(&tmp, out) {
+                    let _ = std::fs::remove_file(out);
+                    return Err(anyhow::Error::new(error).context("Publishing new project"));
+                }
+            }
+        }
         Ok(())
     })();
     drop(file);
