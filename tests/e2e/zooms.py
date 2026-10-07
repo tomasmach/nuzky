@@ -1,17 +1,21 @@
 """Zooms on emphasis in three Czech takes. The Transcript tab suggests punch-ins on the sentences said with
 emphasis, Apply zooms in on them as one undo step, and the preview shows the picture scaled up there; an agent gets
-the same over MCP. The takes keep their sound and get a grid and a yellow square in the middle of the picture, so
-the preview shows how much the picture is scaled."""
+the same over MCP. espeak speaks every sentence at about the same level, so the creator here says two sentences
+6 dB louder. The takes also get a grid and a yellow square in the middle of the picture, so the preview shows how
+much the picture is scaled."""
 import json, subprocess, time
 
 from e2e.harness import (AI_EDITING, FIXTURES, Bridge, flow, link_models, preview_crop, preview_rect, preview_redraw,
                          wait)
+from e2e.reel import truth, words as plain
 
 MODEL = 'large-v3-turbo-q5_0'
 # The yellow square: 400 px wide in the 1080 px frame, centred.
 SQUARE = 'drawbox=x=340:y=760:w=400:h=400:color=0xffd400@1:t=fill'
 GRID = 'drawgrid=w=135:h=160:t=6:color=white@0.8'
 PROJECT = 'return window.__capopen.store.getState().snap.project'
+# Said with emphasis: twice as loud as the rest of the take.
+LOUDER = ('Kamera musí stát pevně na stativu.', 'Celé to zabere deset minut.')
 
 
 def takes(r):
@@ -20,9 +24,13 @@ def takes(r):
 
 def zooms_setup(r):
     link_models(r, ('ggml-silero-v5.1.2.bin', f'ggml-{MODEL}.bin'))
+    louder = [(take, start, end) for take, _, text, start, end in truth() if text in LOUDER]
+    assert len(louder) == len(LOUDER), louder
     for n, out in enumerate(takes(r), 1):
+        boost = [f"volume=2:enable='between(t,{start - 0.05:.3f},{end + 0.05:.3f})'" for take, start, end in louder if take == n]
+        sound = ['-af', ','.join(boost), '-c:a', 'aac', '-b:a', '192k'] if boost else ['-c:a', 'copy']
         subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(FIXTURES / f'reel-{n}.mp4'), '-vf', f'{GRID},{SQUARE}',
-                        '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'copy', str(out)], check=True)
+                        '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', *sound, str(out)], check=True)
 
 
 def poll(bridge, job, timeout):
@@ -124,6 +132,9 @@ def suggest_and_apply(r, bridge):
     suggested = [' '.join(w['text'].strip() for w in words[z['from']:z['to'] + 1]) for z in analysis['zooms']]
     r.check('the marked sentences are the ones analyze(emphasis) suggests', marked and marked == suggested,
             {'marked': marked, 'analysis': analysis['zooms']})
+    loud = [plain(text)[:3] for text in LOUDER]
+    r.check('the two sentences said louder are among them', all(any(plain(m)[:3] == l for m in marked) for l in loud),
+            {'marked': marked, 'louder': LOUDER})
     before = main(r)
     duration = sum(c['durationUs'] for c in before)
     r.check('the suggestions are subtle: about one per 12 s, 5 s apart, 1.15-1.3x',
@@ -157,7 +168,7 @@ def suggest_and_apply(r, bridge):
             {'before': merged(before), 'after': merged(applied)})
 
     # The picture: the yellow square is as much bigger as the zoom, around the same centre.
-    first = next(p for p in pieces(applied) if p[2] != 1.0)
+    first = max(zoomed, key=lambda p: p[2])
     at = (first[0] + first[1]) // 2
     r.s.run('window.__capopen.store.getState().select([])')
     r.seek(at)
