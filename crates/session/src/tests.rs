@@ -191,6 +191,17 @@ fn save_failure_keeps_live_commit_and_retry_does_not_reapply() {
 }
 
 #[test]
+fn begin_run_saves_pending_user_edits_before_its_checkpoint() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("User typing"), Some("typing".into()), Expect::default()).unwrap();
+    assert_eq!(f.disk().name, "Original");
+    s.begin_run("AI".into()).unwrap();
+    // A crash now must not lose the user's edit when the user keeps the file.
+    assert_eq!(f.disk().name, "User typing");
+}
+
+#[test]
 fn only_the_run_owner_postpones_idle_auto_keep() {
     let f = Fixture::new();
     let timeout = Duration::from_millis(300);
@@ -767,6 +778,7 @@ fn user_autosave_debounces_and_events_follow_commits_with_origins() {
     ));
     assert_eq!(f.disk(), s.state().unwrap().project);
     let run = s.begin_run("AI".into()).unwrap().run_id;
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 2, error: None }));
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Run(Some(info)) if info.run_id == run && info.label == "AI"));
     apply(&s, &run, "AI");
     assert!(

@@ -51,6 +51,8 @@ impl ProjectSession {
         inner.recovered()?;
         let run_id = new_id();
         inner.editor.seal();
+        // The project file must hold the user's debounced edits before "keep" can mean it.
+        inner.flush()?;
         let checkpoint = Checkpoint {
             run_id: &run_id,
             label: &label,
