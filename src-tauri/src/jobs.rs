@@ -148,10 +148,10 @@ pub struct ExportRequest {
 }
 
 impl ExportRequest {
-    fn options(&self) -> ExportOptions {
+    fn options(&self, replace_existing: bool) -> ExportOptions {
         ExportOptions {
             crf: self.quality.crf(),
-            replace_existing: true,
+            replace_existing,
             resolution: Some(self.resolution),
             fps: Some(self.fps),
             ..ExportOptions::default()
@@ -159,12 +159,23 @@ impl ExportRequest {
     }
 }
 
+/// Without confirmed replacement, an existing destination fails before any work starts.
+fn check_destination(out: &Path, replace_existing: bool) -> Result<(), String> {
+    if !replace_existing && out.symlink_metadata().is_ok() {
+        let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        return Err(format!("DESTINATION_EXISTS: {name} already exists"));
+    }
+    Ok(())
+}
+
 pub fn start_export(
     app: &AppHandle,
     out: PathBuf,
     request: ExportRequest,
+    replace_existing: bool,
     expected_epoch: Option<&str>,
 ) -> Result<String, String> {
+    check_destination(&out, replace_existing)?;
     let state = app.state::<AppState>();
     let project =
         crate::lock_session(&state.session, expected_epoch)?.host.session.state().map_err(crate::err)?.project;
@@ -180,7 +191,7 @@ pub fn start_export(
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let mut rep = Reporter::new(&app, &job_id, "export", format!("Exporting {name}"));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                export(&project, &cache, &out, &request.options(), &cancel, |p| {
+                export(&project, &cache, &out, &request.options(replace_existing), &cancel, |p| {
                     rep.progress(p.frame as f32 / p.total_frames.max(1) as f32, Some("Rendering"));
                 })
             }))
@@ -474,9 +485,28 @@ mod tests {
                 "resolution": 1080, "fps": 30, "quality": quality
             }))
             .unwrap();
-            assert_eq!(request.options().crf, crf);
-            assert!(request.options().replace_existing);
+            assert_eq!(request.options(true).crf, crf);
+            assert!(request.options(true).replace_existing);
+            assert!(!request.options(false).replace_existing);
         }
+    }
+
+    #[test]
+    fn unconfirmed_existing_destination_fails_before_export() {
+        let dir = std::env::temp_dir().join(format!("capopen-destination-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("clip.mp4");
+        check_destination(&out, false).unwrap();
+        std::fs::write(&out, b"earlier export").unwrap();
+        assert_eq!(check_destination(&out, false).unwrap_err(), "DESTINATION_EXISTS: clip.mp4 already exists");
+        check_destination(&out, true).unwrap();
+        #[cfg(unix)]
+        {
+            let link = dir.join("dangling.mp4");
+            std::os::unix::fs::symlink(dir.join("missing.mp4"), &link).unwrap();
+            assert!(check_destination(&link, false).unwrap_err().starts_with("DESTINATION_EXISTS"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn request(max_words: Option<u8>, max_chars: Option<u8>) -> CaptionRequest {

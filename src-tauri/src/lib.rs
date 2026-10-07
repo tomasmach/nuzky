@@ -547,14 +547,17 @@ fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot>
     state.replace_project(&mut current, path)
 }
 
+/// `replace_existing` is true once the user confirmed this exact path; false fails with
+/// DESTINATION_EXISTS when the file is already there. Absent means true.
 #[tauri::command]
 fn start_export(
     app: AppHandle,
     path: String,
     options: jobs::ExportRequest,
+    replace_existing: Option<bool>,
     expected_epoch: Option<String>,
 ) -> CmdResult<String> {
-    jobs::start_export(&app, PathBuf::from(path), options, expected_epoch.as_deref())
+    jobs::start_export(&app, PathBuf::from(path), options, replace_existing.unwrap_or(true), expected_epoch.as_deref())
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
