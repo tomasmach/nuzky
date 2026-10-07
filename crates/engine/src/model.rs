@@ -415,15 +415,15 @@ impl Project {
     }
 }
 
-/// Parses `#rgb`, `#rrggbb` or `#rrggbbaa` into straight RGBA in 0..1.
+/// Parses `#rgb`, `#rrggbb` or `#rrggbbaa` into straight RGBA in 0..1. Anything else,
+/// including text with non-hex characters, is opaque white.
 pub fn parse_color(s: &str) -> [f32; 4] {
     let hex = s.trim().trim_start_matches('#');
-    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2).unwrap_or("ff"), 16).unwrap_or(255);
-    let (r, g, b, a) = match hex.len() {
-        3 => {
-            let n = |i: usize| u8::from_str_radix(&hex[i..i + 1].repeat(2), 16).unwrap_or(255);
-            (n(0), n(1), n(2), 255)
-        }
+    let digits: Option<Vec<u8>> = hex.chars().map(|c| c.to_digit(16).map(|d| d as u8)).collect();
+    let digits = digits.unwrap_or_default();
+    let byte = |i: usize| digits[i] * 16 + digits[i + 1];
+    let (r, g, b, a) = match digits.len() {
+        3 => (digits[0] * 17, digits[1] * 17, digits[2] * 17, 255),
         6 => (byte(0), byte(2), byte(4), 255),
         8 => (byte(0), byte(2), byte(4), byte(6)),
         _ => (255, 255, 255, 255),
@@ -471,5 +471,13 @@ mod tests {
         assert_eq!(parse_color("#ff0000"), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(parse_color("#00000080")[3], 128.0 / 255.0);
         assert_eq!(parse_color("#fff"), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(parse_color(" #0a0 "), [0.0, 170.0 / 255.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn malformed_colors_fall_back_to_white_without_panicking() {
+        for color in ["#€", "€", "#é1", "#ffé", "#ff00zz", "#+f+f+f", "#ff00€0", "", "#", "#ff00", "red"] {
+            assert_eq!(parse_color(color), [1.0; 4], "{color:?}");
+        }
     }
 }
