@@ -233,6 +233,9 @@ export const useEditor = create<EditorState>((set, get) => ({
     // Opening loads a durable project. Only a new revision waits for a saved event.
     const switched = !prev || snap.sessionEpoch !== prev.sessionEpoch;
     const changed = !switched && snap.revision > prev.revision;
+    // An asset id that now names another file, e.g. media an agent replaced, gets new previews.
+    const rebound = switched ? [] : prev.project.assets.filter((a) => snap.project.assets.some((b) => b.id === a.id && b.path !== a.path)).map((a) => a.id);
+    const without = <T,>(cache: Record<string, T>) => Object.fromEntries(Object.entries(cache).filter(([id]) => !rebound.includes(id)));
     set({
       snap,
       selection: snap.select.length > 0 ? snap.select : kept,
@@ -242,7 +245,9 @@ export const useEditor = create<EditorState>((set, get) => ({
       aiRun: snap.openRunLabel,
       // A copied project can reuse asset ids for other files, so media previews start over.
       ...(switched ? { thumbs: {}, filmstrips: {}, waveforms: {} } : {}),
+      ...(rebound.length > 0 ? { thumbs: without(get().thumbs), filmstrips: without(get().filmstrips), waveforms: without(get().waveforms) } : {}),
     });
+    for (const id of rebound) get().loadWaveform(id, true);
     if (switched && snap.agentBridgeError) {
       get().toast({ kind: "info", text: "AI agents can't connect to this project while it is open here. Your own editing works normally." });
     }

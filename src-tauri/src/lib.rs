@@ -37,11 +37,17 @@ pub struct AppState {
     quit_confirmed: AtomicBool,
     thumbs: Mutex<HashMap<String, String>>,
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
-    preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    preview_locks: Mutex<HashMap<String, PreviewLock>>,
     bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
     fonts: OnceLock<FontFamilies>,
     /// Why the most recent project was not opened at startup.
     startup_notice: Option<String>,
+}
+
+/// Per asset id: the source file its cached previews show, and the lock of their decoding.
+struct PreviewLock {
+    source: String,
+    lock: Arc<Mutex<()>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -255,9 +261,13 @@ impl AppState {
     }
 
     fn publish_project(&self, project: &Project) {
-        self.thumbs.lock().unwrap().retain(|id, _| project.asset(id).is_some());
-        self.filmstrips.lock().unwrap().retain(|id, _| project.asset(id).is_some());
-        self.preview_locks.lock().unwrap().retain(|id, _| project.asset(id).is_some());
+        // Previews stay while their asset id still names the same file; an id rebound to other
+        // media, by removal and re-adding in one batch, is decoded again.
+        let mut locks = self.preview_locks.lock().unwrap();
+        locks.retain(|id, entry| project.asset(id).is_some_and(|asset| asset.path == entry.source));
+        self.thumbs.lock().unwrap().retain(|id, _| locks.contains_key(id));
+        self.filmstrips.lock().unwrap().retain(|id, _| locks.contains_key(id));
+        drop(locks);
         self.engine.send(Msg::Project(Arc::new(project.clone())));
     }
 
@@ -284,13 +294,23 @@ impl AppState {
             let Some(asset) = current.host.session.state().map_err(err)?.project.asset(asset_id).cloned() else {
                 return Ok(None);
             };
-            let lock = self.preview_locks.lock().unwrap().entry(asset_id.into()).or_default().clone();
+            let mut locks = self.preview_locks.lock().unwrap();
+            let entry = locks
+                .entry(asset_id.into())
+                .or_insert_with(|| PreviewLock { source: asset.path.clone(), lock: Arc::default() });
+            let lock = entry.lock.clone();
             (asset, lock)
         };
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         {
             let _current = self.session.lock().unwrap();
-            if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) {
+            if !self
+                .preview_locks
+                .lock()
+                .unwrap()
+                .get(asset_id)
+                .is_some_and(|current| Arc::ptr_eq(&current.lock, &lock))
+            {
                 return Ok(None);
             }
             if let Some(value) = cache.lock().unwrap().get(asset_id) {
@@ -300,7 +320,7 @@ impl AppState {
         let value = decode(&asset).map_err(err)?;
         let _current = self.session.lock().unwrap();
         // Removal or replacement invalidates in-flight decodes, even if the ID is reused.
-        if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(current, &lock)) {
+        if !self.preview_locks.lock().unwrap().get(asset_id).is_some_and(|current| Arc::ptr_eq(&current.lock, &lock)) {
             return Ok(None);
         }
         if let Some(value) = &value {
