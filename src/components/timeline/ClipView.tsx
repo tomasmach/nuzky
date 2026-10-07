@@ -171,10 +171,9 @@ export const ClipView = memo(function ClipView({
               type="button"
               aria-label={`Go to keyframe at ${formatDuration(k.tUs)}`}
               title="Keyframe"
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                useEditor.getState().seek(clip.startUs + k.tUs);
-              }}
+              // Not a clip drag; Enter and Space activate it like a click.
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => useEditor.getState().seek(clip.startUs + k.tUs)}
               className="absolute -top-[5px] h-[10px] w-[10px] -translate-x-1/2 rotate-45 rounded-[1px] border border-black/70 bg-fg hover:bg-accent"
               // Clear of the trim handles, but never so far in that a short clip's first and last keys meet.
               style={{ left: Math.max(Math.min(EDGE + 7, width / 4), Math.min(width - Math.min(EDGE + 7, width / 4), (k.tUs / US) * zoom)) }}
