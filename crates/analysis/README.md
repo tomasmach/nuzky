@@ -7,7 +7,7 @@ Functions return `anyhow::Result` except the lexical `filler_words` helper.
 
 ```rust,ignore
 loudness(asset: &Asset, cache: &Path, window_us: i64) -> Result<Vec<f32>>
-integrated_lufs(asset: &Asset, cache: &Path) -> Result<f32>
+program_loudness(asset: &Asset, cache: &Path) -> Result<ProgramLoudness>
 silences(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Vec<Range>>
 scene_cuts(asset: &Asset, params: SceneParams) -> Result<Vec<SceneCut>>
 transcribe_words(source: AudioSource<'_>, model: &Path, vad: &Path, language: &str)
@@ -26,9 +26,11 @@ that preserves both size and mtime is not detected; this is not a content hash.
 ## Behaviour and limits
 
 - Loudness is non-overlapping RMS dBFS, including the final partial window. Channels
-  contribute equally; silence is a finite -120 dBFS. `integrated_lufs` is only the
-  ungated, unweighted stereo energy approximation `-0.691 + 10 log10(sum powers)`.
-  It is not BS.1770 LUFS and must not drive delivery normalization.
+  contribute equally; silence is a finite -120 dBFS. `program_loudness` is ITU-R
+  BS.1770-4 / EBU R128 from the engine's `loudness::Meter`, the one the Reels export levels
+  with: `integrated_lufs` (K-weighted, gated; `None` when nothing passes the -70 LUFS gate)
+  and `true_peak_dbtp` (4x oversampled; -120 for digital silence). It agrees with FFmpeg's
+  `ebur128` within 0.1 LU and 0.1 dB.
 - Silence uses 10 ms RMS windows. Default threshold is the 10th percentile +6 dB,
   capped at -35 dBFS to avoid treating a steady foreground signal as silence.
   `threshold_db: Some(dbfs)` overrides it. Runs must last 400 ms before subtracting
@@ -75,7 +77,7 @@ cargo run -p capopen-analysis --bin capopen-analyze -- clip.mp4 words --lang cs 
 
 Commands: `loudness`, `silences`, `scenes`, `words`, `fillers`. Output is one compact
 JSON value on stdout; errors and native diagnostics go to stderr. Loudness reports
-100 ms windows plus the explicitly named `integrated_lufs_approx`. `--cache` selects
+100 ms RMS windows plus `integrated_lufs` (null for silence) and `true_peak_dbtp`. `--cache` selects
 a cache directory; default is the OS temp directory's `capopen-analysis` folder.
 CLI cache IDs depend on canonical path, file size and modification time. API callers
 keep asset IDs stable; `pcm_path` performs the same size+mtime invalidation for them.

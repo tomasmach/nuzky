@@ -145,6 +145,17 @@ fn pcm_cache_audio_api_and_cli_are_consistent() -> Result<()> {
     assert!(result.status.success());
     let value: serde_json::Value = serde_json::from_slice(&result.stdout)?;
     assert_eq!(value["rms_dbfs"], serde_json::json!(vec![-120.0; 10]));
+    // Silence has no integrated loudness (nothing passes the -70 LUFS gate) and a finite peak.
+    assert_eq!(
+        (&value["integrated_lufs"], &value["true_peak_dbtp"]),
+        (&serde_json::json!(null), &serde_json::json!(-120.0))
+    );
+    let result = Command::new(binary).arg(&path).arg("loudness").arg("--cache").arg(&dir).output()?;
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout)?;
+    // The tone peaks at 1/8 (-18.06 dBFS) on both channels. The gates drop the silent second but
+    // keep blocks partly over it, so it reads -18.77 LUFS, as FFmpeg's ebur128 does.
+    let (lufs, peak) = (value["integrated_lufs"].as_f64().unwrap(), value["true_peak_dbtp"].as_f64().unwrap());
+    assert!((lufs + 18.77).abs() < 0.1 && (peak + 18.06).abs() < 0.1, "{value}");
     Ok(())
 }
 
