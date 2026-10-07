@@ -27,7 +27,7 @@ pub fn thumbnail(asset: &Asset) -> Result<Option<String>> {
     }
     let Some((t, f)) = picked else { return Ok(None) };
     let display = (asset.width as f32 * THUMB_HEIGHT / asset.height as f32, THUMB_HEIGHT);
-    let (w, h) = decode_size(decoder.source_size(), asset.rotation, display);
+    let (w, h) = decode_size(decoder.source_size(), asset.rotation, display, u32::MAX);
     let frame = decoder.convert(&f, t, w, h)?;
     let (rgba, w, h) = rotate(&frame.data, frame.width, frame.height, asset.rotation);
 

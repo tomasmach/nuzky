@@ -410,11 +410,12 @@ impl VideoDecoder {
 }
 
 /// Size to decode at so a layer shown at `display` pixels (after rotation) stays sharp
-/// without converting more pixels than needed. Returned in source orientation.
-pub fn decode_size(src: (u32, u32), rotation: u32, display: (f32, f32)) -> (u32, u32) {
+/// without converting more pixels than needed, and no side exceeds `max_side`.
+/// Returned in source orientation.
+pub fn decode_size(src: (u32, u32), rotation: u32, display: (f32, f32), max_side: u32) -> (u32, u32) {
     let (dw, dh) = if rotation % 180 == 90 { (display.1, display.0) } else { display };
-    let scale = (dw / src.0 as f32).max(dh / src.1 as f32).min(1.0);
-    let even = |v: f32| ((v.round() as u32).max(2) + 1) & !1;
+    let scale = (dw / src.0 as f32).max(dh / src.1 as f32).min(1.0).min(max_side as f32 / src.0.max(src.1) as f32);
+    let even = |v: f32| (((v.round() as u32).max(2) + 1) & !1).min(max_side & !1);
     (even(src.0 as f32 * scale), even(src.1 as f32 * scale))
 }
 
@@ -664,10 +665,13 @@ mod tests {
 
     #[test]
     fn decode_size_keeps_aspect_and_never_upscales() {
-        assert_eq!(decode_size((1920, 1080), 0, (960.0, 540.0)), (960, 540));
-        assert_eq!(decode_size((1920, 1080), 0, (4000.0, 3000.0)), (1920, 1080));
+        assert_eq!(decode_size((1920, 1080), 0, (960.0, 540.0), 8192), (960, 540));
+        assert_eq!(decode_size((1920, 1080), 0, (4000.0, 3000.0), 8192), (1920, 1080));
         // Rotated portrait source shown 540 wide, 960 tall.
-        assert_eq!(decode_size((1920, 1080), 90, (540.0, 960.0)), (960, 540));
+        assert_eq!(decode_size((1920, 1080), 90, (540.0, 960.0), 8192), (960, 540));
+        // A zoomed panorama stays inside the GPU texture limit and keeps its aspect.
+        assert_eq!(decode_size((20000, 3000), 0, (12800.0, 1920.0), 8192), (8192, 1230));
+        assert_eq!(decode_size((3000, 20000), 90, (12800.0, 1920.0), 8191), (1230, 8190));
     }
 
     /// Upsampled sources used to lose their tail; mono sources came out 3 dB quieter.

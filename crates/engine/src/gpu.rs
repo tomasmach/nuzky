@@ -304,10 +304,19 @@ impl Gpu {
         self.target.as_ref().unwrap()
     }
 
-    fn texture_for(&mut self, image: &Image) -> wgpu::Texture {
+    fn texture_for(&mut self, image: &Image) -> Result<wgpu::Texture> {
         let key = Arc::as_ptr(&image.data) as usize;
         if let Some((_, tex)) = self.textures.get(&key) {
-            return tex.clone();
+            return Ok(tex.clone());
+        }
+        // wgpu panics on invalid textures; callers size layers to the limit, so this is a bug guard.
+        let max = self.max_texture_dimension();
+        if image.width == 0
+            || image.height == 0
+            || image.width.max(image.height) > max
+            || image.data.len() < image.width as usize * image.height as usize * 4
+        {
+            anyhow::bail!("Cannot draw a {}×{} layer (GPU limit {max} px)", image.width, image.height);
         }
         let size = wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 };
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -332,7 +341,7 @@ impl Gpu {
             size,
         );
         self.textures.insert(key, (image.data.clone(), tex.clone()));
-        tex
+        Ok(tex)
     }
 
     fn bind(&self, layer: &Layer, tex: &wgpu::Texture, w: u32, h: u32, premult: bool) -> wgpu::BindGroup {
@@ -420,14 +429,14 @@ impl Gpu {
         for draw in layers {
             match draw {
                 Draw::Layer(layer) => {
-                    let tex = self.texture_for(&layer.image);
+                    let tex = self.texture_for(&layer.image)?;
                     used.push(Arc::as_ptr(&layer.image.data) as usize);
                     bind_groups.push(self.bind(layer, &tex, w, h, false));
                 }
                 Draw::Transition(pair) => {
                     let mut groups = Vec::new();
                     for layer in pair {
-                        let tex = self.texture_for(&layer.image);
+                        let tex = self.texture_for(&layer.image)?;
                         used.push(Arc::as_ptr(&layer.image.data) as usize);
                         groups.push(self.bind(layer, &tex, w, h, false));
                     }

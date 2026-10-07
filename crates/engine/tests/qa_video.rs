@@ -203,7 +203,7 @@ fn odd_tiny_and_4k_frames_decode_without_corruption() {
         let mut decoder = VideoDecoder::open(&p).unwrap();
         assert_eq!(decoder.source_size(), (w, h));
         let (t, f) = decoder.next_frame().unwrap().unwrap();
-        let size = decode_size((w, h), 0, (w as f32, h as f32));
+        let size = decode_size((w, h), 0, (w as f32, h as f32), 8192);
         let rgba = decoder.convert(&f, t, size.0, size.1).unwrap();
         assert_eq!(rgba.data.len(), (size.0 * size.1 * 4) as usize);
         assert!(rgba.data.iter().all(|&v| v >= 253));
@@ -418,4 +418,23 @@ fn exif_orientation_of_still_images_matches_ffmpeg_autorotate() {
         let error = mae(&got, &expected);
         assert!(error < 3.0, "orientation {orientation}: pixel MAE={error}");
     }
+}
+
+#[test]
+fn panorama_zoomed_past_the_gpu_texture_limit_renders_downscaled() {
+    if !available() {
+        return;
+    }
+    let d = dir("panorama");
+    let path = d.join("panorama.jpg");
+    ff(&["-f", "lavfi", "-i", "color=red:s=20000x3000", "-frames:v", "1"], &path);
+    let mut p = project(&path, 200_000);
+    (p.canvas.width, p.canvas.height) = (1080, 1920);
+    // Filling the portrait canvas shows the panorama 12 800 px wide, past the 8192 px default limit.
+    let ClipContent::Media { transform, .. } = &mut p.tracks[0].clips[0].content else { unreachable!() };
+    transform.scale = (1920.0 / 3000.0) / (1080.0 / 20000.0);
+    let mut renderer = Renderer::new().unwrap();
+    assert!(renderer.max_texture_dimension() < 12_800);
+    let frame = renderer.render(&p, 0, 1080, 1920, Wait::Exact, false).unwrap();
+    assert!(frame.chunks_exact(4).all(|px| px[0] > 250 && px[1] < 5 && px[2] < 5), "not filled with red");
 }

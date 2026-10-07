@@ -172,7 +172,7 @@ fn placement_quad(project: &Project, place: &Placement, k: f32) -> [[f32; 2]; 4]
     )
 }
 
-fn decode_resolution(project: &Project, clip: &Clip, asset: &Asset, k: f32) -> (u32, u32) {
+fn decode_resolution(project: &Project, clip: &Clip, asset: &Asset, k: f32, max_side: u32) -> (u32, u32) {
     let base = match clip.content {
         ClipContent::Media { transform, .. } | ClipContent::Text { transform, .. } => transform.scale,
     };
@@ -188,7 +188,8 @@ fn decode_resolution(project: &Project, clip: &Clip, asset: &Asset, k: f32) -> (
     let fit =
         (project.canvas.width as f32 / asset.width as f32).min(project.canvas.height as f32 / asset.height as f32);
     let src = if asset.rotation % 180 == 90 { (asset.height, asset.width) } else { (asset.width, asset.height) };
-    decode_size(src, asset.rotation, (asset.width as f32 * fit * scale * k, asset.height as f32 * fit * scale * k))
+    let display = (asset.width as f32 * fit * scale * k, asset.height as f32 * fit * scale * k);
+    decode_size(src, asset.rotation, display, max_side)
 }
 
 impl Renderer {
@@ -346,7 +347,7 @@ impl Renderer {
                     else {
                         continue;
                     };
-                    let size = decode_resolution(project, clip, asset, k);
+                    let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
                     let worker = self
                         .workers
                         .entry((clip.id.clone(), asset.path.clone()))
@@ -373,7 +374,7 @@ impl Renderer {
             ClipContent::Media { asset_id, adjust, .. } => {
                 let Some(asset) = project.asset(asset_id) else { return Ok(None) };
                 // A stable conversion size avoids flushing the decoder queue on every animation frame.
-                let size = decode_resolution(project, clip, asset, k);
+                let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
                 let source_t = if asset.kind == AssetKind::Image {
                     0
                 } else {
