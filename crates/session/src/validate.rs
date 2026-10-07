@@ -5,8 +5,8 @@ use anyhow::{Result, ensure};
 use capopen_engine::{
     Project,
     model::{
-        AssetKind, Clip, ClipContent, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TrackKind,
-        Transform, max_stroke_width,
+        AssetKind, Clip, ClipContent, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO,
+        PROJECT_VERSION, TrackKind, Transform, max_stroke_width,
     },
 };
 
@@ -53,6 +53,39 @@ pub fn validate(project: &Project) -> Result<()> {
                 .checked_add(clip.duration_us)
                 .ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: clip time overflow"))?;
         }
+    }
+    word_corrections(project)
+}
+
+/// More than a long recording has words, so a project file cannot grow without bound.
+const MAX_WORD_CORRECTIONS: usize = 50_000;
+
+/// A corrected word is one line of text, like the recognised word it replaces. Corrections of
+/// media no longer in the project stay valid: they apply to nothing.
+fn word_corrections(project: &Project) -> Result<()> {
+    ensure!(
+        project.word_corrections.len() <= MAX_WORD_CORRECTIONS,
+        "INVALID_PROJECT: more than {MAX_WORD_CORRECTIONS} corrected words"
+    );
+    let mut seen = HashSet::new();
+    for correction in &project.word_corrections {
+        for text in [&correction.text, &correction.original] {
+            ensure!(
+                !text.trim().is_empty()
+                    && text.chars().count() <= MAX_CORRECTION_CHARS
+                    && !text.chars().any(char::is_control),
+                "INVALID_PROJECT: a corrected word must be one line of 1 to {MAX_CORRECTION_CHARS} characters, not {text:?}"
+            );
+        }
+        ensure!(
+            !correction.asset_id.is_empty() && correction.source_start_us >= 0,
+            "INVALID_PROJECT: corrected word without its media or start"
+        );
+        ensure!(
+            seen.insert((&correction.asset_id, correction.source_start_us, &correction.original)),
+            "INVALID_PROJECT: the word {:?} is corrected twice",
+            correction.original
+        );
     }
     Ok(())
 }
@@ -361,6 +394,58 @@ mod tests {
         let error = editor.apply_batch_checked(vec![set], None, validate).unwrap_err();
         assert!(format!("{error:#}").contains("INVALID_COLOR"), "{error:#}");
         assert_eq!(editor.project, project);
+    }
+
+    #[test]
+    fn word_corrections_are_one_line_of_bounded_text_once_per_word() {
+        use capopen_engine::model::WordCorrection;
+        let fix = |original: &str, text: &str| WordCorrection {
+            asset_id: "clip".into(),
+            source_start_us: 500_000,
+            original: original.into(),
+            text: text.into(),
+        };
+        let mut project = Project::new("corrections");
+        project.word_corrections = vec![fix("oka", "okna"), fix("to", "tu")];
+        // Media removed later leaves its corrections valid: they apply to nothing.
+        validate(&project).unwrap();
+        let long = "ž".repeat(MAX_CORRECTION_CHARS + 1);
+        for bad in [
+            fix("oka", ""),
+            fix("oka", "  "),
+            fix("oka", "two\nlines"),
+            fix("oka", "a\u{7}"),
+            fix("oka", &long),
+            fix("", "okna"),
+            WordCorrection { source_start_us: -1, ..fix("x", "y") },
+            WordCorrection { asset_id: String::new(), ..fix("x", "y") },
+            fix("oka", "okno"),
+        ] {
+            let mut candidate = project.clone();
+            candidate.word_corrections.push(bad.clone());
+            let error = validate(&candidate).unwrap_err().to_string();
+            assert!(error.starts_with("INVALID_PROJECT:"), "{bad:?}: {error}");
+        }
+        project.assets.push(Asset {
+            id: "clip".into(),
+            name: "Clip".into(),
+            path: "/clip.mp4".into(),
+            kind: AssetKind::Video,
+            duration_us: 1_000_000,
+            width: 1080,
+            height: 1920,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+        });
+        let mut editor = capopen_engine::edit::Editor::new(project.clone());
+        let correct = |text: &str| vec![EditCmd::CorrectWords { corrections: vec![fix("word", text)] }];
+        let error = editor.apply_batch_checked(correct("two\nlines"), None, validate).unwrap_err().to_string();
+        assert!(error.contains("one line"), "{error}");
+        assert_eq!(editor.project, project);
+        editor.apply_batch_checked(correct("words"), None, validate).unwrap();
+        assert_eq!(editor.project.word_corrections.len(), 3);
     }
 
     #[test]

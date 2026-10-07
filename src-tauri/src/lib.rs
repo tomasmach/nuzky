@@ -792,6 +792,7 @@ pub fn run() {
             transcripts::remove_pauses,
             agent_connections,
             connect_agent,
+            transcripts::correct_words,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CapOpen")

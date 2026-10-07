@@ -97,6 +97,7 @@ Text-based editing, as in CapCut. Transcribe timeline recognises each video file
 - **Select**: click a word to jump there and select it; drag or `Shift`-click to extend. With the text focused, `←`/`→` move word by word (`Shift` extends), `Home`/`End` jump to the ends, `Enter` jumps to the selection, `Esc` clears it, `Space` plays without leaving the text.
 - **Delete**: `Delete`, `Backspace` or the Delete button in the bar under the text, which shows the selection's word count and length. It cuts the selected words and the silence around them, keeping 0.12 s after the word before and 0.08 s before the word after, counted from where those words are heard in the sound, so a cut never clips a syllable, out of every track except audio kept in place, so captions and overlays stay in sync, as one undo step. A selection of pause chips alone removes those pauses. The playhead lands on the cut; a toast with the time removed offers Undo. While the bar shows, toasts sit above it so they never cover Delete. Inside the text these keys never delete timeline clips.
 - **Remove pauses**: the button names the count and the time it removes ("Remove 5 pauses · 6.7 s") and cuts every pause chip at once. A pause between words keeps half the threshold next to each word, so a 2 s pause at 0.5 s becomes 0.5 s (where the next clip starts speaking at once, the whole pause stays after the last word of the clip before, so no sliver of a clip is left); silence longer than the threshold before the first word and after the last one is trimmed to 0.08 s and 0.12 s. Pauses and text cuts only lie inside clips that carry speech: clips in which words were recognised. A clip without words, such as B-roll, is never part of a pause and never cut from the text.
+- **Correct a word**: double-click a word, or press `F2` with one word selected, and type what was said; `Enter` or clicking elsewhere saves, `Esc` cancels. The word then reads that way in the transcript, in the captions that show it (their style and timing stay) and in captions generated again, also after a restart. The correction belongs to the project and to that recognised word: if the file is recognised again and the word comes out differently, it no longer applies. Typing the recognised text again removes it. A corrected word is underlined with dots and its tooltip says what was recognised. A toast offers Undo; one undo takes back the word and its captions. While AI is editing, a word cannot be corrected and the notice says why.
 - **Keep in place while cutting**: one checkbox per audio track, saved with the project and undoable. Tracks made for music and sound files start checked and keep playing across cuts; sound detached from a video starts unchecked, so it is cut with the picture. The setting also applies to `Q`/`W`.
 
 ### Export
@@ -131,12 +132,13 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Alt+←` `Alt+→` (`Shift`) | Nudge the focused clip a frame (a second); on the main track, move it one place |
 | `Home` / `End` | Start / end |
 | `Ctrl` + wheel, `+` / `-` | Zoom timeline; the playhead stays where it is on screen (moved to the middle if it was out of view), with the wheel the moment under the pointer does |
+| `F2` | In the transcript, correct the selected word |
 | `Ctrl+I` | Import |
 | `Ctrl+E` | Export |
 | `F8` | Focus the newest toast; `Esc` there dismisses it and focus moves to the next toast, then back |
 | `Esc` | Cancel a drag or close the open menu or dialog; with none of those, clear the selection |
 
-Shortcuts are ignored while typing in a text field and while the export dialog is open. A focused tab bar keeps `←`/`→` (and `Home`/`End`) to switch tabs, so the playhead does not move. The focused transcript keeps `←`/`→`, `Home`/`End`, `Delete` and `Backspace` for its words.
+Shortcuts are ignored while typing in a text field and while the export dialog is open. A focused tab bar keeps `←`/`→` (and `Home`/`End`) to switch tabs, so the playhead does not move. The focused transcript keeps `←`/`→`, `Home`/`End`, `Delete`, `Backspace` and `F2` for its words; while a word is being corrected, its field keeps every key.
 
 ## Interrupted AI edits
 

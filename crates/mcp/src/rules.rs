@@ -39,6 +39,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("transcribe", Never, false, false, true),
     rules("get_transcript", Always, false, true, false),
     rules("edit_transcript", When(|args| args["dry_run"] == true), true, false, false),
+    // Changes how words read, never what is heard; the recognised text stays in the project.
+    rules("correct_words", Never, false, false, false),
     rules("job", When(|args| args["action"] == "get"), false, false, false),
     rules("build_captions", Never, true, false, false),
     rules("export_video", Never, false, false, true),

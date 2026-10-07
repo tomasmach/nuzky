@@ -184,6 +184,16 @@ export interface Project {
   canvas: Canvas;
   assets: Asset[];
   tracks: Track[];
+  /** Recognised words the user corrected; absent when there are none. */
+  wordCorrections?: WordCorrection[];
+}
+
+/** A word as the user corrected it; applies while the file's transcript has `original` starting at `sourceStartUs`. */
+export interface WordCorrection {
+  assetId: string;
+  sourceStartUs: number;
+  original: string;
+  text: string;
 }
 
 export interface Snapshot {
@@ -255,6 +265,8 @@ export interface TranscriptWord {
   endUs: number;
   text: string;
   p: number;
+  /** What recognition wrote, when the user corrected the word. */
+  original?: string;
 }
 
 /** Silence in speech longer than the pause length; removing it cuts `startUs`–`endUs` out of the whole `gapUs`. */
@@ -272,6 +284,12 @@ export interface TranscriptView {
   pauses: TranscriptPause[];
   /** Heard media without a transcript yet. */
   untranscribed: string[];
+}
+
+export interface WordsCorrected {
+  snapshot: Snapshot;
+  /** Caption clips that now show the corrected words. */
+  captions: number;
 }
 
 export interface TranscriptCut {
@@ -327,7 +345,9 @@ export type EditCmd =
   /** Without `keepTrackIds` the tracks kept in place stay. */
   | { type: "rippleDeleteRanges"; ranges: TimeRange[]; keepTrackIds?: string[] | null }
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
-  | { type: "renameProject"; name: string };
+  | { type: "renameProject"; name: string }
+  /** Text equal to `original` removes the correction. */
+  | { type: "correctWords"; corrections: WordCorrection[] };
 
 /** An agent CapOpen can be connected to, and the state of its `capopen` MCP entry. */
 export type AgentKind = "claudeCode" | "codex";

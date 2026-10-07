@@ -9,7 +9,7 @@ use capopen_analysis::{AudioSource, CaptionGrouping, group_words};
 use capopen_engine::{
     Project,
     edit::{EditCmd, TimeRange, merge_ranges},
-    model::{Asset, ClipContent, TextStyle},
+    model::{Asset, ClipContent, MAX_CORRECTION_CHARS, TextStyle, WordCorrection},
     speech::{TimelineWord, Word, is_heard, map_words},
 };
 use capopen_session::{
@@ -146,10 +146,44 @@ pub fn heard_assets(project: &Project) -> HashSet<String> {
         .collect()
 }
 
+#[derive(Default)]
 pub struct Derived {
+    /// The words of each heard file, as the project's corrections read them.
     pub sources: HashMap<String, Vec<Word>>,
     pub words: Vec<TimelineWord>,
     pub untranscribed: Vec<String>,
+    /// What corrected words were recognised as, by asset, start in the file and corrected text.
+    pub originals: HashMap<(String, i64, String), String>,
+}
+
+impl Derived {
+    /// The recognised words of `sources` with the project's corrections, placed on its timeline.
+    /// A correction applies to the word with its start and recognised text only, never to
+    /// another word, and is matched against what was recognised, so corrections never chain.
+    pub fn new(project: &Project, mut sources: HashMap<String, Vec<Word>>, untranscribed: Vec<String>) -> Self {
+        let corrections: HashMap<_, _> = project
+            .word_corrections
+            .iter()
+            .map(|c| ((c.asset_id.as_str(), c.source_start_us, c.original.as_str()), c.text.as_str()))
+            .collect();
+        let mut originals = HashMap::new();
+        if !corrections.is_empty() {
+            for (asset, words) in &mut sources {
+                for word in words {
+                    if let Some(&text) = corrections.get(&(asset.as_str(), word.start_us, word.text.as_str())) {
+                        let original = std::mem::replace(&mut word.text, text.to_owned());
+                        originals.insert((asset.clone(), word.start_us, word.text.clone()), original);
+                    }
+                }
+            }
+        }
+        Self { words: map_words(project, &sources), sources, untranscribed, originals }
+    }
+
+    /// What `word` was recognised as, when the user corrected it.
+    pub fn original(&self, word: &TimelineWord) -> Option<&str> {
+        self.originals.get(&(word.asset_id.clone(), word.source_start_us, word.text.clone())).map(String::as_str)
+    }
 }
 
 pub fn derive(project: &Project, store: &TranscriptStore) -> Result<Derived> {
@@ -164,7 +198,7 @@ pub fn derive(project: &Project, store: &TranscriptStore) -> Result<Derived> {
             None => untranscribed.push(asset.id.clone()),
         }
     }
-    Ok(Derived { words: map_words(project, &sources), sources, untranscribed })
+    Ok(Derived::new(project, sources, untranscribed))
 }
 
 /// Word indices also change on re-recognition, even when the timeline layout stays put.
@@ -506,11 +540,202 @@ pub fn deletion_ranges(
 /// A cut planned from `key` must still match what is heard, with every heard file recognised.
 pub fn check_key(project: &Project, derived: &Derived, key: &str) -> Result<()> {
     ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before cutting");
+    check_word_key(project, derived, key)
+}
+
+/// Word indices from `key` still number the same words with the same text.
+pub fn check_word_key(project: &Project, derived: &Derived, key: &str) -> Result<()> {
     ensure!(
         key == word_key(project, &derived.words),
         "SPEECH_CHANGED: speech changed or wrong key; use get_transcript's transcript_key (get_state's key is for apply_edits)"
     );
     Ok(())
+}
+
+/// What correcting words does, as one atomic batch.
+#[derive(Debug)]
+pub struct Correction {
+    /// The corrections first, then the caption clips that show the words.
+    pub edits: Vec<EditCmd>,
+    /// Corrected words as `(index, recognised text, new text)`, for every place the word is heard.
+    pub words: Vec<(usize, String, String)>,
+    /// Caption clips whose text changes.
+    pub captions: Vec<String>,
+}
+
+/// One line of text, as a recognised word is.
+pub fn check_correction(text: &str) -> Result<String> {
+    let text = text.trim();
+    ensure!(
+        !text.is_empty() && text.chars().count() <= MAX_CORRECTION_CHARS && !text.chars().any(char::is_control),
+        "INVALID_CORRECTION: a word must be one line of 1 to {MAX_CORRECTION_CHARS} characters, not {text:?}"
+    );
+    Ok(text.to_owned())
+}
+
+/// Corrects the words at these `derived` indices to the given text. A word heard twice, such as
+/// in a duplicated clip, is one recognised word: correcting it corrects every place it is heard.
+pub fn plan_correction(project: &Project, derived: &Derived, fixes: &[(usize, String)]) -> Result<Correction> {
+    ensure!(!fixes.is_empty(), "INVALID_ARGUMENTS: give at least one correction");
+    let mut corrections: Vec<(usize, WordCorrection)> = Vec::new();
+    for (i, text) in fixes {
+        let word =
+            derived.words.get(*i).with_context(|| format!("INVALID_WORD_INDEX: no word {i} in the transcript"))?;
+        let text = check_correction(text)?;
+        let original = derived.original(word).unwrap_or(&word.text).to_owned();
+        let correction =
+            WordCorrection { asset_id: word.asset_id.clone(), source_start_us: word.source_start_us, original, text };
+        let same = |c: &WordCorrection| {
+            (&c.asset_id, c.source_start_us, &c.original)
+                == (&correction.asset_id, correction.source_start_us, &correction.original)
+        };
+        match corrections.iter().find(|(_, c)| same(c)) {
+            Some((j, c)) => ensure!(
+                c.text == correction.text,
+                "INVALID_CORRECTION: words {j} and {i} are the same recognised word; give it one text"
+            ),
+            None if correction.text != word.text => corrections.push((*i, correction)),
+            None => {}
+        }
+    }
+    // Every place a corrected word is heard, with the text it shows now and the new text.
+    let mut words = Vec::new();
+    for (index, word) in derived.words.iter().enumerate() {
+        let original = derived.original(word).unwrap_or(&word.text);
+        if let Some((_, c)) = corrections.iter().find(|(_, c)| {
+            c.asset_id == word.asset_id && c.source_start_us == word.source_start_us && c.original == original
+        }) {
+            words.push((index, word.text.clone(), c.text.clone()));
+        }
+    }
+    let changes: Vec<(usize, &str)> = words.iter().map(|(i, _, text)| (*i, text.as_str())).collect();
+    let captions = caption_corrections(project, derived, &changes);
+    let mut edits = Vec::new();
+    if !corrections.is_empty() {
+        edits.push(EditCmd::CorrectWords { corrections: corrections.into_iter().map(|(_, c)| c).collect() });
+    }
+    let changed = captions.iter().map(|(id, _)| id.clone()).collect();
+    edits.extend(captions.into_iter().map(|(clip_id, text)| EditCmd::UpdateClip {
+        clip_id,
+        transform: None,
+        volume: None,
+        text: Some(text),
+        style: None,
+        speed: None,
+        adjust: None,
+        fade_in_us: None,
+        fade_out_us: None,
+        clean_voice: None,
+    }));
+    Ok(Correction { edits, words, captions: changed })
+}
+
+/// Text compared without case, the punctuation around it and how wide its spaces are.
+fn comparable(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
+}
+
+/// A caption clip's id, its text and the words to replace in it, as byte ranges and new text.
+type Replacements<'a> = (&'a str, &'a str, Vec<(usize, usize, String)>);
+
+/// The new text of caption clips that show corrected words: on the Captions track, a clip whose
+/// time holds the middle of the word and whose text has the word, compared without case and the
+/// punctuation around it, gets that word replaced. Its style and timing stay. `changes` are
+/// `(index in derived.words, new text)`; a word twice in one caption is told apart by the words
+/// heard before it there.
+pub fn caption_corrections(project: &Project, derived: &Derived, changes: &[(usize, &str)]) -> Vec<(String, String)> {
+    let middle = |w: &TimelineWord| w.start_us + (w.end_us - w.start_us) / 2;
+    // Per clip: its text and the replacements by byte range, both from the text before any change.
+    let mut planned: Vec<Replacements> = Vec::new();
+    for &(index, text) in changes {
+        let Some(word) = derived.words.get(index) else { continue };
+        let wanted = comparable(&word.text);
+        if wanted.is_empty() {
+            continue;
+        }
+        // A corrected word may hold a space, so it may span several words of a caption.
+        let length = word.text.split_whitespace().count();
+        let at = middle(word);
+        for clip in project.tracks.iter().filter(|t| t.is_captions()).flat_map(|t| &t.clips) {
+            let ClipContent::Text { text: shown, .. } = &clip.content else { continue };
+            if !clip.contains(at) {
+                continue;
+            }
+            let words = tokens(shown);
+            let matching: Vec<(usize, usize)> = words
+                .windows(length)
+                .map(|run| (run[0].0, run[length - 1].0 + run[length - 1].1.len()))
+                .filter(|&(start, end)| comparable(&shown[start..end]) == wanted)
+                .collect();
+            let before = derived.words[..index]
+                .iter()
+                .filter(|w| clip.contains(middle(w)) && comparable(&w.text) == wanted)
+                .count();
+            let Some(&(start, end)) = matching.get(before).or(matching.last()) else { continue };
+            let entry = match planned.iter().position(|(id, ..)| *id == clip.id) {
+                Some(found) => &mut planned[found],
+                None => {
+                    planned.push((&clip.id, shown, Vec::new()));
+                    planned.last_mut().unwrap()
+                }
+            };
+            if entry.2.iter().all(|&(a, b, _)| end <= a || start >= b) {
+                entry.2.push((start, end, replaced(&shown[start..end], &word.text, text)));
+            }
+        }
+    }
+    planned
+        .into_iter()
+        .filter_map(|(id, shown, mut replacements)| {
+            replacements.sort_by_key(|r| r.0);
+            let mut out = String::with_capacity(shown.len());
+            let mut last = 0;
+            for (start, end, new) in replacements {
+                out.push_str(&shown[last..start]);
+                out.push_str(&new);
+                last = end;
+            }
+            out.push_str(&shown[last..]);
+            (out != shown).then(|| (id.to_owned(), out))
+        })
+        .collect()
+}
+
+/// Words of a caption text with their byte offsets.
+fn tokens(text: &str) -> Vec<(usize, &str)> {
+    let mut found = Vec::new();
+    let mut start = None;
+    for (at, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        match (c.is_whitespace(), start) {
+            (true, Some(from)) => {
+                found.push((from, &text[from..at]));
+                start = None;
+            }
+            (false, None) => start = Some(at),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// A caption word that reads as recognised takes the correction as it is. One edited by hand
+/// keeps its own punctuation around the corrected word and its capital first letter.
+fn replaced(token: &str, recognised: &str, text: &str) -> String {
+    if token == recognised {
+        return text.to_owned();
+    }
+    let edge = |c: char| !c.is_alphanumeric();
+    let core = token.trim_matches(edge);
+    let lead = &token[..token.len() - token.trim_start_matches(edge).len()];
+    let trail = &token[lead.len() + core.len()..];
+    let mut new = text.trim_matches(edge).to_owned();
+    if core.starts_with(char::is_uppercase)
+        && let Some(first) = new.chars().next()
+        && first.is_lowercase()
+    {
+        new = first.to_uppercase().chain(new.chars().skip(1)).collect();
+    }
+    format!("{lead}{new}{trail}")
 }
 
 pub struct Cut {
@@ -641,7 +866,7 @@ pub(crate) mod tests {
     #[test]
     fn pauses_report_the_whole_silence_they_shorten() {
         let (project, sources) = fixture();
-        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        let derived = Derived::new(&project, sources, vec![]);
         let found = pauses(&project, &derived, 300_000).unwrap();
         // Before the first word, the seven gaps between words and after the last one.
         assert_eq!(found.len(), 9);
@@ -690,7 +915,7 @@ pub(crate) mod tests {
             clips: vec![overlay],
         });
         sources.insert("broll".into(), vec![]);
-        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        let derived = Derived::new(&project, sources, vec![]);
         let main = |p: &Project| p.tracks[0].clips.iter().map(|c| (c.start_us, c.end_us())).collect::<Vec<_>>();
         assert_eq!(main(&project), [(0, 5_000_000), (5_000_000, 11_000_000), (11_000_000, 16_000_000)]);
         let found = pauses(&project, &derived, 300_000).unwrap();
@@ -729,7 +954,7 @@ pub(crate) mod tests {
         let word =
             |start_us, text: &str| Word { start_us, end_us: start_us + 400_000, text: text.into(), probability: 1.0 };
         sources.insert("next".into(), vec![word(0, "next0"), word(1_000_000, "next1")]);
-        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        let derived = Derived::new(&project, sources, vec![]);
         for (delete, last) in [(None, "word7"), (Some(&[[7, 7]][..]), "word6")] {
             let ranges = edit_ranges(&project, &derived, delete, None, Some(300_000)).unwrap();
             let cut = plan_cut(&project, &derived, ranges).unwrap();
@@ -762,7 +987,7 @@ pub(crate) mod tests {
         let word = |start_us, end_us, text: &str| Word { start_us, end_us, text: text.into(), probability: 1.0 };
         sources.insert("talk".into(), vec![word(200_000, 500_000, "first"), word(900_000, 1_300_000, "half")]);
         sources.insert("next".into(), vec![word(0, 400_000, "next0"), word(1_000_000, 1_400_000, "next1")]);
-        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        let derived = Derived::new(&project, sources, vec![]);
         // "half" has its middle past the take's end, so only "first" is numbered in the take.
         assert_eq!(derived.words.iter().filter(|w| w.asset_id == "talk").count(), 1);
         let ranges = edit_ranges(&project, &derived, None, None, Some(300_000)).unwrap();
@@ -830,7 +1055,7 @@ pub(crate) mod tests {
         assert_eq!(words.len(), 5);
         assert_eq!(words[3].start_us, 3_250_000);
         let data =
-            summary(&Derived { sources, words: words.clone(), untranscribed: vec![] }, Some([3_000_000, 5_000_000]))
+            summary(&Derived { sources, words: words.clone(), ..Derived::default() }, Some([3_000_000, 5_000_000]))
                 .unwrap();
         assert_eq!(data["words"][0]["i"], 3);
         assert_eq!(data["words"][0]["text"], "word6");
@@ -905,7 +1130,7 @@ pub(crate) mod tests {
                         );
                     }
                     sources.insert("talk".into(), words);
-                    let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+                    let derived = Derived::new(&project, sources, vec![]);
                     if word_start == 4_800_000 {
                         assert_eq!(derived.words.last().unwrap().start_us, (5_000_000.0 / speed) as i64);
                     }
@@ -1031,5 +1256,223 @@ pub(crate) mod tests {
         assert!(!waiting.recv_timeout(Duration::from_secs(2)).unwrap());
         assert!(worker.join().unwrap().unwrap());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn correction(start_us: i64, original: &str, text: &str) -> EditCmd {
+        EditCmd::CorrectWords {
+            corrections: vec![WordCorrection {
+                asset_id: "talk".into(),
+                source_start_us: start_us,
+                original: original.into(),
+                text: text.into(),
+            }],
+        }
+    }
+
+    /// The words with their texts, where they are heard and what they were recognised as.
+    fn read(project: &Project, sources: &HashMap<String, Vec<Word>>) -> Vec<(String, i64, Option<String>)> {
+        let derived = Derived::new(project, sources.clone(), vec![]);
+        derived.words.iter().map(|w| (w.text.clone(), w.start_us, derived.original(w).map(str::to_owned))).collect()
+    }
+
+    /// Plans the corrections as the app and the MCP tool do and applies them.
+    fn correct(
+        project: &mut Project,
+        sources: &HashMap<String, Vec<Word>>,
+        fixes: &[(usize, &str)],
+    ) -> Result<Correction> {
+        let derived = Derived::new(project, sources.clone(), vec![]);
+        let fixes: Vec<_> = fixes.iter().map(|(i, text)| (*i, text.to_string())).collect();
+        let plan = plan_correction(project, &derived, &fixes)?;
+        for edit in plan.edits.clone() {
+            project.apply(edit)?;
+        }
+        Ok(plan)
+    }
+
+    fn caption_texts(project: &Project) -> Vec<String> {
+        project
+            .tracks
+            .iter()
+            .filter(|t| t.is_captions())
+            .flat_map(|t| &t.clips)
+            .map(|c| match &c.content {
+                ClipContent::Text { text, .. } => text.clone(),
+                ClipContent::Media { .. } => unreachable!(),
+            })
+            .collect()
+    }
+
+    fn add_captions(project: &mut Project, segments: &[(i64, i64, &str)]) {
+        let segments = segments
+            .iter()
+            .map(|&(start_us, end_us, text)| capopen_engine::edit::CaptionSegment {
+                start_us,
+                end_us,
+                text: text.into(),
+                words: vec![],
+            })
+            .collect();
+        project.apply(EditCmd::AddCaptions { segments, style: crate::params::reel_style() }).unwrap();
+    }
+
+    #[test]
+    fn a_correction_follows_cuts_speed_and_duplicates_and_changes_the_key() {
+        let (mut project, sources) = fixture();
+        let key = |p: &Project| word_key(p, &Derived::new(p, sources.clone(), vec![]).words);
+        let before = key(&project);
+        project.apply(correction(3_500_000, "word3", "fixed")).unwrap();
+        let words = read(&project, &sources);
+        assert_eq!(words[3], ("fixed".into(), 3_500_000, Some("word3".into())));
+        assert!(words.iter().enumerate().all(|(i, w)| i == 3 || (w.0.starts_with("word") && w.2.is_none())));
+        assert_ne!(key(&project), before, "a correction changes the word indices' key");
+        // Cut word1 and word2: the correction stays with its word, now at 1.5 s.
+        project
+            .apply(EditCmd::RippleDeleteRanges {
+                ranges: vec![TimeRange { start_us: 1_000_000, end_us: 3_000_000 }],
+                keep_track_ids: None,
+            })
+            .unwrap();
+        let words = read(&project, &sources);
+        assert_eq!(words[1], ("fixed".into(), 1_500_000, Some("word3".into())));
+        // Double speed on the clip after the cut, then a copy of it: heard twice, corrected in both places.
+        let clip = project.tracks[0].clips[1].id.clone();
+        project
+            .apply(serde_json::from_value(json!({"type":"updateClip","clipId":clip.clone(),"speed":2})).unwrap())
+            .unwrap();
+        project.apply(EditCmd::DuplicateClip { clip_id: clip }).unwrap();
+        let fixed: Vec<_> = read(&project, &sources).into_iter().filter(|w| w.2.is_some()).collect();
+        assert_eq!(
+            fixed.iter().map(|w| (w.0.as_str(), w.1)).collect::<Vec<_>>(),
+            [("fixed", 1_250_000), ("fixed", 4_750_000)]
+        );
+    }
+
+    #[test]
+    fn a_word_recognised_again_differently_leaves_the_correction_dormant() {
+        let (mut project, mut sources) = fixture();
+        project.apply(correction(3_500_000, "word3", "fixed")).unwrap();
+        let words = sources.get_mut("talk").unwrap();
+        // Another word now reads like the corrected one, and the corrected word reads differently.
+        words[4].text = "word3".into();
+        words[3].text = "other".into();
+        let texts: Vec<_> = read(&project, &sources).into_iter().map(|w| w.0).collect();
+        assert_eq!(texts[3..5], ["other", "word3"]);
+        // The same text a little later is another word too.
+        let words = sources.get_mut("talk").unwrap();
+        (words[3].text, words[3].start_us) = ("word3".into(), 3_510_000);
+        assert!(read(&project, &sources).iter().all(|w| w.0 != "fixed" && w.2.is_none()));
+        // Recognised as before, it applies again.
+        sources.get_mut("talk").unwrap()[3].start_us = 3_500_000;
+        assert_eq!(read(&project, &sources)[3].0, "fixed");
+    }
+
+    #[test]
+    fn correcting_a_word_updates_the_captions_that_show_it() {
+        let (mut project, sources) = fixture();
+        add_captions(
+            &mut project,
+            &[(0, 3_000_000, "word0 word1 word2."), (3_000_000, 6_000_000, "WORD3! word4 word5.")],
+        );
+        let before = project.tracks.last().unwrap().clips.clone();
+        let plan = correct(&mut project, &sources, &[(3, "fixed"), (5, "five.")]).unwrap();
+        assert_eq!(plan.words, [(3, "word3".into(), "fixed".into()), (5, "word5.".into(), "five.".into())]);
+        assert_eq!(plan.captions, [before[1].id.clone()]);
+        // A caption word edited by hand keeps its capital and its punctuation around the correction.
+        assert_eq!(caption_texts(&project), ["word0 word1 word2.", "Fixed! word4 five."]);
+        let after = &project.tracks.last().unwrap().clips[1];
+        assert_eq!((after.start_us, after.duration_us), (before[1].start_us, before[1].duration_us));
+        let look = |c: &capopen_engine::model::Clip| match &c.content {
+            ClipContent::Text { style, transform, .. } => (style.clone(), *transform),
+            ClipContent::Media { .. } => unreachable!(),
+        };
+        assert_eq!(look(after), look(&before[1]));
+        // A caption that no longer shows the word is left alone.
+        let mut project = fixture().0;
+        add_captions(&mut project, &[(3_000_000, 6_000_000, "something else")]);
+        let plan = correct(&mut project, &sources, &[(3, "fixed")]).unwrap();
+        assert!(plan.captions.is_empty());
+        assert_eq!(caption_texts(&project), ["something else"]);
+        assert_eq!(project.word_corrections.len(), 1);
+    }
+
+    #[test]
+    fn a_word_twice_in_one_caption_is_told_apart_by_order() {
+        let (mut project, mut sources) = fixture();
+        for i in [3, 4] {
+            sources.get_mut("talk").unwrap()[i].text = "to".into();
+        }
+        add_captions(&mut project, &[(3_000_000, 6_000_000, "to to word5.")]);
+        correct(&mut project, &sources, &[(4, "two")]).unwrap();
+        assert_eq!(caption_texts(&project), ["to two word5."]);
+        correct(&mut project, &sources, &[(3, "Tu")]).unwrap();
+        assert_eq!(caption_texts(&project), ["Tu two word5."]);
+    }
+
+    #[test]
+    fn regenerated_captions_keep_the_correction() {
+        let (mut project, sources) = fixture();
+        let grouping = CaptionGrouping { max_words: 3, max_chars: 100, break_gap_us: 2_000_000 };
+        let derived = Derived::new(&project, sources.clone(), vec![]);
+        project
+            .apply(caption_edit(&derived.words, &project, crate::params::reel_style(), grouping).unwrap().0)
+            .unwrap();
+        correct(&mut project, &sources, &[(3, "fixed")]).unwrap();
+        let shown = caption_texts(&project);
+        assert!(shown.iter().any(|t| t.split(' ').any(|w| w == "fixed")), "{shown:?}");
+        let derived = Derived::new(&project, sources.clone(), vec![]);
+        project
+            .apply(caption_edit(&derived.words, &project, crate::params::reel_style(), grouping).unwrap().0)
+            .unwrap();
+        assert_eq!(caption_texts(&project), shown);
+    }
+
+    #[test]
+    fn the_recognised_text_again_removes_the_correction() {
+        let (mut project, sources) = fixture();
+        add_captions(&mut project, &[(3_000_000, 4_000_000, "word3")]);
+        correct(&mut project, &sources, &[(3, "fixed")]).unwrap();
+        // Correcting the corrected word again replaces the correction rather than stacking one.
+        correct(&mut project, &sources, &[(3, "fixed again")]).unwrap();
+        assert_eq!(project.word_corrections.len(), 1);
+        assert_eq!(read(&project, &sources)[3].2.as_deref(), Some("word3"));
+        assert_eq!(caption_texts(&project), ["fixed again"]);
+        let plan = correct(&mut project, &sources, &[(3, " word3 ")]).unwrap();
+        assert!(matches!(&plan.edits[0], EditCmd::CorrectWords { .. }));
+        assert!(project.word_corrections.is_empty());
+        assert_eq!(caption_texts(&project), ["word3"]);
+        // The text it already reads changes nothing.
+        assert!(correct(&mut project, &sources, &[(3, "word3")]).unwrap().edits.is_empty());
+    }
+
+    #[test]
+    fn a_word_heard_twice_gets_one_text() {
+        let (mut project, sources) = fixture();
+        let clip = project.tracks[0].clips[0].id.clone();
+        project.apply(EditCmd::DuplicateClip { clip_id: clip }).unwrap();
+        add_captions(&mut project, &[(3_000_000, 4_000_000, "word3"), (13_000_000, 14_000_000, "word3")]);
+        let error = correct(&mut project.clone(), &sources, &[(3, "a"), (11, "b")]).unwrap_err().to_string();
+        assert!(error.starts_with("INVALID_CORRECTION"), "{error}");
+        let plan = correct(&mut project, &sources, &[(3, "fixed")]).unwrap();
+        assert_eq!(plan.words.iter().map(|w| w.0).collect::<Vec<_>>(), [3, 11]);
+        assert_eq!(caption_texts(&project), ["fixed", "fixed"]);
+        let EditCmd::CorrectWords { corrections } = &plan.edits[0] else { panic!() };
+        assert_eq!(corrections.len(), 1);
+    }
+
+    #[test]
+    fn corrections_are_one_line_of_bounded_text_for_a_word_that_exists() {
+        let (mut project, sources) = fixture();
+        let long = "x".repeat(MAX_CORRECTION_CHARS + 1);
+        for text in ["", "   ", "two\nlines", "tab\there", long.as_str()] {
+            let error = correct(&mut project, &sources, &[(0, text)]).unwrap_err().to_string();
+            assert!(error.starts_with("INVALID_CORRECTION"), "{text:?}: {error}");
+        }
+        let longest = format!(" {} ", "ž".repeat(MAX_CORRECTION_CHARS));
+        assert_eq!(check_correction(&longest).unwrap().chars().count(), MAX_CORRECTION_CHARS);
+        let error = correct(&mut project, &sources, &[(8, "late")]).unwrap_err().to_string();
+        assert!(error.starts_with("INVALID_WORD_INDEX"), "{error}");
+        assert!(correct(&mut project, &sources, &[]).unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"));
+        assert!(project.word_corrections.is_empty());
     }
 }

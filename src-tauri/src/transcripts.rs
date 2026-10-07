@@ -2,10 +2,10 @@
 //! them, so every edit keeps them right; cuts are planned exactly as for agents.
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::edit::TimeRange;
+use capopen_engine::{edit::TimeRange, model::MAX_CORRECTION_CHARS};
 use capopen_mcp::transcript::{self, Pause};
 use capopen_session::{Expect, host::Host};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::{AppState, CmdResult, Snapshot};
@@ -18,6 +18,9 @@ pub struct Word {
     end_us: i64,
     text: String,
     p: f32,
+    /// What recognition wrote, when the user corrected the word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -58,7 +61,14 @@ fn view(host: &Host, pause_us: i64) -> Result<TranscriptView> {
             .words
             .iter()
             .enumerate()
-            .map(|(i, w)| Word { i, start_us: w.start_us, end_us: w.end_us, text: w.text.clone(), p: w.probability })
+            .map(|(i, w)| Word {
+                i,
+                start_us: w.start_us,
+                end_us: w.end_us,
+                text: w.text.clone(),
+                p: w.probability,
+                original: derived.original(w).map(str::to_owned),
+            })
             .collect(),
         pauses,
         untranscribed: derived.untranscribed,
@@ -96,10 +106,30 @@ fn cut(host: &Host, key: &str, target: Target) -> Result<(Vec<String>, i64, i64)
     Ok((edited.outcome.select, plan.ranges[0].start_us, state.project.duration_us() - plan.preview.duration_us()))
 }
 
+/// Corrects words as one user edit, with the captions that show them. Returns how many
+/// caption clips changed.
+fn correct(host: &Host, key: &str, fixes: &[(usize, String)]) -> Result<usize> {
+    let state = host.session.state()?;
+    let derived = transcript::derive(&state.project, &host.transcripts)?;
+    transcript::check_word_key(&state.project, &derived, key)?;
+    let plan = transcript::plan_correction(&state.project, &derived, fixes)?;
+    if !plan.edits.is_empty() {
+        host.session.edit(
+            plan.edits,
+            None,
+            Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+        )?;
+    }
+    Ok(plan.captions.len())
+}
+
 /// Agents read error codes; the panel says what happened.
 fn explain(error: anyhow::Error) -> String {
     let text = format!("{error:#}");
     match text.split_once(':').map(|(code, _)| code) {
+        Some("INVALID_CORRECTION") => {
+            format!("A word must be one line of 1 to {MAX_CORRECTION_CHARS} characters.")
+        }
         Some("SPEECH_CHANGED") => "The transcript changed in the meantime. Check the words and try again.".into(),
         Some("TRANSCRIPT_MISSING") => "Transcribe the remaining clips first.".into(),
         Some("OVERLAPPING_SPEECH" | "UNSAFE_CUT") => {
@@ -138,6 +168,38 @@ pub async fn remove_pauses(
     expected_epoch: Option<String>,
 ) -> CmdResult<TranscriptCut> {
     apply_cut(app, key, Target::Pauses { pause_us, only }, expected_epoch).await
+}
+
+#[derive(Deserialize)]
+pub struct WordFix {
+    i: usize,
+    text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordsCorrected {
+    snapshot: Snapshot,
+    /// Caption clips that now show the corrected words.
+    captions: usize,
+}
+
+#[tauri::command]
+pub async fn correct_words(
+    app: AppHandle,
+    key: String,
+    corrections: Vec<WordFix>,
+    expected_epoch: Option<String>,
+) -> CmdResult<WordsCorrected> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let current = crate::lock_session(&state.session, expected_epoch.as_deref())?;
+        let fixes: Vec<_> = corrections.into_iter().map(|f| (f.i, f.text)).collect();
+        let captions = correct(&current.host, &key, &fixes).map_err(explain)?;
+        Ok(WordsCorrected { snapshot: current.snapshot(Vec::new())?, captions })
+    })
+    .await
+    .map_err(crate::err)?
 }
 
 async fn apply_cut(
@@ -292,6 +354,43 @@ mod tests {
         let tight = placed(&host);
         assert_eq!(texts(&tight).len(), current.words.len());
         assert!(tight.pauses.is_empty());
+        drop(host);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_corrected_word_shows_in_the_view_and_its_caption_and_one_undo_takes_both_back() {
+        let (dir, host) = fixture();
+        let segments = vec![capopen_engine::edit::CaptionSegment {
+            start_us: 2_000_000,
+            end_us: 4_000_000,
+            text: "w2 w3".into(),
+            words: vec![],
+        }];
+        let style = capopen_engine::edit::caption_presets()[0].style.clone();
+        host.session.edit(vec![EditCmd::AddCaptions { segments, style }], None, Expect::default()).unwrap();
+        let caption = |host: &Host| {
+            let project = host.session.state().unwrap().project;
+            match &project.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].content {
+                capopen_engine::model::ClipContent::Text { text, .. } => text.clone(),
+                _ => unreachable!(),
+            }
+        };
+        let first = view(&host, 300_000).unwrap();
+        assert_eq!(correct(&host, &first.key, &[(3, "tři".into())]).unwrap(), 1);
+        let fixed = view(&host, 300_000).unwrap();
+        assert_eq!((fixed.words[3].text.as_str(), fixed.words[3].original.as_deref()), ("tři", Some("w3")));
+        assert!(fixed.words.iter().filter(|w| w.i != 3).all(|w| w.original.is_none()));
+        assert_eq!(caption(&host), "w2 tři");
+        assert!(
+            explain(correct(&host, &first.key, &[(2, "dva".into())]).unwrap_err())
+                .starts_with("The transcript changed")
+        );
+        let long = "x".repeat(MAX_CORRECTION_CHARS + 1);
+        assert!(explain(correct(&host, &fixed.key, &[(2, long)]).unwrap_err()).starts_with("A word must be one line"));
+        host.session.undo().unwrap();
+        assert_eq!(view(&host, 300_000).unwrap().words[3].text, "w3");
+        assert_eq!(caption(&host), "w2 w3");
         drop(host);
         std::fs::remove_dir_all(dir).unwrap();
     }

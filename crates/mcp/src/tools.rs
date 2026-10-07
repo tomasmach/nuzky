@@ -31,7 +31,7 @@ struct PreparedImport {
 
 struct PreparedTranscriptEdit {
     arguments: Value,
-    edit: EditCmd,
+    edits: Vec<EditCmd>,
     expect: Expect,
     response: Value,
 }
@@ -201,6 +201,7 @@ impl Backend {
             "transcribe" => self.transcribe(parse(arguments)?, state),
             "get_transcript" => self.get_transcript(parse(arguments)?, state),
             "edit_transcript" => self.edit_transcript(parse(arguments)?, state),
+            "correct_words" => self.correct_words(parse(arguments)?, state),
             "job" => {
                 let a: Job = parse(arguments)?;
                 self.host.jobs.get_for(Some(&self.client.id), &a.job_id, matches!(a.action, JobAction::Cancel))
@@ -422,7 +423,7 @@ impl Backend {
         prepared: &PreparedTranscriptEdit,
     ) -> Result<Value> {
         let applied =
-            self.host.session.apply_edits(run_id, request_id, vec![prepared.edit.clone()], prepared.expect.clone())?;
+            self.host.session.apply_edits(run_id, request_id, prepared.edits.clone(), prepared.expect.clone())?;
         let mut response = prepared.response.clone();
         response["revision"] = json!(applied.stamp.revision);
         response["session_epoch"] = json!(applied.stamp.session_epoch);
@@ -453,8 +454,47 @@ impl Backend {
             response: json!({"duration_us":{"before":before,"after":after},
                 "removed_us":before-after,"ranges":cut.ranges,"preview_text":preview_text,
                 "transcript_key":transcript::word_key(&cut.preview, &cut.words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
-            edit: cut.edit,
+            edits: vec![cut.edit],
         })
+    }
+
+    fn correct_words(&self, args: CorrectWords, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({"correct_words": args});
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        // A retry after a failed save applies what was planned then: the key no longer matches.
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(
+                prepared.arguments == arguments,
+                "REQUEST_CONFLICT: request_id was used with different transcript arguments"
+            );
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let project = self.media_project(&state.project);
+        let derived = transcript::derive(&project, &self.host.transcripts)?;
+        transcript::check_word_key(&state.project, &derived, &args.transcript_key)?;
+        let fixes: Vec<_> = args.corrections.iter().map(|c| (c.i, c.text.clone())).collect();
+        let plan = transcript::plan_correction(&state.project, &derived, &fixes)?;
+        let mut preview = project;
+        for edit in plan.edits.clone() {
+            preview.apply(edit).context("EDIT_REJECTED: preview failed")?;
+        }
+        capopen_session::validate(&preview)?;
+        let after = transcript::derive(&preview, &self.host.transcripts)?;
+        let words: Vec<_> =
+            plan.words.iter().map(|(i, from, to)| json!({"i": i, "before": from, "after": to})).collect();
+        let prepared = PreparedTranscriptEdit {
+            arguments,
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            response: json!({"words": words, "captions_changed": plan.captions,
+                "transcript_key": transcript::word_key(&preview, &after.words)}),
+            edits: plan.edits,
+        };
+        let prepared = requests.entry(key).or_insert(prepared);
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
     }
 
     fn captions(&self, args: Captions, state: &SessionState) -> Result<Value> {
@@ -973,6 +1013,67 @@ mod transcript_tests {
         assert_eq!(applied["duration_us"], plan["duration_us"]);
         assert_ne!(backend.host.session.state().unwrap().project, before);
         drop((viewer, backend));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn correct_words_changes_captions_survives_rebuilding_retries_and_undoes() {
+        let (dir, backend, before) = fixture();
+        let run = backend.call("begin_run", json!({"label":"fix words"})).unwrap().structured_content.unwrap();
+        let run_id = run["run_id"].as_str().unwrap().to_owned();
+        let call = |name: &str, args: Value| backend.call(name, args).map(|r| r.structured_content.unwrap());
+        call("build_captions", json!({"run_id": run_id, "max_words": 3, "max_chars": 100})).unwrap();
+        let transcript = call("get_transcript", json!({})).unwrap();
+        let key = transcript["transcript_key"].clone();
+        let caption = |backend: &Backend| {
+            let project = backend.host.session.state().unwrap().project;
+            project
+                .tracks
+                .iter()
+                .filter(|t| t.is_captions())
+                .flat_map(|t| &t.clips)
+                .map(|c| match &c.content {
+                    capopen_engine::model::ClipContent::Text { text, .. } => text.clone(),
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        assert!(caption(&backend).contains("word3"));
+        let args = json!({"run_id": run_id, "request_id": "fix-once", "transcript_key": key,
+            "corrections": [{"i": 3, "text": "fixed"}]});
+        // A failed save keeps the live edit; the retry finishes it without correcting twice.
+        std::fs::remove_file(&backend.project_path).unwrap();
+        std::fs::create_dir(&backend.project_path).unwrap();
+        let error = format!("{:#}", backend.call("correct_words", args.clone()).unwrap_err());
+        assert!(error.contains("SAVE_FAILED"), "{error}");
+        std::fs::remove_dir(&backend.project_path).unwrap();
+        let fixed = call("correct_words", args.clone()).unwrap();
+        assert_eq!(fixed["words"], json!([{"i": 3, "before": "word3", "after": "fixed"}]));
+        assert_eq!(fixed["captions_changed"].as_array().unwrap().len(), 1);
+        assert_eq!(call("correct_words", args.clone()).unwrap(), fixed);
+        let mut conflict = args.clone();
+        conflict["corrections"] = json!([{"i": 3, "text": "other"}]);
+        assert!(format!("{:#}", backend.call("correct_words", conflict).unwrap_err()).starts_with("REQUEST_CONFLICT"));
+        let disk: Project = serde_json::from_slice(&std::fs::read(&backend.project_path).unwrap()).unwrap();
+        assert_eq!(disk.word_corrections.len(), 1);
+        let shown = caption(&backend);
+        assert!(shown.contains("fixed") && !shown.contains("word3"), "{shown}");
+        let after = call("get_transcript", json!({})).unwrap();
+        assert_eq!(after["words"][3]["text"], "fixed");
+        assert_eq!(after["transcript_key"], fixed["transcript_key"]);
+        // The old key numbers words that read differently now.
+        let stale = json!({"run_id": run_id, "transcript_key": key, "corrections": [{"i": 4, "text": "x"}]});
+        assert!(format!("{:#}", backend.call("correct_words", stale).unwrap_err()).starts_with("SPEECH_CHANGED"));
+        // Rebuilding the captions keeps the correction, and retakes read it too.
+        call("build_captions", json!({"run_id": run_id, "max_words": 3, "max_chars": 100})).unwrap();
+        assert_eq!(caption(&backend), shown);
+        let retakes = call("analyze", json!({"kind": "retakes"})).unwrap();
+        assert_eq!(retakes["transcript_key"], fixed["transcript_key"]);
+        call("end_run", json!({"run_id": run_id, "action": "keep"})).unwrap();
+        call("undo_run", json!({"run_id": run_id})).unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project, before);
+        drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

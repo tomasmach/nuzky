@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { aiLocked, currentEpoch, enqueue, undoAction, useEditor, whenIdle } from "./store";
-import type { Project, TextStyle, TranscriptCut, TranscriptView } from "./types";
+import type { Project, TextStyle, TranscriptCut, TranscriptView, WordsCorrected } from "./types";
 
 /** Characters per caption when captions show 1–3 words, like reels. */
 export const SHORT_CAPTION_CHARS = 15;
+/** Longest corrected word, as the engine's MAX_CORRECTION_CHARS. */
+export const MAX_WORD_CHARS = 100;
 /** A gap this long between two words starts a new paragraph in the transcript. */
 const PARAGRAPH_GAP_US = 1_000_000;
 
@@ -143,14 +145,30 @@ export const cutWords = (key: string, ranges: [number, number][], what: (removed
 export const removePauses = (key: string, pauseUs: number, only: number[] | null, what: (removedUs: number) => string) =>
   cut((epoch) => api.removePauses(key, pauseUs, only, epoch), what);
 
+/**
+ * Corrects how a word reads, in the transcript and in the captions that show it, after the edits
+ * queued before it, as one undo step, and offers Undo. Resolves to whether it was corrected.
+ */
+export async function correctWord(key: string, i: number, text: string, shown: string): Promise<boolean> {
+  if (aiLocked()) return false;
+  const out: { done?: WordsCorrected } = {};
+  await enqueue(async (epoch) => (out.done = await api.correctWords(key, [{ i, text }], epoch)).snapshot);
+  if (!out.done) return false;
+  const n = out.done.captions;
+  const captions = n > 0 ? `, also in ${n === 1 ? "its caption" : `${n} captions`}` : "";
+  useEditor.getState().toast({ kind: "info", text: `Corrected “${shown}” to “${text}”${captions}`, action: undoAction(out.done.snapshot) });
+  return true;
+}
+
 export type Token =
-  | { kind: "word"; i: number; startUs: number; endUs: number; text: string }
+  /** `original` is what recognition wrote, when the word was corrected. */
+  | { kind: "word"; i: number; startUs: number; endUs: number; text: string; original?: string }
   /** The part of a pause that removing it cuts; `i` is its place in the view's pauses. */
   | { kind: "pause"; i: number; startUs: number; endUs: number; gapUs: number };
 
 /** Words and pauses in timeline order. */
 export function tokenize(view: TranscriptView): Token[] {
-  const words = view.words.map((w): Token => ({ kind: "word", i: w.i, startUs: w.startUs, endUs: w.endUs, text: w.text }));
+  const words = view.words.map((w): Token => ({ kind: "word", i: w.i, startUs: w.startUs, endUs: w.endUs, text: w.text, original: w.original }));
   const pauses = view.pauses.map((p, i): Token => ({ kind: "pause", i, ...p }));
   return [...words, ...pauses].sort((a, b) => a.startUs - b.startUs);
 }

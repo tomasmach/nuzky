@@ -19,6 +19,28 @@ pub struct Project {
     pub assets: Vec<Asset>,
     /// Compositing order: index 0 is the bottom layer (the main track).
     pub tracks: Vec<Track>,
+    /// Recognised words the user corrected. Transcripts belong to the media files and are
+    /// shared by every project, so the corrections live here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub word_corrections: Vec<WordCorrection>,
+}
+
+/// Longest corrected word, in characters.
+pub const MAX_CORRECTION_CHARS: usize = 100;
+
+/// A word as the user corrected it. It applies only while the file's transcript has a word that
+/// starts at `source_start_us` with the `original` text: recognised again differently, the
+/// correction does nothing, and it never moves to another word.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WordCorrection {
+    pub asset_id: String,
+    /// Where the word starts in its media file.
+    pub source_start_us: i64,
+    /// The word as recognised.
+    pub original: String,
+    pub text: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -437,6 +459,7 @@ impl Project {
                 keep_in_place: false,
                 clips: Vec::new(),
             }],
+            word_corrections: Vec::new(),
         }
     }
 
