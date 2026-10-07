@@ -2185,7 +2185,7 @@ mod tests {
         e.apply(EditCmd::SetKeyframes { clip_id: keyed.clone(), keyframes }, None).unwrap();
         let before = e.project.clone();
         let outcome = e.apply(zoom(&[(1_000_000, 2_000_000, 1.2), (6_000_000, 8_000_000, 1.2)]), None).unwrap();
-        assert_eq!(outcome.skipped, [keyed.clone()]);
+        assert_eq!(outcome.skipped, std::slice::from_ref(&keyed));
         assert_eq!(e.project.tracks[0].clips[0], before.tracks[0].clips[0]);
         assert_eq!(zoom_layout(&e.project), [(0, 5000, 1.0), (5000, 6000, 1.0), (6000, 8000, 1.2), (8000, 10000, 1.0)]);
         assert_eq!(serde_json::to_value(&outcome).unwrap()["skipped"], serde_json::json!([keyed]));
