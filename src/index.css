@@ -48,6 +48,12 @@ select {
   outline-offset: 1px;
 }
 
+/* On timeline clips the accent ring means selected, so keyboard focus is an `fg` outline just outside it. */
+[data-clip-id]:focus-visible {
+  outline-color: var(--color-fg);
+  outline-offset: 2px;
+}
+
 .tabular {
   font-variant-numeric: tabular-nums;
 }

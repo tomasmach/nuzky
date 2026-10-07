@@ -29,6 +29,7 @@ Hovering or focusing a media or audio item shows `+` (add at playhead) and a tra
 
 ### Edit clips
 - **Select**: click. `Shift`-click adds to the selection. Click empty space or press `Esc` to clear.
+- **Keyboard**: the clips are one tab stop (the clip focused last, else the first selected, else the first on the main track). On a focused clip `←`/`→` go to the previous or next clip on its track and `↑`/`↓` to the nearest clip on the track above or below, without moving the playhead; `Enter` selects it (`Shift+Enter` adds or removes it). `Alt+←`/`Alt+→` nudge it a frame (`Shift`: a second), stopping at its neighbours; on the main track they trade places with the clip beside it. A burst of nudges is one undo step. `Delete`, `S`, `Q`, `W`, `Space` work as everywhere.
 - **Move**: drag the clip body. A ghost follows the pointer and snaps within 8 px to the playhead and clip edges; a vertical line shows the snap. Dropping on an occupied spot creates a new track. `Esc` cancels the drag, and so does the system taking the pointer or the window losing focus.
 - **Main track**: magnetic. Clips sit back to back; moving reorders, deleting closes the gap. While a clip is dragged the track shows the result live: the neighbours move aside, a dashed slot and an `accent` bar mark where it goes in, and the gap it left closes. Trimming a main-track clip keeps its start and moves the clips after it with the edge. Media dragged over the main track marks the cut it would go in at.
 - **Trim**: drag a clip edge. A tooltip shows the new duration. The handle stops at the end of the source media, taking the clip's speed into account.
@@ -116,7 +117,10 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Ctrl+D` | Duplicate selection |
 | `Delete`, `Backspace` | Delete selection or the selected transition |
 | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` | Undo / redo |
-| `←` `→` (`Shift`) | Step a frame (a second) |
+| `←` `→` (`Shift`) | Step a frame (a second); on a focused clip, go to the previous or next clip |
+| `↑` `↓` | On a focused clip, go to the clip on the track above or below |
+| `Enter` (`Shift`) | On a focused clip, select it (add or remove it) |
+| `Alt+←` `Alt+→` (`Shift`) | Nudge the focused clip a frame (a second); on the main track, move it one place |
 | `Home` / `End` | Start / end |
 | `Ctrl` + wheel, `+` / `-` | Zoom timeline; the playhead stays where it is on screen (moved to the middle if it was out of view), with the wheel the moment under the pointer does |
 | `Ctrl+I` | Import |

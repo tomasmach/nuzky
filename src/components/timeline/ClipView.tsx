@@ -63,6 +63,7 @@ export const ClipView = memo(function ClipView({
   height,
   selected,
   locked,
+  tabbable,
   ghost,
   timing,
   visible,
@@ -77,6 +78,8 @@ export const ClipView = memo(function ClipView({
   selected: boolean;
   /** The AI is editing: the clip can be selected but not moved or trimmed. */
   locked?: boolean;
+  /** The timeline's one tab stop among the clips (roving tabindex); arrows move from it. */
+  tabbable?: boolean;
   ghost?: boolean;
   timing?: { startUs: number; durationUs: number };
   /** Visible lane range in px, so long clips only draw the frames on screen. */
@@ -112,7 +115,10 @@ export const ClipView = memo(function ClipView({
 
   return (
     <div
-      data-clip-id={clip.id}
+      data-clip-id={ghost ? undefined : clip.id}
+      role={ghost ? undefined : "option"}
+      aria-selected={ghost ? undefined : selected}
+      tabIndex={ghost ? undefined : tabbable ? 0 : -1}
       onPointerDown={onPointerDown ? (e) => onPointerDown(e, clip, track) : undefined}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, clip) : undefined}
       className={`group absolute top-1 bottom-1 overflow-hidden rounded-md ${bg} ${
