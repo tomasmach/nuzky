@@ -25,6 +25,8 @@ const PAUSE_US: i64 = 100_000;
 const QUIET_RUN_US: i64 = 20_000;
 /// Without any quiet run, the boundary moves to the quietest moment this close to the estimate.
 const NUDGE_US: i64 = 60_000;
+/// Speech must stand this far above the room for its pauses to be found.
+const MIN_RANGE_DB: f32 = 12.0;
 /// Digital silence, such as padding before late-starting sound, says nothing about the room.
 const SILENT_DB: f32 = -100.0;
 
@@ -118,7 +120,8 @@ impl Levels {
     }
 
     /// A quarter of the way, at least 6 dB, from the room's level (10th percentile) to speech
-    /// (90th percentile). None for a recording without sound.
+    /// (90th percentile). None for a recording without sound, and for one whose quiet moments are
+    /// not clearly quieter than its speech: there silence cannot be told from words.
     fn threshold(&self) -> Option<f32> {
         let mut heard: Vec<f32> = self.db.iter().copied().filter(|db| *db > SILENT_DB).collect();
         if heard.is_empty() {
@@ -126,7 +129,7 @@ impl Levels {
         }
         heard.sort_unstable_by(f32::total_cmp);
         let (room, speech) = (heard[(heard.len() - 1) / 10], heard[(heard.len() - 1) * 9 / 10]);
-        Some(room + (0.25 * (speech - room)).max(6.0))
+        (speech - room >= MIN_RANGE_DB).then(|| room + (0.25 * (speech - room)).max(6.0))
     }
 
     fn hop(us: i64) -> usize {
@@ -264,6 +267,27 @@ mod tests {
         assert!(first.iter().all(|w| w.end_us >= w.start_us), "{first:?}");
         assert!(first.windows(2).all(|p| p[0].end_us <= p[1].start_us), "{first:?}");
         assert_eq!(first.iter().map(|w| &w.text).collect::<Vec<_>>(), ["a", "b", "c", "d", "e"]);
+    }
+
+    /// Speech over loud steady noise, or speech without a pause: nothing is quiet enough to be a
+    /// pause, so the words keep Whisper's times instead of collapsing into "silence".
+    #[test]
+    fn without_clear_pauses_words_keep_their_times() {
+        let mut state = 0x1234_5678_u32;
+        let samples: Vec<f32> = (0..RATE * 3)
+            .flat_map(|n| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                // About -23 dBFS, swaying by a couple of dB.
+                let sway = 1.0 + 0.15 * (n as f32 / RATE as f32 * 3.0).sin();
+                [(state as f32 / u32::MAX as f32 - 0.5) * 0.24 * sway; CHANNELS]
+            })
+            .collect();
+        let original = vec![word(0.2, 0.9, "a"), word(0.9, 1.7, "b"), word(1.8, 2.6, "c")];
+        let mut words = original.clone();
+        align_words(&mut words, &samples);
+        assert_eq!(words, original);
     }
 
     #[test]
