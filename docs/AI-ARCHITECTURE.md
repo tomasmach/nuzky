@@ -69,7 +69,7 @@ All times are integer microseconds on the timeline unless a field says `source`.
 
 `RippleDeleteRanges { ranges, keep_track_ids? }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` never deletes other tracks.
 
-Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema) and, when the creator has one, `capopen://style` (their `EDIT.md`). Prompt: `edit_selected(goal)`.
+Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema) and, when the creator has one, `capopen://style` (their `EDIT.md`). Prompts: `edit_selected(goal)` and `rough_cut(wishes?)`, which runs the whole way from raw takes to an exported reel (in Claude Code: `/mcp__capopen__rough_cut`).
 
 ## Creator style
 

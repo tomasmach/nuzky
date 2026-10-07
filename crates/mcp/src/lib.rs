@@ -20,6 +20,9 @@ use bridge::Target;
 
 const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
 const STYLE_FIRST: &str = "This creator has their own editing style, capopen://style, measured from their recordings and finished cuts. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
+/// The whole way from raw takes to a reel, as the guide describes it, so one prompt starts it.
+const ROUGH_CUT: &str = "Make a rough cut of this whole project for Instagram Reels and TikTok, then export it, following the guide below.\n\n1. get_state. Transcribe whatever is untranscribed and poll job until done.\n2. get_transcript, read every sentence, then analyze(kind: \"retakes\"). Keep the last complete attempt of each restarted sentence and drop the fillers that start sentences; check every group against the text and decide each review pair yourself. Add other slips and false starts you find.\n3. Plan with edit_transcript dry_run, then in one run: edit_transcript with the deletions (long pauses shorten by default), build_captions with the Reel style, inspect_frames with safe_area around cuts and captions, end_run keep.\n4. export_video with preset \"reels\" to a new .mp4 in the user's Videos folder (an absolute path), named after the project, poll until done and report the path, the duration and anything you were unsure about.";
+
 const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at capopen://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
 
 /// The creator's EDIT.md, read anew each time so edits to it apply to the next request.
@@ -188,11 +191,22 @@ impl ServerHandler for Server {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
-        Ok(ListPromptsResult::with_all_items(vec![Prompt::new(
-            "edit_selected",
-            Some("Edit the selected clips toward a goal"),
-            Some(vec![PromptArgument::new("goal").with_required(true)]),
-        )]))
+        Ok(ListPromptsResult::with_all_items(vec![
+            Prompt::new(
+                "edit_selected",
+                Some("Edit the selected clips toward a goal"),
+                Some(vec![PromptArgument::new("goal").with_required(true)]),
+            ),
+            Prompt::new(
+                "rough_cut",
+                Some("Rough-cut the whole project into a Reels and TikTok video with captions and export it"),
+                Some(vec![
+                    PromptArgument::new("wishes")
+                        .with_description("Anything to do differently, e.g. keep the closing call to action")
+                        .with_required(false),
+                ]),
+            ),
+        ]))
     }
 
     async fn get_prompt(
@@ -200,6 +214,15 @@ impl ServerHandler for Server {
         request: GetPromptRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
+        let argument = |name: &str| request.arguments.as_ref().and_then(|a| a.get(name)).and_then(Value::as_str);
+        if request.name == "rough_cut" {
+            let wishes = argument("wishes").filter(|w| !w.trim().is_empty()).unwrap_or("none");
+            return Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                Role::User,
+                format!("{ROUGH_CUT}\n\nThe user's wishes, which win over the steps: {wishes}\n\n{}", guide()),
+            )])
+            .into());
+        }
         if request.name != "edit_selected" {
             return Err(ErrorData::invalid_params("Unknown prompt", None));
         }

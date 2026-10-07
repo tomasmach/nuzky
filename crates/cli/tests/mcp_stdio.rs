@@ -178,6 +178,27 @@ fn readonly_resources_prompts_and_clear_errors() {
     assert!(guide["result"]["contents"][0]["text"].as_str().unwrap().contains("rippleDeleteRanges"));
     let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
     assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
+    // One prompt starts the whole rough cut; the user's wishes come with it.
+    let names: Vec<_> = c.rpc("prompts/list", json!({}))["result"]["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].clone())
+        .collect();
+    assert_eq!(names, [json!("edit_selected"), json!("rough_cut")]);
+    let rough = c.rpc("prompts/get", json!({"name":"rough_cut","arguments":{"wishes":"keep the call to action"}}));
+    let text = rough["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("analyze(kind: \"retakes\")")
+            && text.contains("preset \"reels\"")
+            && text.contains("keep the call to action")
+    );
+    assert!(
+        c.rpc("prompts/get", json!({"name":"rough_cut"}))["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("wishes, which win over the steps: none")
+    );
     let error = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0]}}));
     assert_eq!(error["result"]["isError"], true);
     c.finish();
