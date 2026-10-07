@@ -50,8 +50,12 @@ Nejčastější vada je změna, která funguje jen na cestě, kterou jsi zkouše
 
 - Nový checkout: `git config core.hooksPath .githooks`. Nástroje pro bránu na Fedoře a Nobaře: `sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib`, `cargo install --locked tauri-driver@2.1.0 cargo-deny@0.20.2` a gitleaks 8.30.1. První kompilace testů v čistém checkoutu trvá asi 7 minut.
 - Bug reprodukuj přesně v toku, kde se stal. Když první oprava nezabere, přestaň hádat a najdi stav, který ho spouští.
-- Oprava UI nebo toku není hotová bez úspěšného `python3 scripts/repro.py <flow>` (`--list` ukáže toky). Hlavní tok, který chybí, přidej do `scripts/repro.py`. Do PR dej screenshot z `tmp-test/repro/<flow>/` a příkaz s revizí z `result.json`.
-- Engine ověřuj na skutečných souborech proti FFmpeg; `crates/engine/tests/qa_*.rs` si média generují přes `ffmpeg`. Izolovaný test piš na skutečnou chybu, kterou nechytí nic jiného.
+- E2E jsou hlavní testy. Je to tok ve skutečné appce (`tests/e2e/<oblast>.py`, spouští ho `python3 scripts/repro.py <flow>`, `--list` ukáže toky) a integrační test nad skutečnou binárkou a médii (`crates/cli/tests/`, `crates/engine/tests/qa_*.rs`).
+- Nová funkce, oprava UI, toku nebo bugu není hotová bez E2E scénáře, který by bez ní selhal. Přidej nový flow, nebo kontrolu do existujícího. Scénář ověřuje, co uživatel uvidí: stav projektu, uložený soubor, pixely náhledu nebo exportu. Nestačí, že nic nespadlo.
+- Kontrola musí umět selhat. U nové kontroly jednou rozbij hlídané chování, nebo ji pusť před opravou, a ukaž, že selže.
+- Unit test piš jen na čistou logiku, kterou E2E levně nepokryje (časy v mikrosekundách, hraniční výpočty, parsování), nebo na chybu, kterou E2E nechytí. Nepiš ho až po implementaci jako ozdobu. Nejdřív sepiš, jak může systém selhat.
+- Do PR dej screenshot z `tmp-test/repro/<flow>/` a příkaz s revizí z `result.json`.
+- Engine ověřuj na skutečných souborech proti referenci z FFmpeg. `crates/engine/tests/qa_*.rs` si média generují přes `ffmpeg`.
 - Rust testy spouštěj cíleně: `cargo test -p <crate> <název>`. Testy s `#[ignore]` potřebují média a modely. Připrav je přes `scripts/fixtures.sh` a spusť `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test -p <crate> -- --ignored`. Při změně řeči, analýzy, miniatur nebo dekódování je spusť vždy.
 - Plnou bránu `scripts/check.sh` spusť před merge do `main` a před vydáním. Obsahuje fmt, clippy, typy, build, všechny testy včetně ignorovaných, audity závislostí a všechny repro toky. Trvá desítky minut, pusť ji na pozadí.
 - Frontend před pushem: `npm run build` (typy a Vite build).
