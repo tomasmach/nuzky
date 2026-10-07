@@ -116,9 +116,10 @@ fn unregister(app: &AppHandle, id: &str) {
 /// waveforms, export and captions.
 pub fn ensure_audio(state: &AppState, project: &Project) {
     let app = state.app.clone();
-    for asset in project.assets.iter().filter(|a| has_audio(a)) {
+    // Missing media waits for relinking, and a source that failed is not retried on every edit.
+    for asset in project.assets.iter().filter(|a| has_audio(a) && Path::new(&a.path).is_file()) {
         let path = capopen_engine::audio::pcm_path(&state.cache_dir, asset);
-        if path.exists() {
+        if path.exists() || state.audio_failed.lock().unwrap().contains(&path) {
             continue;
         }
         let id = format!("audio:{}", asset.id);
@@ -133,7 +134,11 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
             })
             .map(|_| None);
             let ok = result.is_ok();
-            rep.finish(result, flag.load(Ordering::Relaxed));
+            let cancelled = flag.load(Ordering::Relaxed);
+            if !ok && !cancelled {
+                app.state::<AppState>().audio_failed.lock().unwrap().insert(path.clone());
+            }
+            rep.finish(result, cancelled);
             unregister(&app, &id);
             if ok {
                 app.emit("audio-ready", asset.id.clone()).ok();

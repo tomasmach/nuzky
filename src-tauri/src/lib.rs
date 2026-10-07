@@ -31,6 +31,8 @@ pub struct AppState {
     preview_url: String,
     cache_dir: PathBuf,
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Sound caches whose extraction failed, not retried on every edit; a changed file gets a new one.
+    audio_failed: Mutex<std::collections::HashSet<PathBuf>>,
     /// Saving failed when the window was closed; the next close quits without retrying the warning.
     close_failed: AtomicBool,
     /// The user agreed to cancel running work when closing the window.
@@ -713,6 +715,7 @@ pub fn run() {
                 preview_url: server.url.clone(),
                 cache_dir,
                 jobs: Mutex::new(HashMap::new()),
+                audio_failed: Mutex::new(Default::default()),
                 close_failed: AtomicBool::new(false),
                 quit_confirmed: AtomicBool::new(false),
                 thumbs: Mutex::new(HashMap::new()),
