@@ -124,21 +124,43 @@ pub fn check_source_path(project: &Project, path: &Path) -> Result<()> {
 }
 
 fn publish(tmp: &Path, out: &Path, replace_existing: bool, cancel: &AtomicBool) -> Result<()> {
+    publish_with(tmp, out, replace_existing, cancel, |from, to| std::fs::hard_link(from, to))
+}
+
+/// `link` is `hard_link`, replaceable in tests by a filesystem without hard links.
+fn publish_with(
+    tmp: &Path,
+    out: &Path,
+    replace_existing: bool,
+    cancel: &AtomicBool,
+    link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
         bail!("CANCELLED: export cancelled");
     }
+    let cannot_write = |error: std::io::Error| anyhow!(error).context(format!("Cannot write {}", out.display()));
     if replace_existing {
-        std::fs::rename(tmp, out).with_context(|| format!("Cannot write {}", out.display()))?;
-    } else {
-        // Linking on the same filesystem atomically refuses an existing destination.
-        std::fs::hard_link(tmp, out).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                anyhow!("OUTPUT_EXISTS: choose a new export path")
-            } else {
-                anyhow!(error).context(format!("Cannot write {}", out.display()))
+        return std::fs::rename(tmp, out).map_err(cannot_write);
+    }
+    let exists = || anyhow!("OUTPUT_EXISTS: choose a new export path");
+    // Linking on the same filesystem atomically refuses an existing destination.
+    match link(tmp, out) {
+        Ok(()) => std::fs::remove_file(tmp).context("Removing published export temporary file")?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(exists()),
+        // FAT32 and exFAT, e.g. USB sticks, have no hard links. Claiming the name first still
+        // never replaces a file that was there; the rename then swaps in the export.
+        Err(error) => {
+            log::debug!("Cannot hard link {} ({error}); publishing by rename", out.display());
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(out) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(exists()),
+                Err(error) => return Err(cannot_write(error)),
             }
-        })?;
-        std::fs::remove_file(tmp).context("Removing published export temporary file")?;
+            if let Err(error) = std::fs::rename(tmp, out) {
+                std::fs::remove_file(out).ok();
+                return Err(cannot_write(error));
+            }
+        }
     }
     Ok(())
 }
@@ -366,6 +388,33 @@ mod tests {
         publish(&tmp, &out, false, &cancel).unwrap();
         assert_eq!(std::fs::read(&out).unwrap(), b"new render");
         assert!(!tmp.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn publish_without_hard_links_claims_the_name_and_never_replaces() {
+        // EPERM, what Linux returns for a hard link on FAT32 and exFAT.
+        let no_links = |_: &Path, _: &Path| Err(std::io::Error::from_raw_os_error(1));
+        let dir = std::env::temp_dir().join(format!("capopen-publish-fat-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = dir.join("rendered.mp4");
+        let out = dir.join("out.mp4");
+        let cancel = AtomicBool::new(false);
+        std::fs::write(&tmp, b"rendered").unwrap();
+        std::fs::write(&out, b"appeared during rendering").unwrap();
+        let error = publish_with(&tmp, &out, false, &cancel, no_links).unwrap_err();
+        assert!(error.to_string().contains("OUTPUT_EXISTS"), "{error:#}");
+        assert_eq!(std::fs::read(&out).unwrap(), b"appeared during rendering");
+        assert!(tmp.exists());
+        std::fs::remove_file(&out).unwrap();
+        publish_with(&tmp, &out, false, &cancel, no_links).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"rendered");
+        assert!(!tmp.exists());
+        // A failed rename leaves neither the claimed name nor a partial file behind.
+        let other = dir.join("other.mp4");
+        assert!(publish_with(&tmp, &other, false, &cancel, no_links).is_err());
+        assert!(!other.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
