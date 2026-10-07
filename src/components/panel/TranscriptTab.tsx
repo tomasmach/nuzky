@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { AlertCircle, AlertTriangle, RefreshCw, ScrollText, Scissors } from "lucide-react";
-import { cutWords, removePauses, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
+import { correctWord, cutWords, removePauses, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Clip, Project } from "../../lib/types";
@@ -144,7 +144,7 @@ export function TranscriptTab() {
         {!running && <JobError job={last} />}
         {errorNote}
       </div>
-      <TranscriptText tokens={tokens} blocker={cutBlocker} onDelete={deleteRange} />
+      <TranscriptText tokens={tokens} blocker={cutBlocker} onDelete={deleteRange} onCorrect={(i, text, shown) => (view ? correctWord(view.key, i, text, shown) : Promise.resolve(false))} />
     </div>
   );
 }

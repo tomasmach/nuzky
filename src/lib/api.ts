@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
+import type { Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -46,6 +46,9 @@ export const api = {
   /** The view's pauses at `pauseUs`, by index, or all of them. */
   removePauses: (key: string, pauseUs: number, only: number[] | null, epoch: Epoch) =>
     invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only, expectedEpoch: epoch }),
+  /** Words by view index and the text they should read, with the captions that show them, as one undo step. */
+  correctWords: (key: string, corrections: { i: number; text: string }[], epoch: Epoch) =>
+    invoke<WordsCorrected>("correct_words", { key, corrections, expectedEpoch: epoch }),
   listFonts: () => invoke<FontFamilies>("list_fonts"),
 };
 
