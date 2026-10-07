@@ -3,6 +3,7 @@
 mod audio;
 mod captions;
 mod fillers;
+mod retakes;
 mod scenes;
 mod speech;
 pub mod style;
@@ -10,6 +11,7 @@ pub mod style;
 pub use audio::{SilenceParams, integrated_lufs, loudness, loudness_cancellable, silences, silences_cancellable};
 pub use captions::{CaptionGrouping, group_words};
 pub use fillers::filler_words;
+pub use retakes::{Attempt, Filler, RetakeGroup, Retakes, Review, retakes};
 pub use scenes::{SceneCut, SceneParams, scene_cuts, scene_cuts_cancellable};
 pub use speech::{AudioSource, Segment, Transcript, Word, transcribe_words, transcribe_words_cancellable};
 
