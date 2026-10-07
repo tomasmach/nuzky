@@ -385,6 +385,28 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires the small model in tmp-test/xdg/data/capopen/models"]
+    fn a_stop_request_ends_recognition_inside_whisper() {
+        let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test/xdg/data/capopen/models/ggml-small.bin");
+        let context = WhisperContext::new_with_params(&model, WhisperContextParameters::default()).unwrap();
+        let mut state = context.create_state().unwrap();
+        let tone: Vec<f32> = (0..16_000 * 5).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        let asked = std::cell::Cell::new(0);
+        let cancelled = || {
+            asked.set(asked.get() + 1);
+            true
+        };
+        let mut params = recognition_params("en");
+        let abort: &dyn Fn() -> bool = &cancelled;
+        // SAFETY: `abort` outlives `full`.
+        unsafe { stop_on(&mut params, &abort) };
+        let error = state.full(params, &tone).map_err(|error| stopped(error, &cancelled, "Recognising")).unwrap_err();
+        // Whisper asked once, after the encoder, and stopped there instead of decoding.
+        assert_eq!(asked.get(), 2, "one poll inside whisper plus the one that classifies the error");
+        assert_eq!(error.to_string(), "CANCELLED: transcription cancelled");
+    }
+
+    #[test]
     fn compaction_maps_boundaries_without_spanning_removed_pause() {
         let audio = vec![0.5; 160_000];
         let (_, mapping) = compact_audio(&audio, &[(16_000, 32_000), (112_000, 128_000)]);
