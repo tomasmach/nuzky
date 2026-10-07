@@ -130,7 +130,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 15);
+    assert_eq!(tools.len(), 16);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -291,6 +291,117 @@ fn retakes_answer_at_once_even_for_read_only_clients() {
     let mut writer = Client::start(true, None, Some(None));
     assert!(writer.error("analyze", json!({"kind":"fillers"})).contains("asset_id is required"));
     writer.finish();
+}
+
+/// A 12 s talk of three sentences of four 0.4 s tone "words", the middle sentence 12 dB louder,
+/// with its words stored as if recognised. Only on Linux does XDG_DATA_HOME choose the store.
+#[cfg(target_os = "linux")]
+#[test]
+fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
+    use capopen_session::transcripts::{Record, TranscriptStore, VERSION};
+    let mut c = Client::start(true, None, Some(None));
+    let mut samples = vec![0i16; 12 * 48_000];
+    let mut words = Vec::new();
+    for sentence in 0..3i64 {
+        for word in 0..4i64 {
+            let start = 1_000_000 + sentence * 4_000_000 + word * 500_000;
+            let level = if sentence == 1 { 0.4 } else { 0.1 };
+            let first = (start * 48 / 1000) as usize;
+            for (i, sample) in samples[first..first + 19_200].iter_mut().enumerate() {
+                *sample = (level * (i as f64 * 440.0 / 48_000.0 * std::f64::consts::TAU).sin() * 32_767.0) as i16;
+            }
+            let end = if word == 3 { "." } else { "" };
+            words.push(json!({"start_us": start, "end_us": start + 400_000, "text": format!(" w{sentence}{word}{end}"), "probability": 0.9}));
+        }
+    }
+    let wav = c.dir.join("speech.wav");
+    // 16-bit mono WAV: the RIFF header, the format chunk and the samples.
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&(36 + samples.len() as u32 * 2).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    for field in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
+        bytes.extend_from_slice(&field.to_le_bytes());
+    }
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(samples.len() as u32 * 2).to_le_bytes());
+    bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    std::fs::write(&wav, bytes).unwrap();
+    let video = c.dir.join("talk.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=360x640:r=30:d=12", "-i"])
+        .arg(&wav)
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
+        .arg(&video)
+        .status()
+        .expect("ffmpeg makes the test video");
+    assert!(status.success());
+
+    let run = c.call("begin_run", json!({"label":"place"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[video]}))["asset_ids"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
+    );
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    assert!(c.error("analyze", json!({"kind":"emphasis"})).contains("TRANSCRIPT_MISSING"));
+    let asset: capopen_engine::model::Asset =
+        serde_json::from_value(c.call("get_state", json!({}))["assets"][0].clone()).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/capopen/transcripts")).unwrap();
+    let record = Record {
+        version: VERSION,
+        fingerprint: store.fingerprint(&asset).unwrap(),
+        duration_us: asset.duration_us,
+        model: "fixture".into(),
+        language: "cs".into(),
+        words: serde_json::from_value(json!(words)).unwrap(),
+        segments: vec![],
+    };
+    store.put(&asset, &record).unwrap();
+
+    let found = c.call("analyze", json!({"kind":"emphasis"}));
+    assert_eq!(found, c.call("analyze", json!({"kind":"emphasis"})), "the same words and sound gave another result");
+    let key = c.call("get_transcript", json!({}))["transcript_key"].clone();
+    assert_eq!(found["transcript_key"], key);
+    // The loud sentence; the hook is less than 5 s before it, and 12 s allow one zoom.
+    let zooms = found["zooms"].as_array().unwrap();
+    assert_eq!(zooms.len(), 1, "{found}");
+    assert_eq!(
+        (zooms[0]["from"].clone(), zooms[0]["to"].clone(), zooms[0]["text"].clone()),
+        (json!(4), json!(7), json!("w10 w11 w12 w13."))
+    );
+    assert_eq!((zooms[0]["score"].clone(), zooms[0]["scale"].clone()), (json!(0.6), json!(1.24)));
+
+    let run = c.call("begin_run", json!({"label":"zoom"}));
+    let stale = json!({"run_id":run["run_id"],"transcript_key":"stale","zooms":[{"from":4,"to":7,"scale":1.24}]});
+    assert!(c.error("apply_zooms", stale).contains("SPEECH_CHANGED"));
+    let args = json!({"run_id":run["run_id"],"request_id":"zoom","transcript_key":key,"zooms":[{"from":4,"to":7,"scale":1.24}]});
+    let applied = c.call("apply_zooms", args.clone());
+    assert_eq!(applied["ranges"], json!([{"startUs": 4_850_000, "endUs": 7_050_000, "scale": 1.24}]));
+    assert_eq!(applied["skipped"], json!([]));
+    // A retry gives the same answer without zooming again; other zooms under the same id are refused.
+    assert_eq!(c.call("apply_zooms", args.clone()), applied);
+    let mut other = args;
+    other["zooms"][0]["scale"] = json!(1.3);
+    assert!(c.error("apply_zooms", other).contains("REQUEST_CONFLICT"));
+    let state = c.call("get_state", json!({}));
+    let main: Vec<(i64, f64)> = state["tracks"][0]["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|clip| (clip["startUs"].as_i64().unwrap(), clip["content"]["transform"]["scale"].as_f64().unwrap()))
+        .collect();
+    assert_eq!(main.iter().map(|m| m.0).collect::<Vec<_>>(), [0, 4_850_000, 7_050_000]);
+    assert!((main[1].1 - 1.24).abs() < 1e-6 && main[0].1 == 1.0 && main[2].1 == 1.0, "{main:?}");
+    assert_eq!(c.call("get_transcript", json!({}))["transcript_key"], applied["transcript_key"]);
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    // One undo takes the whole run back.
+    c.call("undo_run", json!({"run_id":run["run_id"]}));
+    assert_eq!(c.call("get_state", json!({}))["tracks"][0]["clips"].as_array().unwrap().len(), 1);
+    assert!(
+        c.error("apply_zooms", json!({"run_id":"none","transcript_key":key,"zooms":[{"from":4,"to":7,"scale":1.2}]}))
+            .contains("INVALID_RUN")
+    );
+    c.finish();
 }
 
 #[test]
