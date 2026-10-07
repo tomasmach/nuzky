@@ -43,24 +43,47 @@ fn video_stream(input: &ff::format::context::Input) -> Option<ff::format::stream
         .find(|s| !s.disposition().contains(Disposition::ATTACHED_PIC))
 }
 
-/// Clockwise rotation in degrees from the display matrix, snapped to 0/90/180/270.
+/// Clockwise rotation in degrees from a display matrix, snapped to 0/90/180/270.
+fn matrix_rotation(matrix: &[u8]) -> Option<u32> {
+    if matrix.len() < 36 {
+        return None;
+    }
+    let ccw = unsafe { ff::ffi::av_display_rotation_get(matrix.as_ptr() as *const i32) };
+    if ccw.is_nan() {
+        return Some(0);
+    }
+    let cw = (-ccw).rem_euclid(360.0);
+    Some(((cw / 90.0).round() as u32 % 4) * 90)
+}
+
 fn display_rotation(stream: &ff::format::stream::Stream) -> u32 {
-    for sd in stream.side_data() {
-        if sd.kind() == SideDataType::DisplayMatrix && sd.data().len() >= 36 {
-            let ccw = unsafe { ff::ffi::av_display_rotation_get(sd.data().as_ptr() as *const i32) };
-            if ccw.is_nan() {
-                return 0;
-            }
-            let cw = (-ccw).rem_euclid(360.0);
-            return ((cw / 90.0).round() as u32 % 4) * 90;
+    stream
+        .side_data()
+        .filter(|sd| sd.kind() == SideDataType::DisplayMatrix)
+        .find_map(|sd| matrix_rotation(sd.data()))
+        .unwrap_or(0)
+}
+
+/// Still images carry EXIF orientation only on the decoded frame.
+fn frame_rotation(f: &frame::Video) -> Option<u32> {
+    matrix_rotation(f.side_data(frame::side_data::Type::DisplayMatrix)?.data())
+}
+
+/// Decodes the first frame of a still image to read its EXIF orientation.
+fn image_rotation(input: &mut ff::format::context::Input, index: usize, mut decoder: ff::decoder::Video) -> u32 {
+    let mut f = frame::Video::empty();
+    for (stream, packet) in input.packets() {
+        if stream.index() == index && decoder.send_packet(&packet).is_ok() && decoder.receive_frame(&mut f).is_ok() {
+            return frame_rotation(&f).unwrap_or(0);
         }
     }
-    0
+    decoder.send_eof().ok();
+    if decoder.receive_frame(&mut f).is_ok() { frame_rotation(&f).unwrap_or(0) } else { 0 }
 }
 
 pub fn probe(path: &Path, id: String) -> Result<Asset> {
     init();
-    let input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let mut input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
     let is_image = is_image_format(&input);
     let video = video_stream(&input);
     let audio = input.streams().best(ff::media::Type::Audio);
@@ -89,13 +112,17 @@ pub fn probe(path: &Path, id: String) -> Result<Asset> {
 
     if let Some(stream) = video {
         let decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().video()?;
-        let rotation = display_rotation(&stream);
+        let mut rotation = display_rotation(&stream);
         let (w, h) = (decoder.width(), decoder.height());
-        (asset.width, asset.height) = if rotation % 180 == 90 { (h, w) } else { (w, h) };
-        asset.rotation = rotation;
         let rate = stream.avg_frame_rate();
         let rate = if rate.denominator() == 0 || rate.numerator() == 0 { stream.rate() } else { rate };
         asset.fps = if rate.denominator() == 0 { 0.0 } else { f64::from(rate) };
+        if is_image && rotation == 0 {
+            let index = stream.index();
+            rotation = image_rotation(&mut input, index, decoder);
+        }
+        (asset.width, asset.height) = if rotation % 180 == 90 { (h, w) } else { (w, h) };
+        asset.rotation = rotation;
     }
     Ok(asset)
 }
@@ -283,6 +310,11 @@ impl VideoDecoder {
         loop {
             match self.decoder.receive_frame(&mut f) {
                 Ok(()) => {
+                    if self.is_image
+                        && let Some(rotation) = frame_rotation(&f)
+                    {
+                        self.rotation = rotation;
+                    }
                     let pts = f.timestamp().or(f.pts()).unwrap_or(0);
                     let t = (pts as f64 * f64::from(self.time_base) * 1e6).round() as i64 - self.origin_us;
                     if self.is_image {

@@ -385,3 +385,37 @@ fn cold_seek_immediately_before_keyframe_uses_previous_frame() {
     assert!(first <= tick);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Inserts a big-endian EXIF APP1 segment with only an Orientation tag after the JPEG SOI marker.
+fn with_exif_orientation(jpeg: &[u8], orientation: u8) -> Vec<u8> {
+    assert_eq!(&jpeg[..2], [0xFF, 0xD8]);
+    let tiff = [b'M', b'M', 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, orientation, 0, 0, 0, 0, 0, 0];
+    let mut out = jpeg[..2].to_vec();
+    out.extend([0xFF, 0xE1, 0, (2 + 6 + tiff.len()) as u8]);
+    out.extend(b"Exif\0\0");
+    out.extend(tiff);
+    out.extend(&jpeg[2..]);
+    out
+}
+#[test]
+fn exif_orientation_of_still_images_matches_ffmpeg_autorotate() {
+    if !available() {
+        return;
+    }
+    let d = dir("exif-orientation");
+    let source = d.join("source.jpg");
+    ff(&["-f", "lavfi", "-i", "testsrc2=size=96x64", "-frames:v", "1", "-q:v", "2"], &source);
+    let jpeg = std::fs::read(&source).unwrap();
+    let mut renderer = Renderer::new().unwrap();
+    for (orientation, rotation) in [(1, 0), (3, 180), (6, 90), (8, 270)] {
+        let path = d.join(format!("orientation-{orientation}.jpg"));
+        std::fs::write(&path, with_exif_orientation(&jpeg, orientation)).unwrap();
+        let p = project(&path, 200_000);
+        let (w, h) = if rotation % 180 == 90 { (64, 96) } else { (96, 64) };
+        assert_eq!((p.assets[0].width, p.assets[0].height, p.assets[0].rotation), (w, h, rotation), "{orientation}");
+        let got = renderer.render(&p, 0, w, h, Wait::Exact, false).unwrap();
+        let expected = raw(&path, &["-frames:v", "1"]);
+        let error = mae(&got, &expected);
+        assert!(error < 3.0, "orientation {orientation}: pixel MAE={error}");
+    }
+}
