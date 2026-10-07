@@ -70,10 +70,10 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
   const box = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
-  const timeUs = useEditor((s) => s.timeUs);
+  // Re-renders when the word playing changes, not on every frame.
+  const active = useEditor((s) => tokenAt(tokens, s.timeUs));
   const playing = useEditor((s) => s.playing);
   const paras = useMemo(() => paragraphs(tokens), [tokens]);
-  const active = tokenAt(tokens, timeUs);
   // Fewer tokens can arrive before the effect below clears the selection.
   const live = sel && sel.anchor < tokens.length && sel.focus < tokens.length ? sel : null;
   const lo = live ? Math.min(live.anchor, live.focus) : -1;

@@ -176,21 +176,32 @@ function useBackendEvents() {
 
 const UI_CONTEXT_MS = 250;
 
-/** Tells agents what is selected and where the playhead is: at most every 250 ms, ending on the latest values, also while playing. */
+/**
+ * Tells agents what is selected and where the playhead is: at most every 250 ms, ending on the
+ * latest values, also while playing. It follows the store directly, so the playhead moving never
+ * re-renders the app.
+ */
 function useUiContext() {
-  const selection = useEditor((s) => s.selection);
-  const timeUs = useEditor((s) => s.timeUs);
-  const epoch = useEditor((s) => s.snap?.sessionEpoch);
-  const lastSent = useRef(0);
   useEffect(() => {
-    if (!epoch) return;
+    let timer = 0;
+    let lastSent = 0;
     const send = () => {
-      lastSent.current = Date.now();
+      timer = 0;
+      lastSent = Date.now();
+      const { selection, timeUs, snap } = useEditor.getState();
+      if (!snap) return;
       void api.setUiContext(selection, timeUs).catch((e) => useEditor.getState().toast({ kind: "error", text: errorText(e) }));
     };
-    const timer = setTimeout(send, Math.max(0, UI_CONTEXT_MS - (Date.now() - lastSent.current)));
-    return () => clearTimeout(timer);
-  }, [selection, timeUs, epoch]);
+    const unsubscribe = useEditor.subscribe((s, prev) => {
+      if (timer || !s.snap?.sessionEpoch) return;
+      if (s.selection === prev.selection && s.timeUs === prev.timeUs && s.snap.sessionEpoch === prev.snap?.sessionEpoch) return;
+      timer = window.setTimeout(send, Math.max(0, UI_CONTEXT_MS - (Date.now() - lastSent)));
+    });
+    return () => {
+      unsubscribe();
+      window.clearTimeout(timer);
+    };
+  }, []);
 }
 
 function RecoveryDialog() {

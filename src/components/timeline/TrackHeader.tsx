@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { AudioLines, Captions, Eye, EyeOff, Film, Type, Volume2, VolumeX } from "lucide-react";
 import { MAIN_TRACK, isCaptionTrack, useEditor } from "../../lib/store";
 import type { Track } from "../../lib/types";
@@ -20,7 +20,7 @@ function TrackToggle({ off, label, onIcon, offIcon, onClick }: { off: boolean; l
 }
 
 /** Kind icon, name, and the hide and mute toggles of a track, pinned left while the lanes scroll. */
-export function TrackHeader({ track, width }: { track: Track; width: number }) {
+export const TrackHeader = memo(function TrackHeader({ track, width }: { track: Track; width: number }) {
   const { edit } = useEditor.getState();
   const isMain = track.id === MAIN_TRACK;
   const KindIcon = track.kind === "audio" ? AudioLines : track.kind === "text" ? (isCaptionTrack(track) ? Captions : Type) : Film;
@@ -53,4 +53,4 @@ export function TrackHeader({ track, width }: { track: Track; width: number }) {
       )}
     </div>
   );
-}
+});

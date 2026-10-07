@@ -87,12 +87,22 @@ function useFrameStream(url: string, canvas: React.RefObject<HTMLCanvasElement |
   return connected;
 }
 
+/** Playhead time and length; the only part of the preview that follows playback frame by frame. */
+function Timecode({ duration }: { duration: number }) {
+  const timeUs = useEditor((s) => s.timeUs);
+  return (
+    <span className="tabular text-[12px]">
+      <span className="text-fg">{formatTime(timeUs)}</span>
+      <span className="text-muted"> / {formatTime(duration)}</span>
+    </span>
+  );
+}
+
 export function Preview() {
   const url = useEditor((s) => s.previewUrl);
   const canvas = useEditor((s) => s.snap?.project.canvas);
   const duration = useEditor((s) => (s.snap ? projectDuration(s.snap.project) : 0));
   const playing = useEditor((s) => s.playing);
-  const timeUs = useEditor((s) => s.timeUs);
   const engineError = useEditor((s) => s.engineError);
   const { togglePlay, seek } = useEditor.getState();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -159,10 +169,7 @@ export function Preview() {
         </div>
       </div>
       <div className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3">
-        <span className="tabular text-[12px]">
-          <span className="text-fg">{formatTime(timeUs)}</span>
-          <span className="text-muted"> / {formatTime(duration)}</span>
-        </span>
+        <Timecode duration={duration} />
         <div className="flex items-center gap-2">
           <IconButton label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
             <SkipBack size={16} />

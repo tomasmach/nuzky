@@ -29,9 +29,9 @@ function Item({ icon, label, shortcut, disabled, reason, onSelect }: { icon: Rea
 export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const project = useEditor((s) => s.snap!.project);
-  const timeUs = useEditor((s) => s.timeUs);
   const [pos, setPos] = useState({ x: at.x, y: at.y });
   const found = findClip(project, at.clipId);
+  const splittable = useEditor((s) => !!found && canSplitClip(found.clip, s.timeUs, project.canvas.fps));
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -56,7 +56,6 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
 
   if (!found) return null;
   const { clip } = found;
-  const splittable = canSplitClip(clip, timeUs, project.canvas.fps);
   const blocker = detachBlocker(project, clip);
   const run = (fn: () => unknown) => () => {
     onClose();
@@ -89,7 +88,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
         shortcut="S"
         disabled={!splittable}
         reason="Move the playhead over this clip to split it"
-        onSelect={run(() => useEditor.getState().edit({ type: "splitClip", clipId: clip.id, atUs: Math.round(timeUs) }))}
+        onSelect={run(() => useEditor.getState().edit({ type: "splitClip", clipId: clip.id, atUs: Math.round(useEditor.getState().timeUs) }))}
       />
       <Item icon={<Copy size={14} />} label="Duplicate" shortcut="Ctrl+D" onSelect={run(duplicateSelection)} />
       <Item icon={<Unlink size={14} />} label="Detach audio" disabled={!!blocker} reason={blocker} onSelect={run(() => detachAudio(clip.id))} />

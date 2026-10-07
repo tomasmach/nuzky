@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Copy, Magnet, Maximize2, PanelLeftClose, PanelRightClose, Scissors, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
@@ -27,13 +27,32 @@ function tickStep(zoom: number): number {
   return 1200;
 }
 
+/** The playhead line, the one part of the timeline that follows playback frame by frame; it keeps itself in view while playing. */
+function Playhead({ zoom, scroller }: { zoom: number; scroller: RefObject<HTMLDivElement | null> }) {
+  const timeUs = useEditor((s) => s.timeUs);
+  const playing = useEditor((s) => s.playing);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !playing) return;
+    const x = (timeUs / US) * zoom;
+    const lane = el.clientWidth - HEADER_W;
+    if (x > el.scrollLeft + lane - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
+  }, [timeUs, playing, zoom, scroller]);
+  return (
+    <div className="pointer-events-none absolute bottom-0 top-0 z-[45]" style={{ left: HEADER_W + (timeUs / US) * zoom }}>
+      <div className="absolute -left-[5px] top-0 h-3 w-[11px] rounded-b-sm bg-fg" />
+      <div className="absolute left-0 top-0 h-full w-px bg-fg" />
+    </div>
+  );
+}
+
 export function Timeline({ height }: { height: number }) {
   const snap0 = useEditor((s) => s.snap);
   const project = snap0?.project;
   const selection = useEditor((s) => s.selection);
   const cut = useEditor((s) => s.cut);
-  const timeUs = useEditor((s) => s.timeUs);
-  const playing = useEditor((s) => s.playing);
+  // A boolean, so playback re-renders the timeline only when it changes.
+  const canSplit = useEditor((s) => (s.snap ? splitTargets(s.snap.project, s.selection, s.timeUs).length > 0 : false));
   const zoom = useEditor((s) => s.zoom);
   const assetDrag = useEditor((s) => s.assetDrag);
   const { select, setZoom } = useEditor.getState();
@@ -49,7 +68,7 @@ export function Timeline({ height }: { height: number }) {
   const fps = project?.canvas.fps ?? 30;
   const minUs = Math.ceil(US / fps);
   const laneWidth = Math.max(view.width - HEADER_W, (duration / US + 30) * zoom);
-  const visible: [number, number] = [view.left - 200, view.left + view.width + 200];
+  const visible = useMemo<[number, number]>(() => [view.left - 200, view.left + view.width + 200], [view.left, view.width]);
 
   const timeAt = useCallback(
     (clientX: number) => {
@@ -87,15 +106,6 @@ export function Timeline({ height }: { height: number }) {
     return () => ro.disconnect();
   }, []);
 
-  // Keep the playhead visible while playing.
-  useEffect(() => {
-    const el = scroller.current;
-    if (!el || !playing) return;
-    const x = (timeUs / US) * zoom;
-    const lane = el.clientWidth - HEADER_W;
-    if (x > el.scrollLeft + lane - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
-  }, [timeUs, playing, zoom]);
-
   // Ctrl + wheel zooms around the pointer.
   useEffect(() => {
     const el = scroller.current;
@@ -117,15 +127,14 @@ export function Timeline({ height }: { height: number }) {
 
   const { drag, startClipDrag, startScrub } = useTimelineGestures({ project, zoom, snapping, minUs, rows, timeAt });
 
-  const openMenu = (e: React.MouseEvent, clip: Clip) => {
+  const openMenu = useCallback((e: React.MouseEvent, clip: Clip) => {
     e.preventDefault();
-    if (!useEditor.getState().selection.includes(clip.id)) select([clip.id]);
+    if (!useEditor.getState().selection.includes(clip.id)) useEditor.getState().select([clip.id]);
     setMenu({ clipId: clip.id, x: e.clientX, y: e.clientY });
-  };
+  }, []);
 
   if (!project) return <section className="shrink-0 border-t border-line bg-panel" style={{ height }} />;
 
-  const canSplit = splitTargets(project, selection, timeUs).length > 0;
   // The video ends at its last picture or text; music running past it is cut on export.
   const videoEnd = projectDuration(project);
   const endX = (videoEnd / US) * zoom;
@@ -317,11 +326,7 @@ export function Timeline({ height }: { height: number }) {
           {/* Drop position for media dragged from the panel */}
           {dropTime !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent" style={{ left: HEADER_W + (dropTime / US) * zoom }} />}
 
-          {/* Playhead */}
-          <div className="pointer-events-none absolute bottom-0 top-0 z-[45]" style={{ left: HEADER_W + (timeUs / US) * zoom }}>
-            <div className="absolute -left-[5px] top-0 h-3 w-[11px] rounded-b-sm bg-fg" />
-            <div className="absolute left-0 top-0 h-full w-px bg-fg" />
-          </div>
+          <Playhead zoom={zoom} scroller={scroller} />
 
           {drag?.moved && ghostTiming && (
             <div className="tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg" style={{ left: HEADER_W + (ghostTiming.startUs / US) * zoom, top: 2 }}>

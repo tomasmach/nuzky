@@ -56,8 +56,9 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   const canvas = useEditor((s) => s.snap!.project.canvas);
   const revision = useEditor((s) => s.snap!.revision);
   const selection = useEditor((s) => s.selection);
-  const timeUs = useEditor((s) => s.timeUs);
   const playing = useEditor((s) => s.playing);
+  // The box hides while playing, so the playhead only matters once paused.
+  const timeUs = useEditor((s) => (s.playing ? null : s.timeUs));
   const ref = useRef<HTMLDivElement>(null);
   const [bounds, setBounds] = useState<LayerBounds[]>([]);
   const [live, setLive] = useState<{ corners: Pt[]; guideX: boolean; guideY: boolean } | null>(null);
@@ -68,7 +69,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   useEffect(() => () => stop.current?.(), []);
 
   useEffect(() => {
-    if (playing) return;
+    if (timeUs === null) return;
     let alive = true;
     api
       .layerBounds(timeUs)
@@ -77,7 +78,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     return () => {
       alive = false;
     };
-  }, [timeUs, revision, playing]);
+  }, [timeUs, revision]);
 
   const toCanvas = (x: number, y: number): Pt => {
     const r = ref.current!.getBoundingClientRect();

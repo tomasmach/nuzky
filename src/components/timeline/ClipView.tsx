@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { AudioLines, Film, Gauge, Image as ImageIcon, Type } from "lucide-react";
 import { MAIN_TRACK, isCaptionTrack, useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
@@ -54,7 +54,8 @@ function FilmstripTiles({
   return <div className="pointer-events-none absolute inset-0 overflow-hidden">{tiles}</div>;
 }
 
-export function ClipView({
+/** Memoized: playback and pointer moves elsewhere never re-render a clip whose props stay the same. */
+export const ClipView = memo(function ClipView({
   clip,
   track,
   project,
@@ -187,4 +188,4 @@ export function ClipView({
       <div className={`absolute inset-y-0 right-0 w-[7px] cursor-ew-resize rounded-r-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
     </div>
   );
-}
+});

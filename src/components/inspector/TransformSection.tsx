@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } from "lucide-react";
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
 import { LIMITS } from "../../lib/limits";
@@ -7,17 +8,17 @@ import { editClip, isCaptionTrack, setClipTransform, useEditor } from "../../lib
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
 import { Button, IconButton, NumberInput, Section, Slider } from "../ui";
 
-function KeyframeControls({ clip, offset, inside, atIndex }: { clip: Clip; offset: number; inside: boolean; atIndex: number }) {
+function KeyframeControls({ clip, at }: { clip: Clip; at: AtPlayhead }) {
   const { seek } = useEditor.getState();
   const fps = useEditor((s) => s.snap!.project.canvas.fps);
   const tol = keyframeTolerance(fps);
-  const prev = [...clip.keyframes].reverse().find((k) => k.tUs < offset - tol);
-  const next = clip.keyframes.find((k) => k.tUs > offset + tol);
+  const { prevUs, nextUs, inside, atIndex } = at;
   const has = atIndex >= 0;
 
   // Built from the latest confirmed keyframes, so a keyframe added a moment ago is kept.
   const toggle = () =>
     editClip(clip.id, (c): EditCmd | EditCmd[] => {
+      const offset = clipOffset(c, useEditor.getState().timeUs);
       const i = keyframeIndexAt(c, offset, tol);
       if (i < 0) return { type: "setKeyframes", clipId: c.id, keyframes: upsertKeyframe(c, offset, transformAt(c, c.content.transform, offset), tol) };
       const rest = c.keyframes.filter((_, j) => j !== i);
@@ -28,7 +29,7 @@ function KeyframeControls({ clip, offset, inside, atIndex }: { clip: Clip; offse
 
   return (
     <>
-      <IconButton label="Previous keyframe" className="h-7 w-6" disabled={!prev} onClick={() => prev && seek(clip.startUs + prev.tUs)}>
+      <IconButton label="Previous keyframe" className="h-7 w-6" disabled={prevUs === null} onClick={() => prevUs !== null && seek(clip.startUs + prevUs)}>
         <ChevronLeft size={14} />
       </IconButton>
       <IconButton
@@ -40,7 +41,7 @@ function KeyframeControls({ clip, offset, inside, atIndex }: { clip: Clip; offse
       >
         <Diamond size={14} fill={has ? "currentColor" : "none"} />
       </IconButton>
-      <IconButton label="Next keyframe" className="h-7 w-6" disabled={!next} onClick={() => next && seek(clip.startUs + next.tUs)}>
+      <IconButton label="Next keyframe" className="h-7 w-6" disabled={nextUs === null} onClick={() => nextUs !== null && seek(clip.startUs + nextUs)}>
         <ChevronRight size={14} />
       </IconButton>
     </>
@@ -96,13 +97,33 @@ function ZoomOverClip({ clip, scale }: { clip: Clip; scale: number }) {
   );
 }
 
+/** What the playhead decides in the Transform section, as plain values. */
+interface AtPlayhead extends Transform {
+  inside: boolean;
+  atIndex: number;
+  prevUs: number | null;
+  nextUs: number | null;
+}
+
+function atPlayhead(clip: Clip, timeUs: number, fps: number): AtPlayhead {
+  const offset = clipOffset(clip, timeUs);
+  const tol = keyframeTolerance(fps);
+  const inside = timeUs >= clip.startUs && timeUs <= clip.startUs + clip.durationUs;
+  return {
+    ...transformAt(clip, clip.content.transform, offset),
+    inside,
+    atIndex: inside ? keyframeIndexAt(clip, offset, tol) : -1,
+    prevUs: [...clip.keyframes].reverse().find((k) => k.tUs < offset - tol)?.tUs ?? null,
+    nextUs: clip.keyframes.find((k) => k.tUs > offset + tol)?.tUs ?? null,
+  };
+}
+
 export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset }) {
   const canvas = useEditor((s) => s.snap!.project.canvas);
-  const timeUs = useEditor((s) => s.timeUs);
-  const offset = clipOffset(clip, timeUs);
-  const inside = timeUs >= clip.startUs && timeUs <= clip.startUs + clip.durationUs;
-  const atIndex = inside ? keyframeIndexAt(clip, offset, keyframeTolerance(canvas.fps)) : -1;
-  const transform = transformAt(clip, clip.content.transform, offset);
+  // Plain values, so playback re-renders the section only when a keyframed value moves or a keyframe is passed.
+  const at = useEditor(useShallow((s) => atPlayhead(clip, s.timeUs, canvas.fps)));
+  const { atIndex } = at;
+  const transform = at;
   const set = (patch: Partial<Transform>, key: string) => setClipTransform(clip.id, patch, `${clip.id}:${key}`);
   // Scale that makes the media cover the whole canvas instead of fitting inside it.
   const fill =
@@ -123,7 +144,7 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
       title="Transform"
       actions={
         <>
-          <KeyframeControls clip={clip} offset={offset} inside={inside} atIndex={atIndex} />
+          <KeyframeControls clip={clip} at={at} />
           <span className="mx-0.5 h-4 w-px bg-line" />
           <IconButton label={keyed ? "Reset transform and remove keyframes" : "Reset transform"} className="h-7 w-7" onClick={reset}>
             <RotateCcw size={14} />

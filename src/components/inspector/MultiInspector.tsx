@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { Copy, Layers, RotateCcw, Trash2 } from "lucide-react";
 import { LIMITS } from "../../lib/limits";
 import { ADJUST_ROWS, DEFAULT_TRANSFORM, NO_ADJUST, sameAdjust } from "../../lib/presets";
@@ -33,11 +34,20 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** Nouns for the selection summary: "2 videos · 3 captions · 1 audio clip". */
 const KIND_NOUNS: Record<string, string> = { video: "video", image: "image", caption: "caption", text: "text clip", audio: "audio clip" };
 
+const KEYS = ["x", "y", "scale", "rotation", "opacity"] as const;
+
 function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }) {
-  const timeUs = useEditor((s) => s.timeUs);
   const ids = found.map((f) => f.clip.id);
-  const values = found.map((f) => transformAtPlayhead(f.clip, timeUs));
-  const field = (k: keyof Transform) => shared(values.map((t) => t[k]));
+  // Plain numbers, so playback re-renders the rows only when a keyframed value moves.
+  const flat = useEditor(
+    useShallow((s) =>
+      found.flatMap((f) => {
+        const t = transformAtPlayhead(f.clip, s.timeUs);
+        return KEYS.map((k) => t[k]);
+      }),
+    ),
+  );
+  const field = (k: keyof Transform) => shared(found.map((_, i) => flat[i * KEYS.length + KEYS.indexOf(k)]));
   const keyed = found.filter((f) => f.clip.keyframes.length > 0).length;
   // One absolute value for every clip, keyframes included, so "110 % everywhere" really is everywhere.
   const set = (patch: Partial<Transform>, key: string) =>

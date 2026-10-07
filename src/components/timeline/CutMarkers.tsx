@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Plus } from "lucide-react";
 import { DEFAULT_TRANSITION_US, TRANSITIONS } from "../../lib/presets";
 import { mainCuts, useEditor } from "../../lib/store";
@@ -6,7 +7,7 @@ import type { Project } from "../../lib/types";
 import { TRANSITION_ICONS } from "../panel/TransitionsTab";
 
 /** A square on every main-track cut: "+" adds a Dissolve, an icon opens the existing transition. */
-export function CutMarkers({ project, zoom }: { project: Project; zoom: number }) {
+export const CutMarkers = memo(function CutMarkers({ project, zoom }: { project: Project; zoom: number }) {
   const selected = useEditor((s) => s.cut);
   const { edit, selectCut } = useEditor.getState();
   return (
@@ -51,4 +52,4 @@ export function CutMarkers({ project, zoom }: { project: Project; zoom: number }
       })}
     </>
   );
-}
+});
