@@ -1021,10 +1021,10 @@ mod tests {
     }
 
     #[test]
-    fn karaoke_turns_off_when_the_text_is_edited() {
+    fn karaoke_turns_off_when_the_text_gains_or_loses_words() {
         let (w, h) = KARAOKE_SIZE;
         let mut renderer = Renderer::new().unwrap();
-        for text in ["Kůň úpěl ódy!", "Kůň", "Kůň úpěl  ódy", "kůň úpěl ódy", "Kůň\núpěl ódy", ""]
+        for text in ["Kůň úpěl", "Kůň úpěl ódy navíc", "Kůň úpěl  ódy", "Kůň\núpěl ódy", " Kůň úpěl ódy", ""]
         {
             let mut project = karaoke_project(Some("#ffe14d"));
             let id = project.tracks[1].clips[0].id.clone();
@@ -1035,6 +1035,25 @@ mod tests {
                 assert!(karaoke_pixels(&frame).0.is_empty(), "{text:?} at {t}");
             }
         }
+    }
+
+    #[test]
+    fn karaoke_lights_a_word_corrected_in_place() {
+        let (w, h) = KARAOKE_SIZE;
+        let mut renderer = Renderer::new().unwrap();
+        let mut project = karaoke_project(Some("#ffe14d"));
+        let id = project.tracks[1].clips[0].id.clone();
+        // A recognition mistake fixed word for word: "úpěl" becomes the longer "úpěla".
+        let edit = serde_json::json!({"type": "updateClip", "clipId": id, "text": "Kůň úpěla ódy"});
+        project.apply(serde_json::from_value(edit).unwrap()).unwrap();
+        let mut lit = |t: i64| {
+            let frame = renderer.render(&project, KARAOKE_START + t, w, h, Wait::Exact, false).unwrap();
+            pixel_box(&karaoke_pixels(&frame).0)
+        };
+        let (first, corrected, last) = (lit(200_000), lit(550_000), lit(850_000));
+        let [first, corrected, last] = [first, corrected, last].map(|b| b.expect("every word lights up"));
+        assert!(first[2] < corrected[0] && corrected[2] < last[0], "{first:?} {corrected:?} {last:?}");
+        assert!(lit(350_000).is_none(), "the gap stays unlit");
     }
 
     #[test]

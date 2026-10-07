@@ -1,6 +1,7 @@
 """Karaoke captions in the real app: a Czech take captioned with the Karaoke style lights up the word being
 said. The preview, the engine's own frame and the exported file must light the same word at the same moment,
-nothing while a caption holds after its last word, and nothing once the caption's text is edited by hand."""
+nothing while a caption holds after its last word. A word corrected in place keeps lighting up; a caption that
+gains a word lights nothing."""
 import subprocess, time
 
 from e2e.harness import CLI, FIXTURES, changed_share, flow, link_models, preview_crop, preview_rect, wait
@@ -149,17 +150,28 @@ def karaoke(r):
         changed = changed_share(r.work / f'engine-word-{index}.png', exported)
         r.check(f'export frame {n} matches the rendered one', changed < 0.002, f'{changed:.3%} of pixels differ')
 
-    # The caption's inspector offers the highlight; editing the caption's text turns it off and says why.
+    # The caption's inspector offers the highlight. Fixing a word keeps it on that word; adding one turns it off.
     r.focus_clip(caption['id'])
     toggle = ("return [...document.querySelectorAll('label')].find((l) => l.textContent.trim() === 'Highlight spoken word')"
               "?.querySelector('input')?.checked ?? null")
     r.check('the caption inspector has Highlight spoken word switched on', wait(lambda: r.s.run(toggle) is True, 5))
+    show = ("[...document.querySelectorAll('label')].find((l) => l.textContent.trim() === 'Highlight spoken word')"
+            ".scrollIntoView({block: 'center'})")
+    r.s.run(show)
     r.shot('inspector-caption')
-    r.s.call("window.__capopen.store.getState().edit({type: 'updateClip', clipId: arguments[0], text: arguments[1]})",
-             caption['id'], caption['text'] + '!')
-    note = "return document.body.innerText.includes('text was edited, so no word lights up')"
-    r.check('after a text edit the inspector says why no word lights up', wait(lambda: r.s.run(note), 5))
-    r.shot('inspector-edited')
+    retext = "window.__capopen.store.getState().edit({type: 'updateClip', clipId: arguments[0], text: arguments[1]})"
+    note = "return document.body.innerText.includes('Words were added or removed, so none lights up')"
+    tokens = caption['text'].split(' ')
+    corrected = ' '.join([tokens[0] + 'y'] + tokens[1:])
+    r.s.call(retext, caption['id'], corrected)
     time.sleep(1.5)  # Saved about a second after the edit.
-    r.check('the edited caption lights no word', lit(engine_frame(r, moments[0][1], 'engine-edited'))[1] == 0)
+    fixed = [lit(engine_frame(r, us, f'engine-corrected-{i}'))[0] for i, (_, us) in enumerate(moments, 1)]
+    r.check(f'after correcting it to "{tokens[0]}y" that word still lights up when it is said, before the next one',
+            fixed[0] and fixed[1] and reads_before(fixed[0], fixed[1]) and not r.s.run(note), fixed)
+    r.s.call(retext, caption['id'], corrected + ' navíc')
+    r.check('after adding a word the inspector says why no word lights up', wait(lambda: r.s.run(note), 5))
+    r.s.run(show)
+    r.shot('inspector-edited')
+    time.sleep(1.5)
+    r.check('the caption with an added word lights no word', lit(engine_frame(r, moments[0][1], 'engine-edited'))[1] == 0)
     r.check('no error toast', not r.errors(), r.errors())

@@ -47,7 +47,7 @@ function TextField({ clipId, text }: { clipId: string; text: string }) {
 function unlitReason(clip: Clip, text: string) {
   const words = clip.content.type === "text" ? (clip.content.words ?? []) : [];
   if (words.length === 0) return "This caption has no word timing. Regenerate captions to add it.";
-  if (words.map((w) => w.text).join(" ") !== text) return "This caption's text was edited, so no word lights up. Regenerate captions to bring it back.";
+  if (words.map((w) => w.text).join(" ") !== text) return "Words were added or removed, so none lights up. Regenerate captions to bring it back.";
   return null;
 }
 

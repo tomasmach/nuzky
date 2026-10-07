@@ -708,11 +708,12 @@ impl Project {
                             }
                         }
                     }
-                    ClipContent::Text { transform: tr, text: tx, style: st, .. } => {
+                    ClipContent::Text { transform: tr, text: tx, style: st, words } => {
                         if let Some(x) = transform {
                             *tr = x;
                         }
                         if let Some(x) = text {
+                            retext_words(words, tx, &x);
                             *tx = x;
                         }
                         if let Some(x) = style {
@@ -946,6 +947,18 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &
             Clip::new(new_id(), s.start_us, (s.end_us - s.start_us).max(min), content)
         })
         .collect())
+}
+
+/// A caption corrected word for word keeps its timing: when its old text was its words and the new text
+/// has as many words (split at single spaces), each word takes its new text and keeps its times. Any
+/// other edit leaves the words as they were, so they no longer match and nothing is highlighted.
+fn retext_words(words: &mut [CaptionWord], old: &str, new: &str) {
+    let tokens: Vec<&str> = new.split(' ').collect();
+    if !words.is_empty() && tokens.len() == words.len() && words.iter().map(|w| w.text.as_str()).eq(old.split(' ')) {
+        for (word, token) in words.iter_mut().zip(tokens) {
+            word.text = token.to_string();
+        }
+    }
 }
 
 /// Keeps a text clip's spoken words on the same moments when its start moves `by` later.
@@ -2107,6 +2120,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_caption_corrected_word_for_word_keeps_its_highlight() {
+        let (mut p, id) = karaoke();
+        let before = spoken(&p);
+        let retext = |text: &str| -> EditCmd {
+            serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": id, "text": text})).unwrap()
+        };
+        // A word correction replaces one word: the corrected word lights up exactly when the old one did.
+        p.apply(retext("Dneska vám ukážu kam")).unwrap();
+        let corrected: Vec<_> =
+            before.iter().map(|w| w.as_ref().map(|w| if w == "jak" { "kam".into() } else { w.clone() })).collect();
+        assert_eq!(spoken(&p), corrected);
+        // Typing in the inspector passes through a trailing space: still four words, the last one empty for now.
+        p.apply(retext("Dneska vám ukážu ")).unwrap();
+        p.apply(retext("Dneska vám ukážu, jak")).unwrap();
+        assert_eq!(spoken_at(&p, 2_600_000).as_deref(), Some("ukážu,"));
+        assert_eq!(spoken_at(&p, 3_500_000).as_deref(), Some("jak"));
+        // A word more or less: the words no longer match, so nothing lights up, and nothing guesses.
+        p.apply(retext("Dneska vám ukážu, jak na to")).unwrap();
+        assert!(spoken(&p).iter().all(Option::is_none));
+        let ClipContent::Text { words, .. } = &p.tracks[1].clips[0].content else { panic!() };
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Dneska", "vám", "ukážu,", "jak"]);
+        // Back to the words they were: lit again.
+        p.apply(retext("Dneska vám ukážu, jak")).unwrap();
+        assert_eq!(spoken_at(&p, 2_600_000).as_deref(), Some("ukážu,"));
     }
 
     #[test]
