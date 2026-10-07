@@ -307,3 +307,17 @@ export type EditCmd =
   | { type: "rippleDeleteRanges"; ranges: TimeRange[]; keepTrackIds?: string[] | null }
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
   | { type: "renameProject"; name: string };
+
+/** An agent CapOpen can be connected to, and the state of its `capopen` MCP entry. */
+export type AgentKind = "claudeCode" | "codex";
+export interface AgentConnection {
+  agent: AgentKind;
+  name: string;
+  /** Its config file. */
+  path: string;
+  /** connected: runs this app; other: a capopen entry that runs something else. */
+  state: "connected" | "other" | "missing" | "unreadable";
+  problem: string | null;
+  /** The copy made before the last change. */
+  backup: string | null;
+}

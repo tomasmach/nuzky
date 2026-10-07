@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
+import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Plug, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { FORMATS } from "../lib/presets";
 import { AI_EDITING, openExport, projectDuration, stopAiRun, switchProject, useAiLocked, useEditor } from "../lib/store";
@@ -222,6 +222,9 @@ export function TopBar() {
       <div className="flex-1" />
       <AiRunBar />
       <JobIndicator />
+      <Button title="Let Claude Code or Codex edit the project open here" onClick={() => useEditor.setState({ connectOpen: true })}>
+        <Plug size={15} /> Connect agent
+      </Button>
       <div className="flex items-center">
         <IconButton label={aiRun ? "Undo is available when the AI is done" : "Undo (Ctrl+Z)"} disabled={!snap?.canUndo || !!aiRun} onClick={undo}>
           <Undo2 size={16} />

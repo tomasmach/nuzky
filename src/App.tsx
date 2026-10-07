@@ -10,6 +10,7 @@ import { useSpeech } from "./lib/speech";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
 import type { JobEvent, ProjectSummary, Snapshot, Transport } from "./lib/types";
+import { ConnectAgentDialog } from "./components/ConnectAgentDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { Inspector } from "./components/inspector/Inspector";
 import { LeftPanel } from "./components/panel/LeftPanel";
@@ -447,6 +448,7 @@ export default function App() {
         <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
         <Timeline height={timelineH} />
         <ExportDialog />
+        <ConnectAgentDialog />
         <Toasts bottom={timelineH + 12} />
         <DisabledHint />
         <DragChip />

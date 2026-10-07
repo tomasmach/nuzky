@@ -23,7 +23,7 @@ capopen-mcp.workspace = true
 capopen-analysis.workspace = true
 anyhow.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 log.workspace = true
 tauri = { version = "2.12.1", features = [] }
 tauri-plugin-dialog = "2.8.1"
@@ -39,6 +39,7 @@ uuid = { version = "1", features = ["v4"] }
 whisper-rs = "0.16.0"
 ureq = "3.4.2"
 sha2 = "0.11.0"
+toml_edit = "0.25.15"
 
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]

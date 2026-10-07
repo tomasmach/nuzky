@@ -14,7 +14,7 @@ use capopen_engine::{Project, Renderer, Wait};
 mod style;
 
 const USAGE: &str = "Usage:
-  capopen mcp --project <path> [--allow-write] [--cache <dir>]
+  capopen mcp (--project <path> | --current) [--allow-write] [--cache <dir>]
   capopen probe <media>
   capopen new <project.json> <media>...     main-track project from media files
   capopen frame <project.json> <seconds> <out.png> [width]

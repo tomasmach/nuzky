@@ -75,11 +75,16 @@ struct Bridge {
 }
 impl Bridge {
     fn new(app: &App, write: bool) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_capopen"));
-        command.args(["mcp", "--project"]).arg(&app.path).env("XDG_RUNTIME_DIR", &app.dir);
+        let project = app.path.to_string_lossy().into_owned();
+        let mut args = vec!["--project", project.as_str()];
         if write {
-            command.arg("--allow-write");
+            args.push("--allow-write");
         }
+        Self::with(app, &args)
+    }
+    fn with(app: &App, args: &[&str]) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_capopen"));
+        command.arg("mcp").args(args).env("XDG_RUNTIME_DIR", &app.dir);
         let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
         let input = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
@@ -249,4 +254,31 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     assert!(app.hello(&token, 1)["error"].as_str().unwrap().starts_with("UNAUTHORIZED"));
     attached.error("get_state", json!({}), "APP_CLOSED");
     attached.finish();
+}
+
+/// An agent configured once with `--current` attaches to whichever project the app has open, live,
+/// and refuses to start rather than edit a project headless when no app has one open.
+#[test]
+fn current_attaches_to_the_open_project_and_refuses_without_an_app() {
+    let mut app = App::new();
+    let current = app.dir.join("capopen/current");
+    assert_eq!(std::fs::read_to_string(&current).unwrap(), std::fs::canonicalize(&app.path).unwrap().to_string_lossy());
+    assert_eq!(std::fs::metadata(&current).unwrap().permissions().mode() & 0o777, 0o600);
+    let mut bridge = Bridge::with(&app, &["--current", "--allow-write"]);
+    assert_eq!(bridge.call("get_state", json!({}))["name"], "Before");
+    let run = bridge.call("begin_run", json!({"label":"current"}));
+    // The run is the app's own: the app's session shows it.
+    assert_eq!(app.host.session.state().unwrap().open_run.unwrap().run_id, run["run_id"]);
+    bridge.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    bridge.finish();
+    app.listener.take();
+    assert!(!current.exists(), "closing the project removes its name");
+    let refused = Command::new(env!("CARGO_BIN_EXE_capopen"))
+        .args(["mcp", "--current", "--allow-write"])
+        .env("XDG_RUNTIME_DIR", &app.dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("APP_NOT_RUNNING"), "{refused:?}");
 }

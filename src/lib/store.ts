@@ -50,6 +50,7 @@ interface EditorState {
   /** Files being probed by an import, shown as placeholders until they arrive. */
   importing: { key: number; name: string; kind: Asset["kind"] }[];
   exportOpen: boolean;
+  connectOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
   ratioOpen: boolean;
@@ -218,6 +219,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   fileDrag: null,
   importing: [],
   exportOpen: false,
+  connectOpen: false,
   exportJobId: null,
   panelTab: "media",
   ratioOpen: false,

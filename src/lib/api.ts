@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
+import type { AgentConnection, AgentKind, Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -26,6 +26,8 @@ export const api = {
   seek: (tUs: number) => invoke<void>("seek", { tUs: Math.round(tUs) }),
   setPreviewBox: (width: number, height: number) => invoke<void>("set_preview_box", { width, height }),
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
+  agentConnections: () => invoke<AgentConnection[]>("agent_connections"),
+  connectAgent: (agent: AgentKind) => invoke<AgentConnection>("connect_agent", { agent }),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
   /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */

@@ -326,8 +326,10 @@ def close_window_and_confirm(r):
 class Bridge:
     """The agent's side: `capopen mcp` attached to the open app over its local socket."""
 
-    def __init__(self, r, project):
-        self.process = subprocess.Popen([str(CLI), 'mcp', '--project', str(project), '--allow-write'], env=r.env,
+    def __init__(self, r, project=None, command=None):
+        """`command`: what an agent's config runs instead, such as `capopen-app mcp --current`."""
+        command = command or [str(CLI), 'mcp', '--project', str(project), '--allow-write']
+        self.process = subprocess.Popen(command, env=r.env,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(r.work / 'bridge.log', 'w'),
                                         text=True, start_new_session=True)
         self.lines, self.id = queue.Queue(), 0

@@ -1,6 +1,6 @@
 # AI architecture
 
-CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and a planned in-app AI panel will run the user's installed agent under their subscription. The panel, `crates/agent` and Settings → Connect are not built yet. Research behind these decisions: [docs/research](research).
+CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and a planned in-app AI panel will run the user's installed agent under their subscription. The panel and `crates/agent` are not built yet; Connect agent covers Claude Code and Codex. Research behind these decisions: [docs/research](research).
 
 Decided on 6 Oct 2026 after two independent proposals and a cross-critique, and refined the same day after the headless MCP landed (two more proposals and a cross-critique).
 
@@ -83,7 +83,9 @@ Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JS
 ## Agent setup
 
 - The app ships `skills/capopen-edit/SKILL.md` and an `AGENTS.md` template: units, magnetic main track, ripple behaviour, analyse → edit → inspect frames → export, and never editing the JSON directly.
-- Planned: Settings → Connect your agent will show the exact config change for Claude Code (`.mcp.json`), Codex (`config.toml`), Gemini CLI, Cursor and Claude Desktop, write only the `capopen` entry after confirmation and keep a backup.
+- Connect agent (top bar) writes one `capopen` MCP server into Claude Code's user settings (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`, under `mcpServers`) and Codex's (`~/.codex/config.toml` or `$CODEX_HOME/config.toml`, as `[mcp_servers.capopen]`): this app's executable (the AppImage itself when it runs from one) with `mcp --current --allow-write`. The file is copied to `<file>.capopen-backup-<unix time>` first and replaced in one step; a symlinked config is written where the link points, every other key keeps its exact text (Codex comments included), an entry that already runs this app is left alone, and a file that does not parse is not touched. Code: `src-tauri/src/connect.rs`.
+- `--current` attaches to the project open in the app: each app listener writes the open project's path to `current` next to its socket (0600 in the 0700 endpoint directory) and removes it when the project closes. With no project open the bridge refuses to start (`APP_NOT_RUNNING`) instead of editing headless, so one configuration serves every project; the agent's MCP server is restarted after switching projects.
+- Planned: the same for Gemini CLI, Cursor and Claude Desktop.
 - Planned diagnostics will check, in order: executable found, config parsed, MCP handshake, project attached, `get_state` and one `inspect_frames` call.
 
 ## In-app AI panel (planned, not built)

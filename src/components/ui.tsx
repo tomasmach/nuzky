@@ -623,3 +623,21 @@ export function TextSwatch({ style, label }: { style: TextStyle; label: string }
     </span>
   );
 }
+
+/** Keeps Tab and Shift+Tab inside a modal dialog. */
+export function trapTab(e: KeyboardEvent<HTMLElement>) {
+  if (e.key !== "Tab") return;
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]")].filter(
+    (el) => !el.matches(":disabled, [tabindex='-1']") && el.offsetParent !== null,
+  );
+  if (items.length === 0) return;
+  const [first, last] = [items[0], items[items.length - 1]];
+  const inside = items.includes(document.activeElement as HTMLElement);
+  if (e.shiftKey && (document.activeElement === first || !inside)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+    e.preventDefault();
+    first.focus();
+  }
+}

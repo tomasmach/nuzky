@@ -8,7 +8,7 @@ import { formatLabel } from "../lib/presets";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
 import { US, formatTime } from "../lib/time";
 import type { Canvas, ExportRequest } from "../lib/types";
-import { Button, IconButton, ProgressBar, Segmented } from "./ui";
+import { Button, IconButton, ProgressBar, Segmented, trapTab } from "./ui";
 
 const RESOLUTIONS = [
   { id: 720, label: "720p" },
@@ -54,23 +54,6 @@ function formatBytes(b: number) {
 }
 
 /** Tab and Shift+Tab cycle through the dialog's controls, so focus never leaves it for the editor behind. */
-function trapTab(e: React.KeyboardEvent<HTMLElement>) {
-  if (e.key !== "Tab") return;
-  const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]")].filter(
-    (el) => !el.matches(":disabled, [tabindex='-1']") && el.offsetParent !== null,
-  );
-  if (items.length === 0) return;
-  const [first, last] = [items[0], items[items.length - 1]];
-  const inside = items.includes(document.activeElement as HTMLElement);
-  if (e.shiftKey && (document.activeElement === first || !inside)) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
-    e.preventDefault();
-    first.focus();
-  }
-}
-
 function loadOptions(canvas: Canvas): ExportRequest {
   const short = Math.min(canvas.width, canvas.height);
   const fallback: ExportRequest = {
