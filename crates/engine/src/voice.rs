@@ -74,7 +74,17 @@ pub fn ensure_voice_pcm(
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
-    lock.lock()?;
+    // Waiting for another caller still asks `progress`, so a cancelled export stops at once.
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                progress(raw_share)?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
     if !path.exists() {
         clean_file(&raw, &path, |p| progress(raw_share + p * (1.0 - raw_share)))?;
         remove_older_versions(&path, asset);
@@ -485,6 +495,46 @@ mod tests {
             "same input, other output"
         );
         assert!(first.iter().all(|s| s.is_finite()));
+    }
+
+    /// An export waiting for the app's own cleaning of the same file still stops when cancelled.
+    #[test]
+    fn waiting_for_another_cleaning_stays_cancellable() {
+        use crate::model::AssetKind;
+        let cache = std::env::temp_dir().join(format!("capopen-voice-wait-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let asset = Asset {
+            id: "take".into(),
+            name: "take".into(),
+            path: String::new(),
+            kind: AssetKind::Video,
+            duration_us: 1_000_000,
+            width: 2,
+            height: 2,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+        };
+        let raw = pcm_path(&cache, &asset);
+        std::fs::write(&raw, bytemuck::cast_slice(&vec![0.1f32; SAMPLE_RATE as usize * CHANNELS])).unwrap();
+        let path = path_for(&cache, &raw);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let other = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(format!("{}.lock", path.display()))
+            .unwrap();
+        other.lock().unwrap();
+        let started = std::time::Instant::now();
+        let error = ensure_voice_pcm(&cache, &asset, |_| anyhow::bail!("CANCELLED: stop")).unwrap_err();
+        let waited = started.elapsed();
+        drop(other);
+        std::fs::remove_dir_all(cache).unwrap();
+        assert!(error.to_string().starts_with("CANCELLED"), "{error}");
+        assert!(waited < std::time::Duration::from_secs(1), "waited {waited:?}");
     }
 
     #[test]
