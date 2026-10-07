@@ -39,6 +39,8 @@ pub struct Renderer {
     text: TextRenderer,
     /// Keyed by clip and source path, so a clip relinked to other media gets a fresh decoder.
     workers: HashMap<(String, String), VideoWorker>,
+    /// Clips shown now or prefetched for the next second, whose decoders other clips must not take.
+    needed: HashSet<String>,
     blurred: HashMap<(usize, usize), (Image, Image)>,
     solids: [Image; 3],
     pub late_layers: u64,
@@ -74,6 +76,19 @@ fn visible_clips(track: &Track, t_us: i64) -> impl Iterator<Item = VisibleClip<'
         [track.clips.iter().find(|c| c.contains(t_us)).map(|clip| VisibleClip { clip, transition: None }), None]
     };
     clips.into_iter().flatten()
+}
+
+/// Video clips that start within the prefetch window after `t_us`.
+fn upcoming(track: &Track, t_us: i64) -> impl Iterator<Item = &Clip> {
+    let video = !track.hidden && track.kind == TrackKind::Video;
+    track.clips.iter().filter(move |clip| {
+        let start = if track.id == crate::edit::MAIN_TRACK {
+            transition_window(clip).map(|w| w.0).unwrap_or(clip.start_us)
+        } else {
+            clip.start_us
+        };
+        video && start > t_us && start <= t_us + PREFETCH_US
+    })
 }
 
 fn placement(
@@ -198,6 +213,7 @@ impl Renderer {
             gpu: Gpu::new()?,
             text: TextRenderer::new(),
             workers: HashMap::new(),
+            needed: HashSet::new(),
             blurred: HashMap::new(),
             solids: [[0, 0, 0, 0], [0, 0, 0, 255], [255; 4]].map(|c| Image {
                 width: 1,
@@ -232,6 +248,11 @@ impl Renderer {
         playing: bool,
     ) -> Result<Vec<u8>> {
         self.drop_stale_workers(project);
+        self.needed.clear();
+        for track in &project.tracks {
+            let visible = visible_clips(track, t_us).map(|v| v.clip);
+            self.needed.extend(visible.chain(upcoming(track, t_us)).map(|clip| clip.id.clone()));
+        }
         let canvas = &project.canvas;
         let k = out_w as f32 / canvas.width.max(1) as f32;
         let mut draws = Vec::new();
@@ -330,32 +351,37 @@ impl Renderer {
     }
 
     fn prefetch(&mut self, project: &Project, t_us: i64, k: f32) {
-        for track in &project.tracks {
-            if track.hidden || track.kind != TrackKind::Video {
+        for clip in project.tracks.iter().flat_map(|track| upcoming(track, t_us)) {
+            let ClipContent::Media { asset_id, .. } = &clip.content else { continue };
+            let Some(asset) =
+                project.asset(asset_id).filter(|a| a.kind != AssetKind::Audio && a.width > 0 && a.height > 0)
+            else {
                 continue;
-            }
-            for clip in &track.clips {
-                let start = if track.id == crate::edit::MAIN_TRACK {
-                    transition_window(clip).map(|w| w.0).unwrap_or(clip.start_us)
-                } else {
-                    clip.start_us
-                };
-                if start > t_us && start <= t_us + PREFETCH_US {
-                    let ClipContent::Media { asset_id, .. } = &clip.content else { continue };
-                    let Some(asset) =
-                        project.asset(asset_id).filter(|a| a.kind != AssetKind::Audio && a.width > 0 && a.height > 0)
-                    else {
-                        continue;
-                    };
-                    let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
-                    let worker = self
-                        .workers
-                        .entry((clip.id.clone(), asset.path.clone()))
-                        .or_insert_with(|| VideoWorker::spawn(PathBuf::from(&asset.path)));
-                    worker.get(source_time(clip, clip.start_us), size, false, false);
-                }
-            }
+            };
+            let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
+            self.worker(&clip.id, &asset.path).get(source_time(clip, clip.start_us), size, false, false);
         }
+    }
+
+    /// The clip's decoder. A clip without one takes over the most recently used decoder of the same
+    /// file that no needed clip uses, so a file cut into many pieces does not open one per piece,
+    /// and the next piece usually continues where the previous one stopped.
+    fn worker(&mut self, clip_id: &str, path: &str) -> &mut VideoWorker {
+        let key = (clip_id.to_owned(), path.to_owned());
+        if !self.workers.contains_key(&key) {
+            let idle = self
+                .workers
+                .iter()
+                .filter(|((id, p), _)| p == path && !self.needed.contains(id))
+                .max_by_key(|(_, w)| w.last_used)
+                .map(|(k, _)| k.clone());
+            let worker = match idle {
+                Some(idle) => self.workers.remove(&idle).unwrap(),
+                None => VideoWorker::spawn(PathBuf::from(path)),
+            };
+            self.workers.insert(key.clone(), worker);
+        }
+        self.workers.get_mut(&key).unwrap()
     }
 
     fn layer_for(
@@ -380,10 +406,7 @@ impl Renderer {
                 } else {
                     source_time(clip, t_us).min((asset.duration_us - 1).max(0))
                 };
-                let worker = self
-                    .workers
-                    .entry((clip.id.clone(), asset.path.clone()))
-                    .or_insert_with(|| VideoWorker::spawn(PathBuf::from(&asset.path)));
+                let worker = self.worker(&clip.id, &asset.path);
                 let frame = worker.get(source_t, size, playing, wait == Wait::Exact);
                 if wait == Wait::Exact {
                     if let Some(error) = worker.error() {
