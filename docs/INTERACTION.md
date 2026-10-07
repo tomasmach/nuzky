@@ -29,7 +29,7 @@ Hovering or focusing a media or audio item shows `+` (add at playhead) and a tra
 
 ### Edit clips
 - **Select**: click. `Shift`-click adds to the selection. Click empty space or press `Esc` to clear.
-- **Move**: drag the clip body. A ghost follows the pointer and snaps within 8 px to the playhead and clip edges; a vertical line shows the snap. Dropping on an occupied spot creates a new track. `Esc` cancels the drag.
+- **Move**: drag the clip body. A ghost follows the pointer and snaps within 8 px to the playhead and clip edges; a vertical line shows the snap. Dropping on an occupied spot creates a new track. `Esc` cancels the drag, and so does the system taking the pointer or the window losing focus.
 - **Main track**: magnetic. Clips sit back to back; moving reorders, deleting closes the gap.
 - **Trim**: drag a clip edge. A tooltip shows the new duration. The handle stops at the end of the source media, taking the clip's speed into account.
 - **Split**: at the playhead. `S` and the Split button split the selected clips under the playhead, else the main-track clip under it, and are disabled with the reason when there is none; the context menu splits the clicked clip.

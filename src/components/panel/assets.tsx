@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Film, Image as ImageIcon } from "lucide-react";
 import { api, errorText } from "../../lib/api";
+import { followPointer } from "../../lib/drag";
 import { MAIN_TRACK, currentEpoch, findClip, useEditor } from "../../lib/store";
 import type { Asset } from "../../lib/types";
 import { Button } from "../ui";
@@ -83,16 +84,14 @@ export function assetDragHandler(assetId: string) {
       if (dragging) useEditor.setState({ assetDrag: { assetId, x: ev.clientX, y: ev.clientY } });
     };
     const up = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
       const drag = useEditor.getState().assetDrag;
       useEditor.setState({ assetDrag: null });
       if (!dragging || !drag) return;
       const target = dropResolver?.(ev.clientX, ev.clientY);
       if (target) useEditor.getState().edit({ type: "addClip", assetId, startUs: target.startUs, trackId: target.trackId });
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    // A cancelled drag drops nothing.
+    followPointer({ move, up, cancel: () => useEditor.setState({ assetDrag: null }) });
   };
 }
 

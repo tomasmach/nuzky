@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
+import { followPointer } from "../../lib/drag";
 import { findClip, setClipTransform, transformAtPlayhead, useEditor } from "../../lib/store";
 import type { LayerBounds, Transform } from "../../lib/types";
 
@@ -136,14 +137,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       // in this gesture is updated, not duplicated, and other fields are never reverted.
       lastEdit = setClipTransform(g.clipId, patch, g.key);
     };
-    const move = (e: PointerEvent) => {
-      latest = { x: e.clientX, y: e.clientY, shift: e.shiftKey };
-      if (!raf) raf = requestAnimationFrame(apply);
-    };
-    const detach = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", cancel);
+    const halt = () => {
       cancelAnimationFrame(raf);
       raf = 0;
       stop.current = null;
@@ -157,21 +151,27 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
         .catch(() => undefined)
         .finally(() => ref.current && setLive(null));
     };
-    const up = () => {
-      const pending = raf !== 0;
-      detach();
-      if (pending) apply();
-      settle();
+    const unfollow = followPointer({
+      move: (e) => {
+        latest = { x: e.clientX, y: e.clientY, shift: e.shiftKey };
+        if (!raf) raf = requestAnimationFrame(apply);
+      },
+      up: () => {
+        const pending = raf !== 0;
+        halt();
+        if (pending) apply();
+        settle();
+      },
+      // The system took the pointer (e.g. a touch turned into a scroll): keep what was applied.
+      cancel: () => {
+        halt();
+        settle();
+      },
+    });
+    stop.current = () => {
+      unfollow();
+      halt();
     };
-    // The system took the pointer (e.g. a touch turned into a scroll): keep what was applied.
-    const cancel = () => {
-      detach();
-      settle();
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", cancel);
-    stop.current = detach;
   };
 
   const begin = (mode: Mode, clipId: string, corners: Pt[], e: { clientX: number; clientY: number }) => {
@@ -186,18 +186,13 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     const down = { clientX: e.clientX, clientY: e.clientY };
     let latest = { x: e.clientX, y: e.clientY, shift: e.shiftKey };
     let released = false;
-    const track = (ev: PointerEvent) => (latest = { x: ev.clientX, y: ev.clientY, shift: ev.shiftKey });
     const release = () => (released = true);
+    stop.current?.();
+    const unfollow = followPointer({ move: (ev) => (latest = { x: ev.clientX, y: ev.clientY, shift: ev.shiftKey }), up: release, cancel: release });
     const detach = () => {
-      window.removeEventListener("pointermove", track);
-      window.removeEventListener("pointerup", release);
-      window.removeEventListener("pointercancel", release);
+      unfollow();
       stop.current = null;
     };
-    stop.current?.();
-    window.addEventListener("pointermove", track);
-    window.addEventListener("pointerup", release);
-    window.addEventListener("pointercancel", release);
     stop.current = detach;
     let list: LayerBounds[] = [];
     try {

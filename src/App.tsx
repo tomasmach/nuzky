@@ -4,6 +4,7 @@ import { AlertCircle } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText } from "./lib/api";
+import { followPointer } from "./lib/drag";
 import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
@@ -262,14 +263,8 @@ function Divider({ height, max, onChange }: { height: number; max: number; onCha
     e.preventDefault();
     const startY = e.clientY;
     setActive(true);
-    const move = (ev: PointerEvent) => onChange(height - (ev.clientY - startY));
-    const up = () => {
-      setActive(false);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    // A cancelled drag keeps the height reached so far.
+    followPointer({ move: (ev) => onChange(height - (ev.clientY - startY)), up: () => setActive(false), cancel: () => setActive(false) });
   };
   return (
     <div

@@ -1,5 +1,6 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Trash2 } from "lucide-react";
+import { followPointer } from "../../lib/drag";
 import { paragraphs, tokenAt, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
@@ -93,12 +94,6 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
     if (playing && active >= 0) box.current?.querySelector(`[data-t="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active, playing]);
 
-  useEffect(() => {
-    const up = () => (dragging.current = false);
-    window.addEventListener("pointerup", up);
-    return () => window.removeEventListener("pointerup", up);
-  }, []);
-
   const indexAt = (el: EventTarget | null) => {
     const t = el instanceof Element ? el.closest("[data-t]") : null;
     return t ? Number(t.getAttribute("data-t")) : null;
@@ -112,6 +107,8 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
     if (i === null) return;
     e.preventDefault();
     dragging.current = true;
+    const stop = () => (dragging.current = false);
+    followPointer({ up: stop, cancel: stop });
     if (e.shiftKey && live) setSel({ anchor: live.anchor, focus: i });
     else {
       setSel({ anchor: i, focus: i });

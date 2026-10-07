@@ -1,4 +1,5 @@
-import { useEffect, useState, type PointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type RefObject } from "react";
+import { followPointer } from "../../lib/drag";
 import { allClips, useEditor } from "../../lib/store";
 import { US } from "../../lib/time";
 import type { Clip, Project, Track } from "../../lib/types";
@@ -49,7 +50,11 @@ function snap(value: number, candidates: number[], thr: number): number | null {
   return best;
 }
 
-/** Moving and trimming clips, and scrubbing the ruler and empty lanes; both follow the pointer on the window. */
+/**
+ * Moving and trimming clips, and scrubbing the ruler and empty lanes; both follow the pointer on
+ * the window. A drag binds its listeners once when it starts and reads the latest zoom and
+ * snapping from a ref, so pointer moves only update the drag state.
+ */
 export function useTimelineGestures({
   project,
   zoom,
@@ -65,51 +70,38 @@ export function useTimelineGestures({
   rows: RefObject<Map<string, HTMLDivElement>>;
   timeAt: (clientX: number) => number;
 }) {
-  const { select, seek, edit } = useEditor.getState();
   const [drag, setDrag] = useState<Drag | null>(null);
+  const live = useRef({ project, zoom, snapping, minUs, timeAt });
+  live.current = { project, zoom, snapping, minUs, timeAt };
+  const stopDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopDrag.current?.(), []);
 
-  const startClipDrag = (e: PointerEvent, clip: Clip, track: Track) => {
-    if (e.button !== 0 || !project) return;
-    e.stopPropagation();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const mode: Mode = x <= EDGE ? "trimL" : x >= rect.width - EDGE ? "trimR" : "move";
-    const asset = clipAsset(project, clip);
-    const media = clip.content.type === "media" ? clip.content : null;
-    const sourceInUs = media && asset?.kind !== "image" ? media.sourceInUs : null;
-    // The right edge stops where the source ends, at this clip's speed (floored like the engine).
-    const maxDurUs = sourceInUs !== null && asset && media ? Math.floor((asset.durationUs - sourceInUs) / media.speed) : null;
-    const candidates = [0, useEditor.getState().timeUs];
-    for (const c of allClips(project)) if (c.id !== clip.id) candidates.push(c.startUs, c.startUs + c.durationUs);
-    setDrag({ clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 });
-  };
-
-  useEffect(() => {
-    if (!drag || !project) return;
-    const kind = project.tracks.find((t) => t.id === drag.trackId)?.kind ?? "video";
-    const onMove = (e: globalThis.PointerEvent) => {
-      const moved = drag.moved || Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 3;
-      if (!moved) return;
-      let dxUs = ((e.clientX - drag.startX) / zoom) * US;
+  /** The drag after the pointer moved to `e`, or null while it has not moved far enough to count. */
+  const step = useCallback(
+    (d: Drag, e: globalThis.PointerEvent, kind: Track["kind"]): Drag | null => {
+      const { project, zoom, snapping } = live.current;
+      const moved = d.moved || Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 3;
+      if (!moved || !project) return null;
+      let dxUs = ((e.clientX - d.startX) / zoom) * US;
       let snapUs: number | null = null;
       const thr = (SNAP_PX / zoom) * US;
       if (snapping) {
-        if (drag.mode === "move") {
-          const s = drag.clip.startUs + dxUs;
-          const a = snap(s, drag.candidates, thr);
-          const b = snap(s + drag.clip.durationUs, drag.candidates, thr);
+        if (d.mode === "move") {
+          const s = d.clip.startUs + dxUs;
+          const a = snap(s, d.candidates, thr);
+          const b = snap(s + d.clip.durationUs, d.candidates, thr);
           const da = a === null ? Infinity : Math.abs(a - s);
-          const db = b === null ? Infinity : Math.abs(b - (s + drag.clip.durationUs));
+          const db = b === null ? Infinity : Math.abs(b - (s + d.clip.durationUs));
           if (a !== null && da <= db) {
-            dxUs = a - drag.clip.startUs;
+            dxUs = a - d.clip.startUs;
             snapUs = a;
           } else if (b !== null) {
-            dxUs = b - drag.clip.durationUs - drag.clip.startUs;
+            dxUs = b - d.clip.durationUs - d.clip.startUs;
             snapUs = b;
           }
         } else {
-          const edge = drag.mode === "trimL" ? drag.clip.startUs + dxUs : drag.clip.startUs + drag.clip.durationUs + dxUs;
-          const s = snap(edge, drag.candidates, thr);
+          const edge = d.mode === "trimL" ? d.clip.startUs + dxUs : d.clip.startUs + d.clip.durationUs + dxUs;
+          const s = snap(edge, d.candidates, thr);
           if (s !== null) {
             dxUs += s - edge;
             snapUs = s;
@@ -117,79 +109,109 @@ export function useTimelineGestures({
         }
       }
       let target: string | null | undefined = undefined;
-      if (drag.mode === "move") {
-        const entries = [...rows.current.entries()];
-        const rects = entries.map(([id, el]) => [id, el.getBoundingClientRect()] as const);
+      if (d.mode === "move") {
+        const rects = [...rows.current.entries()].map(([id, el]) => [id, el.getBoundingClientRect()] as const);
         const hit = rects.find(([, r]) => e.clientY >= r.top && e.clientY <= r.bottom);
         if (hit) {
           const t = project.tracks.find((tr) => tr.id === hit[0]);
-          if (t && t.kind === kind && t.id !== drag.trackId) target = t.id;
+          if (t && t.kind === kind && t.id !== d.trackId) target = t.id;
         } else if (rects.length > 0) {
           const top = Math.min(...rects.map(([, r]) => r.top));
           const bottom = Math.max(...rects.map(([, r]) => r.bottom));
           if ((kind !== "audio" && e.clientY < top) || (kind === "audio" && e.clientY > bottom)) target = null;
         }
       }
-      setDrag({ ...drag, moved: true, dxUs: Math.round(dxUs), snapUs, target });
-    };
-    const finish = (commit: boolean) => {
-      const d = drag;
-      setDrag(null);
-      if (!commit) return;
-      if (!d.moved) {
-        const sel = useEditor.getState().selection;
-        if (d.shift) select(sel.includes(d.clip.id) ? sel.filter((id) => id !== d.clip.id) : [...sel, d.clip.id]);
-        else select([d.clip.id]);
-        return;
-      }
-      const r = dragResult(d, minUs);
-      if (d.mode === "move") {
-        const trackId = d.target === undefined ? d.trackId : d.target;
-        if (trackId === d.trackId && r.startUs === d.clip.startUs) return;
-        edit({ type: "moveClip", clipId: d.clip.id, trackId, startUs: r.startUs });
-      } else {
-        const sourceInUs = d.mode === "trimL" && d.sourceInUs !== null ? Math.max(0, d.sourceInUs + Math.round((r.startUs - d.clip.startUs) * d.speed)) : null;
-        edit({ type: "trimClip", clipId: d.clip.id, startUs: r.startUs, durationUs: r.durationUs, sourceInUs });
-      }
-      select([d.clip.id]);
-    };
-    const onUp = () => finish(true);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        finish(false);
-      }
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [drag, project, zoom, snapping, minUs, edit, select, rows]);
+      return { ...d, moved: true, dxUs: Math.round(dxUs), snapUs, target };
+    },
+    [rows],
+  );
 
-  const startScrub = (e: PointerEvent) => {
+  const finish = (d: Drag) => {
+    const { select, edit } = useEditor.getState();
+    if (!d.moved) {
+      const sel = useEditor.getState().selection;
+      if (d.shift) select(sel.includes(d.clip.id) ? sel.filter((id) => id !== d.clip.id) : [...sel, d.clip.id]);
+      else select([d.clip.id]);
+      return;
+    }
+    const r = dragResult(d, live.current.minUs);
+    if (d.mode === "move") {
+      const trackId = d.target === undefined ? d.trackId : d.target;
+      if (trackId === d.trackId && r.startUs === d.clip.startUs) return;
+      edit({ type: "moveClip", clipId: d.clip.id, trackId, startUs: r.startUs });
+    } else {
+      const sourceInUs = d.mode === "trimL" && d.sourceInUs !== null ? Math.max(0, d.sourceInUs + Math.round((r.startUs - d.clip.startUs) * d.speed)) : null;
+      edit({ type: "trimClip", clipId: d.clip.id, startUs: r.startUs, durationUs: r.durationUs, sourceInUs });
+    }
+    select([d.clip.id]);
+  };
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
+
+  const startClipDrag = useCallback(
+    (e: PointerEvent, clip: Clip, track: Track) => {
+      const { project } = live.current;
+      if (e.button !== 0 || !project) return;
+      e.stopPropagation();
+      stopDrag.current?.();
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const mode: Mode = x <= EDGE ? "trimL" : x >= rect.width - EDGE ? "trimR" : "move";
+      const asset = clipAsset(project, clip);
+      const media = clip.content.type === "media" ? clip.content : null;
+      const sourceInUs = media && asset?.kind !== "image" ? media.sourceInUs : null;
+      // The right edge stops where the source ends, at this clip's speed (floored like the engine).
+      const maxDurUs = sourceInUs !== null && asset && media ? Math.floor((asset.durationUs - sourceInUs) / media.speed) : null;
+      const candidates = [0, useEditor.getState().timeUs];
+      for (const c of allClips(project)) if (c.id !== clip.id) candidates.push(c.startUs, c.startUs + c.durationUs);
+      let d: Drag = { clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 };
+      setDrag(d);
+
+      const end = (commit: boolean) => {
+        unfollow();
+        window.removeEventListener("keydown", onKey, true);
+        stopDrag.current = null;
+        setDrag(null);
+        if (commit) finishRef.current(d);
+      };
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.key === "Escape") {
+          ev.stopPropagation();
+          end(false);
+        }
+      };
+      // A cancelled pointer or a lost window focus ends the drag like Esc: nothing changes.
+      const unfollow = followPointer({
+        move: (ev) => {
+          const next = step(d, ev, track.kind);
+          if (next) setDrag((d = next));
+        },
+        up: () => end(true),
+        cancel: () => end(false),
+      });
+      window.addEventListener("keydown", onKey, true);
+      stopDrag.current = () => end(false);
+    },
+    [step],
+  );
+
+  const startScrub = useCallback((e: PointerEvent) => {
     if (e.button !== 0) return;
-    seek(timeAt(e.clientX));
+    const { seek } = useEditor.getState();
+    seek(live.current.timeAt(e.clientX));
     let raf = 0;
     let lastX = e.clientX;
-    const move = (ev: globalThis.PointerEvent) => {
-      lastX = ev.clientX;
-      if (!raf)
-        raf = requestAnimationFrame(() => {
-          raf = 0;
-          seek(timeAt(lastX));
-        });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+    followPointer({
+      move: (ev) => {
+        lastX = ev.clientX;
+        if (!raf)
+          raf = requestAnimationFrame(() => {
+            raf = 0;
+            seek(live.current.timeAt(lastX));
+          });
+      },
+    });
+  }, []);
 
   return { drag, startClipDrag, startScrub };
 }
