@@ -255,6 +255,8 @@ pub struct VideoDecoder {
     /// The only frame of a still image, replayed after seeking: image2 loses it when seeked.
     image: Option<DecodedFrame>,
     image_rewound: bool,
+    /// First frame after a seek, decoded to check where the seek landed.
+    pending: Option<DecodedFrame>,
     scaler: Option<Scaler>,
     pub rotation: u32,
     pub frame_duration_us: i64,
@@ -287,6 +289,7 @@ impl VideoDecoder {
             is_image,
             image: None,
             image_rewound: false,
+            pending: None,
             scaler: None,
             rotation,
             frame_duration_us: (1_000_000.0 / fps.clamp(1.0, 240.0)) as i64,
@@ -307,25 +310,48 @@ impl VideoDecoder {
 
     /// Jumps to the keyframe at or before `t_us`. The next decoded frames start there.
     pub fn seek(&mut self, t_us: i64) -> Result<()> {
-        use ff::util::mathematics::{Rescale, Rounding};
         if self.is_image {
             self.image_rewound = self.image.is_some();
             return Ok(());
         }
-        let ts =
-            t_us.max(0).saturating_add(self.origin_us).rescale_with((1, 1_000_000), self.time_base, Rounding::Down);
-        // A global-time seek rounds to the nearest stream tick and can skip the covering GOP.
-        let result = unsafe {
-            ff::ffi::avformat_seek_file(self.input.as_mut_ptr(), self.stream_index as i32, i64::MIN, ts, ts, 0)
+        // Demuxers without an index (MPEG-TS) search packet timestamps and can land after the
+        // keyframe, so decoding starts at a later one, or finds none in the last GOP. Seek further
+        // back until it does not.
+        let mut back = 0;
+        loop {
+            let target = t_us.saturating_sub(back);
+            self.seek_from(target);
+            let first = self.next_frame()?;
+            if first.as_ref().is_none_or(|(t, _)| *t > t_us) && target > 0 {
+                back = (back * 2).max(SEEK_BACK_OFF_US);
+                continue;
+            }
+            self.pending = first;
+            return Ok(());
+        }
+    }
+
+    fn seek_from(&mut self, t_us: i64) {
+        use ff::util::mathematics::{Rescale, Rounding};
+        let result = if t_us <= 0 {
+            // Aim before the first packet: the first timestamp itself can also land past the keyframe.
+            let ts = self.origin_us.saturating_sub(1_000_000);
+            unsafe { ff::ffi::avformat_seek_file(self.input.as_mut_ptr(), -1, i64::MIN, ts, i64::MAX, 0) }
+        } else {
+            let ts = t_us.saturating_add(self.origin_us).rescale_with((1, 1_000_000), self.time_base, Rounding::Down);
+            // A global-time seek rounds to the nearest stream tick and can skip the covering GOP.
+            unsafe {
+                ff::ffi::avformat_seek_file(self.input.as_mut_ptr(), self.stream_index as i32, i64::MIN, ts, ts, 0)
+            }
         };
         // Seeking images and tiny files can fail harmlessly; decoding restarts from the start.
         if result < 0 {
             self.input.seek(0, ..).ok();
         }
         self.decoder.flush();
+        self.pending = None;
         self.sent_eof = false;
         self.eof = false;
-        Ok(())
     }
 
     /// Decodes the next frame in display order. `None` at end of stream.
@@ -334,6 +360,9 @@ impl VideoDecoder {
             && let Some((t, f)) = &self.image
         {
             return Ok(Some((*t, f.clone())));
+        }
+        if let Some(frame) = self.pending.take() {
+            return Ok(Some(frame));
         }
         if self.eof {
             return Ok(None);
@@ -408,6 +437,9 @@ impl VideoDecoder {
         to_rgba(&mut self.scaler, f, t_us, w.max(2), h.max(2))
     }
 }
+
+/// First step back when a seek lands after the frame it was asked for; doubled on every retry.
+const SEEK_BACK_OFF_US: i64 = 1_000_000;
 
 /// Size to decode at so a layer shown at `display` pixels (after rotation) stays sharp
 /// without converting more pixels than needed, and no side exceeds `max_side`.

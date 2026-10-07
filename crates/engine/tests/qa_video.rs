@@ -8,7 +8,7 @@ use capopen_engine::{
 use qa_support::*;
 use std::{path::Path, process::Command, time::Instant};
 
-fn check_seek(path: &Path) {
+fn check_seek(path: &Path, extra_times: &[i64]) {
     let timestamps = pts(path);
     let a = probe(path, "seek".into()).unwrap();
     let truth = raw(path, &[]);
@@ -18,6 +18,7 @@ fn check_seek(path: &Path) {
     let mut worker = VideoWorker::spawn(path.into());
     let mut rng = Rng(0xCAFE_1234);
     let mut times = vec![0, 1, *timestamps.last().unwrap()];
+    times.extend(extra_times);
     for _ in 0..12 {
         let index = (rng.next() as usize) % (timestamps.len() - 1);
         times.extend([timestamps[index], timestamps[index + 1] - 1]);
@@ -86,7 +87,7 @@ fn cfr_h264_long_gop_b_frames_seek_matches_ffmpeg_pts_and_pixels() {
             ],
             &path,
         );
-        if std::panic::catch_unwind(|| check_seek(&path)).is_err() {
+        if std::panic::catch_unwind(|| check_seek(&path, &[])).is_err() {
             failures.push(rate);
         }
     }
@@ -124,7 +125,7 @@ fn vfr_and_hevc_10_bit_seek_matches_ffmpeg() {
             args.extend(["-c:v", "libx264", "-threads", "2", "-g", "250", "-bf", "3"]);
         }
         ff(&args, &path);
-        if std::panic::catch_unwind(|| check_seek(&path)).is_err() {
+        if std::panic::catch_unwind(|| check_seek(&path, &[])).is_err() {
             failures.push(hevc);
         }
     }
@@ -437,4 +438,39 @@ fn panorama_zoomed_past_the_gpu_texture_limit_renders_downscaled() {
     assert!(renderer.max_texture_dimension() < 12_800);
     let frame = renderer.render(&p, 0, 1080, 1920, Wait::Exact, false).unwrap();
     assert!(frame.chunks_exact(4).all(|px| px[0] > 250 && px[1] < 5 && px[2] < 5), "not filled with red");
+}
+
+#[test]
+fn mpeg_ts_seek_matches_ffmpeg_pts_and_pixels() {
+    if !available() {
+        return;
+    }
+    let d = dir("seek-mpegts");
+    let path = d.join("counter.ts");
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=96x64:rate=25:duration=10",
+            "-vf",
+            "drawtext=text='%{n}':x=4:y=4:fontsize=22:fontcolor=white:box=1:boxcolor=black",
+            "-c:v",
+            "libx264",
+            "-threads",
+            "2",
+            "-g",
+            "50",
+            "-bf",
+            "3",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+        ],
+        &path,
+    );
+    // Keyframes every 2 s. Without an index the demuxer lands after the keyframe, so the decoder
+    // used to start at the next one: up to a GOP late, or nothing at all in the last GOP.
+    check_seek(&path, &[1_999_999, 3_960_000, 3_999_999, 4_000_000, 7_999_999, 9_000_000, 2_000_000]);
 }
