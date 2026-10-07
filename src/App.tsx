@@ -8,8 +8,8 @@ import { followPointer } from "./lib/drag";
 import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
-import { US } from "./lib/time";
-import type { JobEvent, Snapshot, Transport } from "./lib/types";
+import { US, formatDuration } from "./lib/time";
+import type { JobEvent, ProjectSummary, Snapshot, Transport } from "./lib/types";
 import { ExportDialog } from "./components/ExportDialog";
 import { Inspector } from "./components/inspector/Inspector";
 import { LeftPanel } from "./components/panel/LeftPanel";
@@ -307,6 +307,83 @@ function Divider({ height, max, onChange }: { height: number; max: number; onCha
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api } });
 
+async function boot() {
+  const boot = await api.boot();
+  setLimits(boot.limits);
+  useEditor.setState({ previewUrl: boot.previewUrl, playing: boot.transport.playing, timeUs: boot.transport.tUs });
+  if (boot.engineError) useEditor.setState({ engineError: boot.engineError });
+  useEditor.getState().setSnap(boot.snapshot, true, true);
+  useEditor.setState({ saveState: "saved" });
+}
+
+/** Until the editor has a project: "Starting", or why starting failed with ways to go on. */
+function BootScreen() {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  /** `open` first opens or creates a project, for when the last one is what failed. */
+  const start = async (open?: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await open?.();
+      await boot();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+      api.listProjects().then(setProjects, () => setProjects([]));
+    }
+  };
+  useEffect(() => void start(), []);
+
+  if (error === null)
+    return (
+      <div className="flex h-full items-center justify-center text-[13px] text-muted" role="status">
+        Starting CapOpen…
+      </div>
+    );
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="flex w-[440px] flex-col gap-4">
+        <div role="alert" className="flex flex-col gap-2">
+          <h1 className="text-[16px] font-semibold text-fg">CapOpen could not start</h1>
+          <p className="flex items-start gap-2 text-[13px] text-danger">
+            <AlertCircle size={16} className="mt-px shrink-0" />
+            {error}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="primary" disabled={busy} onClick={() => void start()}>
+            Try again
+          </Button>
+          <Button disabled={busy} onClick={() => void start(() => api.newProject(1080, 1920))}>
+            New project
+          </Button>
+        </div>
+        {projects.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Open another project</h2>
+            <div className="max-h-64 overflow-y-auto">
+              {projects.map((p) => (
+                <button
+                  key={p.path}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void start(() => api.openProject(p.path))}
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="truncate text-[13px] text-fg">{p.name}</span>
+                  <span className="tabular shrink-0 pl-2 text-[11px] text-muted">{formatDuration(p.durationUs)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const snap = useEditor((s) => s.snap);
   const [timelineH, setTimelineH, timelineMaxH] = useTimelineHeight();
@@ -314,22 +391,7 @@ export default function App() {
   useBackendEvents();
   useUiContext();
 
-  useEffect(() => {
-    api.boot().then((boot) => {
-      setLimits(boot.limits);
-      useEditor.setState({ previewUrl: boot.previewUrl, playing: boot.transport.playing, timeUs: boot.transport.tUs });
-      if (boot.engineError) useEditor.setState({ engineError: boot.engineError });
-      useEditor.getState().setSnap(boot.snapshot, true, true);
-      useEditor.setState({ saveState: "saved" });
-    });
-  }, []);
-
-  if (!snap)
-    return (
-      <div className="flex h-full items-center justify-center text-[13px] text-muted" role="status">
-        Starting CapOpen…
-      </div>
-    );
+  if (!snap) return <BootScreen />;
 
   return (
     <>
