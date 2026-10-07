@@ -224,6 +224,9 @@ impl OpenSession {
                     SessionEvent::Changed { origin, .. } => {
                         if let Ok(snap) = current.snapshot(Vec::new()) {
                             state.publish_project(&snap.project);
+                            // Media an agent added, or rebound to another file under the same id,
+                            // needs its sound prepared too; prepared sources are skipped.
+                            jobs::ensure_audio(&state, &snap.project);
                             // User edits already return this snapshot; agent undo also reaches the UI.
                             if !matches!(origin, Origin::User) {
                                 app.emit("project-changed", snap).ok();
