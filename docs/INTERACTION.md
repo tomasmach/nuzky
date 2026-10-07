@@ -118,7 +118,7 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Ctrl` + wheel, `+` / `-` | Zoom timeline |
 | `Ctrl+I` | Import |
 | `Ctrl+E` | Export |
-| `Esc` | Cancel drag, close menu or dialog, clear selection |
+| `Esc` | Cancel a drag or close the open menu or dialog; with none of those, clear the selection |
 
 Shortcuts are ignored while typing in a text field and while the export dialog is open. A focused tab bar keeps `←`/`→` (and `Home`/`End`) to switch tabs, so the playhead does not move. The focused transcript keeps `←`/`→`, `Home`/`End`, `Delete` and `Backspace` for its words.
 

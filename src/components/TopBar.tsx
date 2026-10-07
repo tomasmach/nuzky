@@ -82,12 +82,18 @@ function ProjectMenu() {
       toast({ kind: "error", text: errorText(e) });
     });
     const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // Esc closes the menu only, before the editor's shortcuts would also clear the selection.
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+      ref.current?.querySelector("button")?.focus();
+    };
     window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", esc);
+    window.addEventListener("keydown", esc, true);
     return () => {
       window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", esc);
+      window.removeEventListener("keydown", esc, true);
     };
   }, [open]);
 

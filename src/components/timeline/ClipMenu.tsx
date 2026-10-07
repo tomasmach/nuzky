@@ -45,13 +45,21 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
 
   useEffect(() => {
     const close = (e: Event) => !ref.current?.contains(e.target as Node) && onClose();
+    // Esc closes the menu only, wherever focus is, and never also clears the selection.
+    const esc = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
     window.addEventListener("pointerdown", close, true);
     window.addEventListener("wheel", close, true);
     window.addEventListener("blur", onClose);
+    window.addEventListener("keydown", esc, true);
     return () => {
       window.removeEventListener("pointerdown", close, true);
       window.removeEventListener("wheel", close, true);
       window.removeEventListener("blur", onClose);
+      window.removeEventListener("keydown", esc, true);
     };
   }, [onClose]);
 
@@ -65,7 +73,6 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    if (e.key === "Escape") onClose();
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
     const items = [...(ref.current?.querySelectorAll<HTMLElement>("[role=menuitem]:not(:disabled)") ?? [])];
