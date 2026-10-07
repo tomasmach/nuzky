@@ -102,6 +102,8 @@ pub enum EditCmd {
         adjust: Option<Adjust>,
         fade_in_us: Option<i64>,
         fade_out_us: Option<i64>,
+        /// Clean voice on clips with sound: less rumble, hum, background noise and harsh s sounds.
+        clean_voice: Option<bool>,
     },
     SetAnimation {
         clip_id: String,
@@ -456,6 +458,7 @@ impl Project {
                         adjust: Adjust::default(),
                         fade_in_us: 0,
                         fade_out_us: 0,
+                        clean_voice: false,
                     },
                 );
                 out.select.push(clip.id.clone());
@@ -643,9 +646,29 @@ impl Project {
     fn apply_clip(&mut self, cmd: EditCmd) -> Result<()> {
         let min = min_duration(self);
         match cmd {
-            EditCmd::UpdateClip { clip_id, transform, volume, text, style, speed, adjust, fade_in_us, fade_out_us } => {
+            EditCmd::UpdateClip {
+                clip_id,
+                transform,
+                volume,
+                text,
+                style,
+                speed,
+                adjust,
+                fade_in_us,
+                fade_out_us,
+                clean_voice,
+            } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let changes_length = speed.is_some();
+                if clean_voice == Some(true) {
+                    let sound = match &self.tracks[ti].clips[ci].content {
+                        ClipContent::Media { asset_id, .. } => {
+                            self.asset(asset_id).is_some_and(crate::audio::has_audio)
+                        }
+                        ClipContent::Text { .. } => false,
+                    };
+                    ensure!(sound, "This clip has no sound to clean");
+                }
                 let limit = self.source_limit(&self.tracks[ti].clips[ci]);
                 let clip = &mut self.tracks[ti].clips[ci];
                 let half = clip.duration_us / 2;
@@ -658,6 +681,7 @@ impl Project {
                         adjust: adj,
                         fade_in_us: fi,
                         fade_out_us: fo,
+                        clean_voice: cv,
                         ..
                     } => {
                         if let Some(x) = transform {
@@ -674,6 +698,9 @@ impl Project {
                         }
                         if let Some(x) = fade_out_us {
                             *fo = x.clamp(0, half);
+                        }
+                        if let Some(x) = clean_voice {
+                            *cv = x;
                         }
                         if let Some(x) = speed {
                             let x = x.clamp(MIN_SPEED, MAX_SPEED);
@@ -1383,6 +1410,7 @@ mod tests {
             adjust: None,
             fade_in_us: None,
             fade_out_us: None,
+            clean_voice: None,
         }
     }
 
@@ -1406,6 +1434,7 @@ mod tests {
             adjust,
             fade_in_us,
             fade_out_us,
+            clean_voice: None,
         })
         .unwrap();
         assert_eq!(main_layout(&p), vec![(0, 2500)]);
@@ -1443,6 +1472,7 @@ mod tests {
             adjust,
             fade_in_us,
             fade_out_us,
+            clean_voice: None,
         };
         assert!(e.apply(slower, None).is_err());
         assert_eq!(e.project, before);
@@ -1468,6 +1498,7 @@ mod tests {
             adjust,
             fade_in_us,
             fade_out_us,
+            clean_voice: None,
         })
         .unwrap();
         p.apply(EditCmd::TrimClip { clip_id: id, start_us: 0, duration_us: 33_334, source_in_us: Some(4_966_666) })
@@ -1639,6 +1670,7 @@ mod tests {
                     adjust: None,
                     fade_in_us: None,
                     fade_out_us: None,
+                    clean_voice: None,
                 },
                 "split_left" => EditCmd::SplitClip { clip_id, at_us: 5_500_000 },
                 "split_right" => EditCmd::SplitClip { clip_id, at_us: 9_500_000 },
@@ -1702,6 +1734,7 @@ mod tests {
                 adjust: None,
                 fade_in_us: None,
                 fade_out_us: None,
+                clean_voice: None,
             };
             e.apply(cmd, Some("vol".into())).unwrap();
         }

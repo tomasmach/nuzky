@@ -162,6 +162,7 @@ mod tests {
             adjust: None,
             fade_in_us: None,
             fade_out_us: None,
+            clean_voice: None,
         })
         .unwrap();
         let got = placed(&p, &words);
@@ -241,6 +242,7 @@ mod tests {
             adjust: None,
             fade_in_us: None,
             fade_out_us: None,
+            clean_voice: None,
         })
         .unwrap();
         assert_eq!(speech_layout_key(&p), key);
