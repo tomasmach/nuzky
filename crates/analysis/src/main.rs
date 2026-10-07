@@ -2,7 +2,7 @@ use std::{io::Write, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use capopen_analysis::{
-    AudioSource, SceneParams, SilenceParams, filler_words, integrated_lufs, loudness, scene_cuts, silences,
+    AudioSource, SceneParams, SilenceParams, filler_words, loudness, program_loudness, scene_cuts, silences,
     transcribe_words,
 };
 
@@ -44,10 +44,13 @@ fn main() -> Result<()> {
     let asset = capopen_engine::media::probe(&media, cache_id(&media)?).context("Probing media")?;
     let cache = cache.unwrap_or_else(|| std::env::temp_dir().join("capopen-analysis"));
     let output = match command {
-        Command::Loudness => serde_json::json!({
-            "window_us": 100_000, "rms_dbfs": loudness(&asset, &cache, 100_000)?,
-            "integrated_lufs_approx": integrated_lufs(&asset, &cache)?,
-        }),
+        Command::Loudness => {
+            let program = program_loudness(&asset, &cache)?;
+            serde_json::json!({
+                "window_us": 100_000, "rms_dbfs": loudness(&asset, &cache, 100_000)?,
+                "integrated_lufs": program.integrated_lufs, "true_peak_dbtp": program.true_peak_dbtp,
+            })
+        }
         Command::Silences => serde_json::to_value(silences(&asset, &cache, SilenceParams::default())?)?,
         Command::Scenes => serde_json::to_value(scene_cuts(&asset, SceneParams::default())?)?,
         Command::Words | Command::Fillers => {

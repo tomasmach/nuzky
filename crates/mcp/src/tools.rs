@@ -5,13 +5,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use capopen_analysis::{SceneParams, SilenceParams};
 use capopen_engine::{
     Project,
     edit::{EditCmd, new_id},
-    export::{ExportOptions, export},
+    export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
 };
 use capopen_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel};
@@ -315,7 +315,12 @@ impl Backend {
             let p = args.params;
             let result = match args.kind {
                 AnalysisKind::Silences => json!({"ranges": capopen_analysis::silences_cancellable(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) }, || cancel.load(Ordering::Relaxed))?}),
-                AnalysisKind::Loudness => json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, || cancel.load(Ordering::Relaxed))?}),
+                AnalysisKind::Loudness => {
+                    let cancelled = || cancel.load(Ordering::Relaxed);
+                    let program = capopen_analysis::program_loudness_cancellable(&asset, &cache, cancelled)?;
+                    json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, cancelled)?,
+                        "integrated_lufs": program.integrated_lufs, "true_peak_dbtp": program.true_peak_dbtp})
+                }
                 AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
                 AnalysisKind::Retakes => anyhow::bail!("Retakes are answered without a job"),
@@ -473,7 +478,11 @@ impl Backend {
     fn export(&self, args: Export, state: &SessionState) -> Result<Value> {
         ensure!(!state.read_only, "READ_ONLY: --allow-write is required to write an export");
         ensure!(
-            (2..=7680).contains(&args.resolution) && (1..=240).contains(&args.fps),
+            args.preset.is_some() || (args.resolution.is_some() && args.fps.is_some()),
+            "INVALID_ARGUMENTS: give resolution and fps, or preset \"reels\""
+        );
+        ensure!(
+            args.resolution.is_none_or(|r| (2..=7680).contains(&r)) && args.fps.is_none_or(|f| (1..=240).contains(&f)),
             "Invalid export resolution or fps"
         );
         let out = self.resolve(&args.path);
@@ -487,15 +496,17 @@ impl Backend {
             "Export cannot overwrite the project or its sidecars"
         );
         let project = self.media_project(&state.project);
-        media::check_media(&project)?;
-        let cache = self.host.cache_dir.clone();
         let options = ExportOptions {
-            resolution: Some(args.resolution),
-            fps: Some(args.fps),
-            crf: args.quality.crf(),
+            resolution: args.resolution,
+            fps: args.fps,
+            crf: args.quality.unwrap_or(Quality::Recommended).crf(),
             replace_existing: false,
+            delivery: args.preset,
             ..ExportOptions::default()
         };
+        check_options(&project, &options).map_err(|e| anyhow!("INVALID_ARGUMENTS: {e}"))?;
+        media::check_media(&project)?;
+        let cache = self.host.cache_dir.clone();
         let queue = self.export_queue.clone();
         self.host.start_job(
             &self.client.id,
@@ -507,9 +518,13 @@ impl Backend {
                 let _export = queue.lock().unwrap();
                 check_cancel(&cancel)?;
                 export(&project, &cache, &out, &options, &cancel, |p| {
-                    progress.set("exporting", Some(p.frame as f32 / p.total_frames.max(1) as f32))
+                    let phase = match p.phase {
+                        ExportPhase::Loudness => "measuring_loudness",
+                        ExportPhase::Rendering => "exporting",
+                    };
+                    progress.set(phase, Some(p.fraction))
                 })?;
-                Ok(json!({"path": out, "duration_us": project.duration_us()}))
+                Ok(json!({"path": out, "duration_us": project.duration_us(), "preset": options.delivery}))
             },
         )
     }
@@ -723,6 +738,37 @@ mod tests {
         other["paths"] = json!(["still.ppm", "still.ppm"]);
         let conflict = format!("{:#}", backend.call("import_media", other).unwrap_err());
         assert!(conflict.starts_with("REQUEST_CONFLICT"), "{conflict}");
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn export_video_takes_the_reels_preset_or_explicit_settings() {
+        let dir = std::env::temp_dir().join(format!("export-args-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.capopen");
+        let mut wide = Project::new("wide");
+        (wide.canvas.width, wide.canvas.height) = (1920, 1080);
+        std::fs::write(&path, serde_json::to_vec(&wide).unwrap()).unwrap();
+        let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
+        let error = |args: Value| format!("{:#}", backend.call("export_video", args).unwrap_err());
+        let missing = error(json!({"path": "out.mp4", "quality": "high"}));
+        assert!(missing.starts_with("INVALID_ARGUMENTS"), "{missing}");
+        let wrong_format = error(json!({"path": "out.mp4", "preset": "reels"}));
+        assert!(
+            wrong_format.starts_with("INVALID_ARGUMENTS: Reels & TikTok needs a 9:16 video and this one is 16:9"),
+            "{wrong_format}"
+        );
+        assert!(error(json!({"path": "out.mp4", "preset": "youtube"})).contains("unknown variant"));
+        drop(backend);
+        std::fs::write(&path, serde_json::to_vec(&Project::new("tall")).unwrap()).unwrap();
+        let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
+        let other = format!(
+            "{:#}",
+            backend.call("export_video", json!({"path": "out.mp4", "preset": "reels", "fps": 60})).unwrap_err()
+        );
+        assert!(other.starts_with("INVALID_ARGUMENTS: Reels & TikTok exports at fps 30"), "{other}");
+        assert!(!dir.join("out.mp4").exists());
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
     }

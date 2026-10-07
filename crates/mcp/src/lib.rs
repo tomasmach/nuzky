@@ -114,7 +114,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Export>(
             "export_video",
-            "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. resolution is the SHORT side in pixels (1080 gives 1080x1920 on a portrait canvas), fps=1..240, quality high/recommended/small. path must be new; relative paths resolve beside the project. Requires --allow-write. Poll job(get) until done before reporting success.",
+            "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. For Instagram Reels or TikTok pass preset=\"reels\": 1080x1920, 30 fps, H.264 High, AAC 48 kHz stereo, sound levelled to -14 LUFS with true peak <= -1 dBTP in the file (the project and preview keep their levels); needs a 9:16 canvas, resolution/fps may be omitted or must be 1080/30. Without preset resolution (the SHORT side in pixels, 1080 gives 1080x1920 on a portrait canvas) and fps=1..240 are required. quality high/recommended/small, default recommended. path must be new; relative paths resolve beside the project. Requires --allow-write. Job phases: measuring_loudness (preset only), exporting. Poll job(get) until done before reporting success.",
         )?,
     ])
 }

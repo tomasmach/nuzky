@@ -116,6 +116,8 @@ export interface ExportRequest {
   resolution: number;
   fps: number;
   quality: "high" | "recommended" | "small";
+  /** "reels": Instagram Reels and TikTok, 1080×1920 at 30 fps, sound levelled to −14 LUFS in the file. Needs a 9:16 canvas; resolution and fps must be 1080 and 30. */
+  preset?: "reels" | null;
 }
 
 export type TrackKind = "video" | "audio" | "text";

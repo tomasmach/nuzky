@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
 use capopen_engine::edit::{EditCmd, new_id};
-use capopen_engine::export::{ExportOptions, check_source_path, export};
+use capopen_engine::export::{Delivery, ExportOptions, check_source_path, export};
 use capopen_engine::media::probe;
 use capopen_engine::{Project, Renderer, Wait};
 
@@ -19,8 +19,36 @@ const USAGE: &str = "Usage:
   capopen new <project.json> <media>...     main-track project from media files
   capopen frame <project.json> <seconds> <out.png> [width]
   capopen bench <project.json> [width] [seconds]
-  capopen render <project.json> <out.mp4> [resolution] [fps]
+  capopen render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
+      reels: Instagram Reels and TikTok, 1080x1920 at 30 fps, sound levelled to -14 LUFS (9:16 only)
 ";
+
+/// `[resolution] [fps]` and an optional `--preset <name>` anywhere among them.
+fn render_options(rest: &[&str]) -> Result<ExportOptions> {
+    let mut delivery = None;
+    let mut positional = Vec::new();
+    let mut args = rest.iter();
+    while let Some(&arg) = args.next() {
+        if arg == "--preset" {
+            let name = args.next().context("--preset needs a name: reels")?;
+            delivery = Some(match *name {
+                "reels" => Delivery::Reels,
+                other => bail!("Unknown preset {other}; the preset is reels"),
+            });
+        } else {
+            positional.push(arg);
+        }
+    }
+    ensure!(positional.len() <= 2, "{USAGE}");
+    Ok(ExportOptions {
+        resolution: positional.first().map(|s| s.parse()).transpose().context("Resolution must be a number")?,
+        fps: positional.get(1).map(|s| s.parse()).transpose().context("Frame rate must be a number")?,
+        delivery,
+        // The output path was typed on purpose, as with any command-line tool.
+        replace_existing: true,
+        ..ExportOptions::default()
+    })
+}
 
 fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
@@ -208,23 +236,17 @@ fn main() -> Result<()> {
             );
         }
         ["render", project, out, rest @ ..] => {
+            let options = render_options(rest)?;
             check_render_output(Path::new(project), Path::new(out))?;
             let project = load(project)?;
             let start = Instant::now();
             let cancel = AtomicBool::new(false);
-            let mut last = 0;
-            let options = ExportOptions {
-                resolution: rest.first().map(|s| s.parse()).transpose()?,
-                fps: rest.get(1).map(|s| s.parse()).transpose()?,
-                // The output path was typed on purpose, as with any command-line tool.
-                replace_existing: true,
-                ..ExportOptions::default()
-            };
+            let mut last = None;
             export(&project, &cache_dir(), Path::new(out), &options, &cancel, |p| {
-                let pct = p.frame * 100 / p.total_frames.max(1);
-                if pct >= last + 10 {
-                    last = pct;
-                    eprintln!("{pct}%  ({}/{} frames)", p.frame, p.total_frames);
+                let pct = (p.fraction * 100.0) as u32;
+                if last.is_none_or(|(phase, at)| phase != p.phase || pct >= at + 10) {
+                    last = Some((p.phase, pct));
+                    eprintln!("{pct}%  {} ({}/{} frames)", p.phase.label(), p.frame, p.total_frames);
                 }
             })?;
             eprintln!("Exported {out} in {:?}", start.elapsed());

@@ -9,7 +9,10 @@ mod scenes;
 mod speech;
 pub mod style;
 
-pub use audio::{SilenceParams, integrated_lufs, loudness, loudness_cancellable, silences, silences_cancellable};
+pub use audio::{
+    ProgramLoudness, SilenceParams, loudness, loudness_cancellable, program_loudness, program_loudness_cancellable,
+    silences, silences_cancellable,
+};
 pub use boundaries::{align_to_sound, align_words};
 pub use captions::{CaptionGrouping, group_words};
 pub use fillers::filler_words;

@@ -6,6 +6,7 @@ pub mod edit;
 pub mod effects;
 pub mod export;
 pub mod gpu;
+pub mod loudness;
 pub mod media;
 pub mod model;
 pub mod render;

@@ -1,4 +1,5 @@
-//! MP4 export: the preview renderer at canvas resolution, H.264 + AAC.
+//! MP4 export: the preview renderer at canvas resolution, H.264 + AAC. A delivery preset fixes
+//! the format a platform expects and levels the sound to its loudness.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,6 +10,7 @@ use ff::util::{color, format::Pixel, frame};
 use ffmpeg_next as ff;
 
 use crate::audio::{Mixer, ensure_pcm, has_audio};
+use crate::loudness::{Limiter, Meter, db_to_gain};
 use crate::media::{init, set_sws_colorspace};
 use crate::model::{CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 use crate::render::{Renderer, Wait};
@@ -32,15 +34,63 @@ impl Quality {
     }
 }
 
+/// A platform's delivery format, shared by the export dialog, MCP and the CLI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    /// Instagram Reels and TikTok: 1080x1920 at 30 fps, H.264 High, AAC 48 kHz stereo, loudness
+    /// -14 LUFS with true peak at most -1 dBTP. Needs a 9:16 canvas.
+    Reels,
+}
+
+impl Delivery {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Reels => "Reels & TikTok",
+        }
+    }
+
+    /// Short side in pixels.
+    pub fn resolution(self) -> u32 {
+        match self {
+            Self::Reels => 1080,
+        }
+    }
+
+    pub fn fps(self) -> u32 {
+        match self {
+            Self::Reels => 30,
+        }
+    }
+
+    /// The canvas width to height ratio the preset is made for.
+    pub fn aspect(self) -> (u32, u32) {
+        match self {
+            Self::Reels => (9, 16),
+        }
+    }
+
+    /// Integrated loudness in LUFS and the highest true peak in dBTP of the file.
+    pub fn loudness(self) -> (f64, f64) {
+        match self {
+            Self::Reels => (-14.0, -1.0),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExportOptions {
     pub crf: u8,
     pub replace_existing: bool,
+    /// x264 speed preset.
     pub preset: String,
     /// Short side of the output in pixels (720, 1080, 1440, 2160); `None` keeps the canvas size.
     pub resolution: Option<u32>,
     /// Output frame rate; `None` uses the project frame rate.
     pub fps: Option<u32>,
+    /// Delivery preset; `resolution` and `fps` must then be `None` or the preset's own values.
+    pub delivery: Option<Delivery>,
 }
 
 impl Default for ExportOptions {
@@ -51,6 +101,24 @@ impl Default for ExportOptions {
             preset: "veryfast".into(),
             resolution: None,
             fps: None,
+            delivery: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportPhase {
+    /// The audio-only passes of a delivery preset that measure and level the sound.
+    Loudness,
+    Rendering,
+}
+
+impl ExportPhase {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Loudness => "Measuring loudness",
+            Self::Rendering => "Rendering",
         }
     }
 }
@@ -58,8 +126,12 @@ impl Default for ExportOptions {
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportProgress {
+    pub phase: ExportPhase,
+    /// Frames rendered so far; 0 while the loudness is measured.
     pub frame: u64,
     pub total_frames: u64,
+    /// The whole export from 0 to 1, loudness passes included.
+    pub fraction: f32,
 }
 
 /// Renders the whole timeline to `out`. Returns early with an error if `cancel` is set.
@@ -76,6 +148,7 @@ pub fn export(
     if duration <= 0 {
         bail!("The timeline is empty");
     }
+    check_options(project, options)?;
     check_source_path(project, out)?;
     let heard: std::collections::HashSet<&str> = project
         .tracks
@@ -92,7 +165,7 @@ pub fn export(
         })
         .collect();
     for asset in project.assets.iter().filter(|a| heard.contains(a.id.as_str()) && has_audio(a)) {
-        ensure_pcm(cache_dir, asset, |_| Ok(()))?;
+        ensure_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
     }
     // Reserve beside the destination so rename stays on the same filesystem.
     let tmp = loop {
@@ -112,6 +185,43 @@ pub fn export(
         }
     }
     result
+}
+
+fn check_cancel(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        bail!("CANCELLED: export cancelled");
+    }
+    Ok(())
+}
+
+/// Refuses a delivery preset the project cannot meet, before any work starts.
+pub fn check_options(project: &Project, options: &ExportOptions) -> Result<()> {
+    let Some(delivery) = options.delivery else { return Ok(()) };
+    let (w, h) = (project.canvas.width, project.canvas.height);
+    let (aw, ah) = delivery.aspect();
+    if w as u64 * ah as u64 != h as u64 * aw as u64 {
+        bail!(
+            "{} needs a {aw}:{ah} video and this one is {}. Switch the format to {aw}:{ah}, then export again.",
+            delivery.label(),
+            ratio(w, h)
+        );
+    }
+    let fixed = [("resolution", options.resolution, delivery.resolution()), ("fps", options.fps, delivery.fps())];
+    for (name, given, wanted) in fixed {
+        if given.is_some_and(|given| given != wanted) {
+            bail!("{} exports at {name} {wanted}; leave {name} out or set it to {wanted}", delivery.label());
+        }
+    }
+    Ok(())
+}
+
+fn ratio(w: u32, h: u32) -> String {
+    let (mut a, mut b) = (w, h);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    let d = a.max(1);
+    format!("{}:{}", w / d, h / d)
 }
 
 pub fn check_source_path(project: &Project, path: &Path) -> Result<()> {
@@ -170,7 +280,7 @@ fn output_size(project: &Project, options: &ExportOptions, max_dimension: u32) -
     if w < 2 || h < 2 {
         bail!("Canvas dimensions must be at least 2 pixels");
     }
-    let short = options.resolution.unwrap_or(w.min(h));
+    let short = options.resolution.or(options.delivery.map(Delivery::resolution)).unwrap_or(w.min(h));
     if !(2..=7680).contains(&short) {
         bail!("Export resolution must be between 2 and 7680");
     }
@@ -208,20 +318,44 @@ fn encode(
     progress: &mut impl FnMut(ExportProgress),
     duration: i64,
 ) -> Result<()> {
-    let fps = options.fps.unwrap_or(project.canvas.fps);
+    let delivery = options.delivery;
+    let fps = options.fps.or(delivery.map(Delivery::fps)).unwrap_or(project.canvas.fps);
     if fps == 0 || fps > 240 {
         bail!("Export frame rate must be between 1 and 240");
     }
     let mut renderer = Renderer::new()?;
     let (w, h) = output_size(project, options, renderer.max_texture_dimension())?;
     let total_frames = frame_count(duration, fps);
+    let total_samples = crate::audio::us_to_samples(duration);
+
+    let vcodec = match delivery {
+        // Another H.264 encoder would not promise the profile and settings the platforms expect.
+        Some(delivery) => ff::encoder::find_by_name("libx264").ok_or_else(|| {
+            anyhow!("{} needs the libx264 encoder, which this FFmpeg build does not have", delivery.label())
+        })?,
+        None => ff::encoder::find_by_name("libx264")
+            .or_else(|| ff::encoder::find(ff::codec::Id::H264))
+            .ok_or_else(|| anyhow!("No H.264 encoder available in this FFmpeg build"))?,
+    };
+    let render_start = if delivery.is_some() { LOUDNESS_SHARE } else { 0.0 };
+    let mut sound = match delivery {
+        Some(delivery) => {
+            let report = |fraction: f32| {
+                progress(ExportProgress {
+                    phase: ExportPhase::Loudness,
+                    frame: 0,
+                    total_frames,
+                    fraction: fraction * LOUDNESS_SHARE,
+                })
+            };
+            let gain = plan_gain(project, cache_dir, total_samples, delivery.loudness().0, cancel, report)?;
+            Sound::Leveled(Box::new(Leveled::new(cache_dir, project, gain)))
+        }
+        None => Sound::Mix(Mixer::new(cache_dir.to_path_buf())),
+    };
 
     let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
     let global_header = octx.format().flags().contains(ff::format::Flags::GLOBAL_HEADER);
-
-    let vcodec = ff::encoder::find_by_name("libx264")
-        .or_else(|| ff::encoder::find(ff::codec::Id::H264))
-        .ok_or_else(|| anyhow!("No H.264 encoder available in this FFmpeg build"))?;
     let mut venc = ff::codec::context::Context::new_with_codec(vcodec).encoder().video()?;
     venc.set_width(w);
     venc.set_height(h);
@@ -239,7 +373,13 @@ fn encode(
         venc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
     }
     let mut vopts = ff::Dictionary::new();
-    vopts.set("preset", &options.preset);
+    if delivery.is_some() {
+        // A delivery preset keeps the app's speed: veryfast writes High, which the profile pins.
+        vopts.set("preset", "veryfast");
+        vopts.set("profile", "high");
+    } else {
+        vopts.set("preset", &options.preset);
+    }
     vopts.set("crf", &options.crf.to_string());
     let mut venc = venc.open_with(vopts).context("Opening the H.264 encoder failed")?;
     let vindex = {
@@ -275,12 +415,10 @@ fn encode(
     let vtb = octx.stream(vindex).unwrap().time_base();
     let atb = octx.stream(aindex).unwrap().time_base();
 
-    let mut mixer = Mixer::new(cache_dir.to_path_buf());
     let mut scaler = scaling::Context::get(Pixel::RGBA, w, h, Pixel::YUV420P, w, h, scaling::Flags::BICUBIC)?;
     set_sws_colorspace(&mut scaler, ff::ffi::SWS_CS_DEFAULT, true, ff::ffi::SWS_CS_ITU709, false);
     let mut rgba = frame::Video::new(Pixel::RGBA, w, h);
     let mut yuv = frame::Video::new(Pixel::YUV420P, w, h);
-    let total_samples = crate::audio::us_to_samples(duration);
     let mut audio_pos: i64 = 0;
     let mut mix = vec![0f32; aframe_size * CHANNELS];
 
@@ -322,11 +460,17 @@ fn encode(
         // Keep audio up to the end of this video frame.
         let audio_until = crate::audio::us_to_samples(frame_time_us(i + 1, fps)).min(total_samples);
         while audio_pos < audio_until {
-            encode_audio(&mut aenc, &mut mixer, project, audio_pos, &mut mix, aframe_size)?;
+            sound.fill(project, audio_pos, &mut mix);
+            encode_audio(&mut aenc, audio_pos, &mix, aframe_size)?;
             audio_pos += aframe_size as i64;
             drain(&mut aenc, aindex, (1, SAMPLE_RATE as i32).into(), atb, &mut octx)?;
         }
-        progress(ExportProgress { frame: i + 1, total_frames });
+        progress(ExportProgress {
+            phase: ExportPhase::Rendering,
+            frame: i + 1,
+            total_frames,
+            fraction: render_start + (1.0 - render_start) * (i + 1) as f32 / total_frames.max(1) as f32,
+        });
     }
 
     venc.send_eof()?;
@@ -337,15 +481,168 @@ fn encode(
     Ok(())
 }
 
-fn encode_audio(
-    enc: &mut ff::encoder::Audio,
-    mixer: &mut Mixer,
+/// Ceiling in dBTP the limiter holds the levelled mix under. The AAC encoder adds peaks of its
+/// own: decoded files measured 0.2 to 0.4 dB over the ceiling for speech, 0.8 dB for music and
+/// up to 1.6 dB for limited bursts of broadband noise such as claps (qa_export
+/// `reels_true_peak_survives_aac_on_hard_material`), so -3 keeps all of them under -1 dBTP.
+const LIMITER_CEILING_DB: f64 = -3.0;
+/// The most a quiet timeline is raised, so near silence never turns into loud noise.
+const MAX_GAIN_DB: f64 = 24.0;
+/// Close enough to the target to stop measuring; AAC moves the level by about as much.
+const TOLERANCE_LU: f64 = 0.1;
+/// Levelled passes at most after the first measurement. Speech lands in one or two; sound
+/// whose loudness sits in the peaks the limiter holds takes more.
+const LEVELLING_PASSES: usize = 6;
+/// Part of the progress bar the loudness passes take before rendering starts: they took 1 % of
+/// a 47 s Reels export in a release build and 4 % in a debug one.
+const LOUDNESS_SHARE: f32 = 0.05;
+/// Audio between cancellation checks in the loudness passes, in frames (one second).
+const MEASURE_CHUNK: usize = SAMPLE_RATE as usize;
+
+/// The sound that goes into the file: the project mix as it plays, or for a delivery preset that
+/// mix at the planned gain through the true-peak limiter.
+enum Sound {
+    Mix(Mixer),
+    Leveled(Box<Leveled>),
+}
+
+impl Sound {
+    /// `pos` must continue where the previous call ended.
+    fn fill(&mut self, project: &Project, pos: i64, out: &mut [f32]) {
+        match self {
+            Self::Mix(mixer) => mixer.mix(project, pos, out),
+            Self::Leveled(leveled) => {
+                debug_assert_eq!(pos, leveled.read - Limiter::latency() as i64);
+                leveled.fill(project, out)
+            }
+        }
+    }
+}
+
+/// The timeline mix at a fixed gain through the true-peak limiter, frame for frame in step with
+/// the timeline: the limiter's look-ahead is read before the first frame comes out.
+struct Leveled {
+    mixer: Mixer,
+    gain: f32,
+    limiter: Limiter,
+    /// Timeline frame the mixer reads next.
+    read: i64,
+    input: Vec<f32>,
+}
+
+impl Leveled {
+    fn new(cache_dir: &Path, project: &Project, gain_db: f64) -> Self {
+        let mut leveled = Self {
+            mixer: Mixer::new(cache_dir.to_path_buf()),
+            gain: db_to_gain(gain_db),
+            limiter: Limiter::new(db_to_gain(LIMITER_CEILING_DB)),
+            read: 0,
+            input: vec![0.0; Limiter::latency() * CHANNELS],
+        };
+        leveled.mixer.mix(project, 0, &mut leveled.input);
+        leveled.read = Limiter::latency() as i64;
+        for frame in leveled.input.chunks_exact(CHANNELS) {
+            let early = leveled.limiter.push(std::array::from_fn(|c| frame[c] * leveled.gain));
+            debug_assert!(early.is_none());
+        }
+        leveled
+    }
+
+    /// The next `out.len() / CHANNELS` frames of the timeline.
+    fn fill(&mut self, project: &Project, out: &mut [f32]) {
+        self.input.resize(out.len(), 0.0);
+        self.mixer.mix(project, self.read, &mut self.input);
+        self.read += (out.len() / CHANNELS) as i64;
+        for (out, frame) in out.chunks_exact_mut(CHANNELS).zip(self.input.chunks_exact(CHANNELS)) {
+            let gain = self.gain;
+            let leveled = self.limiter.push(std::array::from_fn(|c| frame[c] * gain));
+            out.copy_from_slice(&leveled.expect("the look-ahead is read first"));
+        }
+    }
+}
+
+/// Loudness of the first `total` timeline frames, read in one-second chunks from `fill`.
+fn measure(
+    total: i64,
+    cancel: &AtomicBool,
+    mut fill: impl FnMut(i64, &mut [f32]),
+    mut report: impl FnMut(f32),
+) -> Result<crate::loudness::Loudness> {
+    let mut meter = Meter::new();
+    let mut chunk = vec![0f32; MEASURE_CHUNK * CHANNELS];
+    let mut pos = 0;
+    while pos < total {
+        check_cancel(cancel)?;
+        let frames = MEASURE_CHUNK.min((total - pos) as usize);
+        let chunk = &mut chunk[..frames * CHANNELS];
+        fill(pos, chunk);
+        meter.push(chunk);
+        pos += frames as i64;
+        report(pos as f32 / total as f32);
+    }
+    Ok(meter.finish())
+}
+
+/// Gain in dB that brings the timeline to `target` LUFS once the limiter has held its peaks,
+/// from audio-only passes: the mix as it plays, then the levelled mix until it lands on the
+/// target. Silence stays silence: with nothing above the -70 LUFS gate there is no gain.
+fn plan_gain(
     project: &Project,
-    pos: i64,
-    mix: &mut [f32],
-    frame_size: usize,
-) -> Result<()> {
-    mixer.mix(project, pos, mix);
+    cache_dir: &Path,
+    total: i64,
+    target: f64,
+    cancel: &AtomicBool,
+    mut report: impl FnMut(f32),
+) -> Result<f64> {
+    let passes = (1 + LEVELLING_PASSES) as f32;
+    let mut mixer = Mixer::new(cache_dir.to_path_buf());
+    let source = measure(total, cancel, |pos, out| mixer.mix(project, pos, out), |f| report(f / passes))?;
+    let Some(lufs) = source.integrated else {
+        log::info!("Loudness: nothing above -70 LUFS, exported as it is");
+        return Ok(0.0);
+    };
+    let mut gain = (target - lufs).min(MAX_GAIN_DB);
+    log::info!("Loudness: timeline {lufs:.2} LUFS, {:.2} dBTP; gain {gain:+.2} dB", source.true_peak_db());
+    if source.true_peak_db() + gain <= LIMITER_CEILING_DB {
+        // The limiter has nothing to hold, so the gain lands exactly.
+        return Ok(gain);
+    }
+    // The limiter takes away part of every step up, more the harder it works. The loudness still
+    // only grows with the gain, so the passes close in on the target from both sides.
+    let mut best = (f64::INFINITY, gain);
+    // Passes as (gain, loudness): the latest under and over the target, and the one before this.
+    type Pass = Option<(f64, f64)>;
+    let (mut below, mut above, mut previous): (Pass, Pass, Pass) = (None, None, None);
+    for pass in 1..=LEVELLING_PASSES {
+        let mut leveled = Leveled::new(cache_dir, project, gain);
+        let at = pass as f32;
+        let result = measure(total, cancel, |_, out| leveled.fill(project, out), |f| report((at + f) / passes))?;
+        let Some(got) = result.integrated else { break };
+        let error = target - got;
+        log::info!("Loudness pass {pass}: gain {gain:+.2} dB gives {got:.2} LUFS, {:.2} dBTP", result.true_peak_db());
+        if error.abs() < best.0 {
+            best = (error.abs(), gain);
+        }
+        if error.abs() <= TOLERANCE_LU || (error > 0.0 && gain >= MAX_GAIN_DB) {
+            break;
+        }
+        *(if error > 0.0 { &mut below } else { &mut above }) = Some((gain, got));
+        let slope = previous
+            .filter(|&(g, l)| (gain - g).abs() > 1e-6 && got != l)
+            .map_or(1.0, |(g, l)| ((got - l) / (gain - g)).clamp(0.1, 1.0));
+        previous = Some((gain, got));
+        gain += error / slope;
+        if let (Some(lo), Some(hi)) = (below, above)
+            && !(lo.0 < gain && gain < hi.0)
+        {
+            gain = lo.0 + (target - lo.1) * (hi.0 - lo.0) / (hi.1 - lo.1);
+        }
+        gain = gain.min(MAX_GAIN_DB);
+    }
+    Ok(best.1)
+}
+
+fn encode_audio(enc: &mut ff::encoder::Audio, pos: i64, mix: &[f32], frame_size: usize) -> Result<()> {
     let mut f = frame::Audio::new(
         ff::format::Sample::F32(ff::format::sample::Type::Planar),
         frame_size,
