@@ -175,6 +175,8 @@ export interface Snapshot {
   canRedo: boolean;
   path: string;
   select: string[];
+  /** Why AI agents cannot attach to this project live; editing works without them. */
+  agentBridgeError: string | null;
 }
 
 export interface Transport {
@@ -189,6 +191,8 @@ export interface Boot {
   limits: Limits;
   /** Why the preview could not start, when it failed before the UI listened. */
   engineError: string | null;
+  /** Why the most recent project was not opened, when another one opened instead. */
+  startupNotice: string | null;
 }
 
 export interface JobEvent {

@@ -241,6 +241,9 @@ export const useEditor = create<EditorState>((set, get) => ({
       // A copied project can reuse asset ids for other files, so media previews start over.
       ...(switched ? { thumbs: {}, filmstrips: {}, waveforms: {} } : {}),
     });
+    if (switched && snap.agentBridgeError) {
+      get().toast({ kind: "info", text: "AI agents can't connect to this project while it is open here. Your own editing works normally." });
+    }
   },
 
   edit: (input, coalesce) => {

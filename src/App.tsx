@@ -156,7 +156,8 @@ function useBackendEvents() {
     offs.push(listen("transcripts-changed", () => useSpeech.setState((s) => ({ stored: s.stored + 1 }))));
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
-    offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
+    // null: the preview recovered, e.g. after a failed frame.
+    offs.push(listen<string | null>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
     let hasMedia = false;
     // The run seen last, also one already open at boot; a snapshot can clear `aiRun` before this event.
     let lastRun: string | null = useEditor.getState().aiRun;
@@ -347,6 +348,8 @@ async function startEditor() {
   if (boot.engineError) useEditor.setState({ engineError: boot.engineError });
   useEditor.getState().setSnap(boot.snapshot, true, true);
   useEditor.setState({ saveState: "saved" });
+  // An error toast stays until dismissed, so the reason a different project opened is not missed.
+  if (boot.startupNotice) useEditor.getState().toast({ kind: "error", text: boot.startupNotice });
 }
 
 /** Until the editor has a project: "Starting", or why starting failed with ways to go on. */
