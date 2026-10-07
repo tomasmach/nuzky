@@ -568,16 +568,19 @@ fn reels_loudness_passes_stop_within_a_second_of_cancel() {
     let mut seen = Vec::new();
     let result = export(&reels_project(&input, 120), &d.join("cache"), &out, &reels(), &cancel, |p| {
         seen.push((p.phase, p.fraction));
-        // Stop in the middle of the second pass, the first one through the limiter.
-        if asked.is_none() && p.phase == ExportPhase::Loudness && p.fraction >= 0.03 {
+        // A pass reports every second of sound: stop in the middle of the second pass, the
+        // first one through the limiter.
+        if asked.is_none() && seen.len() == 180 {
             cancel.store(true, Ordering::Relaxed);
             asked = Some(Instant::now());
         }
     });
     let stopped = asked.expect("the loudness passes reported progress").elapsed();
     let error = format!("{:#}", result.unwrap_err());
+    eprintln!("QA reels cancel: stopped {stopped:?} after the request, {} reports", seen.len());
     assert!(error.starts_with("CANCELLED"), "{error}");
     assert!(stopped < Duration::from_secs(1), "stopping took {stopped:?}");
+    assert_eq!(seen.len(), 180, "the pass went on after the request");
     assert!(seen.iter().all(|(phase, _)| *phase == ExportPhase::Loudness), "rendering started");
     assert!(seen.windows(2).all(|w| w[0].1 <= w[1].1), "progress went back");
     assert_eq!(std::fs::read(&out).unwrap(), b"existing destination");

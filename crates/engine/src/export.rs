@@ -493,8 +493,9 @@ const TOLERANCE_LU: f64 = 0.1;
 /// Levelled passes at most after the first measurement. Speech lands in one or two; sound
 /// whose loudness sits in the peaks the limiter holds takes more.
 const LEVELLING_PASSES: usize = 6;
-/// Part of the progress bar the loudness passes take before rendering starts.
-const LOUDNESS_SHARE: f32 = 0.1;
+/// Part of the progress bar the loudness passes take before rendering starts: they took 1 % of
+/// a 47 s Reels export in a release build and 4 % in a debug one.
+const LOUDNESS_SHARE: f32 = 0.05;
 /// Audio between cancellation checks in the loudness passes, in frames (one second).
 const MEASURE_CHUNK: usize = SAMPLE_RATE as usize;
 
