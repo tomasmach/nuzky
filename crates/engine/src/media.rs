@@ -477,7 +477,12 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
     let stream = input.streams().best(ff::media::Type::Audio).ok_or_else(|| anyhow!("No audio stream"))?;
     let stream_index = stream.index();
     let time_base = f64::from(stream.time_base());
-    let video = input.streams().best(ff::media::Type::Video).map(|s| (s.index(), f64::from(s.time_base())));
+    // Cover art (an MP3's attached picture) is a video stream of one frame, not a picture track.
+    let video = input
+        .streams()
+        .best(ff::media::Type::Video)
+        .filter(|s| !s.disposition().contains(ff::format::stream::Disposition::ATTACHED_PIC))
+        .map(|s| (s.index(), f64::from(s.time_base())));
     let duration_us = input.duration().max(1) as f64;
     let origin = origin_us(&input);
     let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
@@ -492,6 +497,8 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
             mono: false,
             shift: None,
             skip: 0,
+            audio: 0,
+            gaps: 0,
         };
         let mut decoded = frame::Audio::empty();
         let mut last_progress = 0.0;
@@ -515,7 +522,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
                 continue;
             }
             while decoder.receive_frame(&mut decoded).is_ok() {
-                sink.write_frame(&decoded, start_us(&decoded), max_lead_us(video_end_us))?;
+                sink.write_frame(&decoded, start_us(&decoded), video.map(|_| video_end_us))?;
             }
             if let Some(pts) = packet.pts() {
                 let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
@@ -527,7 +534,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
         }
         decoder.send_eof().ok();
         while decoder.receive_frame(&mut decoded).is_ok() {
-            sink.write_frame(&decoded, start_us(&decoded), max_lead_us(video_end_us))?;
+            sink.write_frame(&decoded, start_us(&decoded), video.map(|_| video_end_us))?;
         }
         if let Some((mut ctx, _)) = sink.resampler.take() {
             loop {
@@ -564,6 +571,9 @@ struct PcmSink {
     shift: Option<i64>,
     /// Converted sample frames still to drop because they overlap audio already written.
     skip: u64,
+    /// Sample frames of decoded audio written, and of silence written for gaps after the first frame.
+    audio: u64,
+    gaps: u64,
 }
 
 fn us_to_frames(us: i64) -> i64 {
@@ -592,6 +602,7 @@ impl PcmSink {
             self.writer.write_all(&out.data(0)[dropped * CHANNELS * 4..n * CHANNELS * 4])?;
         }
         self.written += (n - dropped) as u64;
+        self.audio += (n - dropped) as u64;
         Ok(())
     }
 
@@ -604,7 +615,9 @@ impl PcmSink {
 
     /// Lines up the next samples with `start_us`: the first ones with the container origin, later ones
     /// by filling gaps with silence and dropping overlaps, like FFmpeg's aresample async mode.
-    fn place(&mut self, start_us: i64, max_lead_us: i64) -> Result<()> {
+    /// `video_end_us` is how far the file's video has been read, or None without a picture track.
+    fn place(&mut self, start_us: i64, video_end_us: Option<i64>) -> Result<()> {
+        let max_lead_us = max_lead_us(video_end_us.unwrap_or(0));
         let buffered = self.resampler.as_ref().and_then(|(ctx, _)| ctx.delay()).map_or(0, |d| d.output);
         let position = self.written as i64 + buffered - self.skip as i64;
         let Some(shift) = self.shift else {
@@ -621,8 +634,15 @@ impl PcmSink {
         if gap.abs() <= us_to_frames(MIN_GAP_US) {
             return Ok(());
         }
-        // Silence is bounded like the lead-in, so broken timestamps cannot fill the disk.
-        if gap > 0 && target * 1_000_000 / SAMPLE_RATE as i64 <= max_lead_us {
+        // Bounded, so broken timestamps cannot fill the disk. With video, audio stays near the video
+        // read so far; audio alone may pause for as long as it has played, at least the lead-in limit,
+        // so the real pauses of a long recording are kept.
+        let real = match video_end_us {
+            Some(_) => target <= us_to_frames(max_lead_us),
+            None => (self.gaps as i64).saturating_add(gap) <= us_to_frames(MAX_AUDIO_LEAD_US).max(self.audio as i64),
+        };
+        if gap > 0 && real {
+            self.gaps += gap as u64;
             return self.silence(gap);
         }
         if gap < 0 && -gap <= us_to_frames(MAX_OVERLAP_US) {
@@ -634,7 +654,7 @@ impl PcmSink {
         Ok(())
     }
 
-    fn write_frame(&mut self, f: &frame::Audio, start_us: Option<i64>, max_lead_us: i64) -> Result<()> {
+    fn write_frame(&mut self, f: &frame::Audio, start_us: Option<i64>, video_end_us: Option<i64>) -> Result<()> {
         let mut layout = f.channel_layout();
         if layout.is_empty() {
             layout = ff::ChannelLayout::default(f.channels() as i32);
@@ -647,7 +667,7 @@ impl PcmSink {
             self.resampler = Some((ctx, key));
         }
         if let Some(start_us) = start_us {
-            self.place(start_us, max_lead_us)?;
+            self.place(start_us, video_end_us)?;
         }
         let mut f = f.clone();
         f.set_channel_layout(layout);
@@ -829,6 +849,59 @@ mod tests {
         assert!((1.55..1.75).contains(&length), "length {length} s");
         assert!((0..30).all(|i| peak(i as f64 * 0.05, i as f64 * 0.05 + 0.05) > 0.05), "no hole");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Audio without video keeps a real pause late in a long recording.
+    #[test]
+    fn pcm_keeps_late_pauses_of_long_audio() {
+        let dir = std::env::temp_dir().join(format!("capopen-pcm-late-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ffmpeg = |filter: &str, out: &Path| {
+            std::process::Command::new("ffmpeg")
+                .args(["-v", "error", "-y", "-f", "lavfi", "-i", filter, "-c:a", "aac", "-b:a", "48k"])
+                .arg(out)
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let late = dir.join("late.mka");
+        // 700 s of tone with 1 s without audio packets at 660 s.
+        if !ffmpeg("sine=f=440:r=48000:d=700,asetpts='PTS+if(gte(T,660),1/TB,0)'", &late) {
+            eprintln!("ffmpeg CLI not available, skipping");
+            return;
+        }
+        let seconds = |path: &Path| {
+            extract_pcm(path, &path.with_extension("f32"), |_| Ok(())).unwrap() as f64 / SAMPLE_RATE as f64
+        };
+        assert!((seconds(&late) - 701.0).abs() < 0.2, "the pause at 660 s is kept");
+        let samples: Vec<f32> = bytemuck::cast_slice(&std::fs::read(late.with_extension("f32")).unwrap()).to_vec();
+        let peak = |from: f64, to: f64| {
+            samples[(from * 96_000.0) as usize..(to * 96_000.0) as usize].iter().fold(0f32, |m, s| m.max(s.abs()))
+        };
+        assert!(
+            peak(659.0, 659.9) > 0.05 && peak(660.1, 660.9) < 0.001 && peak(661.1, 662.0) > 0.05,
+            "tone, pause, tone"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A jump of 200 million s overflowed the old bound, which then wrote silence until the disk
+    /// was full. FFmpeg smooths such jumps when encoding, so the sink gets them directly.
+    #[test]
+    fn an_absurd_timestamp_jump_writes_no_silence() {
+        let path = std::env::temp_dir().join(format!("capopen-pcm-jump-{}", uuid::Uuid::new_v4()));
+        let writer = BufWriter::new(File::create(&path).unwrap());
+        let mut sink =
+            PcmSink { writer, written: 0, resampler: None, mono: false, shift: None, skip: 0, audio: 0, gaps: 0 };
+        sink.place(0, None).unwrap();
+        // One second of audio played.
+        (sink.written, sink.audio) = (48_000, 48_000);
+        sink.place(200_000_000 * 1_000_000, None).unwrap();
+        assert_eq!(sink.written, 48_000, "no silence for the jump");
+        // The audio after it continues where the audio before it ended.
+        sink.place(200_000_000 * 1_000_000, None).unwrap();
+        assert_eq!(sink.written, 48_000);
+        drop(sink);
+        std::fs::remove_file(path).ok();
     }
 
     /// Upsampled sources used to lose their tail; mono sources came out 3 dB quieter.
