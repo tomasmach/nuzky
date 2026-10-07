@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Once, OnceLock};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use ff::codec::packet::side_data::Type as SideDataType;
@@ -23,6 +23,40 @@ pub fn init() {
         ff::init().expect("FFmpeg failed to initialise");
         ff::util::log::set_level(ff::util::log::Level::Error);
     });
+}
+
+/// Demuxers that open other files or URLs named inside the media, or run scripts.
+const INDIRECT_DEMUXERS: &[&str] =
+    &["hls", "dash", "concat", "imf", "sdp", "rtsp", "rtp", "sap", "avisynth", "vapoursynth"];
+
+/// Every demuxer except the indirect ones; FFmpeg checks it before reading the file header.
+fn format_whitelist() -> &'static str {
+    static LIST: OnceLock<String> = OnceLock::new();
+    LIST.get_or_init(|| {
+        let mut names = Vec::new();
+        let mut opaque = std::ptr::null_mut();
+        loop {
+            let format = unsafe { ff::ffi::av_demuxer_iterate(&mut opaque) };
+            if format.is_null() {
+                break;
+            }
+            let name = unsafe { std::ffi::CStr::from_ptr((*format).name) }.to_string_lossy();
+            if !name.split(',').any(|n| INDIRECT_DEMUXERS.contains(&n)) {
+                names.push(name.into_owned());
+            }
+        }
+        names.join(",")
+    })
+}
+
+/// Opens local media only: no network protocols, also for files a container refers to,
+/// and no playlists or scripts that pull in other sources.
+fn open_input(path: &Path) -> Result<ff::format::context::Input> {
+    init();
+    let mut options = ff::Dictionary::new();
+    options.set("protocol_whitelist", "file");
+    options.set("format_whitelist", format_whitelist());
+    ff::format::input_with_dictionary(path, options).with_context(|| format!("Cannot open {}", path.display()))
 }
 
 fn origin_us(input: &ff::format::context::Input) -> i64 {
@@ -82,8 +116,7 @@ fn image_rotation(input: &mut ff::format::context::Input, index: usize, mut deco
 }
 
 pub fn probe(path: &Path, id: String) -> Result<Asset> {
-    init();
-    let mut input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let mut input = open_input(path)?;
     let is_image = is_image_format(&input);
     let video = video_stream(&input);
     let audio = input.streams().best(ff::media::Type::Audio);
@@ -231,8 +264,7 @@ unsafe impl Send for VideoDecoder {}
 
 impl VideoDecoder {
     pub fn open(path: &Path) -> Result<Self> {
-        init();
-        let input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+        let input = open_input(path)?;
         let is_image = is_image_format(&input);
         let stream = video_stream(&input).ok_or_else(|| anyhow!("{} has no video", path.display()))?;
         let stream_index = stream.index();
@@ -389,8 +421,7 @@ pub fn decode_size(src: (u32, u32), rotation: u32, display: (f32, f32)) -> (u32,
 /// Decodes the whole audio stream to 48 kHz interleaved stereo f32 little-endian.
 /// The file starts at the container origin, padded with silence if audio starts late.
 pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Result<u64> {
-    init();
-    let mut input = ff::format::input(path).with_context(|| format!("Cannot open {}", path.display()))?;
+    let mut input = open_input(path)?;
     let stream = input.streams().best(ff::media::Type::Audio).ok_or_else(|| anyhow!("No audio stream"))?;
     let stream_index = stream.index();
     let time_base = f64::from(stream.time_base());
