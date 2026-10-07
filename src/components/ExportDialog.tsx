@@ -45,6 +45,24 @@ function formatBytes(b: number) {
   return `${Math.max(1, Math.round(b / 1e6))} MB`;
 }
 
+/** Tab and Shift+Tab cycle through the dialog's controls, so focus never leaves it for the editor behind. */
+function trapTab(e: React.KeyboardEvent<HTMLElement>) {
+  if (e.key !== "Tab") return;
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex]")].filter(
+    (el) => !el.matches(":disabled, [tabindex='-1']") && el.offsetParent !== null,
+  );
+  if (items.length === 0) return;
+  const [first, last] = [items[0], items[items.length - 1]];
+  const inside = items.includes(document.activeElement as HTMLElement);
+  if (e.shiftKey && (document.activeElement === first || !inside)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 function loadOptions(canvas: Canvas): ExportRequest {
   const short = Math.min(canvas.width, canvas.height);
   const fallback: ExportRequest = {
@@ -99,10 +117,11 @@ export function ExportDialog() {
 
   useEffect(() => {
     if (!open) return;
+    // Esc closes the dialog; while an export runs, Cancel export and Keep editing say what happens to it.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
-      close();
+      if (!running) close();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -168,7 +187,7 @@ export function ExportDialog() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="export-title" className="w-[460px] rounded-lg border border-line bg-panel shadow-2xl shadow-black">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="export-title" onKeyDown={trapTab} className="w-[460px] rounded-lg border border-line bg-panel shadow-2xl shadow-black">
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 id="export-title" className="text-[14px] font-semibold">
             Export video
