@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { videoDir, join } from "@tauri-apps/api/path";
-import { AlertCircle, CheckCircle2, Download, FolderOpen, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Download, FolderOpen, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { formatLabel } from "../lib/presets";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
@@ -38,6 +38,8 @@ function estimateBytes(w: number, h: number, fps: number, quality: ExportRequest
   return ((w * h * fps * bpp + AUDIO_BPS) * (durationUs / US)) / 8;
 }
 
+const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
+
 function formatBytes(b: number) {
   if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
   return `${Math.max(1, Math.round(b / 1e6))} MB`;
@@ -65,7 +67,9 @@ export function ExportDialog() {
   const job = useEditor((s) => (s.exportJobId ? s.jobs[s.exportJobId] : undefined));
   const [options, setOptions] = useState<ExportRequest | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const lastPath = useRef<string | null>(null);
+  /** The file asked for already exists; Replace exports over it. */
+  const [exists, setExists] = useState<string | null>(null);
+  const last = useRef<{ path: string; replace: boolean } | null>(null);
   const startedAt = useRef(0);
   const dialog = useRef<HTMLDivElement>(null);
   const running = job?.status === "running";
@@ -78,6 +82,7 @@ export function ExportDialog() {
 
   const close = () => {
     setError(null);
+    setExists(null);
     // A finished job is shown once; a running one keeps reporting in the top bar.
     if (job && job.status !== "running") useEditor.setState({ exportJobId: null });
     useEditor.setState({ exportOpen: false });
@@ -103,6 +108,15 @@ export function ExportDialog() {
     return () => window.removeEventListener("keydown", onKey, true);
   }); // re-bound each render so `close` sees the current job
 
+  const jobFailed = job?.status === "failed" ? job.message : null;
+  // A file that appeared at the destination while rendering is asked about like one that was there before.
+  const appeared = !exists && jobFailed?.startsWith("OUTPUT_EXISTS") && last.current ? last.current.path : null;
+  const replacing = exists ?? appeared;
+  // The question replaces the buttons that were focused, so focus moves to its safe answer.
+  useEffect(() => {
+    if (replacing) dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+  }, [replacing]);
+
   if (!open || !project || !options) return null;
   const duration = projectDuration(project);
   const size = outputSize(project.canvas, options.resolution);
@@ -112,15 +126,18 @@ export function ExportDialog() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ resolution: next.resolution, quality: next.quality }));
   };
 
-  /** `epoch`: the project the export was asked for, taken before any wait. */
-  const run = async (path: string, epoch = currentEpoch()) => {
+  /** `epoch`: the project the export was asked for, taken before any wait. `replace`: overwriting the file was confirmed. */
+  const run = async (path: string, replace: boolean, epoch = currentEpoch()) => {
     setError(null);
-    lastPath.current = path;
+    setExists(null);
+    last.current = { path, replace };
     try {
       startedAt.current = Date.now();
-      useEditor.setState({ exportJobId: await api.startExport(path, options, epoch) });
+      useEditor.setState({ exportJobId: await api.startExport(path, options, epoch, replace) });
     } catch (e) {
-      setError(errorText(e));
+      const text = errorText(e);
+      if (text.startsWith("DESTINATION_EXISTS")) setExists(path);
+      else setError(text);
     }
   };
 
@@ -133,8 +150,11 @@ export function ExportDialog() {
     } catch {
       /* no Videos folder; the dialog falls back to its default location */
     }
-    const path = await save({ defaultPath, filters: [{ name: "MP4 video", extensions: ["mp4"] }] });
-    if (path) await run(path.endsWith(".mp4") ? path : `${path}.mp4`, epoch);
+    const picked = await save({ defaultPath, filters: [{ name: "MP4 video", extensions: ["mp4"] }] });
+    if (!picked) return;
+    const path = picked.endsWith(".mp4") ? picked : `${picked}.mp4`;
+    // The save dialog asked before replacing the name it returned, not one with ".mp4" added.
+    await run(path, path === picked, epoch);
   };
 
   const eta = (() => {
@@ -143,7 +163,7 @@ export function ExportDialog() {
     const left = (elapsed / job.progress) * (1 - job.progress);
     return left < 60 ? `${Math.ceil(left)} s left` : `${Math.ceil(left / 60)} min left`;
   })();
-  const failed = error ?? (job?.status === "failed" ? job.message : null);
+  const failed = replacing ? null : (error ?? jobFailed);
   const settingsLocked = running || job?.status === "done";
 
   return (
@@ -208,6 +228,12 @@ export function ExportDialog() {
               <span className="break-all">Saved to {job.output}</span>
             </div>
           )}
+          {replacing && (
+            <div className="flex items-start gap-2 rounded-md bg-warn/10 p-3 text-[13px] text-fg" role="alert">
+              <AlertTriangle size={16} className="mt-px shrink-0 text-warn" />
+              <span className="break-all">{fileName(replacing)} already exists. Replace it?</span>
+            </div>
+          )}
           {failed && (
             <div className="flex items-start gap-2 rounded-md bg-danger/10 p-3 text-[13px] text-danger" role="alert">
               <AlertCircle size={16} className="mt-px shrink-0" />
@@ -234,11 +260,20 @@ export function ExportDialog() {
                 Done
               </Button>
             </>
+          ) : replacing ? (
+            <>
+              <Button data-autofocus onClick={() => (setExists(null), pickAndRun())}>
+                Choose another name…
+              </Button>
+              <Button variant="danger" onClick={() => run(replacing, true)}>
+                Replace
+              </Button>
+            </>
           ) : (
             <>
               <Button onClick={close}>Close</Button>
-              {failed && lastPath.current ? (
-                <Button variant="primary" data-autofocus onClick={() => run(lastPath.current!)}>
+              {failed && last.current ? (
+                <Button variant="primary" data-autofocus onClick={() => run(last.current!.path, last.current!.replace)}>
                   <Download size={15} /> Retry
                 </Button>
               ) : (

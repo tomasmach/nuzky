@@ -28,7 +28,9 @@ export const api = {
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
-  startExport: (path: string, options: ExportRequest, epoch: Epoch) => invoke<string>("start_export", { path, options, expectedEpoch: epoch }),
+  /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */
+  startExport: (path: string, options: ExportRequest, epoch: Epoch, replaceExisting: boolean) =>
+    invoke<string>("start_export", { path, options, expectedEpoch: epoch, replaceExisting }),
   filmstrip: (assetId: string) => invoke<Filmstrip | null>("filmstrip", { assetId }),
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
