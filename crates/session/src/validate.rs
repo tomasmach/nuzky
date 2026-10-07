@@ -19,6 +19,7 @@ pub fn validate(project: &Project) -> Result<()> {
     );
     ensure!((1..=240).contains(&project.canvas.fps), "INVALID_PROJECT: frame rate");
     ensure!(project.canvas.background_blur.is_finite(), "INVALID_PROJECT: background blur");
+    color(&project.canvas.background, "canvas background")?;
     unique(project.assets.iter().map(|a| a.id.as_str()), "asset")?;
     unique(project.tracks.iter().map(|t| t.id.as_str()), "track")?;
     unique(project.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.id.as_str())), "clip")?;
@@ -65,6 +66,16 @@ pub fn local_media_path(path: &str) -> Result<()> {
     ensure!(
         !path.contains('\0') && local.is_absolute() && !device,
         "INVALID_ASSET_PATH: media must be an absolute local file path, not {path:?}"
+    );
+    Ok(())
+}
+
+/// The renderer parses colours by byte offset; anything but ASCII hex must not reach it.
+fn color(value: &str, field: &str) -> Result<()> {
+    let hex = value.strip_prefix('#').unwrap_or_default();
+    ensure!(
+        matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        "INVALID_COLOR: {field} must be #rgb, #rrggbb or #rrggbbaa, not {value:?}"
     );
     Ok(())
 }
@@ -144,6 +155,11 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                         && width <= MAX_TEXT_WIDTH_RATIO * project.canvas.width as f32),
                 "INVALID_PROJECT: text style"
             );
+            color(&style.color, "text color")?;
+            color(&style.stroke_color, "outline color")?;
+            if let Some(background) = &style.background {
+                color(background, "text background")?;
+            }
             transform(t)?;
         }
     }
@@ -249,6 +265,52 @@ mod tests {
         let assets = project.assets.clone();
         assert!(editor.apply_batch_checked(vec![EditCmd::AddAssets { assets }], None, validate).is_err());
         assert_eq!(editor.project, before);
+    }
+
+    #[test]
+    fn every_color_field_requires_ascii_hex() {
+        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+            "fontSize":95.0,"color":"#ffffff","strokeWidth":7.5,"background":"#00000080"
+        }))
+        .unwrap();
+        let mut project = Project::new("colors");
+        project.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
+        validate(&project).unwrap();
+        for field in 0..4 {
+            for (value, valid) in [
+                ("#fff", true),
+                ("#FFAA00", true),
+                ("#00000080", true),
+                ("#€", false),
+                ("#ab€", false),
+                ("white", false),
+                ("#ggg", false),
+                ("#12345", false),
+                ("fff", false),
+                ("#fff ", false),
+                ("", false),
+            ] {
+                let mut candidate = project.clone();
+                let ClipContent::Text { style, .. } = &mut candidate.tracks[1].clips[0].content else { panic!() };
+                match field {
+                    0 => candidate.canvas.background = value.into(),
+                    1 => style.color = value.into(),
+                    2 => style.stroke_color = value.into(),
+                    _ => style.background = Some(value.into()),
+                }
+                let result = validate(&candidate);
+                assert_eq!(result.is_ok(), valid, "field {field}: {value:?}");
+                if let Err(error) = result {
+                    assert!(error.to_string().starts_with("INVALID_COLOR:"), "{error}");
+                }
+            }
+        }
+        let mut editor = capopen_engine::edit::Editor::new(project.clone());
+        let set =
+            EditCmd::SetCanvas { width: 1080, height: 1920, background: Some("#€".into()), background_blur: None };
+        let error = editor.apply_batch_checked(vec![set], None, validate).unwrap_err();
+        assert!(format!("{error:#}").contains("INVALID_COLOR"), "{error:#}");
+        assert_eq!(editor.project, project);
     }
 
     #[test]
