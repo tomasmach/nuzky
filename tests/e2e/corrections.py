@@ -79,10 +79,11 @@ class Hands:
         self.r, self.d = r, display.Display()
         r.s.run("window.__pointerAt = null;"
                 "addEventListener('pointermove', (e) => { window.__pointerAt = [e.clientX, e.clientY]; }, true);")
-        # Where the page sits on the screen and how large its pixels are, from two pointer positions.
+        self.calibrate()
+
+    def calibrate(self):
+        """Where the page sits on the screen and how large its pixels are, from two pointer positions."""
         (x0, y0), (x1, y1) = (500, 300), (900, 600)
-        from Xlib import X
-        self.fake(X.MotionNotify, x=x0 - 40, y=y0 - 40)
         (c0, d0), (c1, d1) = self.read(x0, y0), self.read(x1, y1)
         self.scale = (x1 - x0) / (c1 - c0)
         self.origin = (x0 - c0 * self.scale, y0 - d0 * self.scale)
@@ -93,24 +94,36 @@ class Hands:
         self.d.sync()
 
     def read(self, x, y):
+        """Moves the pointer and returns where the page saw it last, once earlier moves have arrived."""
         from Xlib import X
-        self.r.s.run('window.__pointerAt = null')
         self.fake(X.MotionNotify, x=x, y=y)
-        at = wait(lambda: self.r.s.run('return window.__pointerAt'), 5, 0.05)
+        time.sleep(0.4)
+        at = self.r.s.run('return window.__pointerAt')
         if not at:
             raise RuntimeError('the page did not see the pointer move')
         return at
 
-    def double_click(self, css):
-        from Xlib import X
+    def over(self, css):
+        """Moves the pointer to the middle of the element; true once the page sees it there."""
         left, top = self.r.s.run('const b = document.querySelector(arguments[0]).getBoundingClientRect();'
                                  'return [b.left + b.width / 2, b.top + b.height / 2];', css)
-        self.fake(X.MotionNotify, x=round(self.origin[0] + left * self.scale), y=round(self.origin[1] + top * self.scale))
+        self.read(round(self.origin[0] + left * self.scale), round(self.origin[1] + top * self.scale))
+        return self.r.s.run('const [x, y] = window.__pointerAt;'
+                            'return !!document.elementFromPoint(x, y)?.closest(arguments[0]);', css)
+
+    def double_click(self, css):
+        """Two clicks on the element within the double-click time; false when the pointer missed it."""
+        from Xlib import X
+        if not self.over(css):
+            self.calibrate()
+            if not self.over(css):
+                return False
         for _ in range(2):
             self.fake(X.ButtonPress, 1)
             time.sleep(0.03)
             self.fake(X.ButtonRelease, 1)
             time.sleep(0.06)
+        return True
 
     def type(self, text):
         from Xlib import X, XK
@@ -197,7 +210,8 @@ def corrections(r):
     before = preview_crop(r.work / 'caption-before.png', preview_rect(r))
 
     hands = Hands(r)
-    hands.double_click(f'[data-t="{target}"]')
+    r.check('the pointer reaches the word', hands.double_click(f'[data-t="{target}"]'),
+            {'origin': hands.origin, 'scale': hands.scale})
     opened = wait(lambda: field(r), 5)
     r.check(f'double-clicking "{word}" opens it for typing, the whole word selected',
             opened and opened['value'] == word and opened['focused'] and opened['selected'], opened)
@@ -205,30 +219,35 @@ def corrections(r):
     r.check('typing replaces the word', (field(r) or {}).get('value') == right, field(r))
     r.shot('word-editing')
     hands.type('\n')
+    toasts = lambda: [t['text'] for t in r.state()['toasts']]
+    toast = wait(lambda: next((t for t in toasts() if t.startswith('Corrected')), None), 5)
+    r.check('a toast says what changed', toast == f'Corrected “{word}” to “{right}”, also in its caption', toasts())
     fixed = lambda: next((w for w in shown(r) if w['t'] == target), {})
     r.check(f'the transcript reads "{right}", underlined with dots, and says what was recognised',
-            wait(lambda: fixed().get('text') == right, 10) and fixed().get('title') == f'Recognised as “{word}”'
+            wait(lambda: fixed().get('text') == right, 5) and fixed().get('title') == f'Recognised as “{word}”'
             and fixed().get('underline') == 'dotted', fixed())
-    r.check('the caption shows the corrected word', wait(lambda: caption_with(r, right) and not caption_with(r, word), 10),
+    r.check('the caption shows the corrected word', wait(lambda: caption_with(r, right) and not caption_with(r, word), 5),
             caption_texts(r))
-    toast = next((t['text'] for t in r.state()['toasts'] if t['text'].startswith('Corrected')), None)
-    r.check('a toast says what changed', toast == f'Corrected “{word}” to “{right}”, also in its caption', r.state()['toasts'])
-    r.shot('word-corrected')
-    _, redrawn = preview_redraw(r, 'caption-corrected', before)
-    r.check('the preview draws the corrected caption', redrawn, 'the preview stayed the same')
     keep = caption_texts(r)
-    r.check('the saved project holds the correction and the caption',
-            wait(lambda: saved(r) == ([{'original': word, 'text': right}], keep), 10), saved(r))
+    r.shot('word-corrected')
 
     # One undo takes back the word and its caption together; redo brings both.
-    r.s.run("[...document.querySelectorAll('[data-toast] button')].find((b) => b.textContent.trim() === 'Undo').click()")
+    undo = r.s.run("const b = [...document.querySelectorAll('[data-toast] button')].find((b) => b.textContent.trim() === 'Undo');"
+                   "b?.click(); return !!b;")
+    if not undo:
+        r.s.run('document.activeElement?.blur()')
+        r.key('z', ctrlKey=True)
     r.check('Undo in the toast takes back the word and its caption together',
-            wait(lambda: fixed().get('text') == word and caption_with(r, word) and not caption_with(r, right), 10),
-            {'word': fixed(), 'captions': caption_texts(r)})
+            undo and wait(lambda: fixed().get('text') == word and caption_with(r, word) and not caption_with(r, right), 10),
+            {'toast': undo, 'word': fixed(), 'captions': caption_texts(r)})
     r.s.run('document.activeElement?.blur()')
     r.key('z', ctrlKey=True, shiftKey=True)
-    r.check('redo brings both back', wait(lambda: fixed().get('text') == right and caption_texts(r) == keep, 10),
-            caption_texts(r))
+    r.check('redo brings both back', wait(lambda: caption_texts(r) == keep, 10) and fixed().get('text') == right,
+            {'word': fixed(), 'captions': caption_texts(r)})
+    _, redrawn = preview_redraw(r, 'caption-corrected', before)
+    r.check('the preview draws the corrected caption', redrawn, 'the preview stayed the same')
+    r.check('the saved project holds the correction and the caption',
+            wait(lambda: saved(r) == ([{'original': word, 'text': right}], keep), 10), saved(r))
 
     job = generate_captions(r)
     r.check('regenerating the captions keeps the corrected word',
