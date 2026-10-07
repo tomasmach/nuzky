@@ -329,7 +329,56 @@ fn speech_cut(
             })
             .collect();
     }
-    Ok((ranges, speech))
+    Ok((without_slivers(project, &bounds, ranges), speech))
+}
+
+/// Where a take starts speaking at once, the silence a cut keeps before its first word lies at
+/// the end of the take before it, cut off from that take's last word: a sliver of a clip on the
+/// timeline. That silence moves next to the last word instead, so the pause keeps its length and
+/// the takes meet at one cut; when the cut also removes words there, the sliver just goes. The
+/// same holds the other way round, for a take that ends speaking at once.
+fn without_slivers(project: &Project, words: &[TimelineWord], mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
+    const SLIVER_US: i64 = 400_000;
+    let joins: Vec<i64> = project
+        .tracks
+        .iter()
+        .flat_map(|track| {
+            let heard: Vec<_> = track.clips.iter().filter(|c| is_heard(project, track, c)).collect();
+            heard
+                .windows(2)
+                .filter(|pair| pair[0].end_us() == pair[1].start_us)
+                .map(|pair| pair[1].start_us)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let silent = |from: i64, to: i64| words.iter().all(|w| w.end_us <= from || w.start_us >= to);
+    let edges: Vec<(i64, i64)> = ranges.iter().map(|r| (r.start_us, r.end_us)).collect();
+    for (i, range) in ranges.iter_mut().enumerate() {
+        let next = edges.get(i + 1).map_or(i64::MAX, |r| r.0);
+        let previous = i.checked_sub(1).map_or(i64::MIN, |p| edges[p].1);
+        // A sliver after the cut, before a join.
+        if let Some(&join) = joins.iter().filter(|&&t| t > range.end_us && t <= next).min() {
+            let kept = join - range.end_us;
+            if kept < SLIVER_US && silent(range.end_us, join) {
+                if silent(range.start_us, range.start_us + kept) {
+                    range.start_us += kept;
+                }
+                range.end_us = join;
+                continue;
+            }
+        }
+        // A sliver before the cut, after a join.
+        if let Some(&join) = joins.iter().filter(|&&t| t < range.start_us && t >= previous).max() {
+            let kept = range.start_us - join;
+            if kept < SLIVER_US && silent(join, range.start_us) {
+                if silent(range.end_us - kept, range.end_us) {
+                    range.end_us -= kept;
+                }
+                range.start_us = join;
+            }
+        }
+    }
+    ranges
 }
 
 /// A silence in speech longer than the pause length; shortening it cuts `start_us..end_us`
@@ -656,6 +705,33 @@ pub(crate) mod tests {
             assert_eq!(broll, [6_000_000]);
             let over = cut.preview.tracks[1].clips.last().unwrap();
             assert_eq!(over.end_us() - main.last().unwrap().end_us(), 4_000_000);
+        }
+    }
+
+    /// A second take that speaks from its first moment: shortening the pause between the takes
+    /// keeps its length next to the last word of the first take, not as a sliver of its end.
+    #[test]
+    fn a_take_that_speaks_at_once_leaves_no_sliver_of_the_take_before() {
+        let (mut project, mut sources) = fixture();
+        let mut next = project.assets[0].clone();
+        (next.id, next.path, next.duration_us) = ("next".into(), "/next.mov".into(), 3_000_000);
+        project.apply(EditCmd::AddAssets { assets: vec![next] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "next".into(), start_us: None, track_id: None }).unwrap();
+        let word =
+            |start_us, text: &str| Word { start_us, end_us: start_us + 400_000, text: text.into(), probability: 1.0 };
+        sources.insert("next".into(), vec![word(0, "next0"), word(1_000_000, "next1")]);
+        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        for (delete, last) in [(None, "word7"), (Some(&[[7, 7]][..]), "word6")] {
+            let ranges = edit_ranges(&project, &derived, delete, None, Some(300_000)).unwrap();
+            let cut = plan_cut(&project, &derived, ranges).unwrap();
+            let main = &cut.preview.tracks[0].clips;
+            assert!(main.iter().all(|c| c.duration_us >= 300_000), "{delete:?}: {main:?}");
+            let words = map_words(&cut.preview, &derived.sources);
+            let at = |text: &str| words.iter().find(|w| w.text == text).unwrap();
+            assert_eq!(
+                at("next0").start_us - at(last).end_us,
+                if delete.is_none() { 300_000 } else { AFTER_WORD_US + BEFORE_WORD_US }
+            );
         }
     }
 

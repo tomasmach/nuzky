@@ -198,6 +198,8 @@ def rough_cut(r, bridge, truths):
     r.check('the cut matches its dry run', cut['duration_us'] == plan['duration_us'], [plan['duration_us'], cut['duration_us']])
     captions = bridge.call('build_captions', {'run_id': run})
     r.check('Reel captions are built', captions['caption_count'] > 10, captions)
+    r.check('the cut and the captions show live while the agent works',
+            wait(lambda: len(r.track()) > 3 and len(r.state()['tracks']) == 2, 10), r.track())
     r.shot('agent-editing')
     bridge.call('end_run', {'run_id': run, 'action': 'keep'})
     r.check('the lock ends with the run', wait(lambda: not r.state()['aiRun'], 10))
@@ -216,6 +218,8 @@ def rough_cut(r, bridge, truths):
             timeline.append((at, text, e - s))
     r.check('kept phrases play in the order they were said', [x[0] for x in timeline] == sorted(x[0] for x in timeline), timeline)
     pauses = [round(b[0] - (a[0] + a[2]), 2) for a, b in zip(timeline, timeline[1:])]
+    slivers = [(take, round(b - a, 3)) for take, a, b, _ in order if b - a < 0.3]
+    r.check('no sliver of a clip is left between the takes', not slivers, slivers)
     r.check('no long pause is left between sentences', all(p <= 0.45 for p in pauses), pauses)
     # Where the sound jumps: between takes, or where the cut skipped part of a take.
     cuts = [b[3] for a, b in zip(order, order[1:]) if a[0] != b[0] or abs(a[2] - b[1]) > 0.001]
