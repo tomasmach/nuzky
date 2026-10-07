@@ -177,6 +177,8 @@ fn readonly_resources_prompts_and_clear_errors() {
     c.finish();
 }
 
+// Only on Linux does XDG_DATA_HOME choose where CapOpen looks for EDIT.md.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_creator_style_reaches_the_agent_and_without_one_nothing_changes() {
     let guide = include_str!("../../../skills/capopen-edit/SKILL.md");

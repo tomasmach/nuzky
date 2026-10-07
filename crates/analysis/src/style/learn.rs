@@ -154,19 +154,27 @@ pub fn learn(sources: &[Source]) -> String {
         body.push_str(&section);
         settings.push(setting);
     }
+    let unseen: Vec<String> =
+        sources.iter().filter_map(|s| s.picture.skipped.as_ref().map(|why| format!("{} ({why})", s.cut))).collect();
+    if !unseen.is_empty() {
+        rare.push(format!("Captions and zoom not measured in {}", unseen.join(", ")));
+    }
+    let seen = unseen.len() < sources.len();
     match captions(&edits, &say) {
         Some((section, rows)) => {
             body.push_str(&section);
             settings.extend(rows);
         }
-        None => rare.push("Burned-in captions: none found".into()),
+        None if seen => rare.push("Burned-in captions: none found".into()),
+        None => {}
     }
     match zoom(&edits, &say) {
         Some((section, rows)) => {
             body.push_str(&section);
             settings.extend(rows);
         }
-        None => rare.push("Zoom: no framing could be measured".into()),
+        None if seen => rare.push("Zoom: no framing could be measured".into()),
+        None => {}
     }
 
     let mut doc = String::new();
@@ -730,7 +738,8 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(Strin
     }
     let total = counts.len();
     let share = |n: i64| percent(counts.iter().filter(|&&c| c == n).count(), total);
-    let most = (1..=4).find(|&n| counts.iter().filter(|&&c| c <= n).count() * 10 >= total * 9).unwrap_or(4);
+    let largest = counts.iter().copied().max().unwrap_or(1);
+    let most = (1..=largest).find(|&n| counts.iter().filter(|&&c| c <= n).count() * 10 >= total * 9).unwrap_or(largest);
     let max_chars = percentile(&chars, 0.95);
     let centre = percentile(&centres, 0.5) as f32 / 1000.0;
     let mut out = String::from("## Captions\n\n");
@@ -779,7 +788,9 @@ fn caption_texts<'w>(captions: &[Caption], words: &'w [Word]) -> Vec<Vec<&'w Wor
                 continue;
             }
             let shown = captions[j - 1].words;
-            for take in shown.saturating_sub(1)..=(shown + 1).min(i) {
+            // A caption may also get none of the words, when recognition missed them.
+            let near = shown.saturating_sub(1)..=(shown + 1).min(i);
+            for take in std::iter::once(0).chain(near.filter(|&t| t > 0)) {
                 let k = i - take;
                 let c = cost[j - 1][k]
                     + words[k..i].iter().map(|w| away(w, &captions[j - 1])).sum::<f64>()
@@ -809,6 +820,7 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
     let mut minutes = 0.0;
     let (mut ins, mut outs, mut moves) = (Vec::new(), Vec::new(), Vec::new());
     let (mut in_scales, mut move_lengths, mut holds) = (Vec::new(), Vec::new(), Vec::new());
+    let mut samples = Vec::new();
     let mut at_cut = 0;
     for edit in edits {
         let picture = edit.source.picture;
@@ -825,6 +837,7 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
                 in_cut.iter().filter(|w| w.0 >= t - 100_000).take(5).map(|w| w.2.text.trim()).collect();
             words.join(" ")
         };
+        samples.extend(picture.framing.iter().map(|f| (edit.index, *f, said(f.time_us))));
         for (k, z) in picture.zooms.iter().enumerate() {
             let line = |what: String| Example {
                 source: edit.index,
@@ -863,13 +876,35 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
         percentile(&ys, 0.5) as f32 / 1000.0,
     );
     let changes = ins.len() + outs.len() + moves.len();
-    let mut out = String::from("## Zoom\n\n");
-    let _ = writeln!(
-        out,
-        "Every clip of the recording is framed at scale {scale:.2}, x {x:.3}, y {y:.3} unless zoomed (CapOpen transform: scale 1 fits the recording, x and y move it by fractions of the frame). The zoom changes {changes} times, {:.1} per minute of finished video. Zoom even when the user does not ask for it. Times in the examples are in the finished cut.\n",
-        changes as f64 / minutes
+    let base: Vec<Example> = samples
+        .iter()
+        .filter(|(_, f, said)| (f.scale - scale).abs() <= 0.02 && !said.is_empty())
+        .map(|(source, f, said)| Example {
+            source: *source,
+            time_us: f.time_us,
+            line: format!("scale {:.2}, x {:.3}, y {:.3} on \"{said}\"", f.scale, f.x, f.y),
+        })
+        .collect();
+    let mut out = String::from(
+        "## Zoom\n\nCapOpen transform: scale 1 fits the recording, x and y move it by fractions of the frame. Times in the examples are in the finished cut.",
     );
-    let mut settings = vec![("Base framing".into(), format!("scale {scale:.2}, x {x:.3}, y {y:.3}"))];
+    let mut settings = Vec::new();
+    if base.len() >= MIN_EXAMPLES {
+        let _ = write!(
+            out,
+            " Every clip of the recording is framed at scale {scale:.2}, x {x:.3}, y {y:.3} unless zoomed."
+        );
+        settings.push(("Base framing".into(), format!("scale {scale:.2}, x {x:.3}, y {y:.3}")));
+    }
+    let _ =
+        write!(out, " The zoom changes {changes} times, {:.1} per minute of finished video.", changes as f64 / minutes);
+    if changes >= MIN_EXAMPLES {
+        out.push_str(" Zoom even when the user does not ask for it.");
+    }
+    out.push_str("\n\n");
+    if base.len() >= MIN_EXAMPLES {
+        let _ = writeln!(out, "{}", say(&base));
+    }
     if ins.len() >= MIN_EXAMPLES {
         let target = percentile(&in_scales, 0.5) as f32 / 1000.0;
         let _ = writeln!(
@@ -1042,7 +1077,12 @@ mod tests {
                 at_cut: true,
             })
             .collect();
-        (words, cut_words, alignment, Picture { captions, caption_band: Some((0.6, 0.66)), framing, zooms })
+        (
+            words,
+            cut_words,
+            alignment,
+            Picture { skipped: None, captions, caption_band: Some((0.6, 0.66)), framing, zooms },
+        )
     }
 
     fn learned() -> String {
@@ -1081,9 +1121,11 @@ mod tests {
         assert!(doc.contains("| Base framing | scale 1.10, x 0.000, y -0.030 |"), "{doc}");
         assert!(doc.contains("4 cuts"), "{doc}");
         // A section that shows moments shows at least three.
-        for section in doc.split("\n#").skip(1).filter(|s| !s.contains("Seen too rarely for a rule")) {
+        // Every rule shows at least three moments; only the overview sections show none.
+        let overview = ["# Settings", "# What gets cut", "# Seen too rarely for a rule"];
+        for section in doc.split("\n#").skip(1).filter(|s| !overview.iter().any(|o| s.starts_with(o))) {
             let examples = section.lines().filter(|l| l.starts_with("- ")).count();
-            assert!(examples == 0 || examples >= MIN_EXAMPLES, "too few examples in {section}");
+            assert!(examples >= MIN_EXAMPLES, "too few examples in {section}");
         }
     }
 
@@ -1101,6 +1143,28 @@ mod tests {
             picture: &picture,
         };
         assert!(learn(&[source]).starts_with("# Editing style"));
+    }
+
+    #[test]
+    fn long_captions_set_their_own_limit_and_an_unseen_picture_is_named() {
+        let (words, cut_words, alignment, mut picture) = fixture();
+        picture.captions.iter_mut().for_each(|c| c.words = 5);
+        let source = |picture| Source {
+            recording: "talk.mov".into(),
+            cut: "reel.mp4".into(),
+            language: "en".into(),
+            recording_us: 30_000_000,
+            words: &words,
+            cut_words: &cut_words,
+            alignment: &alignment,
+            picture,
+        };
+        let doc = learn(&[source(&picture)]);
+        assert!(doc.contains("| build_captions max_words | 5 |"), "{doc}");
+        let unseen = Picture { skipped: Some("too long".into()), ..Picture::default() };
+        let doc = learn(&[source(&unseen)]);
+        assert!(doc.contains("- Captions and zoom not measured in reel.mp4 (too long)"), "{doc}");
+        assert!(!doc.contains("none found") && !doc.contains("## Captions"), "{doc}");
     }
 
     #[test]

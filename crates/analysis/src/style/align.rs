@@ -98,12 +98,13 @@ impl Alignment {
     /// counts as kept when the cut's own recognition heard the same word that close to it.
     pub fn places(&self, words: &[Word], cut_words: &[Word]) -> Vec<Place> {
         let mut places: Vec<Place> = words.iter().map(|w| self.by_sound(w)).collect();
-        let heard: Vec<(String, usize, i64)> = cut_words
+        // Each cut word heard inside a piece: its token, piece, recording time and the word itself.
+        let heard: Vec<(String, usize, i64, &Word)> = cut_words
             .iter()
             .filter_map(|w| {
                 let middle = (w.start_us + w.end_us) / 2;
                 let piece = self.pieces.iter().position(|p| p.start_us <= middle && middle < p.end_us)?;
-                Some((super::token(&w.text), piece, w.start_us + self.pieces[piece].offset_us))
+                Some((super::token(&w.text), piece, w.start_us + self.pieces[piece].offset_us, w))
             })
             .collect();
         let mut claimed = vec![false; heard.len()];
@@ -124,7 +125,7 @@ impl Alignment {
             if places[i].is_none()
                 && let Some(k) = claim(word, &mut claimed)
             {
-                let (piece, cut) = (heard[k].1, &cut_words[k]);
+                let (piece, cut) = (heard[k].1, heard[k].3);
                 places[i] = Some((piece, cut.start_us, cut.end_us.max(cut.start_us)));
             }
         }
@@ -370,6 +371,27 @@ mod tests {
         };
         let word = Word { start_us: 15_010_000, end_us: 15_070_000, text: "ok".into(), probability: 1.0 };
         assert_eq!(alignment.places(&[word], &[]), [Some((0, 10_000_000, 10_000_000))]);
+    }
+
+    #[test]
+    fn a_word_the_cut_heard_keeps_the_times_the_cut_heard_it_at() {
+        let alignment = Alignment {
+            pieces: vec![Piece { start_us: 1_000_000, end_us: 3_000_000, offset_us: 9_000_000 }],
+            matched: 1.0,
+            cut_duration_us: 3_000_000,
+            cut_pauses: Vec::new(),
+            recording_pauses: Vec::new(),
+        };
+        let word = |start_us: i64, text: &str| Word {
+            start_us,
+            end_us: start_us + 200_000,
+            text: text.into(),
+            probability: 1.0,
+        };
+        // "intro" plays before the piece, so the cut's recognition of "tak" is its second word.
+        let cut = [word(100_000, "intro"), word(1_500_000, "tak")];
+        // Recognition placed "tak" 0.8 s early in the recording, in the pause before the piece.
+        assert_eq!(alignment.places(&[word(9_700_000, "tak")], &cut), [Some((0, 1_500_000, 1_700_000))]);
     }
 
     fn tone_frames(pattern: &[u8]) -> Vec<Frame> {

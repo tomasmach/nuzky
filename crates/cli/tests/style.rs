@@ -142,12 +142,16 @@ fn fixture(dir: &Path) -> Fixture {
     Fixture { dir: dir.to_path_buf(), recording, cut, pieces }
 }
 
+/// The models and stored transcripts of tmp-test, as scripts/check.sh runs tests.
+fn data() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test/xdg/data")
+}
+
 fn capopen(fixture: &Fixture, args: &[&Path]) -> Output {
-    let xdg = fixture.dir.join("xdg");
     run(Command::new(env!("CARGO_BIN_EXE_capopen"))
         .args(args)
-        .env("XDG_DATA_HOME", xdg.join("data"))
-        .env("XDG_CACHE_HOME", xdg.join("cache")))
+        .env("XDG_DATA_HOME", data())
+        .env("XDG_CACHE_HOME", fixture.dir.join("cache")))
 }
 
 /// A project with the recording as one main-track clip per piece, or one clip for all of it.
@@ -183,9 +187,7 @@ fn project(fixture: &Fixture, name: &str, pieces: Option<&[(f64, f64)]>) -> Path
 fn learns_the_creators_style_and_scores_cuts_against_it() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let dir = root.join("tmp-test/style-tests").join(std::process::id().to_string());
-    std::fs::create_dir_all(dir.join("xdg/data/capopen")).unwrap();
-    std::os::unix::fs::symlink(root.join("tmp-test/xdg/data/capopen/models"), dir.join("xdg/data/capopen/models"))
-        .unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
     let fixture = fixture(&dir);
 
     // Learning the same pair twice gives the same EDIT.md, byte for byte.
@@ -202,7 +204,7 @@ fn learns_the_creators_style_and_scores_cuts_against_it() {
     assert_eq!(style, std::fs::read_to_string(&second).unwrap());
     let refused = Command::new(env!("CARGO_BIN_EXE_capopen"))
         .args([Path::new("style"), Path::new("learn"), Path::new("--out"), &first, &fixture.recording, &fixture.cut])
-        .env("XDG_DATA_HOME", dir.join("xdg/data"))
+        .env("XDG_DATA_HOME", data())
         .output()
         .unwrap();
     assert!(!refused.status.success(), "an existing EDIT.md may hold the creator's own changes");
@@ -227,9 +229,10 @@ fn learns_the_creators_style_and_scores_cuts_against_it() {
         "{style}"
     );
     assert!(style.contains("Closing calls to action, 1 seen"), "{style}");
-    for section in style.split("\n#").skip(1).filter(|s| !s.contains("Seen too rarely for a rule")) {
+    let overview = ["# Settings", "# What gets cut", "# Seen too rarely for a rule"];
+    for section in style.split("\n#").skip(1).filter(|s| !overview.iter().any(|o| s.starts_with(o))) {
         let examples = section.lines().filter(|l| l.starts_with("- ")).count();
-        assert!(examples == 0 || examples >= 3, "a rule needs three examples: {section}");
+        assert!(examples >= 3, "a rule needs three examples: {section}");
     }
 
     // A cut of exactly the creator's pieces matches; keeping everything has every creator word

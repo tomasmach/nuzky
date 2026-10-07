@@ -15,6 +15,7 @@ const MASK_WIDTH: usize = 270;
 /// Framing is compared on frames this wide.
 const SMALL_WIDTH: usize = 72;
 /// Pictures of longer cuts are not analysed: every frame is kept in memory, about 25 kB each.
+/// The reason `picture` gives says this length too.
 const MAX_CUT_US: i64 = 5 * 60 * 1_000_000;
 /// Framing is measured about this often within a piece, and this far from its ends.
 const SAMPLE_US: i64 = 500_000;
@@ -58,6 +59,8 @@ pub struct ZoomChange {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Picture {
+    /// Why the picture was not analysed, if it was not.
+    pub skipped: Option<String>,
     pub captions: Vec<Caption>,
     /// Top and bottom of the caption area, as fractions of the frame height.
     pub caption_band: Option<(f32, f32)>,
@@ -66,12 +69,16 @@ pub struct Picture {
 }
 
 pub fn picture(recording: &Asset, cut: &Asset, alignment: &Alignment, cancelled: &dyn Fn() -> bool) -> Result<Picture> {
-    if recording.kind != AssetKind::Video || cut.kind != AssetKind::Video || cut.duration_us > MAX_CUT_US {
-        return Ok(Picture::default());
+    let skipped = |why: &str| Ok(Picture { skipped: Some(why.into()), ..Picture::default() });
+    if recording.kind != AssetKind::Video || cut.kind != AssetKind::Video {
+        return skipped("the recording or the cut has no picture");
+    }
+    if cut.duration_us > MAX_CUT_US {
+        return skipped("pictures are analysed in cuts up to 5 minutes long");
     }
     let frames = decode_cut(cut, cancelled)?;
     if frames.times.is_empty() {
-        return Ok(Picture::default());
+        return skipped("no frame of the cut could be decoded");
     }
     let (captions, caption_band) = captions(&frames);
     let keep_rows = |row: usize| {
@@ -83,7 +90,7 @@ pub fn picture(recording: &Asset, cut: &Asset, alignment: &Alignment, cancelled:
     let shots = shots(&frames, alignment, &keep_rows);
     let framing = framing(recording, cut, &frames, &shots, &keep_rows, cancelled)?;
     let zooms = zooms(&framing, &frames, &shots, &keep_rows);
-    Ok(Picture { captions, caption_band, framing, zooms })
+    Ok(Picture { skipped: None, captions, caption_band, framing, zooms })
 }
 
 /// The pieces as the picture shows them. Sound puts a cut anywhere in its pause, the picture

@@ -113,7 +113,10 @@ fn recording(path: &Path, language: &str, store: &TranscriptStore, cache: &Path)
         "{} has no picture: style learns from and scores video recordings",
         path.display()
     );
-    if let Some(record) = store.get(&asset)? {
+    // A language asked for explicitly corrects a recognition stored in another one.
+    if let Some(record) = store.get(&asset)?
+        && (language == "auto" || record.language == language)
+    {
         return Ok(Recording { asset, record });
     }
     let model = best_model();
