@@ -76,7 +76,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Analyze>(
             "analyze",
-            "Start local asset analysis. Poll job(get). Source microseconds. silences: threshold_db, min_silence_us (400000), pad_us (120000); loudness: window_us (100000), RMS dBFS; scenes: threshold (0.18), min_gap_us (300000); fillers: reads stored source words, transcribe first. Review filler suggestions in context.",
+            "Start local asset analysis. Poll job(get). Source microseconds. silences: threshold_db, min_silence_us (400000), pad_us (120000); loudness: window_us (100000, wider for media over ten hours; at most 360000 values), RMS dBFS; scenes: threshold (0.18), min_gap_us (300000); fillers: reads stored source words, transcribe first. Review filler suggestions in context.",
         )?,
         tool::<params::Transcribe>(
             "transcribe",

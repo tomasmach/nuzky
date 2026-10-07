@@ -253,6 +253,10 @@ impl Backend {
             state.project.asset(&args.asset_id).with_context(|| format!("UNKNOWN_ASSET: {}", args.asset_id))?.clone();
         asset.path = self.resolve(&asset.path).to_string_lossy().into_owned();
         ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
+        let window = matches!(args.kind, AnalysisKind::Loudness)
+            .then(|| loudness_window(asset.duration_us, args.params.window_us))
+            .transpose()?
+            .unwrap_or_default();
         let transcript = if matches!(args.kind, AnalysisKind::Fillers) {
             let record =
                 self.host.transcripts.get(&asset)?.context("TRANSCRIPT_MISSING: transcribe this asset first")?;
@@ -267,7 +271,7 @@ impl Backend {
             let p = args.params;
             let result = match args.kind {
                 AnalysisKind::Silences => json!({"ranges": capopen_analysis::silences(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) })?}),
-                AnalysisKind::Loudness => { let window = p.window_us.unwrap_or(100_000); json!({"window_us": window, "dbfs": capopen_analysis::loudness(&asset, &cache, window)?}) },
+                AnalysisKind::Loudness => json!({"window_us": window, "dbfs": capopen_analysis::loudness(&asset, &cache, window)?}),
                 AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
             };
@@ -474,6 +478,20 @@ impl Backend {
     }
 }
 
+/// An hour in 10 ms windows; longer media needs wider windows so results stay bounded.
+const MAX_LOUDNESS_VALUES: i64 = 360_000;
+const MAX_LOUDNESS_WINDOW_US: i64 = 3_600_000_000;
+
+fn loudness_window(duration_us: i64, window_us: Option<i64>) -> Result<i64> {
+    let min = (duration_us / MAX_LOUDNESS_VALUES + 1).max(10_000);
+    let window = window_us.unwrap_or(min.max(100_000));
+    ensure!(
+        (min..=MAX_LOUDNESS_WINDOW_US).contains(&window),
+        "INVALID_ARGUMENTS: loudness window_us must be {min}..={MAX_LOUDNESS_WINDOW_US} for this asset"
+    );
+    Ok(window)
+}
+
 /// Agents add media as existing local files, as import_media does; projects may keep missing ones.
 fn check_new_assets(edits: &[EditCmd]) -> Result<()> {
     for edit in edits {
@@ -625,6 +643,19 @@ mod tests {
         assert!(host.session.state().unwrap().open_run.is_some());
         drop((agent, viewer));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn loudness_windows_stay_bounded_for_long_media() {
+        let hour = 3_600_000_000;
+        assert_eq!(loudness_window(hour, None).unwrap(), 100_000);
+        assert_eq!(loudness_window(hour, Some(10_001)).unwrap(), 10_001);
+        assert!(loudness_window(hour, Some(1)).unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"));
+        assert!(loudness_window(hour, Some(MAX_LOUDNESS_WINDOW_US + 1)).is_err());
+        let day = 24 * hour;
+        let wide = loudness_window(day, None).unwrap();
+        assert!(wide > 100_000 && day / wide <= MAX_LOUDNESS_VALUES);
+        assert!(loudness_window(day, Some(100_000)).is_err());
     }
 
     #[test]
