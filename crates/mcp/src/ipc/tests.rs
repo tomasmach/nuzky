@@ -226,3 +226,20 @@ fn cancelled_transcription_never_loads_models() {
     .unwrap_err();
     assert!(error.to_string().starts_with("CANCELLED"));
 }
+
+#[test]
+fn token_is_ready_before_the_socket_and_a_failed_bind_leaves_neither() {
+    let f = Fixture::new();
+    // Unix socket paths are limited to about 108 bytes, so binding this one fails.
+    let long = f.dir.join(format!("{}.sock", "x".repeat(120)));
+    let error = Listener::at(f.host.clone(), long.clone()).err().unwrap();
+    assert!(error.to_string().starts_with("IPC_UNAVAILABLE"), "{error:#}");
+    assert!(!long.with_extension("token").exists() && !long.exists());
+    let listener = f.listener();
+    assert!(f.socket.exists() && f.socket.with_extension("token").exists());
+    let remote = Remote::at(&f.socket, false).unwrap().unwrap();
+    assert_ne!(remote.call("get_state".into(), json!({})).unwrap().is_error, Some(true));
+    drop(remote);
+    drop(listener);
+    assert!(!f.socket.exists() && !f.socket.with_extension("token").exists());
+}

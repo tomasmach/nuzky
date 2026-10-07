@@ -110,14 +110,16 @@ impl Listener {
         private_directory(path.parent().context("IPC_UNAVAILABLE: no socket directory")?)?;
         remove(&path)?;
         remove(&path.with_extension("token"))?;
-        let listener = UnixListener::bind(&path).context("IPC_UNAVAILABLE: binding socket")?;
+        // Dropping the owner on any error below removes both endpoint files.
         let mut owner = Self { path, stop: Arc::default(), connections: Arc::default(), worker: None };
-        fs::set_permissions(&owner.path, Permissions::from_mode(0o600))?;
         let mut random = [0u8; 32];
         File::open("/dev/urandom")?.read_exact(&mut random)?;
         let token = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        // A client that finds the socket must also find its token.
         let mut token_file = security::create_token(&owner.path.with_extension("token"))?;
         token_file.write_all(token.as_bytes())?;
+        let listener = UnixListener::bind(&owner.path).context("IPC_UNAVAILABLE: binding socket")?;
+        fs::set_permissions(&owner.path, Permissions::from_mode(0o600))?;
         listener.set_nonblocking(true)?;
         let stop = owner.stop.clone();
         let connections = owner.connections.clone();
