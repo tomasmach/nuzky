@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, errorText } from "./api";
+import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
 import type { Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition } from "./types";
@@ -278,6 +278,7 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   toast: (t) => {
     const id = ++toastId;
+    if (t.kind === "error") t = { ...t, text: plainError(t.text) };
     set({ toasts: [...get().toasts.slice(-3), { ...t, id }] });
     window.setTimeout(() => get().dismissToast(id), t.kind === "error" ? 8000 : t.action ? 7000 : 5000);
   },

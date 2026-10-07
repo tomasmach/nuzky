@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { AlertCircle } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api, errorText } from "./lib/api";
+import { api, errorText, plainError } from "./lib/api";
 import { followPointer } from "./lib/drag";
 import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
@@ -247,7 +247,7 @@ function RecoveryDialog() {
       useEditor.setState({ saveState: "saved" });
       if (action === "restore") useEditor.getState().toast({ kind: "success", text: "Previous version restored", action: undoAction(snap) });
     } catch (e) {
-      setError(errorText(e));
+      setError(plainError(errorText(e)));
       setBusy(false);
     }
   };
@@ -354,7 +354,7 @@ function BootScreen() {
       await open?.();
       await boot();
     } catch (e) {
-      setError(errorText(e));
+      setError(plainError(errorText(e)));
       setBusy(false);
       api.listProjects().then(setProjects, () => setProjects([]));
     }

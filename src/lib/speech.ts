@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
-import { api, errorText } from "./api";
+import { api, errorText, plainError } from "./api";
 import { aiLocked, currentEpoch, enqueue, undoAction, useEditor, whenIdle } from "./store";
 import type { Project, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
@@ -65,7 +65,7 @@ export function useTranscriptView(): { view: TranscriptView | null; error: strin
     let live = true;
     api.transcriptView(pauseUs).then(
       (view) => live && setState((s) => ({ epoch, view: s.epoch === epoch && s.view && sameView(s.view, view) ? s.view : view, error: null })),
-      (e) => live && setState({ epoch, view: null, error: errorText(e) }),
+      (e) => live && setState({ epoch, view: null, error: plainError(errorText(e)) }),
     );
     return () => {
       live = false;

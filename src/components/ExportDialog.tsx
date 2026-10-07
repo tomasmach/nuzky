@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { videoDir, join } from "@tauri-apps/api/path";
 import { AlertCircle, AlertTriangle, CheckCircle2, Download, FolderOpen, X } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { api, errorText, plainError } from "../lib/api";
 import { formatLabel } from "../lib/presets";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
 import { US, formatTime } from "../lib/time";
@@ -256,7 +256,7 @@ export function ExportDialog() {
           {failed && (
             <div className="flex items-start gap-2 rounded-md bg-danger/10 p-3 text-[13px] text-danger" role="alert">
               <AlertCircle size={16} className="mt-px shrink-0" />
-              <span>Export failed: {failed}</span>
+              <span>Export failed: {plainError(failed)}</span>
             </div>
           )}
           {job?.status === "cancelled" && <p className="text-[12px] text-muted">Export cancelled. The partial file was removed.</p>}

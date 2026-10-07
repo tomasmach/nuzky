@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, Loader2, X } from "lucide-react";
-import { api, errorText } from "../../lib/api";
+import { api, errorText, plainError } from "../../lib/api";
 import { useSpeech } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import type { JobEvent, SpeechModel } from "../../lib/types";
@@ -44,7 +44,7 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
         setModels(list);
         setModelsError(null);
       },
-      (e) => setModelsError(errorText(e)),
+      (e) => setModelsError(plainError(errorText(e))),
     );
   }, [running?.id]);
   return (
@@ -103,7 +103,7 @@ export function JobError({ job }: { job: JobEvent | undefined }) {
   return (
     <p className="flex gap-1.5 text-[12px] text-danger" role="alert">
       <AlertCircle size={14} className="mt-px shrink-0" />
-      {job.message}
+      {plainError(job.message ?? "")}
     </p>
   );
 }

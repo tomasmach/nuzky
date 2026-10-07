@@ -100,6 +100,9 @@ Text-based editing, as in CapCut. Transcribe timeline recognises each video file
 ### Starting
 Until the open project is ready the window says "Starting CapOpen…". If that fails, it says why and offers Try again, New project and the recent projects to open instead.
 
+### Errors
+An error says in plain words what happened and what to do next. The engine's coded errors (`READ_ONLY: …`, `EDIT_REJECTED: …` and the like) are translated where they are shown; an error without a known code is shown as it came.
+
 ### Saving
 Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text. An action that changes nothing, such as a failed import, leaves the status as it was.
 
