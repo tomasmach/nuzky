@@ -14,8 +14,8 @@ use super::{Alignment, Piece};
 const MASK_WIDTH: usize = 270;
 /// Framing is compared on frames this wide.
 const SMALL_WIDTH: usize = 72;
-/// Pictures of longer cuts are not analysed: every frame is kept in memory.
-const MAX_CUT_US: i64 = 10 * 60 * 1_000_000;
+/// Pictures of longer cuts are not analysed: every frame is kept in memory, about 25 kB each.
+const MAX_CUT_US: i64 = 5 * 60 * 1_000_000;
 /// Framing is measured about this often within a piece, and this far from its ends.
 const SAMPLE_US: i64 = 500_000;
 const EDGE_US: i64 = 200_000;
@@ -70,6 +70,9 @@ pub fn picture(recording: &Asset, cut: &Asset, alignment: &Alignment, cancelled:
         return Ok(Picture::default());
     }
     let frames = decode_cut(cut, cancelled)?;
+    if frames.times.is_empty() {
+        return Ok(Picture::default());
+    }
     let (captions, caption_band) = captions(&frames);
     let keep_rows = |row: usize| {
         caption_band.is_none_or(|(top, bottom)| {
@@ -111,7 +114,8 @@ struct CutFrames {
     /// White pixels next to black ones, one bit each, `words` u64 per row of MASK_WIDTH.
     masks: Vec<Vec<u64>>,
     mask_height: usize,
-    small: Vec<Gray>,
+    /// Grey SMALL_WIDTH pictures.
+    small: Vec<Vec<u8>>,
     small_height: usize,
 }
 
@@ -132,7 +136,8 @@ fn decode_cut(cut: &Asset, cancelled: &dyn Fn() -> bool) -> Result<CutFrames> {
         let rgba = decoder.convert(&frame, t, w as u32, h as u32)?;
         let (rgba, _, _) = orient(&rgba.data, w as u32, h as u32, cut);
         out.masks.push(caption_mask(&rgba, mask_height));
-        out.small.push(Gray::shrink(&rgba, MASK_WIDTH, mask_height, SMALL_WIDTH, small_height));
+        let small = Gray::shrink(&rgba, MASK_WIDTH, mask_height, SMALL_WIDTH, small_height);
+        out.small.push(small.px.iter().map(|&v| v.round() as u8).collect());
         out.times.push(t);
     }
     Ok(out)
@@ -338,8 +343,10 @@ fn framing(
     let mut previous: Option<(usize, Fit)> = None;
     for (i, &(time, piece)) in wanted.iter().enumerate() {
         let Some(raw) = &sources[i] else { continue };
-        let Some(frame) = frames.times.iter().rposition(|&t| t <= time).map(|f| &frames.small[f]) else { continue };
-        let pair = Pair { cut: frame, raw, fit, keep_rows };
+        let Some(f) = frames.times.iter().rposition(|&t| t <= time) else { continue };
+        let frame =
+            Gray { w: SMALL_WIDTH, h: frames.small_height, px: frames.small[f].iter().map(|&v| v as f32).collect() };
+        let pair = Pair { cut: &frame, raw, fit, keep_rows };
         let tracked = previous.filter(|(p, _)| *p == piece).map(|(_, start)| pair.descend(start));
         let best = match tracked {
             Some(found) if found.score >= MIN_MATCH => found,
@@ -413,11 +420,14 @@ fn jump(frames: &CutFrames, from: i64, to: i64, keep_rows: &dyn Fn(usize) -> boo
         .filter(|&f| frames.times[f] > from && frames.times[f] <= to)
         .map(|f| {
             let (a, b) = (&frames.small[f - 1], &frames.small[f]);
-            let diff: f32 =
-                rows.iter().flat_map(|&r| (0..a.w).map(move |x| r * a.w + x)).map(|p| (a.px[p] - b.px[p]).abs()).sum();
+            let diff: u32 = rows
+                .iter()
+                .flat_map(|&r| (0..SMALL_WIDTH).map(move |x| r * SMALL_WIDTH + x))
+                .map(|p| u32::from(a[p].abs_diff(b[p])))
+                .sum();
             (frames.times[f], diff)
         })
-        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
         .map_or((from + to) / 2, |(t, _)| t)
 }
 

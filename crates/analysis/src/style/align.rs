@@ -36,6 +36,8 @@ const RECOGNITION_US: i64 = 1_000_000;
 const QUIET: f32 = -1.6;
 /// Silences shorter than this are gaps inside words.
 const MIN_PAUSE: usize = 8;
+/// Most candidate places a cut is matched against.
+const MAX_PLACES: usize = 400;
 /// Candidate places closer than this are the same place.
 const SAME_PLACE: i64 = 3;
 
@@ -277,6 +279,10 @@ fn candidates(source: &[Frame], target: &[Frame], cancelled: &dyn Fn() -> bool) 
             _ => offsets.push((offset, cost)),
         }
     }
+    // The best places are enough; a long cut of a long recording would otherwise find thousands.
+    offsets.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    offsets.truncate(MAX_PLACES);
+    offsets.sort_by_key(|&(offset, _)| offset);
     Ok(offsets.into_iter().map(|(offset, _)| offset).collect())
 }
 
@@ -295,14 +301,14 @@ fn viterbi(source: &[Frame], target: &[Frame], offsets: &[i64]) -> Vec<Option<us
         distance(&target[t], &source[at as usize])
     };
     let mut cost: Vec<f32> = (0..states).map(|k| emit(0, k)).collect();
-    let mut from = vec![0u32; target.len() * states];
+    let mut from = vec![0u16; target.len() * states];
     for t in 1..target.len() {
         let (best, best_cost) =
             cost.iter().enumerate().min_by(|a, b| a.1.total_cmp(b.1)).map(|(k, c)| (k, *c)).unwrap_or((none, 0.0));
         for k in 0..states {
             let (previous, stay) =
                 if cost[k] <= best_cost + SWITCH { (k, cost[k]) } else { (best, best_cost + SWITCH) };
-            from[t * states + k] = previous as u32;
+            from[t * states + k] = previous as u16;
             cost[k] = stay + emit(t, k);
         }
         // Costs only compare with each other; keeping them small keeps f32 exact enough.
