@@ -220,7 +220,12 @@ pub struct Gpu {
 
 impl Gpu {
     pub fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        // Debug builds name every GPU object by default. Vulkan loaders before 1.4.345 look the device
+        // up for each name without the lock that guards another renderer's new instance freeing unused
+        // drivers, so preview and export starting together crashed. WGPU_DEBUG=1 still names them.
+        let mut options = wgpu::InstanceDescriptor::new_without_display_handle();
+        options.flags.remove(wgpu::InstanceFlags::DEBUG);
+        let instance = wgpu::Instance::new(options.with_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
@@ -637,6 +642,47 @@ mod tests {
         let out = gpu.render(2, 2, [0.0, 0.0, 0.0, 1.0], &[Draw::Layer(layer)]).unwrap();
         let grey = (0.2126 * 200.0 + 0.7152 * 100.0 + 0.0722 * 50.0) * 128.0 / 255.0;
         assert!(out[..3].iter().all(|&v| (v as f32 - grey).abs() <= 1.5), "{:?} vs {grey}", &out[..4]);
+    }
+
+    /// Preview keeps drawing while an export or an agent's contact sheet starts its own renderer.
+    /// The Vulkan loader freed driver records under the drawing threads and crashed the process.
+    #[test]
+    fn renderers_start_and_stop_while_others_draw() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let draw = |gpu: &mut Gpu| {
+            let layer = Layer {
+                image: Image { width: 1, height: 1, data: Arc::new(vec![80, 100, 120, 255]) },
+                corners: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]],
+                uv_rotation: 0,
+                mirror: false,
+                opacity: 1.0,
+                adjust: Adjust::default(),
+                blur: 0.0,
+                clip: None,
+                transfer: Transfer::Sdr,
+            };
+            assert_eq!(gpu.render(1, 1, [0.0; 4], &[Draw::Layer(layer)]).unwrap(), [80, 100, 120, 255]);
+        };
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    let mut gpu = Gpu::new().unwrap();
+                    while !done.load(Ordering::Relaxed) {
+                        draw(&mut gpu);
+                    }
+                });
+            }
+            let starters: Vec<_> =
+                (0..4).map(|_| scope.spawn(|| (0..8).for_each(|_| draw(&mut Gpu::new().unwrap())))).collect();
+            let started: Vec<_> = starters.into_iter().map(|starter| starter.join()).collect();
+            done.store(true, Ordering::Relaxed);
+            for result in started {
+                if let Err(panic) = result {
+                    std::panic::resume_unwind(panic);
+                }
+            }
+        });
     }
 
     #[test]
