@@ -340,7 +340,7 @@ function Divider({ height, max, onChange }: { height: number; max: number; onCha
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api } });
 
-async function boot() {
+async function startEditor() {
   const boot = await api.boot();
   setLimits(boot.limits);
   useEditor.setState({ previewUrl: boot.previewUrl, playing: boot.transport.playing, timeUs: boot.transport.tUs });
@@ -360,7 +360,7 @@ function BootScreen() {
     setError(null);
     try {
       await open?.();
-      await boot();
+      await startEditor();
     } catch (e) {
       setError(plainError(errorText(e)));
       setBusy(false);
