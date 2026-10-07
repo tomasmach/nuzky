@@ -242,7 +242,7 @@ def corrections(r):
             {'toast': undo, 'word': fixed(), 'captions': caption_texts(r)})
     r.s.run('document.activeElement?.blur()')
     r.key('z', ctrlKey=True, shiftKey=True)
-    r.check('redo brings both back', wait(lambda: caption_texts(r) == keep, 10) and fixed().get('text') == right,
+    r.check('redo brings both back', wait(lambda: caption_texts(r) == keep and fixed().get('text') == right, 10),
             {'word': fixed(), 'captions': caption_texts(r)})
     _, redrawn = preview_redraw(r, 'caption-corrected', before)
     r.check('the preview draws the corrected caption', redrawn, 'the preview stayed the same')
