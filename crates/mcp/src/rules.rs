@@ -34,7 +34,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("undo_run", Never, true, false, false),
     rules("import_media", Never, false, false, false),
     rules("inspect_frames", Always, false, true, false),
-    rules("analyze", Never, false, false, true),
+    // Retakes only read stored words and answer at once.
+    rules("analyze", When(|args| args["kind"] == "retakes"), false, false, true),
     rules("transcribe", Never, false, false, true),
     rules("get_transcript", Always, false, true, false),
     rules("edit_transcript", When(|args| args["dry_run"] == true), true, false, false),
@@ -83,6 +84,8 @@ mod tests {
         assert!(job.reads(&json!({"action":"get"})) && !job.reads(&json!({"action":"cancel"})));
         let edit = find("edit_transcript").unwrap();
         assert!(edit.reads(&json!({"dry_run":true})) && !edit.reads(&json!({})));
+        let analyze = find("analyze").unwrap();
+        assert!(analyze.reads(&json!({"kind":"retakes"})) && !analyze.reads(&json!({"kind":"silences"})));
         assert!(find("unknown").is_none());
     }
 }

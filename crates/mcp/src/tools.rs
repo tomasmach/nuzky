@@ -279,8 +279,22 @@ impl Backend {
     }
 
     fn analyze(&self, args: Analyze, state: &SessionState) -> Result<Value> {
-        let mut asset =
-            state.project.asset(&args.asset_id).with_context(|| format!("UNKNOWN_ASSET: {}", args.asset_id))?.clone();
+        if matches!(args.kind, AnalysisKind::Retakes) {
+            // Pure computation over stored words, so it answers at once instead of as a job.
+            ensure!(args.asset_id.is_none(), "INVALID_ARGUMENTS: retakes reads the whole timeline; omit asset_id");
+            let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+            ensure!(
+                derived.untranscribed.is_empty(),
+                "TRANSCRIPT_MISSING: transcribe every heard asset first, untranscribed: {}",
+                derived.untranscribed.join(", ")
+            );
+            let mut result = serde_json::to_value(capopen_analysis::retakes(&derived.words))?;
+            result["time_basis"] = json!("timeline");
+            result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
+            return Ok(result);
+        }
+        let asset_id = args.asset_id.context("INVALID_ARGUMENTS: asset_id is required for this kind")?;
+        let mut asset = state.project.asset(&asset_id).with_context(|| format!("UNKNOWN_ASSET: {asset_id}"))?.clone();
         asset.path = self.resolve(&asset.path).to_string_lossy().into_owned();
         ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
         let window = matches!(args.kind, AnalysisKind::Loudness)
@@ -304,6 +318,7 @@ impl Backend {
                 AnalysisKind::Loudness => json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
+                AnalysisKind::Retakes => anyhow::bail!("Retakes are answered without a job"),
             };
             check_cancel(&cancel)?;
             Ok(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result}))
