@@ -24,6 +24,14 @@ const QUALITIES: { id: ExportRequest["quality"]; label: string; bitsPerPixel: nu
 ];
 const AUDIO_BPS = 192_000;
 const STORAGE_KEY = "capopen.export";
+const PRESETS: { id: "custom" | "reels"; label: string }[] = [
+  { id: "custom", label: "Custom" },
+  { id: "reels", label: "Reels & TikTok" },
+];
+/** What the Reels & TikTok preset fixes; the engine refuses anything else with it. */
+const REELS = { resolution: 1080, fps: 30 } as const;
+const REELS_NEEDS_916 = "Reels & TikTok needs a 9:16 video. Switch Ratio under the preview to 9:16.";
+const isNineSixteen = (canvas: Canvas) => canvas.width * 16 === canvas.height * 9;
 
 /** Output size for a short side, keeping the canvas aspect and even dimensions. */
 export function outputSize(canvas: Canvas, shortSide: number) {
@@ -69,10 +77,13 @@ function loadOptions(canvas: Canvas): ExportRequest {
     resolution: RESOLUTIONS.some((r) => r.id === short) ? short : 1080,
     fps: FRAME_RATES.includes(canvas.fps) ? canvas.fps : 30,
     quality: "recommended",
+    preset: null,
   };
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<ExportRequest> | null;
-    return { ...fallback, ...(saved?.resolution && { resolution: saved.resolution }), ...(saved?.quality && { quality: saved.quality }) };
+    const options = { ...fallback, ...(saved?.resolution && { resolution: saved.resolution }), ...(saved?.quality && { quality: saved.quality }) };
+    // The preset comes back where it applies; a project in another format starts from its own settings.
+    return saved?.preset === "reels" && isNineSixteen(canvas) ? { ...options, ...REELS, preset: "reels" } : options;
   } catch {
     return fallback;
   }
@@ -92,7 +103,7 @@ export function ExportDialog() {
   const dialog = useRef<HTMLDivElement>(null);
   const running = job?.status === "running";
 
-  // Options start from the project each time the dialog opens; resolution and quality are remembered.
+  // Options start from the project each time the dialog opens; preset, resolution and quality are remembered.
   useEffect(() => {
     const canvas = useEditor.getState().snap?.project.canvas;
     if (open && canvas) setOptions(loadOptions(canvas));
@@ -141,9 +152,13 @@ export function ExportDialog() {
   const size = outputSize(project.canvas, options.resolution);
   const setOption = (patch: Partial<ExportRequest>) => {
     const next = { ...options, ...patch };
+    // Another resolution or frame rate is no longer the preset; quality may change within it.
+    if (next.preset === "reels" && (next.resolution !== REELS.resolution || next.fps !== REELS.fps)) next.preset = null;
     setOptions(next);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ resolution: next.resolution, quality: next.quality }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ resolution: next.resolution, quality: next.quality, preset: next.preset ?? null }));
   };
+  const pickPreset = (id: "custom" | "reels") => setOption(id === "reels" ? { ...REELS, quality: "recommended", preset: "reels" } : { preset: null });
+  const reelsBlocked = options.preset === "reels" && !isNineSixteen(project.canvas);
 
   /** `epoch`: the project the export was asked for, taken before any wait. `replace`: overwriting the file was confirmed. */
   const run = async (path: string, replace: boolean, epoch = currentEpoch()) => {
@@ -200,6 +215,19 @@ export function ExportDialog() {
         <div className="flex flex-col gap-4 p-4">
           <fieldset disabled={settingsLocked} className="flex flex-col gap-4 disabled:opacity-50">
             <div className="flex flex-col gap-1.5">
+              <span className="text-[12px] text-muted">Preset</span>
+              <Segmented label="Preset" value={options.preset ?? "custom"} onChange={pickPreset} options={PRESETS} />
+              {options.preset === "reels" &&
+                (reelsBlocked ? (
+                  <p className="flex items-start gap-1.5 text-[12px] text-fg" role="alert">
+                    <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
+                    {REELS_NEEDS_916}
+                  </p>
+                ) : (
+                  <p className="tabular text-[12px] text-muted">Loudness −14 LUFS, applied to the file</p>
+                ))}
+            </div>
+            <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between">
                 <span className="text-[12px] text-muted">Resolution</span>
                 <span className="tabular text-[12px] text-fg">
@@ -234,7 +262,9 @@ export function ExportDialog() {
           {job && running && (
             <div className="flex flex-col gap-2" role="status">
               <div className="flex justify-between text-[12px]">
-                <span className="text-fg">Rendering… {Math.round(job.progress * 100)}%</span>
+                <span className="text-fg">
+                  {job.phase ?? "Rendering"}… {Math.round(job.progress * 100)}%
+                </span>
                 <span className="tabular text-muted">{eta}</span>
               </div>
               <ProgressBar value={job.progress} label={job.label} />
@@ -292,11 +322,11 @@ export function ExportDialog() {
             <>
               <Button onClick={close}>Close</Button>
               {failed && last.current ? (
-                <Button variant="primary" data-autofocus onClick={() => run(last.current!.path, last.current!.replace)}>
+                <Button variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={() => run(last.current!.path, last.current!.replace)}>
                   <Download size={15} /> Retry
                 </Button>
               ) : (
-                <Button variant="primary" data-autofocus onClick={pickAndRun}>
+                <Button variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={pickAndRun}>
                   <Download size={15} /> Export…
                 </Button>
               )}

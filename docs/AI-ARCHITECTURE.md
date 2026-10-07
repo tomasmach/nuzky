@@ -63,7 +63,7 @@ All times are integer microseconds on the timeline unless a field says `source`.
 | `get_transcript(range?)` | Numbered timeline words and sentences, `transcript_key`, untranscribed clips |
 | `edit_transcript(run_id?, transcript_key, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text. A dry run needs no open run |
 | `build_captions(run_id, style?, max_words?, max_chars?)` | Deterministic caption clips on one captions track, never across a cut; the Reel style by default |
-| `export_video(path, resolution, fps, quality)` | Job exporting a snapshot |
+| `export_video(path, preset? or resolution + fps, quality?)` | Job exporting a snapshot; `preset: "reels"` writes 1080x1920 at 30 fps with the sound levelled to -14 LUFS, true peak at most -1 dBTP |
 | `job(job_id, get | cancel)` | Progress, result, cancel |
 
 `RippleDeleteRanges { ranges, keep_track_ids? }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` never deletes other tracks.

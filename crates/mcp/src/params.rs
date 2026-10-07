@@ -1,6 +1,6 @@
 use capopen_engine::{
     edit::{EditCmd, TimeRange},
-    export::Quality,
+    export::{Delivery, Quality},
     model::TextStyle,
 };
 use schemars::JsonSchema;
@@ -151,10 +151,16 @@ pub struct Captions {
 #[serde(deny_unknown_fields)]
 pub struct Export {
     pub path: String,
-    /// Short side in pixels, e.g. 1080 for a 1080x1920 reel.
-    pub resolution: u32,
-    pub fps: u32,
-    pub quality: Quality,
+    /// "reels": Instagram Reels and TikTok, 1080x1920 at 30 fps, loudness levelled to -14 LUFS
+    /// with true peak at most -1 dBTP. Needs a 9:16 canvas.
+    pub preset: Option<Delivery>,
+    /// Short side in pixels, e.g. 1080 for a 1080x1920 reel. Required without preset; with a
+    /// preset leave it out or give the preset's own value.
+    pub resolution: Option<u32>,
+    /// Required without preset; with a preset leave it out or give the preset's own value.
+    pub fps: Option<u32>,
+    /// Defaults to recommended.
+    pub quality: Option<Quality>,
 }
 
 impl Captions {

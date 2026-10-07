@@ -12,7 +12,7 @@ use capopen_analysis::CaptionGrouping;
 use capopen_analysis::models_dir;
 use capopen_engine::audio::{ensure_pcm, has_audio};
 use capopen_engine::edit::new_id;
-use capopen_engine::export::{ExportOptions, Quality, export};
+use capopen_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
 use capopen_engine::model::{Asset, Project, TextStyle};
 use capopen_mcp::transcript;
 use capopen_session::{host::Host, transcripts::TranscriptStore};
@@ -163,6 +163,9 @@ pub struct ExportRequest {
     pub fps: u32,
     /// "high" | "recommended" | "small"
     pub quality: Quality,
+    /// "reels" fixes the format and levels the sound; resolution and fps are then its own.
+    #[serde(default)]
+    pub preset: Option<Delivery>,
 }
 
 impl ExportRequest {
@@ -172,6 +175,7 @@ impl ExportRequest {
             replace_existing,
             resolution: Some(self.resolution),
             fps: Some(self.fps),
+            delivery: self.preset,
             ..ExportOptions::default()
         }
     }
@@ -200,6 +204,7 @@ pub fn start_export(
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
+    check_options(&project, &request.options(replace_existing)).map_err(|e| e.to_string())?;
     let id = format!("export:{}", new_id());
     let cancel = register(app, &id).ok_or("An export is already running")?;
     let (app, cache, job_id) = (app.clone(), state.cache_dir.clone(), id.clone());
@@ -210,7 +215,7 @@ pub fn start_export(
             let mut rep = Reporter::new(&app, &job_id, "export", format!("Exporting {name}"));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 export(&project, &cache, &out, &request.options(replace_existing), &cancel, |p| {
-                    rep.progress(p.frame as f32 / p.total_frames.max(1) as f32, Some("Rendering"));
+                    rep.progress(p.fraction, Some(p.phase.label()));
                 })
             }))
             .unwrap_or_else(|p| Err(anyhow::anyhow!("Export crashed: {}", panic_text(&p))));
@@ -508,7 +513,13 @@ mod tests {
             assert_eq!(request.options(true).crf, crf);
             assert!(request.options(true).replace_existing);
             assert!(!request.options(false).replace_existing);
+            assert_eq!(request.options(true).delivery, None, "a request from before presets is a plain export");
         }
+        let reels: ExportRequest = serde_json::from_value(serde_json::json!({
+            "resolution": 1080, "fps": 30, "quality": "recommended", "preset": "reels"
+        }))
+        .unwrap();
+        assert_eq!(reels.options(false).delivery, Some(Delivery::Reels));
     }
 
     #[test]
