@@ -657,7 +657,7 @@ pub fn caption_corrections(project: &Project, derived: &Derived, changes: &[(usi
         let length = word.text.split_whitespace().count();
         let at = middle(word);
         for clip in project.tracks.iter().filter(|t| t.is_captions()).flat_map(|t| &t.clips) {
-            let ClipContent::Text { text: shown, .. } = &clip.content else { continue };
+            let ClipContent::Text { text: shown, words: timed, .. } = &clip.content else { continue };
             if !clip.contains(at) {
                 continue;
             }
@@ -671,7 +671,11 @@ pub fn caption_corrections(project: &Project, derived: &Derived, changes: &[(usi
                 .iter()
                 .filter(|w| clip.contains(middle(w)) && comparable(&w.text) == wanted)
                 .count();
-            let Some(&(start, end)) = matching.get(before).or(matching.last()) else { continue };
+            // A karaoke caption knows when each of its words is said, which also holds after its
+            // start was trimmed off; other captions count the word's earlier repeats inside them.
+            let spoken = capopen_engine::model::spoken_word(shown, timed, at - clip.start_us)
+                .and_then(|range| matching.iter().find(|&&(start, _)| start == range.start));
+            let Some(&(start, end)) = spoken.or(matching.get(before)).or(matching.last()) else { continue };
             let entry = match planned.iter().position(|(id, ..)| *id == clip.id) {
                 Some(found) => &mut planned[found],
                 None => {
@@ -999,6 +1003,42 @@ pub(crate) mod tests {
             })
         };
         assert!(plays(900_000, 1_000_000), "the kept start of \"half\" still plays: {:?}", cut.ranges);
+    }
+
+    /// "To je to." as a karaoke caption whose first word was trimmed off: correcting the last word
+    /// changes the last word, not the first one still in the text.
+    #[test]
+    fn a_correction_finds_its_word_in_a_trimmed_karaoke_caption_by_time() {
+        let (mut project, mut sources) = fixture();
+        let word =
+            |start_us, text: &str| Word { start_us, end_us: start_us + 400_000, text: text.into(), probability: 1.0 };
+        sources.insert("talk".into(), vec![word(500_000, "To"), word(1_500_000, "je"), word(2_500_000, "to.")]);
+        let timed = |text: &str, start_us| capopen_engine::model::CaptionWord {
+            text: text.into(),
+            start_us,
+            end_us: start_us + 400_000,
+        };
+        let segment = capopen_engine::edit::CaptionSegment {
+            start_us: 400_000,
+            end_us: 3_000_000,
+            text: "To je to.".into(),
+            // Timeline times, as built from the transcript.
+            words: vec![timed("To", 500_000), timed("je", 1_500_000), timed("to.", 2_500_000)],
+        };
+        project.apply(EditCmd::AddCaptions { segments: vec![segment], style: crate::params::reel_style() }).unwrap();
+        let caption = project.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].id.clone();
+        project
+            .apply(EditCmd::TrimClip {
+                clip_id: caption,
+                start_us: 1_000_000,
+                duration_us: 2_000_000,
+                source_in_us: None,
+            })
+            .unwrap();
+        let derived = Derived::new(&project, sources, vec![]);
+        let last = derived.words.iter().position(|w| w.text == "to.").unwrap();
+        let changed = caption_corrections(&project, &derived, &[(last, "tu.")]);
+        assert_eq!(changed.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>(), ["To je tu."]);
     }
 
     #[test]
