@@ -38,6 +38,8 @@ use writer::Writer;
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Save user edits after 800 ms without another edit; explicit flushes and agent edits save immediately.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(800);
+/// Continuous editing still saves this long after the oldest unsaved edit.
+pub const SAVE_MAX_WAIT: Duration = Duration::from_secs(3);
 
 struct Request {
     content: Value,

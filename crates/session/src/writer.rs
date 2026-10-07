@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use capopen_engine::Project;
 
-use crate::{SAVE_DEBOUNCE, SessionEvent, storage};
+use crate::{SAVE_DEBOUNCE, SAVE_MAX_WAIT, SessionEvent, storage};
 
 struct Snapshot {
     project: Project,
@@ -57,9 +58,13 @@ impl Writer {
 
 fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<Message>) {
     let mut pending = None;
+    let mut oldest = Instant::now();
     loop {
         let message = if pending.is_some() {
-            match rx.recv_timeout(SAVE_DEBOUNCE) {
+            // A steady stream of edits must not postpone the save past the maximum wait.
+            let wait = SAVE_DEBOUNCE.min(SAVE_MAX_WAIT.saturating_sub(oldest.elapsed()));
+            let received = if wait.is_zero() { Err(RecvTimeoutError::Timeout) } else { rx.recv_timeout(wait) };
+            match received {
                 Ok(message) => Some(message),
                 Err(RecvTimeoutError::Timeout) => {
                     if let Some(snapshot) = pending.take() {
@@ -73,7 +78,12 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<
             rx.recv().ok()
         };
         match message {
-            Some(Message::Schedule(snapshot)) => pending = Some(snapshot),
+            Some(Message::Schedule(snapshot)) => {
+                if pending.is_none() {
+                    oldest = Instant::now();
+                }
+                pending = Some(snapshot);
+            }
             Some(Message::Flush(snapshot, reply)) => {
                 pending = None;
                 let _ = reply.send(save(&path, &events, snapshot));

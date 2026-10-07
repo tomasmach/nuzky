@@ -191,6 +191,25 @@ fn save_failure_keeps_live_commit_and_retry_does_not_reapply() {
 }
 
 #[test]
+fn continuous_editing_still_saves_within_the_maximum_wait() {
+    use std::sync::mpsc;
+    let f = Fixture::new();
+    let (tx, rx) = mpsc::channel();
+    let s = ProjectSession::open(&f.0, Mode::Write, Some(tx)).unwrap();
+    let began = Instant::now();
+    for i in 0.. {
+        s.edit(rename(&format!("Edit {i}")), Some("typing".into()), Expect::default()).unwrap();
+        if rx.try_iter().any(|event| matches!(event, SessionEvent::Saved { error: None, .. })) {
+            break;
+        }
+        assert!(began.elapsed() < SAVE_MAX_WAIT + Duration::from_secs(1), "edits faster than the debounce never saved");
+        std::thread::sleep(SAVE_DEBOUNCE / 4);
+    }
+    assert!(began.elapsed() >= SAVE_MAX_WAIT.min(SAVE_DEBOUNCE * 2), "saved before the debounce could apply");
+    assert_ne!(f.disk().name, "Original");
+}
+
+#[test]
 fn begin_run_saves_pending_user_edits_before_its_checkpoint() {
     let f = Fixture::new();
     let s = f.open();
