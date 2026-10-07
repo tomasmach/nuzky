@@ -625,6 +625,9 @@ fn comparable(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()
 }
 
+/// A caption clip's id, its text and the words to replace in it, as byte ranges and new text.
+type Replacements<'a> = (&'a str, &'a str, Vec<(usize, usize, String)>);
+
 /// The new text of caption clips that show corrected words: on the Captions track, a clip whose
 /// time holds the middle of the word and whose text has the word, compared without case and the
 /// punctuation around it, gets that word replaced. Its style and timing stay. `changes` are
@@ -633,7 +636,7 @@ fn comparable(text: &str) -> String {
 pub fn caption_corrections(project: &Project, derived: &Derived, changes: &[(usize, &str)]) -> Vec<(String, String)> {
     let middle = |w: &TimelineWord| w.start_us + (w.end_us - w.start_us) / 2;
     // Per clip: its text and the replacements by byte range, both from the text before any change.
-    let mut planned: Vec<(&str, &str, Vec<(usize, usize, String)>)> = Vec::new();
+    let mut planned: Vec<Replacements> = Vec::new();
     for &(index, text) in changes {
         let Some(word) = derived.words.get(index) else { continue };
         let wanted = comparable(&word.text);
