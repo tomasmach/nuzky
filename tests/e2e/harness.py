@@ -162,14 +162,20 @@ def start(command, log, env=None):
                             start_new_session=True)
 
 
-def stop(process):
+def stop(process, timeout=5):
     try:
         os.killpg(process.pid, signal.SIGTERM)
-        process.wait(5)
+        process.wait(timeout)
     except ProcessLookupError:
         pass
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
+
+
+def started(process, port, timeout):
+    """True once `port` answers while `process` still runs; a server that exited left the port to someone else."""
+    wait(lambda: process.poll() is not None or port_busy(port), timeout)
+    return process.poll() is None and port_busy(port)
 
 
 def port_busy(port):
@@ -196,7 +202,7 @@ def run_flow(name):
         # Tauri 2 lets WebDriver drive its webview only with this set, as tauri-driver does.
         driver = start([WEBKIT_DRIVER, '--port=4444', '--host=127.0.0.1'], r.work / 'driver.log',
                        dict(r.env, TAURI_WEBVIEW_AUTOMATION='true'))
-        if not wait(lambda: port_busy(4444), 20):
+        if not started(driver, 4444, 20):
             raise RuntimeError('WebKitWebDriver did not start, see driver.log')
         r.s = Session()
         if not wait(lambda: r.s.run('return !!window.__capopen?.store.getState().snap', retries=3), 60):
@@ -326,8 +332,12 @@ class Bridge:
                                         text=True, start_new_session=True)
         self.lines, self.id = queue.Queue(), 0
         threading.Thread(target=lambda: [self.lines.put(line) for line in self.process.stdout], daemon=True).start()
-        self.rpc('initialize', {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'repro', 'version': '1'}})
-        self.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        try:
+            self.rpc('initialize', {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'repro', 'version': '1'}})
+            self.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        except BaseException:
+            stop(self.process)
+            raise
 
     def send(self, message):
         self.process.stdin.write(json.dumps(message) + '\n')

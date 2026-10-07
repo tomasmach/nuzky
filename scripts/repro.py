@@ -14,13 +14,13 @@ dialog or notification reaches the desktop. Media and models come from scripts/f
 Needs gamescope, WebKitWebDriver, Pillow and python-xlib. Vite takes port 1420 (the app's dev URL) and
 WebKitWebDriver 4444. A busy port belongs to another session, so the run stops instead of touching it.
 """
-import importlib, json, os, shutil, subprocess, sys
+import importlib, json, os, shutil, signal, subprocess, sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 TESTS = Path(__file__).resolve().parent.parent / 'tests'
 sys.path.insert(0, str(TESTS))
-from e2e.harness import FIXTURES, FLOWS, MODELS, OUT, ROOT, WEBKIT_DRIVER, port_busy, run_flow, start, stop, wait  # noqa: E402
+from e2e.harness import FIXTURES, FLOWS, MODELS, OUT, ROOT, WEBKIT_DRIVER, port_busy, run_flow, start, started, stop  # noqa: E402
 
 for module in sorted(p.stem for p in (TESTS / 'e2e').glob('*.py') if p.stem != 'harness'):
     importlib.import_module(f'e2e.{module}')
@@ -53,11 +53,18 @@ def main(args):
     if unknown:
         print(f'Unknown flow: {", ".join(unknown)}. Run python3 scripts/repro.py --list.', file=sys.stderr)
         return 2
+    # A stop request (Ctrl+C in a terminal, SIGTERM from a timeout) unwinds through the cleanup below, so Vite,
+    # WebKitWebDriver and the app do not keep running and holding their ports.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if os.environ.get('CAPOPEN_REPRO_INNER') == '1':
         OUT.mkdir(parents=True, exist_ok=True)
+        # Checked again here: the port may have been taken while the app was building.
+        if port_busy(1420):
+            print('port 1420 is in use by another session', file=sys.stderr)
+            return 1
         vite = start(['npx', 'vite', '--port', '1420', '--strictPort'], OUT / 'vite.log')
         try:
-            if not wait(lambda: port_busy(1420), 30):
+            if not started(vite, 1420, 30):
                 print('Vite did not start, see tmp-test/repro/vite.log', file=sys.stderr)
                 return 1
             for name in names:
@@ -75,8 +82,14 @@ def main(args):
     OUT.mkdir(parents=True, exist_ok=True)
     print(f'Running {", ".join(names)} in headless gamescope; its output goes to tmp-test/repro/gamescope.log', flush=True)
     with open(OUT / 'gamescope.log', 'w') as log:
-        subprocess.run(['gamescope', '--backend', 'headless', '-W', '1440', '-H', '900', '--', sys.executable, __file__, *names],
-                       cwd=ROOT, env=dict(os.environ, CAPOPEN_REPRO_INNER='1'), stdout=log, stderr=subprocess.STDOUT)
+        gamescope = subprocess.Popen(['gamescope', '--backend', 'headless', '-W', '1440', '-H', '900', '--', sys.executable,
+                                      __file__, *names], cwd=ROOT, env=dict(os.environ, CAPOPEN_REPRO_INNER='1'), stdout=log,
+                                     stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            gamescope.wait()
+        finally:
+            if gamescope.poll() is None:
+                stop(gamescope, timeout=20)
     failed = []
     for name in names:
         result_file = OUT / name / 'result.json'
