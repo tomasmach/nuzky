@@ -110,7 +110,8 @@ impl Backend {
 
     fn call_inner(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
         let read = matches!(name, "get_state" | "get_transcript" | "inspect_frames")
-            || (name == "job" && arguments["action"] == "get");
+            || (name == "job" && arguments["action"] == "get")
+            || (name == "edit_transcript" && arguments["dry_run"] == true);
         let mut runs = (!read).then(|| self.runs.lock().unwrap());
         ensure!(!self.closed.load(Ordering::Acquire), "CLIENT_CLOSED: client disconnected");
         // Reads never hold this client's run lock while the session is locked.
@@ -130,7 +131,11 @@ impl Backend {
         }
         ensure!(read || self.client.access == Access::Write, "READ_ONLY: this client cannot mutate");
         if let Some(run) = arguments.get("run_id").and_then(Value::as_str) {
-            ensure!(runs.as_ref().is_some_and(|runs| runs.contains(run)), "INVALID_RUN: run belongs to another client");
+            let mine = match &runs {
+                Some(runs) => runs.contains(run),
+                None => self.runs.lock().unwrap().contains(run),
+            };
+            ensure!(mine, "INVALID_RUN: run belongs to another client");
             if name != "undo_run" {
                 self.host.session.check_run(run)?;
             }
@@ -363,27 +368,27 @@ impl Backend {
     }
 
     fn edit_transcript(&self, args: EditTranscript, state: &SessionState) -> Result<Value> {
-        owns_run(state, &args.run_id)?;
+        // A dry run plans the cut before a run is open and changes nothing.
+        if args.dry_run {
+            return Ok(self.prepare_transcript_edit(&args, state)?.response);
+        }
+        let run_id = args.run_id.clone().context("INVALID_ARGUMENTS: run_id is required unless dry_run is true")?;
+        owns_run(state, &run_id)?;
         let request_id = args.request_id.clone().unwrap_or_else(new_id);
-        let key = (args.run_id.clone(), request_id.clone());
+        let key = (run_id.clone(), request_id.clone());
         let mut requests = self.transcript_requests.lock().unwrap();
-        requests.retain(|(run, _), _| run == &args.run_id);
-        if !args.dry_run
-            && let Some(prepared) = requests.get(&key)
-        {
+        requests.retain(|(run, _), _| run == &run_id);
+        if let Some(prepared) = requests.get(&key) {
             ensure!(
                 prepared.arguments == serde_json::to_value(&args)?,
                 "REQUEST_CONFLICT: request_id was used with different transcript arguments"
             );
-            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+            return self.apply_transcript_edit(&run_id, &request_id, prepared);
         }
         let prepared = self.prepare_transcript_edit(&args, state)?;
-        if args.dry_run {
-            return Ok(prepared.response);
-        }
         // Retain the original ranges and expectations even if the live edit's save fails.
         let prepared = requests.entry(key).or_insert(prepared);
-        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
+        self.apply_transcript_edit(&run_id, &request_id, prepared)
     }
 
     fn apply_transcript_edit(
@@ -867,6 +872,40 @@ mod transcript_tests {
         backend.host.session.undo_run(&run.run_id).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, before);
         drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dry_run_plans_before_a_run_even_for_read_only_clients() {
+        let (dir, backend, before) = fixture();
+        let state = backend.host.session.state().unwrap();
+        let key = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap()["transcript_key"].clone();
+        let plan_args = json!({"transcript_key":key,"delete":[[1,2]],"dry_run":true});
+        let plan = backend.call("edit_transcript", plan_args.clone()).unwrap().structured_content.unwrap();
+        assert_eq!(plan["dry_run"], true);
+        let viewer = Backend::shared(
+            backend.host.clone(),
+            &backend.project_path,
+            Client { id: "viewer".into(), access: Access::ReadOnly },
+        )
+        .unwrap();
+        let viewed = viewer.call("edit_transcript", plan_args).unwrap().structured_content.unwrap();
+        assert_eq!(viewed["duration_us"], plan["duration_us"]);
+        assert_eq!(backend.host.session.state().unwrap().project, before);
+        let missing_run = format!(
+            "{:#}",
+            backend.call("edit_transcript", json!({"transcript_key":key,"delete":[[1,2]]})).unwrap_err()
+        );
+        assert!(missing_run.starts_with("INVALID_ARGUMENTS"), "{missing_run}");
+        let run = backend.call("begin_run", json!({"label":"cut"})).unwrap().structured_content.unwrap();
+        let applied = backend
+            .call("edit_transcript", json!({"run_id":run["run_id"],"transcript_key":key,"delete":[[1,2]]}))
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(applied["duration_us"], plan["duration_us"]);
+        assert_ne!(backend.host.session.state().unwrap().project, before);
+        drop((viewer, backend));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

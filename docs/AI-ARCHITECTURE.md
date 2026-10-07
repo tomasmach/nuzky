@@ -61,7 +61,7 @@ All times are integer microseconds on the timeline unless a field says `source`.
 | `analyze(kind, asset_id, params)` | `silences`, `loudness`, `scenes`, `fillers` from `crates/analysis` |
 | `transcribe(asset_ids?)` | Job recognising the heard media that has no transcript yet |
 | `get_transcript(range?)` | Numbered timeline words and sentences, `transcript_key`, untranscribed clips |
-| `edit_transcript(run_id, transcript_key, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text |
+| `edit_transcript(run_id?, transcript_key, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text. A dry run needs no open run |
 | `build_captions(run_id, style?, max_words?, max_chars?)` | Deterministic caption clips on one captions track, never across a cut; the Reel style by default |
 | `export_video(path, resolution, fps, quality)` | Job exporting a snapshot |
 | `job(job_id, get | cancel)` | Progress, result, cancel |

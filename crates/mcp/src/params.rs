@@ -114,7 +114,8 @@ pub struct GetTranscript {
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EditTranscript {
-    pub run_id: String,
+    /// Required unless dry_run is true.
+    pub run_id: Option<String>,
     /// Reuse this id with identical arguments to retry a failed save without cutting twice.
     pub request_id: Option<String>,
     pub transcript_key: String,
