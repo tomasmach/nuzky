@@ -7,3 +7,4 @@
 *.local
 .playwright-mcp/
 /tmp-test/
+__pycache__/

@@ -1,0 +1,33 @@
+# `cargo deny check advisories licenses` runs in scripts/check.sh.
+# CapOpen ships as GPL-3.0-or-later, so every Rust dependency needs a licence that can be combined with it.
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
+
+[advisories]
+# Vulnerabilities always fail. An unmaintained crate fails only when we depend on it directly;
+# deeper ones (ttf-parser under cosmic-text, proc-macro-error under GTK) have no upgrade we control.
+unmaintained = "workspace"
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    # webpki-roots: Mozilla's root certificate list for the model download.
+    "CDLA-Permissive-2.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    # ureq, the model download client.
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    # ffmpeg-next and ffmpeg-sys-next.
+    "WTFPL",
+    "Zlib",
+]
+confidence-threshold = 0.9

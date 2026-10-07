@@ -1,18 +1,13 @@
 name: Build and test
 
+# Actions minutes are capped and macOS counts ten times, so the three-system build runs only for a
+# release tag (through release.yml) and on request. Changes are checked locally with scripts/check.sh.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
   workflow_call:
 
 permissions:
   contents: read
-
-# A new push to a pull request supersedes its running check.
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -61,15 +56,12 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
-      # Installers are built for main and releases; pull requests stop after the tests.
       - name: Build installers
-        if: github.event_name != 'pull_request'
         run: node scripts/build-bundles.mjs
       - name: Verify Linux bundle
-        if: github.event_name != 'pull_request' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: bash scripts/verify-linux-bundle.sh
-      - if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: capopen-${{ matrix.os }}
           path: |

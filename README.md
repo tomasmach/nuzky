@@ -55,7 +55,7 @@ npm install
 npm run tauri dev
 ```
 
-For macOS and Windows, install the platform dependencies in [BUILDING.md](docs/BUILDING.md) before running the same commands. CI runs on `main` upload installers; pushing a matching `v*` version tag prepares a draft GitHub Release. Builds are unsigned previews until verified on each target OS.
+For macOS and Windows, install the platform dependencies in [BUILDING.md](docs/BUILDING.md) before running the same commands. Pushing a matching `v*` version tag builds installers on all three systems and prepares a draft GitHub Release. Builds are unsigned previews until verified on each target OS.
 
 ## CLI
 
@@ -73,7 +73,11 @@ Projects are JSON files, so the same project renders identically in the app and 
 ```sh
 cargo test --workspace
 npm run typecheck
+scripts/check.sh            # full local gate before a merge or release
+python3 scripts/repro.py --list  # UI flows driven in the real app
 ```
+
+Rules for contributors and coding agents are in [AGENTS.md](AGENTS.md).
 
 ## License
 
