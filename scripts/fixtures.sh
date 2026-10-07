@@ -78,6 +78,29 @@ media reel-1.mp4 reel_take 1 0x2b3a4a
 media reel-2.mp4 reel_take 2 0x3a2b4a
 media reel-3.mp4 reel_take 3 0x2b4a3a
 
+# A talking head in a noisy room for the voice flow: four phrases with a second of pause after each, pink
+# room noise around -40 dBFS and 50 Hz mains hum around -30 dBFS under them, the sound Clean voice is for.
+noisy_talk() {
+  local out=$1 dir n=0 inputs=() seconds
+  dir=$(mktemp -d)
+  for phrase in "Hello and welcome back to the channel." "The air conditioning in this room is really loud." \
+    "Listen to the hum under my voice." "Clean voice should take most of it away."; do
+    espeak-ng -v en-us -s 150 -w "$dir/$n.wav" "$phrase"
+    ff -i "$dir/$n.wav" -af "aresample=48000,apad=pad_dur=1" -ac 1 "$dir/p$n.wav"
+    inputs+=(-i "$dir/p$n.wav")
+    n=$((n + 1))
+  done
+  ff "${inputs[@]}" -filter_complex "concat=n=$n:v=0:a=1,adelay=1000,volume=-6dB" "$dir/speech.wav"
+  seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dir/speech.wav")
+  ff -i "$dir/speech.wav" -f lavfi -i "anoisesrc=color=pink:amplitude=0.05:seed=11:sample_rate=48000:duration=$seconds" \
+    -f lavfi -i "sine=frequency=50:sample_rate=48000:duration=$seconds" \
+    -f lavfi -i "color=c=0x3a3a2b:s=1080x1920:r=30:d=$seconds,noise=alls=10:allf=u" \
+    -filter_complex "[2:a]volume=-9dB[h];[0:a][1:a][h]amix=inputs=3:normalize=0,aformat=channel_layouts=mono[a]" \
+    -map 3:v -map "[a]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -shortest "$out"
+  rm -rf "$dir"
+}
+media voice.mp4 noisy_talk
+
 model() {
   local file=$models/$1 sha=$2 url=$3
   if [ -f "$file" ] && echo "$sha  $file" | sha256sum --check --status; then return; fi
