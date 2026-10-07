@@ -33,16 +33,13 @@ pub fn load(path: &Path) -> Result<Project> {
     serde_json::from_str(&json).with_context(|| format!("{} is not a CapOpen project", path.display()))
 }
 
+/// The error of `open` for a project another window or an agent holds.
+pub const BUSY: &str =
+    "This project is open in another CapOpen window or an AI agent is editing it. Close it there first.";
+
 pub fn open(path: &Path, events: Sender<SessionEvent>) -> Result<ProjectSession> {
-    ProjectSession::open(path, Mode::Write, Some(events)).map_err(|error| {
-        if error.to_string().starts_with("PROJECT_BUSY:") {
-            anyhow::anyhow!(
-                "This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
-            )
-        } else {
-            error
-        }
-    })
+    ProjectSession::open(path, Mode::Write, Some(events))
+        .map_err(|error| if error.to_string().starts_with("PROJECT_BUSY:") { anyhow::anyhow!(BUSY) } else { error })
 }
 
 pub fn create(path: &Path, project: &Project) -> Result<()> {

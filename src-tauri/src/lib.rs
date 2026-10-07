@@ -634,17 +634,38 @@ fn initial_project() -> anyhow::Result<(OpenSession, Receiver<SessionEvent>, Opt
 }
 
 fn open_recent(recent: Vec<ProjectSummary>) -> (Option<(OpenSession, Receiver<SessionEvent>)>, Option<String>) {
-    let mut notice = None;
+    let mut skipped: Option<(String, anyhow::Error)> = None;
     for project in recent {
         match std::fs::canonicalize(&project.path).map_err(anyhow::Error::from).and_then(OpenSession::open) {
-            Ok(opened) => return (Some(opened), notice),
+            Ok(opened) => {
+                return (Some(opened), skipped.map(|(name, error)| skipped_notice(&name, Some(&project.name), &error)));
+            }
             Err(error) => {
                 log::warn!("Cannot open {}: {error:#}", project.path);
-                notice.get_or_insert_with(|| format!("“{}” could not be opened. {error:#}", project.name));
+                skipped.get_or_insert((project.name, error));
             }
         }
     }
-    (None, notice)
+    (None, skipped.map(|(name, error)| skipped_notice(&name, None, &error)))
+}
+
+/// Why the most recent project did not open, which one did instead and what to do.
+fn skipped_notice(name: &str, instead: Option<&str>, error: &anyhow::Error) -> String {
+    let instead = instead
+        .map_or_else(|| "A new project opened instead.".to_string(), |other| format!("“{other}” opened instead."));
+    if error.to_string() == store::BUSY {
+        format!(
+            "“{name}” is open in another CapOpen window or an AI agent is editing it, so {}. Close it there, then open it from Projects.",
+            lowercase_first(&instead).trim_end_matches('.')
+        )
+    } else {
+        format!("“{name}” could not be opened ({error:#}). {instead}")
+    }
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| first.to_lowercase().chain(chars).collect())
 }
 
 pub fn run() {
@@ -924,7 +945,10 @@ mod ipc_lifecycle_tests {
         let (current, _) = opened.unwrap();
         assert_eq!(current.snapshot(Vec::new()).unwrap().project.name, "Older");
         let notice = notice.unwrap();
-        assert!(notice.starts_with("“Newer” could not be opened.") && notice.contains("AI agent"), "{notice}");
+        assert_eq!(
+            notice,
+            "“Newer” is open in another CapOpen window or an AI agent is editing it, so “Older” opened instead. Close it there, then open it from Projects."
+        );
         let (opened, notice) = open_recent(store::list_in(&dir));
         assert!(opened.is_none() && notice.is_some());
         assert_eq!(store::list_in(&dir).len(), 2, "no new project is created while projects are busy");
