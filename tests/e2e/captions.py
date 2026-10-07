@@ -1,6 +1,6 @@
 import time
 
-from e2e.harness import FIXTURES, changed_share, flow, link_models, preview_crop, preview_rect, wait
+from e2e.harness import FIXTURES, changed_share, flow, link_models, preview_crop, preview_rect, preview_redraw, wait
 
 
 @flow('captions', 'Whisper on this computer captions the spoken words of a video', before=link_models)
@@ -19,17 +19,20 @@ def captions(r):
     spoken = ['channel', 'video', 'laptop', 'clips', 'pauses', 'captions']
     found = [w for w in spoken if w in heard]
     r.check('captions contain the spoken words', len(found) >= 4, {'found': found, 'captions': texts[:8]})
-    # The same moment with the captions track shown and hidden differs only by the caption itself.
+    # Hiding and showing the captions track redraws the same moment, so the two pictures differ only by the caption.
+    # Each is taken once the preview has redrawn, so a picture left from before the seek cannot pass for either.
     caption = max(track['clips'], key=lambda c: c['durationUs'])
     r.seek(caption['startUs'] + caption['durationUs'] // 2)
     time.sleep(1.5)
-    r.shot('captions')
+    r.shot('captions-seek')
+    before = preview_crop(r.work / 'captions-seek.png', preview_rect(r))
     hide = "window.__capopen.store.getState().edit({type: 'updateTrack', trackId: arguments[0], hidden: arguments[1]})"
     r.s.call(hide, track['id'], True)
-    time.sleep(1.5)
-    r.shot('captions-hidden')
+    hidden, redrawn_hidden = preview_redraw(r, 'captions-hidden', before)
     r.s.call(hide, track['id'], False)
-    rect = preview_rect(r)
-    changed = changed_share(preview_crop(r.work / 'captions.png', rect), preview_crop(r.work / 'captions-hidden.png', rect))
+    shown, redrawn_shown = preview_redraw(r, 'captions', hidden)
+    r.check('the preview redraws after hiding and after showing the captions', redrawn_hidden and redrawn_shown,
+            {'after hiding': redrawn_hidden, 'after showing': redrawn_shown})
+    changed = changed_share(hidden, shown)
     r.check(f'the caption "{caption["text"]}" shows in the preview', changed > 0.005, f'{changed:.2%} of the preview changes')
     r.check('no error toast', not r.errors(), r.errors())

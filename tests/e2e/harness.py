@@ -117,7 +117,8 @@ class Run:
 
     def shot(self, name):
         self.s.screenshot(self.work / f'{name}.png')
-        self.shots.append(f'{name}.png')
+        if f'{name}.png' not in self.shots:
+            self.shots.append(f'{name}.png')
 
     def state(self):
         return self.s.run(STATE, retries=3)
@@ -232,6 +233,21 @@ def preview_crop(screenshot, rect):
     scale = image.width / rect['viewport']
     left, top = int(rect['left'] * scale), int(rect['top'] * scale)
     return image.crop((left, top, left + int(rect['width'] * scale), top + int(rect['height'] * scale)))
+
+
+def preview_redraw(r, name, before, timeout=6):
+    """Screenshots the preview until it differs from `before` (a crop), so the picture follows the last edit.
+    Returns the crop and whether the preview changed in time."""
+    rect = preview_rect(r)
+    end = time.time() + timeout
+    while True:
+        r.shot(name)
+        crop = preview_crop(r.work / f'{name}.png', rect)
+        if changed_share(crop, before) > 0:
+            return crop, True
+        if time.time() > end:
+            return crop, False
+        time.sleep(0.5)
 
 
 def preview_brightness(r, screenshot, fraction):
