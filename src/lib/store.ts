@@ -279,8 +279,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   toast: (t) => {
     const id = ++toastId;
     if (t.kind === "error") t = { ...t, text: plainError(t.text) };
+    // The toast times itself out (Toasts.tsx), so hovering or focusing it can pause the clock.
     set({ toasts: [...get().toasts.slice(-3), { ...t, id }] });
-    window.setTimeout(() => get().dismissToast(id), t.kind === "error" ? 8000 : t.action ? 7000 : 5000);
   },
 
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),

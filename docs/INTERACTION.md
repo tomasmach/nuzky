@@ -101,7 +101,7 @@ Text-based editing, as in CapCut. Transcribe timeline recognises each video file
 Until the open project is ready the window says "Starting CapOpen…". If that fails, it says why and offers Try again, New project and the recent projects to open instead.
 
 ### Errors
-An error says in plain words what happened and what to do next. The engine's coded errors (`READ_ONLY: …`, `EDIT_REJECTED: …` and the like) are translated where they are shown; an error without a known code is shown as it came.
+An error says in plain words what happened and what to do next; an error toast stays until it is dismissed. The engine's coded errors (`READ_ONLY: …`, `EDIT_REJECTED: …` and the like) are translated where they are shown; an error without a known code is shown as it came.
 
 ### Saving
 Every edit is saved about a second later. The top bar shows Saving…, Saved, or a failure with an icon and text. An action that changes nothing, such as a failed import, leaves the status as it was.
@@ -121,6 +121,7 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Ctrl` + wheel, `+` / `-` | Zoom timeline; the playhead stays where it is on screen (moved to the middle if it was out of view), with the wheel the moment under the pointer does |
 | `Ctrl+I` | Import |
 | `Ctrl+E` | Export |
+| `F8` | Focus the newest toast; `Esc` there dismisses it and focus moves to the next toast, then back |
 | `Esc` | Cancel a drag or close the open menu or dialog; with none of those, clear the selection |
 
 Shortcuts are ignored while typing in a text field and while the export dialog is open. A focused tab bar keeps `←`/`→` (and `Home`/`End`) to switch tabs, so the playhead does not move. The focused transcript keeps `←`/`→`, `Home`/`End`, `Delete` and `Backspace` for its words.
