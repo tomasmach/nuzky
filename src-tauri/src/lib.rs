@@ -825,6 +825,11 @@ fn drain(jobs: &Mutex<HashMap<String, Arc<AtomicBool>>>, host: &Host, timeout: s
     }
 }
 
+/// A spawned child shares this process's open files, project locks included, until it execs.
+/// Tests that spawn children and tests that expect a released lock to be free take turns.
+#[cfg(test)]
+static CHILD_SPAWN: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod ipc_lifecycle_tests {
     #[test]

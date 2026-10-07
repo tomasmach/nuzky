@@ -541,6 +541,7 @@ mod tests {
             .open(sidecar(&path, ".lock"))
             .unwrap();
         lock.lock().unwrap();
+        let spawning = crate::CHILD_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut children: Vec<_> = (0..2)
             .map(|_| {
                 Child(
@@ -553,6 +554,8 @@ mod tests {
             })
             .collect();
         wait_until(|| children.iter().all(|child| dir.join(format!("ready-{}", child.0.id())).exists()));
+        // Running children have replaced the copies of this process's open files.
+        drop(spawning);
         std::thread::sleep(Duration::from_millis(150));
         assert!(children.iter_mut().all(|child| child.0.try_wait().unwrap().is_none()));
         assert_eq!(

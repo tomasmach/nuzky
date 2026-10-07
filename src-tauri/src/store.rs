@@ -103,6 +103,7 @@ mod tests {
 
     #[test]
     fn desktop_session_owns_lock_and_reports_busy_projects() {
+        let _children = crate::CHILD_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = std::env::temp_dir().join(format!("capopen-store-{}", capopen_engine::edit::new_id()));
         let path = dir.join("project.capopen");
         let project = Project::new("Lock test");
