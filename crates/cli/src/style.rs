@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, bail, ensure};
 use capopen_analysis::style::{self, Alignment};
-use capopen_engine::model::Asset;
+use capopen_engine::model::{Asset, AssetKind};
 use capopen_engine::speech::map_words;
 use capopen_mcp::transcript::{best_model, models, recognise};
 use capopen_session::transcripts::{Record, TranscriptStore};
@@ -107,6 +107,12 @@ fn stable_id(path: &Path) -> Result<String> {
 /// Words stored for this file, recognised now if it has none yet.
 fn recording(path: &Path, language: &str, store: &TranscriptStore, cache: &Path) -> Result<Recording> {
     let asset = probe(path)?;
+    // CapOpen hears speech in videos only; a sound file on the timeline is music.
+    ensure!(
+        asset.kind == AssetKind::Video,
+        "{} has no picture: style learns from and scores video recordings",
+        path.display()
+    );
     if let Some(record) = store.get(&asset)? {
         return Ok(Recording { asset, record });
     }

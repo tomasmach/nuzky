@@ -250,3 +250,26 @@ fn learns_the_creators_style_and_scores_cuts_against_it() {
     assert!((all["precision"].as_f64().unwrap() - expected).abs() < 1e-9 && expected < 0.85, "{all}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_sound_file_is_refused_before_any_recognition() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test/style-tests").join(format!("audio-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sound = dir.join("memo.m4a");
+    ffmpeg(&["-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "aac", sound.to_str().unwrap()]);
+    let out = Command::new(env!("CARGO_BIN_EXE_capopen"))
+        .args(["style", "compare"])
+        .args([&sound, &sound, &dir.join("project.capopen")])
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("has no picture"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

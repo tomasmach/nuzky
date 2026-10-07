@@ -87,7 +87,7 @@ impl Alignment {
         self.pieces.iter().enumerate().find_map(|(i, p)| {
             let source = p.source();
             (source.start_us - EDGE_US <= middle && middle < source.end_us + EDGE_US).then(|| {
-                let start = (word.start_us - p.offset_us).max(p.start_us);
+                let start = (word.start_us - p.offset_us).clamp(p.start_us, p.end_us);
                 (i, start, (word.end_us - p.offset_us).clamp(start, p.end_us))
             })
         })
@@ -358,6 +358,19 @@ impl Biquad {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_word_just_past_a_piece_plays_at_its_end() {
+        let alignment = Alignment {
+            pieces: vec![Piece { start_us: 0, end_us: 10_000_000, offset_us: 5_000_000 }],
+            matched: 1.0,
+            cut_duration_us: 10_000_000,
+            cut_pauses: Vec::new(),
+            recording_pauses: Vec::new(),
+        };
+        let word = Word { start_us: 15_010_000, end_us: 15_070_000, text: "ok".into(), probability: 1.0 };
+        assert_eq!(alignment.places(&[word], &[]), [Some((0, 10_000_000, 10_000_000))]);
+    }
 
     fn tone_frames(pattern: &[u8]) -> Vec<Frame> {
         // Each symbol is a distinct "syllable" of 15 frames; 0 is silence.

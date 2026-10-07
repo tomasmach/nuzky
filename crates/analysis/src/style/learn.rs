@@ -423,6 +423,9 @@ fn removals(edits: &[Edit]) -> Vec<Removal> {
 /// Inclusive word ranges of sentences within `start..=end`.
 fn sentences(edit: &Edit, start: usize, end: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
+    if end >= edit.words.len() || start > end {
+        return out;
+    }
     let mut from = start;
     for k in start..=end {
         let word = edit.words[k].word;
@@ -1082,6 +1085,22 @@ mod tests {
             let examples = section.lines().filter(|l| l.starts_with("- ")).count();
             assert!(examples == 0 || examples >= MIN_EXAMPLES, "too few examples in {section}");
         }
+    }
+
+    #[test]
+    fn a_recording_without_recognised_speech_still_gives_a_file() {
+        let (_, _, alignment, picture) = fixture();
+        let source = Source {
+            recording: "room.mov".into(),
+            cut: "reel.mp4".into(),
+            language: "en".into(),
+            recording_us: 30_000_000,
+            words: &[],
+            cut_words: &[],
+            alignment: &alignment,
+            picture: &picture,
+        };
+        assert!(learn(&[source]).starts_with("# Editing style"));
     }
 
     #[test]
