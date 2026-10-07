@@ -349,8 +349,14 @@ async function startEditor() {
   useEditor.getState().setSnap(boot.snapshot, true, true);
   useEditor.setState({ saveState: "saved" });
   // An error toast stays until dismissed, so the reason a different project opened is not missed.
-  if (boot.startupNotice) useEditor.getState().toast({ kind: "error", text: boot.startupNotice });
+  // Once per launch: StrictMode and Try again can start the editor more than once.
+  if (boot.startupNotice && !startupNoticeShown) {
+    startupNoticeShown = true;
+    useEditor.getState().toast({ kind: "error", text: boot.startupNotice });
+  }
 }
+
+let startupNoticeShown = false;
 
 /** Until the editor has a project: "Starting", or why starting failed with ways to go on. */
 function BootScreen() {
