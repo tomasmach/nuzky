@@ -230,11 +230,9 @@ export function TopBar() {
           <Redo2 size={16} />
         </IconButton>
       </div>
-      <span title={empty ? "Add a clip to the timeline to export" : "Export video (Ctrl+E)"}>
-        <Button variant="primary" disabled={empty} onClick={openExport}>
-          <Download size={15} /> Export
-        </Button>
-      </span>
+      <Button variant="primary" disabled={empty} disabledReason="Add a clip to the timeline to export" title="Export video (Ctrl+E)" onClick={openExport}>
+        <Download size={15} /> Export
+      </Button>
     </header>
   );
 }

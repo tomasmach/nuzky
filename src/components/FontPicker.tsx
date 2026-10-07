@@ -41,9 +41,9 @@ export function FontPicker({
         aria-expanded={open}
         aria-label={`Font: ${mixed ? "mixed" : current}`}
         title={disabled ? disabledReason : missing ? `${current} is not installed on this computer, so ${DEFAULT_FONT} is used` : undefined}
-        disabled={disabled}
-        onClick={() => setOpen(!open)}
-        className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-line bg-raised pl-2 pr-1.5 text-left text-fg transition-colors duration-[120ms] ease-out enabled:hover:border-muted disabled:cursor-not-allowed disabled:opacity-40"
+        aria-disabled={disabled || undefined}
+        onClick={disabled ? undefined : () => setOpen(!open)}
+        className={`flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-line bg-raised pl-2 pr-1.5 text-left text-fg transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${disabled ? "" : "enabled:hover:border-muted"}`}
       >
         <span className="min-w-0 flex-1 truncate text-[15px] leading-5" style={{ fontFamily: mixed ? undefined : fontCss(current) }}>
           {mixed ? "—" : current}

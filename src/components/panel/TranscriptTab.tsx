@@ -92,9 +92,9 @@ export function TranscriptTab() {
         {running ? (
           <SpeechJobCard job={running} />
         ) : (
-          <span className="flex" title={blocker ?? undefined}>
+          <span className="flex">
             {/* With every clip transcribed but no words, transcribing again may use another language. */}
-            <Button variant="primary" className="flex-1" disabled={!!blocker || !view} onClick={() => startSpeech(null, view?.untranscribed.length === 0)}>
+            <Button variant="primary" className="flex-1" disabled={!!blocker || !view} disabledReason={blocker ?? undefined} onClick={() => startSpeech(null, view?.untranscribed.length === 0)}>
               <ScrollText size={15} /> Transcribe timeline
             </Button>
           </span>
@@ -119,11 +119,9 @@ export function TranscriptTab() {
             <span className="flex-1">
               {missing} clip{missing === 1 ? "" : "s"} not transcribed
             </span>
-            <span title={busy ? "Wait for speech recognition to finish" : undefined}>
-              <Button className="h-7 px-2" disabled={busy} onClick={() => startSpeech(null)}>
-                Transcribe
-              </Button>
-            </span>
+            <Button className="h-7 px-2" disabled={busy} disabledReason="Wait for speech recognition to finish" onClick={() => startSpeech(null)}>
+              Transcribe
+            </Button>
           </div>
         )}
         {running && <SpeechJobCard job={running} />}
@@ -132,11 +130,15 @@ export function TranscriptTab() {
           <NumberInput label="Shortest pause to show" value={pauseUs / US} min={0.1} max={5} step={0.1} format={(v) => v.toFixed(1)} onChange={(v) => useSpeech.setState({ pauseUs: Math.round(v * US) })} className="w-11" />
           <span className="text-[12px] text-muted">s</span>
           <span className="flex-1" />
-          <span title={cutBlocker ?? (pauses.length === 0 ? `No pauses longer than ${formatDuration(pauseUs)}` : `Shorten every pause to ${formatDuration(pauseUs)}`)}>
-            <Button className="h-7 px-2" disabled={pauses.length === 0 || !!cutBlocker} onClick={removeAll}>
-              <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatDuration(total(pauses))}` : "Remove pauses"}
-            </Button>
-          </span>
+          <Button
+            className="h-7 px-2"
+            disabled={pauses.length === 0 || !!cutBlocker}
+            disabledReason={cutBlocker ?? `No pauses longer than ${formatDuration(pauseUs)}`}
+            title={`Shorten every pause to ${formatDuration(pauseUs)}`}
+            onClick={removeAll}
+          >
+            <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatDuration(total(pauses))}` : "Remove pauses"}
+          </Button>
         </div>
         <KeepTracks project={project} />
         {!running && <JobError job={last} />}

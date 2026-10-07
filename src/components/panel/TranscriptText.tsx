@@ -200,11 +200,9 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatDuration(lengthUs)}
           </span>
-          <span title={blocker ?? "Cut from the timeline (Delete)"}>
-            <Button variant="danger" className="h-7" disabled={!!blocker} onClick={remove}>
-              <Trash2 size={14} /> Delete
-            </Button>
-          </span>
+          <Button variant="danger" className="h-7" disabled={!!blocker} disabledReason={blocker ?? undefined} title="Cut from the timeline (Delete)" onClick={remove}>
+            <Trash2 size={14} /> Delete
+          </Button>
         </div>
       )}
     </>

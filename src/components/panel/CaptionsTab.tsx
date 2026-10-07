@@ -59,11 +59,11 @@ export function CaptionsTab() {
               key={s.name}
               type="button"
               aria-pressed={i === current}
-              disabled={busy}
+              aria-disabled={busy || undefined}
               title={busy ? "Wait for speech recognition to finish" : hasCaptions ? `Apply ${s.name} to all captions` : `Use ${s.name} for new captions`}
-              onClick={() => pickStyle(i)}
-              className={`flex h-12 min-w-0 items-center justify-center rounded-md border bg-line disabled:cursor-not-allowed disabled:opacity-40 ${
-                i === current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line enabled:hover:border-muted"
+              onClick={busy ? undefined : () => pickStyle(i)}
+              className={`flex h-12 min-w-0 items-center justify-center rounded-md border bg-line disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
+                i === current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : busy ? "border-line" : "border-line enabled:hover:border-muted"
               }`}
             >
               <TextSwatch style={{ ...s.style, fontFamily: font }} label={s.name} />
@@ -81,8 +81,8 @@ export function CaptionsTab() {
       {running ? (
         <SpeechJobCard job={running} />
       ) : (
-        <span className="flex" title={blocker ?? undefined}>
-          <Button variant="primary" className="flex-1" disabled={!!blocker} onClick={start}>
+        <span className="flex">
+          <Button variant="primary" className="flex-1" disabled={!!blocker} disabledReason={blocker ?? undefined} onClick={start}>
             <Captions size={15} /> {hasCaptions ? "Regenerate captions" : "Generate captions"}
           </Button>
         </span>

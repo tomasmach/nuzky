@@ -106,11 +106,9 @@ export function AudioSection({ clip, content }: { clip: Clip; content: Media }) 
         onChange={(v) => edit({ type: "updateClip", clipId: clip.id, fadeOutUs: Math.round(v * US) }, `${clip.id}:fadeOut`)}
       />
       {isVideo && (
-        <span className="block" title={blocker ?? "Move the sound to its own audio track"}>
-          <Button className="w-full" disabled={!!blocker} onClick={() => detachAudio([clip.id])}>
-            <Unlink size={14} /> Detach audio
-          </Button>
-        </span>
+        <Button className="w-full" disabled={!!blocker} disabledReason={blocker ?? undefined} title="Move the sound to its own audio track" onClick={() => detachAudio([clip.id])}>
+          <Unlink size={14} /> Detach audio
+        </Button>
       )}
     </Section>
   );

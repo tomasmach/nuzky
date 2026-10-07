@@ -11,13 +11,14 @@ export interface MenuAt {
 
 function Item({ icon, label, shortcut, disabled, reason, onSelect }: { icon: ReactNode; label: string; shortcut?: string; disabled?: boolean; reason?: string | null; onSelect: () => void }) {
   return (
+    // Disabled items stay reachable with ↑/↓, as in other menus, so their reason is read out.
     <button
       type="button"
       role="menuitem"
-      disabled={disabled}
+      aria-disabled={disabled || undefined}
       title={disabled ? (reason ?? undefined) : undefined}
-      onClick={onSelect}
-      className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-[13px] text-fg hover:bg-raised focus-visible:bg-raised disabled:cursor-not-allowed disabled:text-subtle disabled:hover:bg-transparent"
+      onClick={disabled ? undefined : onSelect}
+      className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-[13px] text-fg hover:bg-raised focus-visible:bg-raised aria-disabled:cursor-not-allowed aria-disabled:text-subtle aria-disabled:hover:bg-transparent aria-disabled:focus-visible:bg-raised"
     >
       <span className="text-muted">{icon}</span>
       <span className="flex-1">{label}</span>
@@ -46,7 +47,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
     // Keep the menu inside the window.
     const r = el.getBoundingClientRect();
     setPos({ x: Math.min(at.x, window.innerWidth - r.width - 8), y: Math.min(at.y, window.innerHeight - r.height - 8) });
-    el.querySelector<HTMLElement>("[role=menuitem]:not(:disabled)")?.focus();
+    el.querySelector<HTMLElement>("[role=menuitem]:not([aria-disabled=true])")?.focus();
   }, [at]);
 
   useEffect(() => {
@@ -84,7 +85,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
     e.stopPropagation();
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
-    const items = [...(ref.current?.querySelectorAll<HTMLElement>("[role=menuitem]:not(:disabled)") ?? [])];
+    const items = [...(ref.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
     const i = items.indexOf(document.activeElement as HTMLElement);
     items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
   };

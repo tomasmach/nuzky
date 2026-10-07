@@ -18,7 +18,7 @@ import { Preview } from "./components/preview/Preview";
 import { Timeline } from "./components/timeline/Timeline";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
-import { Button } from "./components/ui";
+import { Button, DisabledHint } from "./components/ui";
 
 const TEXT_INPUTS = new Set(["text", "search", "email", "number", "password", "url", "tel"]);
 
@@ -431,6 +431,7 @@ export default function App() {
         <Timeline height={timelineH} />
         <ExportDialog />
         <Toasts bottom={timelineH + 12} />
+        <DisabledHint />
         <DragChip />
       </div>
       {snap.recovery && <RecoveryDialog key={snap.sessionEpoch} />}

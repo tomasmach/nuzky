@@ -1,4 +1,4 @@
-import { useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { fontCss } from "../lib/fonts";
 import { useAiLocked } from "../lib/store";
@@ -13,25 +13,56 @@ const variants: Record<Variant, string> = {
   danger: "bg-danger/15 text-danger hover:bg-danger/25 border border-danger/40",
 };
 
+/** Drops hover styles, so a disabled control does not react to the pointer. */
+const idle = (classes: string) => classes.split(" ").filter((c) => !c.startsWith("hover:")).join(" ");
+
+/**
+ * A disabled button here stays focusable (`aria-disabled` rather than `disabled`), so the keyboard
+ * and screen readers reach it and its reason: the tooltip, the description, and the hint shown on
+ * keyboard focus (`DisabledHint`). A click on it does nothing. Inside a disabled fieldset the
+ * browser still disables it outright.
+ */
+function disabledProps(disabled: boolean | undefined, onClick: ButtonHTMLAttributes<HTMLButtonElement>["onClick"], reasonId?: string) {
+  return disabled ? { "aria-disabled": true, onClick: undefined, "aria-describedby": reasonId } : { onClick };
+}
+
 export function Button({
   variant = "secondary",
   className = "",
   children,
+  disabled,
+  disabledReason,
+  title,
+  onClick,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; disabledReason?: string }) {
+  const reasonId = useId();
+  const reason = disabled ? (disabledReason ?? title) : undefined;
   return (
-    <button
-      type="button"
-      className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40 disabled:active:translate-y-0 ${variants[variant]} ${className}`}
-      {...rest}
-    >
-      {children}
-    </button>
+    <>
+      <button
+        type="button"
+        title={disabled ? reason : title}
+        {...disabledProps(disabled, onClick, reason ? reasonId : undefined)}
+        className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+          disabled ? `cursor-not-allowed opacity-40 ${idle(variants[variant])}` : `active:translate-y-px disabled:active:translate-y-0 ${variants[variant]}`
+        } ${className}`}
+        {...rest}
+      >
+        {children}
+      </button>
+      {reason && (
+        <span id={reasonId} hidden>
+          {reason}
+        </span>
+      )}
+    </>
   );
 }
 
 /**
- * Icon-only button. `label` is required: it becomes the tooltip and the accessible name.
+ * Icon-only button. `label` is required: it becomes the tooltip and the accessible name, and says
+ * why when the button is disabled ("Split: move the playhead over a clip").
  * Passing `active`, true or false, makes it a toggle button.
  */
 export function IconButton({
@@ -39,6 +70,8 @@ export function IconButton({
   active,
   className = "",
   children,
+  disabled,
+  onClick,
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
   return (
@@ -47,13 +80,58 @@ export function IconButton({
       aria-label={label}
       title={label}
       aria-pressed={active}
-      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40 disabled:active:translate-y-0 ${
-        active ? "bg-accent/20 text-accent" : "text-muted hover:bg-raised hover:text-fg"
-      } ${className}`}
+      {...disabledProps(disabled, onClick)}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+        disabled ? "cursor-not-allowed opacity-40" : "active:translate-y-px disabled:active:translate-y-0"
+      } ${active ? "bg-accent/20 text-accent" : disabled ? "text-muted" : "text-muted hover:bg-raised hover:text-fg"} ${className}`}
       {...rest}
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * While a disabled control has keyboard focus, its reason (the tooltip text) shows just below it,
+ * as hovering shows the tooltip. Mount once.
+ */
+export function DisabledHint() {
+  const [hint, setHint] = useState<{ text: string; x: number; y: number; above: boolean } | null>(null);
+  useEffect(() => {
+    let keyboard = false;
+    const onKey = () => (keyboard = true);
+    const onPointer = () => (keyboard = false);
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target instanceof HTMLElement ? e.target : null;
+      const text = el?.getAttribute("aria-disabled") === "true" ? el.getAttribute("title") : null;
+      if (!el || !text || !keyboard) return setHint(null);
+      const r = el.getBoundingClientRect();
+      const above = r.bottom + 40 > window.innerHeight;
+      setHint({ text, x: Math.max(138, Math.min(window.innerWidth - 138, r.left + r.width / 2)), y: above ? r.top - 6 : r.bottom + 6, above });
+    };
+    const hide = () => setHint(null);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("focusin", onFocus);
+    window.addEventListener("focusout", hide);
+    window.addEventListener("scroll", hide, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("focusin", onFocus);
+      window.removeEventListener("focusout", hide);
+      window.removeEventListener("scroll", hide, true);
+    };
+  }, []);
+  if (!hint) return null;
+  return (
+    <div
+      aria-hidden
+      className={`pointer-events-none fixed z-[130] max-w-[260px] -translate-x-1/2 rounded-md border border-line bg-raised px-2 py-1 text-[12px] text-fg shadow-lg shadow-black/50 ${hint.above ? "-translate-y-full" : ""}`}
+      style={{ left: hint.x, top: hint.y }}
+    >
+      {hint.text}
+    </div>
   );
 }
 
@@ -411,6 +489,8 @@ export function Segmented<T extends string | number>({
   disabled?: boolean;
   disabledReason?: string;
 }) {
+  const reasonId = useId();
+  const reason = disabled ? disabledReason : undefined;
   return (
     <div role="group" aria-label={label} className="flex gap-1 rounded-md bg-bg p-0.5">
       {options.map((o) => (
@@ -418,16 +498,20 @@ export function Segmented<T extends string | number>({
           key={o.id}
           type="button"
           aria-pressed={o.id === value}
-          title={disabled ? disabledReason : o.title}
-          disabled={disabled}
-          onClick={() => onChange(o.id)}
-          className={`tabular h-7 flex-1 rounded px-2 text-[12px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
-            o.id === value ? "bg-line font-medium text-fg" : "text-muted enabled:hover:text-fg"
+          title={disabled ? reason : o.title}
+          {...disabledProps(disabled, () => onChange(o.id), reason ? reasonId : undefined)}
+          className={`tabular h-7 flex-1 rounded px-2 text-[12px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
+            o.id === value ? "bg-line font-medium text-fg" : `text-muted ${disabled ? "" : "enabled:hover:text-fg"}`
           }`}
         >
           {o.label}
         </button>
       ))}
+      {reason && (
+        <span id={reasonId} hidden>
+          {reason}
+        </span>
+      )}
     </div>
   );
 }
@@ -452,14 +536,13 @@ export function PresetTile({
     <button
       type="button"
       aria-pressed={selected}
-      disabled={disabled}
       title={title ?? label}
-      onClick={onClick}
-      className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40"
+      {...disabledProps(disabled, onClick)}
+      className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
     >
       <span
         className={`relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
-          selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-line group-enabled:group-hover:border-muted"
+          selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : disabled ? "border-line" : "border-line group-enabled:group-hover:border-muted"
         }`}
       >
         {children}
