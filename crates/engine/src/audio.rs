@@ -337,7 +337,7 @@ impl Mixer {
         if !has_audio(asset) {
             return Some(false);
         }
-        let pcm = self.source(asset)?;
+        let pcm = self.source(asset, false)?;
         let samples = pcm.samples();
         let frame = |us: i64| (us_to_samples(us.max(0)) as usize).min(pcm.frames());
         let rms = |a: usize, b: usize| {
