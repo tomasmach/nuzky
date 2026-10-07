@@ -602,6 +602,19 @@ export async function detachAudio(clipIds: string[]) {
   if (snap) toast({ kind: "info", text, action: undoAction(snap) });
 }
 
+/** Turns Clean voice on or off for the media clips in `ids`, as one undo step. */
+export function setCleanVoice(ids: string[], on: boolean) {
+  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));
+}
+
+/** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */
+export function useVoicePreparation(assetIds: string[]) {
+  return useEditor((s) => {
+    const running = assetIds.map((id) => s.jobs[`voice:${id}`]).filter((j) => j?.status === "running");
+    return running.length > 0 ? Math.min(...running.map((j) => j.progress)) : null;
+  });
+}
+
 /** Restyles every caption clip at once, as one undo step, keeping each caption's wrap width (the safe area). */
 export function applyCaptionStyle(style: TextStyle) {
   return useEditor.getState().edit(

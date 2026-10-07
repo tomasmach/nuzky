@@ -64,6 +64,8 @@ export type ClipContent =
       adjust: Adjust;
       fadeInUs: number;
       fadeOutUs: number;
+      /** High-pass, gentle denoise and de-ess for speech; playback switches to it once prepared. */
+      cleanVoice: boolean;
     }
   | { type: "text"; text: string; style: TextStyle; transform: Transform };
 
@@ -294,6 +296,7 @@ export type EditCmd =
       adjust?: Adjust | null;
       fadeInUs?: number | null;
       fadeOutUs?: number | null;
+      cleanVoice?: boolean | null;
     }
   | { type: "setAnimation"; clipId: string; slot: "in" | "out"; animation: Animation | null }
   | { type: "setTransition"; clipId: string; transition: Transition | null }

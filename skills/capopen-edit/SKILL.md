@@ -25,3 +25,5 @@ For “rozhýbej to, občas zoom, pomalý nájezd”, read the story first. A co
 ## Runs and low-level edits
 
 All timeline times are integer microseconds; time ranges are half-open [start,end). Word-index ranges above are inclusive. apply_edits takes camelCase EditCmd fields, a fresh request_id per batch, and optional expected_revision/expected_speech_layout_key from get_state. edit_transcript instead uses get_transcript.transcript_key, which also guards against re-recognition. Retry identical content with the same request_id after a save failure; the live edit may already be applied. The main track is magnetic. One run is one Undo; end_run(discard) restores its start. Runs auto-keep after two idle minutes, so plan before opening one. A stopped run returns RUN_STOPPED; never resume it. undo_run works only for the last history entry in this session. Never change the user's selection.
+
+For speech recorded with audible room noise, hum or harsh s sounds, set `{"type":"updateClip","clipId":…,"cleanVoice":true}` on its clips with sound (high-pass, gentle denoise, de-ess; not for music); export waits for the cleaned sound.
