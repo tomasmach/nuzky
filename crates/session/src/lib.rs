@@ -14,7 +14,7 @@ mod writer;
 
 pub use storage::{json_temp_path, lock_project, save as write_json_atomic};
 pub use types::*;
-pub use validate::validate;
+pub use validate::{local_media_path, validate};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};

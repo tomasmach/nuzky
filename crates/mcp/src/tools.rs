@@ -155,6 +155,7 @@ impl Backend {
             }
             "apply_edits" => {
                 let a: Apply = parse(arguments)?;
+                check_new_assets(&a.edits)?;
                 Ok(serde_json::to_value(self.host.session.apply_edits(
                     &a.run_id,
                     &a.request_id,
@@ -464,6 +465,19 @@ impl Backend {
     }
 }
 
+/// Agents add media as existing local files, as import_media does; projects may keep missing ones.
+fn check_new_assets(edits: &[EditCmd]) -> Result<()> {
+    for edit in edits {
+        if let EditCmd::AddAssets { assets } = edit {
+            for asset in assets {
+                capopen_session::local_media_path(&asset.path)?;
+                ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn owns_run(state: &SessionState, id: &str) -> Result<()> {
     ensure!(!state.read_only, "READ_ONLY: restart with --allow-write");
     ensure!(state.open_run.as_ref().is_some_and(|r| r.run_id == id), "INVALID_RUN: begin a run first");
@@ -536,6 +550,42 @@ mod tests {
         let backend = Backend::open(&path, false, dir.join("cache")).unwrap();
         let error = backend.call("inspect_frames", json!({"times_us": [0], "width": 64})).unwrap_err();
         assert!(format!("{error:#}").contains("deleted.ppm"), "{error:#}");
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn agent_assets_must_be_existing_local_files() {
+        let dir = std::env::temp_dir().join(format!("add-assets-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("still.ppm");
+        std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+        let path = dir.join("project.capopen");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("assets")).unwrap()).unwrap();
+        let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
+        let run = backend.call("begin_run", json!({"label":"assets"})).unwrap().structured_content.unwrap();
+        let mut asset = probe(&image, "still".into()).unwrap();
+        let add = |asset: &capopen_engine::model::Asset, request: &str| {
+            backend.call(
+                "apply_edits",
+                json!({"run_id":run["run_id"],"request_id":request,"edits":[{"type":"addAssets","assets":[asset]}]}),
+            )
+        };
+        for (path, code) in [
+            ("http://127.0.0.1:9/x.mp4", "INVALID_ASSET_PATH"),
+            ("concat:/a.mp4|/b.mp4", "INVALID_ASSET_PATH"),
+            ("still.ppm", "INVALID_ASSET_PATH"),
+            ("/nonexistent-capopen-asset.mp4", "MEDIA_MISSING"),
+        ] {
+            let mut bad = asset.clone();
+            bad.path = path.into();
+            let error = format!("{:#}", add(&bad, path).unwrap_err());
+            assert!(error.starts_with(code), "{path}: {error}");
+        }
+        assert!(backend.host.session.state().unwrap().project.assets.is_empty());
+        asset.path = image.to_string_lossy().into();
+        add(&asset, "ok").unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project.assets.len(), 1);
         drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
     }

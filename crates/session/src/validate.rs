@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::{Component, Path, Prefix};
 
 use anyhow::{Result, ensure};
 use capopen_engine::{
@@ -31,6 +32,7 @@ pub fn validate(project: &Project) -> Result<()> {
             "INVALID_PROJECT: asset {} timing",
             asset.id
         );
+        local_media_path(&asset.path)?;
     }
     for track in &project.tracks {
         let mut clips: Vec<_> = track.clips.iter().collect();
@@ -48,6 +50,22 @@ pub fn validate(project: &Project) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: clip time overflow"))?;
         }
     }
+    Ok(())
+}
+
+/// FFmpeg reads prefixes such as `http:`, `concat:` or `pipe:` as protocols and relative paths
+/// depend on the working directory, so media paths must be absolute and local. Missing files
+/// stay valid so the project can be relinked.
+pub fn local_media_path(path: &str) -> Result<()> {
+    let local = Path::new(path);
+    let device = matches!(
+        local.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::DeviceNS(_))
+    );
+    ensure!(
+        !path.contains('\0') && local.is_absolute() && !device,
+        "INVALID_ASSET_PATH: media must be an absolute local file path, not {path:?}"
+    );
     Ok(())
 }
 
@@ -196,12 +214,50 @@ mod tests {
     }
 
     #[test]
+    fn asset_paths_must_be_absolute_and_local_but_may_be_missing() {
+        let mut project = Project::new("paths");
+        project.assets.push(Asset {
+            id: "clip".into(),
+            name: "Clip".into(),
+            path: "/missing/clip.mp4".into(),
+            kind: AssetKind::Video,
+            duration_us: 1_000_000,
+            width: 1080,
+            height: 1920,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+        });
+        validate(&project).unwrap();
+        for path in [
+            "http://host/x.mp4",
+            "https://host/x.mp4",
+            "concat:/a.mp4|/b.mp4",
+            "pipe:0",
+            "file:/tmp/x.mp4",
+            "clip.mp4",
+            "./clip.mp4",
+            "",
+            "/tmp/a\0http://host/x.mp4",
+        ] {
+            project.assets[0].path = path.into();
+            let error = validate(&project).unwrap_err().to_string();
+            assert!(error.starts_with("INVALID_ASSET_PATH:"), "{path:?}: {error}");
+        }
+        let before = Project::new("edit");
+        let mut editor = capopen_engine::edit::Editor::new(before.clone());
+        let assets = project.assets.clone();
+        assert!(editor.apply_batch_checked(vec![EditCmd::AddAssets { assets }], None, validate).is_err());
+        assert_eq!(editor.project, before);
+    }
+
+    #[test]
     fn new_color_adjustments_reject_non_finite_values() {
         let mut project = Project::new("color validation");
         project.assets.push(Asset {
             id: "ramp".into(),
             name: "Ramp".into(),
-            path: "ramp.ppm".into(),
+            path: "/ramp.ppm".into(),
             kind: AssetKind::Image,
             duration_us: 0,
             width: 256,

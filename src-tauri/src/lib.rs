@@ -387,7 +387,18 @@ fn resolve_recovery(state: State<'_, AppState>, action: String, expected_epoch: 
 #[tauri::command]
 async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option<String>) -> CmdResult<ImportResult> {
     let probed = tauri::async_runtime::spawn_blocking(move || {
-        paths.into_iter().map(|p| (p.clone(), probe(Path::new(&p), new_id()))).collect::<Vec<_>>()
+        paths
+            .into_iter()
+            .map(|p| {
+                // FFmpeg would open URLs and protocol prefixes; only local files are media.
+                let local = capopen_session::local_media_path(&p).and_then(|()| {
+                    anyhow::ensure!(Path::new(&p).is_file(), "{p} is not a file");
+                    Ok(())
+                });
+                let result = local.and_then(|()| probe(Path::new(&p), new_id()));
+                (p, result)
+            })
+            .collect::<Vec<_>>()
     })
     .await
     .map_err(err)?;

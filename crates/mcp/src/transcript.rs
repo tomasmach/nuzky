@@ -502,7 +502,7 @@ pub(crate) mod tests {
                 assets: vec![Asset {
                     id: "talk".into(),
                     name: "talk".into(),
-                    path: "talk.mov".into(),
+                    path: "/talk.mov".into(),
                     kind: AssetKind::Video,
                     duration_us: 10_000_000,
                     width: 1080,
@@ -563,7 +563,7 @@ pub(crate) mod tests {
                 assets: vec![Asset {
                     id: "broll".into(),
                     name: "broll".into(),
-                    path: "broll.mov".into(),
+                    path: "/broll.mov".into(),
                     kind: AssetKind::Video,
                     duration_us: 6_000_000,
                     width: 1080,
