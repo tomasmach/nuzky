@@ -1,0 +1,9 @@
+/target
+/target-*
+/node_modules
+/dist
+/.cargo/config.toml
+/src-tauri/gen/schemas
+*.local
+.playwright-mcp/
+/tmp-test/

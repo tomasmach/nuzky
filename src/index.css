@@ -1,0 +1,201 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0d0e10;
+  --color-panel: #15171a;
+  --color-raised: #1d2024;
+  --color-line: #2a2e34;
+  --color-fg: #e9ebee;
+  --color-muted: #9aa1a9;
+  --color-subtle: #656c75;
+  --color-accent: #10b981;
+  --color-accent-strong: #059669;
+  --color-danger: #f05252;
+  --color-warn: #f5a524;
+  /* "clip-text" would collide with Tailwind's bg-clip-text (background-clip: text). */
+  --color-clip-video: #25435a;
+  --color-clip-image: #3a3f63;
+  --color-clip-audio: #1f4a3a;
+  --color-clip-title: #5a4520;
+  --color-clip-captions: #4a3460;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Inter", "Noto Sans", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  color-scheme: dark;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* On timeline clips the accent ring means selected, so keyboard focus is an `fg` outline just outside it. */
+[data-clip-id]:focus-visible {
+  outline-color: var(--color-fg);
+  outline-offset: 2px;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin, dark scrollbars that do not shift layout. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2f343a;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+
+/* RangeInput (ui.tsx): `line` track, accent fill between --fill-from and --fill-to, `fg` thumb. */
+input[type="range"].range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].range:disabled {
+  cursor: not-allowed;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--color-line) var(--fill-from),
+    var(--color-accent) var(--fill-from),
+    var(--color-accent) var(--fill-to),
+    var(--color-line) var(--fill-to)
+  );
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--color-fg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.range:enabled:hover::-webkit-slider-thumb {
+  background: #fff;
+}
+
+@keyframes skeleton {
+  from {
+    background-position: -200px 0;
+  }
+  to {
+    background-position: 200px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, #1d2024 0, #262a2f 50%, #1d2024 100%) no-repeat;
+  background-size: 400px 100%;
+  animation: skeleton 1.4s linear infinite;
+}
+
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.indeterminate {
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
+/*
+ * Motion previews on transition and animation tiles. At rest a tile shows a frame from the
+ * middle of the effect; hovering or focusing the tile plays it in a loop.
+ */
+.pv {
+  animation-duration: 1.4s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+  animation-play-state: paused;
+  animation-delay: -0.56s;
+}
+button:hover .pv,
+button:focus-visible .pv {
+  animation-play-state: running;
+}
+.pv-out {
+  animation-direction: reverse;
+}
+
+@keyframes t-dissolve-b { 0%, 15% { opacity: 0 } 85%, 100% { opacity: 1 } }
+@keyframes t-swap-b { 0%, 49.9% { opacity: 0 } 50%, 100% { opacity: 1 } }
+@keyframes t-flash { 0%, 10% { opacity: 0 } 50% { opacity: 1 } 90%, 100% { opacity: 0 } }
+@keyframes t-slide-left-a { 0%, 15% { transform: translateX(0) } 85%, 100% { transform: translateX(-100%) } }
+@keyframes t-slide-left-b { 0%, 15% { transform: translateX(100%) } 85%, 100% { transform: translateX(0) } }
+@keyframes t-slide-up-a { 0%, 15% { transform: translateY(0) } 85%, 100% { transform: translateY(-100%) } }
+@keyframes t-slide-up-b { 0%, 15% { transform: translateY(100%) } 85%, 100% { transform: translateY(0) } }
+@keyframes t-zoom-a { 0%, 15% { transform: scale(1); opacity: 1 } 55%, 100% { transform: scale(1.9); opacity: 0 } }
+@keyframes t-zoom-b { 0%, 40% { transform: scale(0.85); opacity: 0 } 85%, 100% { transform: scale(1); opacity: 1 } }
+@keyframes t-wipe-b { 0%, 15% { clip-path: inset(0 0 0 100%) } 85%, 100% { clip-path: inset(0 0 0 0) } }
+@keyframes t-blur-a { 0%, 10% { filter: blur(0) } 50%, 100% { filter: blur(6px) } }
+@keyframes t-blur-b { 0%, 49.9% { opacity: 0; filter: blur(6px) } 50% { opacity: 1; filter: blur(6px) } 90%, 100% { opacity: 1; filter: blur(0) } }
+
+@keyframes a-fade { 0%, 15% { opacity: 0 } 70%, 100% { opacity: 1 } }
+@keyframes a-zoomIn { 0%, 15% { opacity: 0; transform: scale(0.3) } 70%, 100% { opacity: 1; transform: scale(1) } }
+@keyframes a-zoomOut { 0%, 15% { opacity: 0; transform: scale(1.9) } 70%, 100% { opacity: 1; transform: scale(1) } }
+@keyframes a-slideUp { 0%, 15% { opacity: 0; transform: translateY(120%) } 70%, 100% { opacity: 1; transform: translateY(0) } }
+@keyframes a-slideDown { 0%, 15% { opacity: 0; transform: translateY(-120%) } 70%, 100% { opacity: 1; transform: translateY(0) } }
+@keyframes a-slideLeft { 0%, 15% { opacity: 0; transform: translateX(120%) } 70%, 100% { opacity: 1; transform: translateX(0) } }
+@keyframes a-slideRight { 0%, 15% { opacity: 0; transform: translateX(-120%) } 70%, 100% { opacity: 1; transform: translateX(0) } }
+@keyframes a-pop { 0%, 15% { transform: scale(0) } 55% { transform: scale(1.18) } 70%, 100% { transform: scale(1) } }
+@keyframes a-typewriter { 0%, 15% { clip-path: inset(0 100% 0 0) } 70%, 100% { clip-path: inset(0 0 0 0) } }
+.a-typewriter {
+  animation-timing-function: steps(5, end);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+  /* A still sweep would read as a third done; a full striped bar says "in progress" instead. */
+  .indeterminate {
+    width: 100%;
+    background: repeating-linear-gradient(135deg, var(--color-accent) 0 4px, color-mix(in srgb, var(--color-accent) 35%, transparent) 4px 8px);
+  }
+}

@@ -1,0 +1,672 @@
+//! Offscreen wgpu compositor shared by preview and export.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::{Context as _, Result};
+use wgpu::util::DeviceExt;
+
+use crate::media::Transfer;
+use crate::model::Adjust;
+
+const SHADER: &str = r#"
+struct Layer {
+    corners: array<vec4<f32>, 4>, // xy = clip-space position, zw = uv
+    opacity: vec4<f32>, // opacity, transfer (0 SDR, 1 PQ, 2 HLG)
+    adjust: vec4<f32>,
+    effects: vec4<f32>,
+    grading: vec4<f32>, // exposure, tint, highlights, shadows
+    clip: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> layer: Layer;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+    let c = layer.corners[i];
+    var out: VsOut;
+    out.pos = vec4<f32>(c.xy, 0.0, 1.0);
+    out.uv = c.zw;
+    return out;
+}
+
+fn srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
+    return select(pow((rgb + 0.055) / 1.055, vec3<f32>(2.4)), rgb / 12.92, rgb <= vec3<f32>(0.04045));
+}
+
+fn linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(rgb, vec3<f32>(1.0 / 2.4)) - 0.055, rgb * 12.92, rgb <= vec3<f32>(0.0031308));
+}
+
+const SDR_WHITE_NITS = 203.0;
+const ROLL_OFF_KNEE = 0.75;
+// Linear BT.2020 to BT.709 primaries; columns are the BT.2020 red, green and blue.
+const BT2020_TO_BT709 = mat3x3<f32>(
+    vec3<f32>(1.6605, -0.1246, -0.0182),
+    vec3<f32>(-0.5876, 1.1329, -0.1006),
+    vec3<f32>(-0.0728, -0.0083, 1.1187),
+);
+
+// PQ or HLG BT.2020 colour to SDR BT.709 as in ITU-R BT.2408: HDR reference white (203 nits) becomes
+// SDR white, highlights above the knee roll off on the brightest channel to keep their hue, and the
+// result is encoded for a BT.1886 display like the SDR video around it.
+fn hdr_to_sdr(rgb: vec3<f32>, transfer: f32) -> vec3<f32> {
+    let e = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    var nits: vec3<f32>;
+    if transfer < 1.5 {
+        let p = pow(e, vec3<f32>(1.0 / 78.84375));
+        nits = 10000.0 * pow(max(p - 0.8359375, vec3<f32>(0.0)) / (18.8515625 - 18.6875 * p), vec3<f32>(1.0 / 0.1593017578125));
+    } else {
+        let scene = select((exp((e - 0.55991073) / 0.17883277) + 0.28466892) / 12.0, e * e / 3.0, e <= vec3<f32>(0.5));
+        // HLG's OOTF on a 1000 nit display (system gamma 1.2).
+        nits = 1000.0 * pow(dot(scene, vec3<f32>(0.2627, 0.678, 0.0593)), 0.2) * scene;
+    }
+    let linear = max(BT2020_TO_BT709 * (nits / SDR_WHITE_NITS), vec3<f32>(0.0));
+    let peak = max(max(linear.r, linear.g), linear.b);
+    let rolled = ROLL_OFF_KNEE + (1.0 - ROLL_OFF_KNEE) * (1.0 - exp((ROLL_OFF_KNEE - peak) / (1.0 - ROLL_OFF_KNEE)));
+    let sdr = linear * select(1.0, rolled / peak, peak > ROLL_OFF_KNEE);
+    return pow(sdr, vec3<f32>(1.0 / 2.4));
+}
+
+fn premultiplied_texel(p: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+    let c = textureLoad(tex, clamp(p, vec2<i32>(0), size - 1), 0);
+    return select(vec4<f32>(c.rgb * c.a, c.a), c, layer.effects.z > 0.0);
+}
+
+// Bilinear filtering of premultiplied colour, so the colour of transparent texels cannot darken
+// soft edges. Textures hold straight alpha except the premultiplied transition intermediate.
+fn sample_premultiplied(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(tex));
+    let p = uv * vec2<f32>(size) - 0.5;
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    let top = mix(premultiplied_texel(i, size), premultiplied_texel(i + vec2<i32>(1, 0), size), f.x);
+    let bottom = mix(premultiplied_texel(i + vec2<i32>(0, 1), size), premultiplied_texel(i + 1, size), f.x);
+    return mix(top, bottom, f.y);
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    if in.pos.x < layer.clip.x || in.pos.y < layer.clip.y || in.pos.x >= layer.clip.z || in.pos.y >= layer.clip.w {
+        discard;
+    }
+    var c = sample_premultiplied(in.uv);
+    if layer.effects.y > 0.0 {
+        let step = vec2<f32>(layer.effects.y) / vec2<f32>(textureDimensions(tex));
+        c = vec4<f32>(0.0);
+        for (var y = -2; y <= 2; y += 1) {
+            for (var x = -2; x <= 2; x += 1) {
+                c += sample_premultiplied(in.uv + vec2<f32>(f32(x), f32(y)) * step) / 25.0;
+            }
+        }
+    }
+    var rgb = c.rgb;
+    let adjusting = any(layer.adjust != vec4<f32>(0.0)) || any(layer.grading != vec4<f32>(0.0)) || layer.effects.x != 0.0 || layer.effects.w != 0.0;
+    let hdr = layer.opacity.y > 0.0;
+    if adjusting || hdr {
+        // Tone mapping and adjustments work on straight colour.
+        rgb = select(vec3<f32>(0.0), rgb / c.a, c.a > 0.0);
+        if hdr {
+            rgb = hdr_to_sdr(rgb, layer.opacity.y);
+        }
+        if adjusting {
+            const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
+            const EXPOSURE_STOPS = 2.0;
+            const TONE_STRENGTH = 0.25;
+            const FADE_BLACK = 0.25;
+            const FADE_WHITE = 0.05;
+            if layer.grading.x != 0.0 {
+                // Exposure multiplies linear light by 2^stops; skipping zero avoids a lossy round-trip.
+                rgb = linear_to_srgb(srgb_to_linear(rgb) * exp2(layer.grading.x * EXPOSURE_STOPS));
+            }
+            rgb += vec3<f32>(0.15, 0.025, -0.15) * layer.adjust.w;
+            // Tint opposes green to equal red/blue shifts, with the temperature control's strength.
+            rgb += vec3<f32>(0.075, -0.15, 0.075) * layer.grading.y;
+            let tone_luma = dot(rgb, LUMA);
+            // Highlights smoothly approach white/black only above mid-grey; the bounded mix avoids hard clipping.
+            let highlights = smoothstep(0.5, 1.0, tone_luma) * layer.grading.z * TONE_STRENGTH;
+            rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, highlights > 0.0)), abs(highlights));
+            // Shadows use the mirrored mask below mid-grey; 0.25 keeps the grey ramp monotonic even at full strength.
+            let shadows = (1.0 - smoothstep(0.0, 0.5, tone_luma)) * layer.grading.w * TONE_STRENGTH;
+            rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, shadows > 0.0)), abs(shadows));
+            rgb = (rgb - 0.5) * (1.0 + layer.adjust.y * 0.8) + 0.5;
+            rgb += layer.adjust.x * 0.4;
+            let luma = dot(rgb, LUMA);
+            rgb = mix(vec3<f32>(luma), rgb, 1.0 + layer.adjust.z);
+            // Fade maps black to 0.25 and white to 0.95 at full strength, without changing hue.
+            rgb = rgb * (1.0 - layer.effects.w * (FADE_BLACK + FADE_WHITE)) + layer.effects.w * FADE_BLACK;
+            let edge = smoothstep(0.2, 0.72, distance(in.uv, vec2<f32>(0.5)));
+            rgb *= 1.0 - edge * layer.effects.x * 0.85;
+        }
+        rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * c.a;
+    }
+    return vec4<f32>(rgb, c.a) * layer.opacity.x;
+}
+"#;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LayerUniform {
+    corners: [[f32; 4]; 4],
+    opacity: [f32; 4],
+    adjust: [f32; 4],
+    effects: [f32; 4],
+    grading: [f32; 4],
+    clip: [f32; 4],
+}
+
+/// Straight-alpha RGBA image shared between frames without copying.
+#[derive(Clone)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub data: Arc<Vec<u8>>,
+}
+
+#[derive(Clone)]
+pub struct Layer {
+    pub image: Image,
+    /// Output pixel positions of the top-left, top-right, bottom-right, bottom-left corners.
+    pub corners: [[f32; 2]; 4],
+    /// Clockwise rotation of the image inside the quad (0, 90, 180, 270).
+    pub uv_rotation: u32,
+    /// Mirrors the rotated image left to right.
+    pub mirror: bool,
+    pub opacity: f32,
+    pub adjust: Adjust,
+    pub blur: f32,
+    pub clip: Option<[f32; 4]>,
+    pub transfer: Transfer,
+}
+
+pub enum Draw {
+    Layer(Layer),
+    /// Both layers contribute premultiplied colour to a transparent intermediate.
+    Transition([Layer; 2]),
+}
+
+struct Target {
+    size: (u32, u32),
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    padded_row: u32,
+}
+
+struct TransitionTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    uniform: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+pub struct Gpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::RenderPipeline,
+    additive: wgpu::RenderPipeline,
+    transitions: Vec<TransitionTarget>,
+    layout: wgpu::BindGroupLayout,
+    target: Option<Target>,
+    /// Textures from the previous frame, keyed by the image allocation they hold.
+    textures: HashMap<usize, (Arc<Vec<u8>>, wgpu::Texture)>,
+    pub adapter_name: String,
+}
+
+impl Gpu {
+    pub fn new() -> Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .context("No GPU adapter found")?;
+        let adapter_name = adapter.get_info().name;
+        let (device, queue) = pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor { label: Some("capopen"), ..Default::default() }),
+        )
+        .context("Cannot open GPU device")?;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("compositor"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("layer"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("compositor"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let make_pipeline = |blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("compositor"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let additive = make_pipeline(wgpu::BlendState { color: component, alpha: component });
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+            additive,
+            transitions: Vec::new(),
+            layout,
+            target: None,
+            textures: HashMap::new(),
+            adapter_name,
+        })
+    }
+
+    pub fn max_texture_dimension(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
+    fn target(&mut self, w: u32, h: u32) -> &Target {
+        if self.target.as_ref().map(|t| t.size) != Some((w, h)) {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("frame"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let padded_row = (w * 4).div_ceil(256) * 256;
+            let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: padded_row as u64 * h as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.target = Some(Target { size: (w, h), texture, view, readback, padded_row });
+        }
+        self.target.as_ref().unwrap()
+    }
+
+    fn texture_for(&mut self, image: &Image) -> Result<wgpu::Texture> {
+        let key = Arc::as_ptr(&image.data) as usize;
+        if let Some((_, tex)) = self.textures.get(&key) {
+            return Ok(tex.clone());
+        }
+        // wgpu panics on invalid textures; callers size layers to the limit, so this is a bug guard.
+        let max = self.max_texture_dimension();
+        if image.width == 0
+            || image.height == 0
+            || image.width.max(image.height) > max
+            || image.data.len() < image.width as usize * image.height as usize * 4
+        {
+            anyhow::bail!("Cannot draw a {}×{} layer (GPU limit {max} px)", image.width, image.height);
+        }
+        let size = wgpu::Extent3d { width: image.width, height: image.height, depth_or_array_layers: 1 };
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("layer"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &image.data,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(image.width * 4), rows_per_image: None },
+            size,
+        );
+        self.textures.insert(key, (image.data.clone(), tex.clone()));
+        Ok(tex)
+    }
+
+    fn bind(&self, layer: &Layer, tex: &wgpu::Texture, w: u32, h: u32, premult: bool) -> wgpu::BindGroup {
+        let base = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let shift = (layer.uv_rotation / 90) as usize % 4;
+        let mut corners = [[0.0; 4]; 4];
+        // Triangle strip order: top-left, top-right, bottom-left, bottom-right.
+        for (slot, cyclic) in [0usize, 1, 3, 2].into_iter().enumerate() {
+            let p = layer.corners[cyclic];
+            // Mirrored, each corner shows what its left-right partner would.
+            let source = if layer.mirror { [1, 0, 3, 2][cyclic] } else { cyclic };
+            let uv = base[(source + 4 - shift) % 4];
+            corners[slot] = [p[0] / w as f32 * 2.0 - 1.0, 1.0 - p[1] / h as f32 * 2.0, uv[0], uv[1]];
+        }
+        let a = layer.adjust;
+        let uniform = LayerUniform {
+            corners,
+            opacity: [layer.opacity.clamp(0.0, 1.0), layer.transfer as u8 as f32, 0.0, 0.0],
+            adjust: [a.brightness, a.contrast, a.saturation, a.temperature],
+            effects: [a.vignette, layer.blur, premult as u8 as f32, a.fade],
+            grading: [a.exposure, a.tint, a.highlights, a.shadows],
+            clip: layer.clip.unwrap_or([0.0, 0.0, w as f32, h as f32]),
+        };
+        let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("layer"),
+            contents: bytemuck::bytes_of(&uniform),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let view = tex.create_view(&Default::default());
+        self.bind_group(&buffer, &view)
+    }
+
+    fn bind_group(&self, buffer: &wgpu::Buffer, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("layer"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+            ],
+        })
+    }
+
+    fn draw_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        background: [f32; 4],
+        groups: &[wgpu::BindGroup],
+        additive: bool,
+    ) {
+        let [r, g, b, a] = background;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: r as f64, g: g as f64, b: b as f64, a: a as f64 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(if additive { &self.additive } else { &self.pipeline });
+        for bg in groups {
+            pass.set_bind_group(0, bg, &[]);
+            pass.draw(0..4, 0..1);
+        }
+    }
+
+    /// Composites the layers bottom to top over `background` and returns tight RGBA rows.
+    pub fn render(&mut self, w: u32, h: u32, background: [f32; 4], layers: &[Draw]) -> Result<Vec<u8>> {
+        let max = self.max_texture_dimension();
+        if w > max || h > max {
+            anyhow::bail!("This resolution is larger than your GPU supports (max {max} px)");
+        }
+        let mut used = Vec::new();
+        let mut bind_groups = Vec::new();
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let mut transition_index = 0;
+        for draw in layers {
+            match draw {
+                Draw::Layer(layer) => {
+                    let tex = self.texture_for(&layer.image)?;
+                    used.push(Arc::as_ptr(&layer.image.data) as usize);
+                    bind_groups.push(self.bind(layer, &tex, w, h, false));
+                }
+                Draw::Transition(pair) => {
+                    let mut groups = Vec::new();
+                    for layer in pair {
+                        let tex = self.texture_for(&layer.image)?;
+                        used.push(Arc::as_ptr(&layer.image.data) as usize);
+                        groups.push(self.bind(layer, &tex, w, h, false));
+                    }
+                    if self.transitions.get(transition_index).map(|t| (t.texture.width(), t.texture.height()))
+                        != Some((w, h))
+                    {
+                        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("transition"),
+                            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        });
+                        let view = texture.create_view(&Default::default());
+                        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("transition"),
+                            size: std::mem::size_of::<LayerUniform>() as u64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        let bind_group = self.bind_group(&uniform, &view);
+                        let target = TransitionTarget { texture, view, uniform, bind_group };
+                        if transition_index == self.transitions.len() {
+                            self.transitions.push(target);
+                        } else {
+                            self.transitions[transition_index] = target;
+                        }
+                    }
+                    let target = &self.transitions[transition_index];
+                    transition_index += 1;
+                    self.draw_pass(&mut encoder, &target.view, [0.0; 4], &groups, true);
+                    let uniform = LayerUniform {
+                        corners: [
+                            [-1.0, 1.0, 0.0, 0.0],
+                            [1.0, 1.0, 1.0, 0.0],
+                            [-1.0, -1.0, 0.0, 1.0],
+                            [1.0, -1.0, 1.0, 1.0],
+                        ],
+                        opacity: [1.0, 0.0, 0.0, 0.0],
+                        adjust: [0.0; 4],
+                        effects: [0.0, 0.0, 1.0, 0.0],
+                        grading: [0.0; 4],
+                        clip: [0.0, 0.0, w as f32, h as f32],
+                    };
+                    self.queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
+                    bind_groups.push(target.bind_group.clone());
+                }
+            }
+        }
+        self.textures.retain(|k, _| used.contains(k));
+
+        self.target(w, h);
+        let target = self.target.as_ref().unwrap();
+        self.draw_pass(&mut encoder, &target.view, background, &bind_groups, false);
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &target.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.padded_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(Some(encoder.finish()));
+
+        let slice = target.readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            tx.send(r).ok();
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).context("GPU poll failed")?;
+        rx.recv()?.context("Mapping readback buffer failed")?;
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        {
+            let data = slice.get_mapped_range().context("Reading back the frame failed")?;
+            let row = (w * 4) as usize;
+            for y in 0..h as usize {
+                let start = y * target.padded_row as usize;
+                out.extend_from_slice(&data[start..start + row]);
+            }
+        }
+        target.readback.unmap();
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transition_resources_reuse_and_resize() {
+        let mut gpu = Gpu::new().unwrap();
+        let layer = Layer {
+            image: Image { width: 1, height: 1, data: Arc::new(vec![80, 100, 120, 255]) },
+            corners: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]],
+            uv_rotation: 0,
+            mirror: false,
+            opacity: 0.5,
+            adjust: Adjust::default(),
+            blur: 0.0,
+            clip: None,
+            transfer: Transfer::Sdr,
+        };
+        let draws = [Draw::Transition([layer.clone(), layer])];
+        let first = gpu.render(2, 2, [0.0; 4], &draws).unwrap();
+        let group = gpu.transitions[0].bind_group.clone();
+        assert_eq!(gpu.render(2, 2, [0.0; 4], &draws).unwrap(), first);
+        assert_eq!(gpu.transitions[0].bind_group, group);
+        let resized = gpu.render(4, 4, [0.0; 4], &draws).unwrap();
+        assert_ne!(gpu.transitions[0].bind_group, group);
+        assert!(resized.chunks_exact(4).all(|p| p == &first[..4]));
+        let max = gpu.max_texture_dimension();
+        assert_eq!(
+            gpu.render(max + 1, 2, [0.0; 4], &[]).unwrap_err().to_string(),
+            format!("This resolution is larger than your GPU supports (max {max} px)")
+        );
+    }
+
+    /// Text and PNG edges store transparent texels as black; filtering them unpremultiplied
+    /// drew a dark fringe around scaled white text over a light background.
+    #[test]
+    fn scaled_soft_edges_have_no_dark_fringe() {
+        let mut gpu = Gpu::new().unwrap();
+        let mut layer = Layer {
+            image: Image { width: 2, height: 1, data: Arc::new(vec![255, 255, 255, 255, 0, 0, 0, 0]) },
+            corners: [[0.0, 0.0], [64.0, 0.0], [64.0, 2.0], [0.0, 2.0]],
+            uv_rotation: 0,
+            mirror: false,
+            opacity: 1.0,
+            adjust: Adjust::default(),
+            blur: 0.0,
+            clip: None,
+            transfer: Transfer::Sdr,
+        };
+        for adjust in [false, true] {
+            layer.adjust.contrast = if adjust { 0.2 } else { 0.0 };
+            let out = gpu.render(64, 2, [1.0; 4], &[Draw::Layer(layer.clone())]).unwrap();
+            let darkest = out.chunks_exact(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
+            assert!(darkest >= 254, "adjust={adjust}: darkest edge pixel {darkest}");
+        }
+        // Half-covered texels keep their straight colour through adjustments.
+        layer.image = Image { width: 1, height: 1, data: Arc::new(vec![200, 100, 50, 128]) };
+        layer.adjust = Adjust { saturation: -1.0, ..Adjust::default() };
+        let out = gpu.render(2, 2, [0.0, 0.0, 0.0, 1.0], &[Draw::Layer(layer)]).unwrap();
+        let grey = (0.2126 * 200.0 + 0.7152 * 100.0 + 0.0722 * 50.0) * 128.0 / 255.0;
+        assert!(out[..3].iter().all(|&v| (v as f32 - grey).abs() <= 1.5), "{:?} vs {grey}", &out[..4]);
+    }
+
+    #[test]
+    fn zero_adjust_preserves_pixels_and_crossfade_preserves_colour() {
+        let mut gpu = Gpu::new().unwrap();
+        let pixels = vec![30, 80, 170, 255, 250, 130, 20, 255, 0, 255, 90, 255, 128, 128, 128, 255];
+        let layer = Layer {
+            image: Image { width: 2, height: 2, data: Arc::new(pixels.clone()) },
+            corners: [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
+            uv_rotation: 0,
+            mirror: false,
+            opacity: 1.0,
+            adjust: Adjust::default(),
+            blur: 0.0,
+            clip: None,
+            transfer: Transfer::Sdr,
+        };
+        assert_eq!(gpu.render(2, 2, [0.0; 4], &[Draw::Layer(layer.clone())]).unwrap(), pixels);
+        let mut half = layer.clone();
+        half.opacity = 0.5;
+        let mixed = gpu.render(2, 2, [1.0, 0.0, 1.0, 1.0], &[Draw::Transition([half.clone(), half])]).unwrap();
+        for (a, b) in mixed.iter().zip(&pixels) {
+            assert!((*a as i16 - *b as i16).abs() <= 1);
+        }
+        let mut grey = layer;
+        grey.adjust.saturation = -1.0;
+        let output = gpu.render(2, 2, [0.0; 4], &[Draw::Layer(grey)]).unwrap();
+        for pixel in output.chunks_exact(4) {
+            assert_eq!(pixel[0], pixel[1]);
+            assert_eq!(pixel[1], pixel[2]);
+        }
+    }
+}

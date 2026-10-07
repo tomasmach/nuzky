@@ -1,0 +1,47 @@
+[
+  {
+    "family": "Anton",
+    "file": "anton/Anton-Regular.ttf",
+    "weight": "400"
+  },
+  {
+    "family": "Bebas Neue",
+    "file": "bebasneue/BebasNeue-Regular.ttf",
+    "weight": "400"
+  },
+  {
+    "family": "Inter",
+    "file": "inter/Inter[opsz,wght].ttf",
+    "weight": "100 900"
+  },
+  {
+    "family": "Lexend",
+    "file": "lexend/Lexend[wght].ttf",
+    "weight": "100 900"
+  },
+  {
+    "family": "Montserrat",
+    "file": "montserrat/Montserrat[wght].ttf",
+    "weight": "100 900"
+  },
+  {
+    "family": "Oswald",
+    "file": "oswald/Oswald[wght].ttf",
+    "weight": "200 700"
+  },
+  {
+    "family": "Poppins",
+    "file": "poppins/Poppins-Regular.ttf",
+    "weight": "400"
+  },
+  {
+    "family": "Poppins",
+    "file": "poppins/Poppins-Bold.ttf",
+    "weight": "700"
+  },
+  {
+    "family": "Roboto",
+    "file": "roboto/Roboto[wdth,wght].ttf",
+    "weight": "100 900"
+  }
+]
