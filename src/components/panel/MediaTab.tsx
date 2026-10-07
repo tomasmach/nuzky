@@ -1,15 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { AudioLines, Film, Plus, Trash2, Upload } from "lucide-react";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { Button, ProgressBar } from "../ui";
-import { KindIcon, RemoveConfirm, addAtPlayhead, assetDragHandler, pickAndImport } from "./assets";
+import { KindIcon, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 function MediaItem({ asset }: { asset: Asset }) {
   const thumb = useEditor((s) => s.thumbs[asset.id]);
   const job = useEditor((s) => s.jobs[`audio:${asset.id}`]);
-  const [confirm, setConfirm] = useState(false);
   const epoch = useEditor((s) => s.snap?.sessionEpoch);
   useEffect(() => useEditor.getState().loadThumb(asset.id), [asset.id, epoch]);
   const preparing = job?.status === "running";
@@ -50,8 +49,8 @@ function MediaItem({ asset }: { asset: Asset }) {
         <button
           type="button"
           aria-label={`Remove ${asset.name}`}
-          title="Remove from project"
-          onClick={() => setConfirm(true)}
+          title="Remove from project, with its clips"
+          onClick={() => removeAsset(asset)}
           className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/70 text-fg opacity-0 transition-opacity duration-[120ms] hover:bg-black/90 hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
         >
           <Trash2 size={14} />
@@ -66,7 +65,6 @@ function MediaItem({ asset }: { asset: Asset }) {
         <KindIcon kind={asset.kind} size={12} />
         <span className="truncate">{asset.name}</span>
       </div>
-      {confirm && <RemoveConfirm asset={asset} onKeep={() => setConfirm(false)} />}
     </div>
   );
 }

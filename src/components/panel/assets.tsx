@@ -2,9 +2,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Film, Image as ImageIcon } from "lucide-react";
 import { api, errorText } from "../../lib/api";
 import { followPointer } from "../../lib/drag";
-import { MAIN_TRACK, aiLocked, currentEpoch, findClip, useEditor } from "../../lib/store";
+import { MAIN_TRACK, aiLocked, allClips, currentEpoch, findClip, undoAction, useEditor } from "../../lib/store";
 import type { Asset } from "../../lib/types";
-import { Button } from "../ui";
 
 export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
 export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif", "bmp"];
@@ -102,26 +101,10 @@ export function KindIcon({ kind, size = 14 }: { kind: Asset["kind"]; size?: numb
   return <Film size={size} />;
 }
 
-/** Confirmation overlay for removing an asset and its clips. */
-export function RemoveConfirm({ asset, onKeep }: { asset: Asset; onKeep: () => void }) {
-  const edit = useEditor((s) => s.edit);
-  return (
-    <div
-      className="absolute inset-0 z-10 flex cursor-default flex-col items-center justify-center gap-2 rounded-md bg-panel/95 p-2 text-center text-[12px]"
-      role="alertdialog"
-      aria-label={`Remove ${asset.name}?`}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-    >
-      <span>Remove from project? Its clips are removed too.</span>
-      <span className="flex gap-1">
-        <Button variant="danger" className="h-7" onClick={() => edit({ type: "removeAsset", assetId: asset.id })}>
-          Remove
-        </Button>
-        <Button className="h-7" autoFocus onClick={onKeep}>
-          Keep
-        </Button>
-      </span>
-    </div>
-  );
+/** Removes an asset and its clips at once; the toast's Undo brings both back. */
+export async function removeAsset(asset: Asset) {
+  const { snap: before, edit, toast } = useEditor.getState();
+  const n = before ? allClips(before.project).filter((c) => c.content.type === "media" && c.content.assetId === asset.id).length : 0;
+  const snap = await edit({ type: "removeAsset", assetId: asset.id });
+  if (snap) toast({ kind: "info", text: n > 0 ? `Removed ${asset.name} and its ${n === 1 ? "clip" : `${n} clips`}` : `Removed ${asset.name}`, action: undoAction(snap) });
 }

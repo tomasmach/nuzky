@@ -1,15 +1,13 @@
-import { useState } from "react";
 import { AudioLines, Music, Plus, Trash2 } from "lucide-react";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { Waveform } from "../timeline/Waveform";
 import { Button, ProgressBar } from "../ui";
-import { RemoveConfirm, addAtPlayhead, assetDragHandler, pickAndImport } from "./assets";
+import { addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 function AudioItem({ asset }: { asset: Asset }) {
   const job = useEditor((s) => s.jobs[`audio:${asset.id}`]);
-  const [confirm, setConfirm] = useState(false);
   return (
     <div
       onPointerDown={assetDragHandler(asset.id)}
@@ -34,8 +32,8 @@ function AudioItem({ asset }: { asset: Asset }) {
       <button
         type="button"
         aria-label={`Remove ${asset.name}`}
-        title="Remove from project"
-        onClick={() => setConfirm(true)}
+        title="Remove from project, with its clips"
+        onClick={() => removeAsset(asset)}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <Trash2 size={14} />
@@ -49,7 +47,6 @@ function AudioItem({ asset }: { asset: Asset }) {
       >
         <Plus size={16} />
       </button>
-      {confirm && <RemoveConfirm asset={asset} onKeep={() => setConfirm(false)} />}
     </div>
   );
 }
