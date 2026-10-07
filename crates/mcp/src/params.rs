@@ -78,6 +78,8 @@ pub enum AnalysisKind {
     Loudness,
     Scenes,
     Fillers,
+    /// Restarted sentences and leading fillers over the whole timeline, returned at once.
+    Retakes,
 }
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -93,7 +95,8 @@ pub struct AnalysisParams {
 #[serde(deny_unknown_fields)]
 pub struct Analyze {
     pub kind: AnalysisKind,
-    pub asset_id: String,
+    /// Required for silences, loudness, scenes and fillers. Omit for retakes.
+    pub asset_id: Option<String>,
     #[serde(default)]
     pub params: AnalysisParams,
 }

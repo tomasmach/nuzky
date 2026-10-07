@@ -98,6 +98,12 @@ impl Client {
         assert_ne!(result["result"]["isError"], true, "{result}");
         result["result"]["structuredContent"].clone()
     }
+    /// The message of a call that must fail.
+    fn error(&mut self, tool: &str, args: Value) -> String {
+        let result = self.rpc("tools/call", json!({"name":tool,"arguments":args}));
+        assert_eq!(result["result"]["isError"], true, "{result}");
+        result["result"]["content"][0]["text"].as_str().unwrap().to_owned()
+    }
     fn finish(&mut self) {
         self.input.take();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -246,6 +252,27 @@ fn recovery_tool_resolves_both_choices_over_stdio() {
 }
 
 #[test]
+fn retakes_answer_at_once_even_for_read_only_clients() {
+    let mut c = Client::with_style(None);
+    let tools = c.rpc("tools/list", json!({}));
+    let analyze = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "analyze").unwrap();
+    assert_eq!(analyze["inputSchema"]["required"], json!(["kind"]));
+    let retakes = c.call("analyze", json!({"kind":"retakes"}));
+    assert_eq!(retakes["time_basis"], "timeline");
+    assert_eq!(retakes["transcript_key"], c.call("get_transcript", json!({}))["transcript_key"]);
+    for list in ["groups", "fillers", "review", "suggested_delete"] {
+        assert_eq!(retakes[list], json!([]), "{retakes}");
+    }
+    // The other kinds still need an asset and start a job, which a read-only client cannot.
+    assert!(c.error("analyze", json!({"kind":"retakes","asset_id":"a"})).contains("omit asset_id"));
+    assert!(c.error("analyze", json!({"kind":"silences","asset_id":"a"})).contains("READ_ONLY"));
+    c.finish();
+    let mut writer = Client::start(true, None, Some(None));
+    assert!(writer.error("analyze", json!({"kind":"fillers"})).contains("asset_id is required"));
+    writer.finish();
+}
+
+#[test]
 #[ignore = "Requires tmp-test/talk.mp4 and installed small + Silero models; run with XDG_DATA_HOME=tmp-test/xdg/data"]
 fn transcribe_edit_and_caption_real_media_over_stdio() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -285,5 +312,76 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     let captions = c.call("build_captions", json!({"run_id":run["run_id"]}));
     assert!(captions["caption_count"].as_u64().unwrap() > 0);
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    c.finish();
+}
+
+#[test]
+#[ignore = "Requires tmp-test/reel-1..3.mp4 from scripts/fixtures.sh and large-v3-turbo-q5_0 + Silero in tmp-test/xdg/data/capopen/models"]
+fn retakes_of_three_czech_takes_over_stdio() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let model = root.join("tmp-test/xdg/data/capopen/models/ggml-large-v3-turbo-q5_0.bin");
+    let takes: Vec<PathBuf> = (1..=3).map(|n| root.join(format!("tmp-test/reel-{n}.mp4"))).collect();
+    // Its own data directory, so no transcript stored by an earlier run is found.
+    let mut c = Client::start(true, None, Some(None));
+    let run = c.call("begin_run", json!({"label":"takes"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":takes}))["asset_ids"].clone();
+    let place: Vec<Value> = ids.as_array().unwrap().iter().map(|id| json!({"type":"addClip","assetId":id})).collect();
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":place}));
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    assert!(c.error("analyze", json!({"kind":"retakes"})).contains("TRANSCRIPT_MISSING"));
+
+    let job = c.call("transcribe", json!({"language":"cs","model":model}));
+    let deadline = std::time::Instant::now() + Duration::from_secs(900);
+    loop {
+        let status = c.call("job", json!({"job_id":job["job_id"],"action":"get"}));
+        if status["status"] == "done" {
+            break;
+        }
+        assert_eq!(status["status"], "running", "{status}");
+        assert!(std::time::Instant::now() < deadline, "transcription timed out");
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    let transcript = c.call("get_transcript", json!({}));
+    let analysis = c.call("analyze", json!({"kind":"retakes"}));
+    eprintln!("{}", serde_json::to_string_pretty(&analysis).unwrap());
+    assert_eq!(analysis, c.call("analyze", json!({"kind":"retakes"})), "the same words gave another analysis");
+    assert_eq!(analysis["transcript_key"], transcript["transcript_key"]);
+    assert_eq!(analysis["time_basis"], "timeline");
+    let words: Vec<&str> =
+        transcript["words"].as_array().unwrap().iter().map(|w| w["text"].as_str().unwrap().trim()).collect();
+    let said =
+        |from: &Value, to: &Value| words[from.as_u64().unwrap() as usize..=to.as_u64().unwrap() as usize].join(" ");
+    let plain =
+        |text: &str| text.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect::<String>();
+
+    // Exactly two restarted sentences, each keeping its last attempt.
+    let groups = analysis["groups"].as_array().unwrap();
+    let attempts: Vec<Vec<String>> = groups
+        .iter()
+        .map(|g| g["sentences"].as_array().unwrap().iter().map(|s| plain(&said(&s["from"], &s["to"]))).collect())
+        .collect();
+    assert_eq!(attempts.iter().map(Vec::len).collect::<Vec<_>>(), [3, 2], "{attempts:?}");
+    // Recognition hears the first "Kamera musí stát" differently from run to run, e.g. "start".
+    assert!(attempts[0].iter().all(|a| a.starts_with("dneska vám ukážu")), "{attempts:?}");
+    assert!(attempts[1].iter().all(|a| a.starts_with("kamera musí st")), "{attempts:?}");
+    assert_eq!(groups.iter().map(|g| g["keep"].as_u64().unwrap()).collect::<Vec<_>>(), [2, 1]);
+    assert!(attempts[0][2].ends_with("za 10 minut"), "{attempts:?}");
+    assert_eq!(attempts[1][1], "kamera musí stát pevně na stativu");
+    // Only the filler words that start a sentence.
+    let fillers: Vec<String> =
+        analysis["fillers"].as_array().unwrap().iter().map(|f| plain(&said(&f["from"], &f["to"]))).collect();
+    assert_eq!(fillers, ["ehm", "jakoby", "prostě"]);
+    assert_eq!(analysis["review"], json!([]), "{analysis}");
+
+    // suggested_delete plans as is, leaving each kept sentence once and no filler.
+    let plan = c.call(
+        "edit_transcript",
+        json!({"transcript_key":transcript["transcript_key"],"delete":analysis["suggested_delete"],"dry_run":true}),
+    );
+    let text = plain(plan["preview_text"].as_str().unwrap());
+    assert!(text.starts_with("dneska vám ukážu jak natočit video za 10 minut nejd"), "{text}");
+    assert_eq!(text.matches("dneska").count(), 1, "{text}");
+    assert_eq!(text.matches("kamera musí stát").count(), 1, "{text}");
+    assert!(["ehm", "jakoby", "prostě"].iter().all(|f| !text.contains(f)), "{text}");
     c.finish();
 }
