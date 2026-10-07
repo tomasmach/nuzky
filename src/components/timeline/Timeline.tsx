@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Copy, Magnet, Maximize2, PanelLeftClose, PanelRightClose, Scissors, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, projectDuration, splitAtPlayhead, splitTargets, useAiLocked, useEditor } from "../../lib/store";
+import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, mainClips, projectDuration, splitAtPlayhead, splitTargets, useAiLocked, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
-import type { Clip, Track } from "../../lib/types";
+import type { Clip, Project, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
 import { IconButton, RangeInput } from "../ui";
 import { ClipMenu, type MenuAt } from "./ClipMenu";
 import { ClipView } from "./ClipView";
 import { CutMarkers } from "./CutMarkers";
 import { TrackHeader } from "./TrackHeader";
-import { dragResult, useTimelineGestures } from "./useTimelineGestures";
+import { dragResult, useTimelineGestures, type Drag } from "./useTimelineGestures";
 
 const HEADER_W = 132;
 const RULER_H = 28;
@@ -20,6 +20,49 @@ function rowHeight(track: Track) {
   if (track.kind === "video") return 50;
   if (track.kind === "audio") return 46;
   return 34;
+}
+
+type Timing = { startUs: number; durationUs: number };
+
+/** Where the engine puts a clip moved or added to the magnetic main track: before the first other clip whose middle is later. */
+function mainInsertIndex(others: Clip[], startUs: number) {
+  const i = others.findIndex((c) => c.startUs + c.durationUs / 2 > startUs);
+  return i < 0 ? others.length : i;
+}
+
+/**
+ * The main track as the drag in progress would leave it, so neighbours move live: a moved clip
+ * opens a slot where it would go in (`slotUs`, null when it leaves the track) and the gap it left
+ * closes; a trim keeps the clip's start and moves everything after it by the change in length.
+ */
+function mainLayout(project: Project, d: Drag | null, minUs: number): { timing: Map<string, Timing>; slotUs: number | null } | null {
+  if (!d?.moved) return null;
+  const main = mainClips(project);
+  const timing = new Map<string, Timing>();
+  const r = dragResult(d, minUs);
+  if (d.mode === "move") {
+    const dest = d.target === undefined ? d.trackId : d.target;
+    if (d.trackId !== MAIN_TRACK && dest !== MAIN_TRACK) return null;
+    const others = main.filter((c) => c.id !== d.clip.id);
+    const at = dest === MAIN_TRACK ? mainInsertIndex(others, r.startUs) : -1;
+    let t = 0;
+    let slotUs: number | null = null;
+    others.forEach((c, i) => {
+      if (i === at) {
+        slotUs = t;
+        t += d.clip.durationUs;
+      }
+      timing.set(c.id, { startUs: t, durationUs: c.durationUs });
+      t += c.durationUs;
+    });
+    if (at === others.length) slotUs = t;
+    return { timing, slotUs };
+  }
+  if (d.trackId !== MAIN_TRACK) return null;
+  const shift = r.durationUs - d.clip.durationUs;
+  for (const c of main)
+    timing.set(c.id, c.id === d.clip.id ? { startUs: c.startUs, durationUs: r.durationUs } : { startUs: c.startUs > d.clip.startUs ? c.startUs + shift : c.startUs, durationUs: c.durationUs });
+  return { timing, slotUs: null };
 }
 
 function tickStep(zoom: number): number {
@@ -165,13 +208,22 @@ export function Timeline({ height }: { height: number }) {
   const ticks: number[] = [];
   for (let t = firstTick; t <= lastTick; t += step) ticks.push(Math.round(t * 1000) / 1000);
 
-  const ghostTiming = drag?.moved ? dragResult(drag, minUs) : null;
+  const layout = mainLayout(project, drag, minUs);
+  // A trimmed main-track clip shows where it ends up; elsewhere the ghost follows the pointer.
+  const ghostTiming = drag?.moved ? ((drag.mode !== "move" && layout?.timing.get(drag.clip.id)) || dragResult(drag, minUs)) : null;
   const ghostTrackId = drag?.moved ? (drag.target === undefined ? drag.trackId : drag.target) : null;
+  // Media dropped on the magnetic main track goes in at a cut, so the line shows that cut.
   const dropTime =
     assetDrag && scroller.current
       ? (() => {
           const r = scroller.current.getBoundingClientRect();
-          return assetDrag.x >= r.left && assetDrag.x <= r.right && assetDrag.y >= r.top && assetDrag.y <= r.bottom ? timeAt(assetDrag.x) : null;
+          if (assetDrag.x < r.left || assetDrag.x > r.right || assetDrag.y < r.top || assetDrag.y > r.bottom) return null;
+          const t = timeAt(assetDrag.x);
+          const mainRow = rows.current.get(MAIN_TRACK)?.getBoundingClientRect();
+          if (!mainRow || assetDrag.y < mainRow.top || assetDrag.y > mainRow.bottom) return t;
+          const main = mainClips(project);
+          const i = mainInsertIndex(main, t);
+          return i < main.length ? main[i].startUs : main.reduce((end, c) => Math.max(end, c.startUs + c.durationUs), 0);
         })()
       : null;
   const emptyTimeline = allClips(project).length === 0;
@@ -298,14 +350,19 @@ export function Timeline({ height }: { height: number }) {
                         Drag media here, or press + on a media item
                       </div>
                     )}
-                    {track.clips.map((clip) =>
-                      drag?.moved && drag.clip.id === clip.id ? (
-                        <div
-                          key={clip.id}
-                          className="absolute top-1 bottom-1 rounded-md border border-dashed border-muted/50"
-                          style={{ left: (clip.startUs / US) * zoom + 1, width: (clip.durationUs / US) * zoom - 2 }}
-                        />
-                      ) : (
+                    {track.clips.map((clip) => {
+                      if (drag?.moved && drag.clip.id === clip.id) {
+                        // A trimmed main-track clip is drawn by its ghost in place; a moved one leaves its old spot.
+                        if (isMain && layout) return null;
+                        return (
+                          <div
+                            key={clip.id}
+                            className="absolute top-1 bottom-1 rounded-md border border-dashed border-muted/50"
+                            style={{ left: (clip.startUs / US) * zoom + 1, width: (clip.durationUs / US) * zoom - 2 }}
+                          />
+                        );
+                      }
+                      return (
                         <ClipView
                           key={clip.id}
                           clip={clip}
@@ -316,10 +373,21 @@ export function Timeline({ height }: { height: number }) {
                           visible={visible}
                           selected={selection.includes(clip.id)}
                           locked={locked}
+                          timing={isMain ? layout?.timing.get(clip.id) : undefined}
                           onPointerDown={startClipDrag}
                           onContextMenu={openMenu}
                         />
-                      ),
+                      );
+                    })}
+                    {/* Where a moved clip would go in on the main track: its slot and an insertion bar. */}
+                    {isMain && drag?.moved && layout?.slotUs != null && (
+                      <>
+                        <div
+                          className="pointer-events-none absolute top-1 bottom-1 rounded-md border border-dashed border-muted/50"
+                          style={{ left: (layout.slotUs / US) * zoom + 1, width: (drag.clip.durationUs / US) * zoom - 2 }}
+                        />
+                        <div className="pointer-events-none absolute -top-0.5 -bottom-0.5 z-20 w-0.5 -translate-x-1/2 rounded-full bg-accent" style={{ left: (layout.slotUs / US) * zoom }} />
+                      </>
                     )}
                     {isMain && !drag?.moved && <CutMarkers project={project} zoom={zoom} locked={locked} />}
                     {drag?.moved && ghostTiming && ghostTrackId === track.id && (
@@ -369,7 +437,7 @@ export function Timeline({ height }: { height: number }) {
 
           {drag?.moved && ghostTiming && (
             <div className="tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg" style={{ left: HEADER_W + (ghostTiming.startUs / US) * zoom, top: 2 }}>
-              {drag.mode === "move" ? formatTime(ghostTiming.startUs) : formatDuration(ghostTiming.durationUs)}
+              {drag.mode === "move" ? formatTime(layout?.slotUs ?? ghostTiming.startUs) : formatDuration(ghostTiming.durationUs)}
             </div>
           )}
         </div>
