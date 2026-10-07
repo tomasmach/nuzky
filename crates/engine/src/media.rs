@@ -718,9 +718,83 @@ fn bytemuck_slice(bytes: &[u8]) -> &[f32] {
     bytemuck::cast_slice(&bytes[..bytes.len() / 4 * 4])
 }
 
+/// Turns tightly packed RGBA the way the asset is shown: its rotation, then its mirroring.
+pub fn orient(src: &[u8], w: u32, h: u32, asset: &Asset) -> (Vec<u8>, u32, u32) {
+    let (mut out, w, h) = rotate(src, w, h, asset.rotation);
+    if asset.mirror {
+        for row in out.chunks_exact_mut(w as usize * 4) {
+            let pixels: Vec<[u8; 4]> = row.chunks_exact(4).rev().map(|p| [p[0], p[1], p[2], p[3]]).collect();
+            row.copy_from_slice(pixels.as_flattened());
+        }
+    }
+    (out, w, h)
+}
+
+/// Rotates tightly packed RGBA clockwise by 0/90/180/270 degrees.
+fn rotate(src: &[u8], w: u32, h: u32, rotation: u32) -> (Vec<u8>, u32, u32) {
+    let (w, h) = (w as usize, h as usize);
+    let px = |x: usize, y: usize| &src[(y * w + x) * 4..(y * w + x) * 4 + 4];
+    match rotation {
+        90 | 180 | 270 => {
+            let (ow, oh) = if rotation == 180 { (w, h) } else { (h, w) };
+            let mut out = Vec::with_capacity(src.len());
+            for oy in 0..oh {
+                for ox in 0..ow {
+                    let (sx, sy) = match rotation {
+                        90 => (oy, h - 1 - ox),
+                        180 => (w - 1 - ox, h - 1 - oy),
+                        _ => (w - 1 - oy, ox),
+                    };
+                    out.extend_from_slice(px(sx, sy));
+                }
+            }
+            (out, ow as u32, oh as u32)
+        }
+        _ => (src.to_vec(), w as u32, h as u32),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_preserves_corner_order() {
+        let pixels: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
+        for (angle, expected) in
+            [(90, vec![3, 0, 4, 1, 5, 2]), (180, vec![5, 4, 3, 2, 1, 0]), (270, vec![2, 5, 1, 4, 0, 3])]
+        {
+            let (out, w, h) = rotate(&pixels, 3, 2, angle);
+            assert_eq!(out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), expected);
+            assert_eq!((w, h), if angle == 180 { (3, 2) } else { (2, 3) });
+        }
+    }
+
+    /// A mirrored quarter turn is a transpose: stored rows become columns, in order.
+    #[test]
+    fn mirroring_follows_the_rotation() {
+        let pixels: Vec<u8> = (0..6).flat_map(|i| [i, 0, 0, 255]).collect();
+        let mut asset = Asset {
+            id: "x".into(),
+            name: "x".into(),
+            path: "/x.jpg".into(),
+            kind: AssetKind::Image,
+            duration_us: 0,
+            width: 2,
+            height: 3,
+            fps: 0.0,
+            has_audio: false,
+            rotation: 90,
+            mirror: true,
+        };
+        let (out, w, h) = orient(&pixels, 3, 2, &asset);
+        assert_eq!((out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), w, h), (vec![0, 3, 1, 4, 2, 5], 2, 3));
+        asset.mirror = false;
+        assert_eq!(
+            orient(&pixels, 3, 2, &asset).0.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            vec![3, 0, 4, 1, 5, 2]
+        );
+    }
 
     #[test]
     fn seek_before_keyframe_respects_container_start_offset() {

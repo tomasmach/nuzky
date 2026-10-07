@@ -17,13 +17,15 @@ An open-source desktop video editor in the spirit of CapCut, with a native Rust 
 - Real-time preview with sound; the sound card clock keeps picture and audio in sync
 - MP4 export (H.264 + AAC) using the same renderer as the preview, so the export matches what you saw
 - Automatic saving after every edit
+- Learns how a creator edits from their recordings and finished cuts into an editable `EDIT.md` that AI agents follow, and scores any cut of a recording against the creator's own
 
 ## Architecture
 
 ```
 crates/engine   project model, edits + undo, FFmpeg decoding, wgpu compositor,
                 text rendering, audio mixing, MP4 export
-crates/analysis local speech recognition, caption grouping, silence and scene analysis
+crates/analysis local speech recognition, caption grouping, silence and scene analysis,
+                learning a creator's style from their finished cuts
 crates/session  editing authority, undo runs, autosave, crash recovery and transcripts
 crates/mcp      agent tools, stdio bridge and live-app IPC
 crates/cli      `capopen` headless CLI and MCP entry point
@@ -64,9 +66,13 @@ cargo run -p capopen-cli -- probe clip.mov
 cargo run -p capopen-cli -- new project.capopen a.mp4 b.mov
 cargo run -p capopen-cli -- frame project.capopen 2.5 frame.png 540
 cargo run -p capopen-cli -- render project.capopen out.mp4
+cargo run -p capopen-cli -- style learn raw.mov reel.mp4 raw2.mov reel2.mp4
+cargo run -p capopen-cli -- style compare raw.mov reel.mp4 project.capopen
 ```
 
 Projects are JSON files, so the same project renders identically in the app and on a server.
+
+`style learn` writes the creator's `EDIT.md` into CapOpen's data folder (`--out` elsewhere, `--replace` to overwrite an existing one) from pairs of a raw recording and the finished cut made from it. `style compare` prints how much of the creator's cut a project keeps, word by word (recall and precision). Both recognise speech locally and nothing leaves the computer.
 
 ## Tests
 

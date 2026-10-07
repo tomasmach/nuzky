@@ -19,6 +19,22 @@ use serde_json::Value;
 use bridge::Target;
 
 const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
+const STYLE_FIRST: &str = "This creator has their own editing style, capopen://style, measured from their recordings and finished cuts. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
+const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at capopen://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
+
+/// The creator's EDIT.md, read anew each time so edits to it apply to the next request.
+fn style() -> Option<String> {
+    std::fs::read_to_string(capopen_analysis::style::style_path()).ok().filter(|text| !text.trim().is_empty())
+}
+
+/// The guide with the creator's style, pointed to first so a client that shortens long
+/// instructions still sees it. Without EDIT.md this is the guide alone.
+fn guide() -> String {
+    match style() {
+        Some(style) => format!("{STYLE_FIRST}{GUIDE}{STYLE_NOTE}{style}"),
+        None => GUIDE.to_owned(),
+    }
+}
 
 #[derive(Clone)]
 struct Server {
@@ -107,7 +123,7 @@ impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().enable_prompts().build())
             .with_server_info(Implementation::new("capopen", env!("CARGO_PKG_VERSION")))
-            .with_instructions(GUIDE)
+            .with_instructions(guide())
     }
 
     async fn list_tools(
@@ -140,10 +156,15 @@ impl ServerHandler for Server {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult::with_all_items(vec![
+        let mut resources = vec![
             Resource::new("capopen://guide", "Editing guide").with_mime_type("text/markdown"),
             Resource::new("capopen://schema", "Project JSON schema").with_mime_type("application/schema+json"),
-        ]))
+        ];
+        if style().is_some() {
+            resources
+                .push(Resource::new("capopen://style", "This creator's editing style").with_mime_type("text/markdown"));
+        }
+        Ok(ListResourcesResult::with_all_items(resources))
     }
 
     async fn read_resource(
@@ -152,8 +173,11 @@ impl ServerHandler for Server {
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let text = match request.uri.as_str() {
-            "capopen://guide" => GUIDE.into(),
+            "capopen://guide" => guide(),
             "capopen://schema" => schema_for!(capopen_engine::Project).to_value().to_string(),
+            "capopen://style" => style().ok_or_else(|| {
+                ErrorData::invalid_params("No EDIT.md yet: capopen style learn writes one from finished cuts", None)
+            })?,
             _ => return Err(ErrorData::invalid_params("Unknown CapOpen resource", None)),
         };
         Ok(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri)]).into())
@@ -185,6 +209,6 @@ impl ServerHandler for Server {
             .and_then(|a| a.get("goal"))
             .and_then(Value::as_str)
             .ok_or_else(|| ErrorData::invalid_params("goal is required", None))?;
-        Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, format!("{goal}\n\nRead get_state and use its selection. Headless selection is empty: use the whole timeline.\n\n{GUIDE}"))]).into())
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, format!("{goal}\n\nRead get_state and use its selection. Headless selection is empty: use the whole timeline.\n\n{}", guide()))]).into())
     }
 }

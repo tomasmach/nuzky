@@ -9,6 +9,7 @@ use capopen_engine::{Project, edit::new_id};
 use serde_json::{Value, json};
 
 struct Client {
+    init: Value,
     child: Child,
     input: Option<ChildStdin>,
     output: Receiver<Value>,
@@ -20,6 +21,13 @@ impl Client {
         Self::with_checkpoint(write, None)
     }
     fn with_checkpoint(write: bool, checkpoint: Option<Project>) -> Self {
+        Self::start(write, checkpoint, None)
+    }
+    /// `style` is this client's own data directory with that EDIT.md, or `Some(None)` for none at all.
+    fn with_style(style: Option<&str>) -> Self {
+        Self::start(false, None, Some(style))
+    }
+    fn start(write: bool, checkpoint: Option<Project>, style: Option<Option<&str>>) -> Self {
         let dir = std::env::temp_dir().join(format!("capopen-mcp-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("project.capopen");
@@ -36,6 +44,14 @@ impl Client {
         command.arg("mcp").arg("--project").arg(path).arg("--cache").arg(dir.join("cache"));
         if write {
             command.arg("--allow-write");
+        }
+        if let Some(style) = style {
+            let data = dir.join("data");
+            std::fs::create_dir_all(data.join("capopen")).unwrap();
+            if let Some(text) = style {
+                std::fs::write(data.join("capopen/EDIT.md"), text).unwrap();
+            }
+            command.env("XDG_DATA_HOME", data);
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -55,9 +71,10 @@ impl Client {
                 }
             }
         });
-        let mut client = Self { child, input, output, dir, seq: 0 };
+        let mut client = Self { init: Value::Null, child, input, output, dir, seq: 0 };
         let init = client.rpc("initialize", json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}}));
         assert_eq!(init["result"]["serverInfo"]["name"], "capopen");
+        client.init = init;
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
         client
     }
@@ -144,7 +161,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
 
 #[test]
 fn readonly_resources_prompts_and_clear_errors() {
-    let mut c = Client::new(false);
+    let mut c = Client::with_style(None);
     assert_eq!(c.call("get_state", json!({}))["read_only"], true);
     let error = c.rpc("tools/call", json!({"name":"begin_run","arguments":{"label":"denied"}}));
     assert_eq!(error["result"]["isError"], true);
@@ -158,6 +175,44 @@ fn readonly_resources_prompts_and_clear_errors() {
     let error = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0]}}));
     assert_eq!(error["result"]["isError"], true);
     c.finish();
+}
+
+// Only on Linux does XDG_DATA_HOME choose where CapOpen looks for EDIT.md.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_creator_style_reaches_the_agent_and_without_one_nothing_changes() {
+    let guide = include_str!("../../../skills/capopen-edit/SKILL.md");
+    let mut plain = Client::with_style(None);
+    assert_eq!(plain.init["result"]["instructions"], guide);
+    assert_eq!(plain.rpc("resources/list", json!({}))["result"]["resources"].as_array().unwrap().len(), 2);
+    assert_eq!(plain.rpc("resources/read", json!({"uri":"capopen://guide"}))["result"]["contents"][0]["text"], guide);
+    assert!(
+        plain.rpc("resources/read", json!({"uri":"capopen://style"}))["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("capopen style learn")
+    );
+    plain.finish();
+
+    let style = "# Editing style\n\nKeep pauses under 120 ms.\n";
+    let mut styled = Client::with_style(Some(style));
+    let instructions = styled.init["result"]["instructions"].as_str().unwrap().to_owned();
+    assert!(instructions.starts_with("This creator has their own editing style, capopen://style"), "{instructions}");
+    assert!(instructions.contains(guide) && instructions.ends_with(style));
+    let resources = styled.rpc("resources/list", json!({}));
+    let uris: Vec<&str> =
+        resources["result"]["resources"].as_array().unwrap().iter().map(|r| r["uri"].as_str().unwrap()).collect();
+    assert_eq!(uris, ["capopen://guide", "capopen://schema", "capopen://style"]);
+    assert_eq!(styled.rpc("resources/read", json!({"uri":"capopen://style"}))["result"]["contents"][0]["text"], style);
+    assert!(
+        styled.rpc("resources/read", json!({"uri":"capopen://guide"}))["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(style)
+    );
+    let prompt = styled.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
+    assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().ends_with(style));
+    styled.finish();
 }
 
 #[test]

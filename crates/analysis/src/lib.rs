@@ -5,6 +5,7 @@ mod captions;
 mod fillers;
 mod scenes;
 mod speech;
+pub mod style;
 
 pub use audio::{SilenceParams, integrated_lufs, loudness, loudness_cancellable, silences, silences_cancellable};
 pub use captions::{CaptionGrouping, group_words};
