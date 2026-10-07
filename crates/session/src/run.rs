@@ -34,9 +34,18 @@ impl ProjectSession {
         self.inner.lock().unwrap().owns_run(run_id)
     }
 
+    /// A call from the client that owns the open run postpones its idle auto-keep.
+    pub fn touch_run(&self, owns: impl FnOnce(&str) -> bool) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.run.as_ref().is_some_and(|run| owns(&run.info.run_id)) {
+            inner.touch()?;
+        }
+        Ok(())
+    }
+
     pub fn begin_run(&self, label: String) -> Result<RunResult> {
         let mut inner = self.inner.lock().unwrap();
-        inner.touch()?;
+        inner.expire()?;
         inner.writable()?;
         ensure!(inner.run.is_none(), "RUN_BUSY: a run is already open");
         inner.recovered()?;
@@ -70,9 +79,10 @@ impl ProjectSession {
         let mut inner = self.inner.lock().unwrap();
         inner.writable()?;
         inner.not_stopped(run_id)?;
-        inner.touch()?;
+        inner.expire()?;
         ensure!(!request_id.is_empty(), "INVALID_REQUEST: request_id cannot be empty");
         inner.owns_run(run_id)?;
+        inner.touch()?;
         ensure!(
             inner.run.as_ref().is_some_and(|run| run.ending.is_none()),
             "RUN_ENDING: retry ending the run before editing"
@@ -100,7 +110,7 @@ impl ProjectSession {
         let mut inner = self.inner.lock().unwrap();
         inner.writable()?;
         inner.not_stopped(run_id)?;
-        inner.touch()?;
+        inner.expire()?;
         inner.owns_run(run_id)?;
         inner.finish(action)?;
         Ok(RunResult { run_id: run_id.into(), stamp: inner.stamp() })

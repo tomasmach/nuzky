@@ -111,9 +111,9 @@ impl ProjectSession {
         Ok(Self { inner, stop, worker })
     }
 
+    /// Reading never postpones an open run's idle auto-keep; only its owner does, with `touch_run`.
     pub fn state(&self) -> Result<SessionState> {
         let mut inner = self.inner.lock().unwrap();
-        inner.touch()?;
         if inner.mode == Mode::ReadOnly {
             let project = load(&inner.path)?;
             if inner.editor.project != project {
@@ -134,6 +134,11 @@ impl ProjectSession {
             undo_run_id: inner.editor.last_key().and_then(|key| key.strip_prefix("run:")).map(str::to_owned),
             read_only: inner.mode == Mode::ReadOnly,
         })
+    }
+
+    /// Revision and session epoch without copying the project.
+    pub fn stamp(&self) -> Stamp {
+        self.inner.lock().unwrap().stamp()
     }
 
     /// A consistent project view with the availability of undo and redo.
@@ -231,7 +236,7 @@ impl Inner {
     }
 
     fn user_editable(&mut self) -> Result<()> {
-        self.touch()?;
+        self.expire()?;
         self.writable()?;
         ensure!(self.run.is_none(), "RUN_ACTIVE: stop the open run before editing");
         self.recovered()

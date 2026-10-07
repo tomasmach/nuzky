@@ -48,7 +48,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Begin>(
             "begin_run",
-            "Begin one reversible editing run and persist its checkpoint. Requires --allow-write. Only this run may mutate the project. End with keep or discard. Two minutes without tool calls auto-keeps the run; plan or transcribe before opening a run. Every response includes revision and session_epoch. Revision changes only when the project changes; beginning a run leaves it unchanged.",
+            "Begin one reversible editing run and persist its checkpoint. Requires --allow-write. Only this run may mutate the project. End with keep or discard. Two minutes without tool calls from this client auto-keeps the run; plan or transcribe before opening a run. Every response includes revision and session_epoch. Revision changes only when the project changes; beginning a run leaves it unchanged.",
         )?,
         tool::<params::Recovery>(
             "resolve_recovery",

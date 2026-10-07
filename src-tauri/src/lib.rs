@@ -107,7 +107,7 @@ fn lock_session<'a>(
 ) -> CmdResult<std::sync::MutexGuard<'a, OpenSession>> {
     let current = session.lock().unwrap();
     if let Some(epoch) = expected_epoch
-        && current.host.session.state().map_err(err)?.stamp.session_epoch != epoch
+        && current.host.session.stamp().session_epoch != epoch
     {
         return Err("EPOCH_CHANGED: another project is open".into());
     }

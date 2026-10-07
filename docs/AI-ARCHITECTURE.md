@@ -32,7 +32,7 @@ A run groups one agent turn. There is one linear history: a run is one entry in 
 
 - `begin_run(label)` seals the history, writes `<project>.checkpoint.json` and returns `run_id`. Mutations are only accepted from the run that owns the session. Manual edits, Undo and Redo in the UI are blocked with "AI is editing · Stop"; the toast offers "Stop and edit", so stopping the AI is always deliberate.
 - `apply_edits(run_id, request_id, edits[])` applies a batch atomically to the live project under the run's coalesce key `run:<id>`, so the whole run merges into one undo entry. A repeated `request_id` with the same content returns the stored result; with different content it is an error. The result lists created, changed and removed clip ids and the real times after magnetic repacking, and is returned only once the project is on disk.
-- `end_run(run_id, keep | discard)`: keep seals the entry; discard drops it without a redo entry. A run also ends with keep when its client disconnects or after 2 minutes without calls.
+- `end_run(run_id, keep | discard)`: keep seals the entry; discard drops it without a redo entry. A run also ends with keep when its client disconnects or after 2 minutes without calls from that client; reads by the UI or other clients do not keep it open.
 - Stop in the UI revokes the run first (late calls get `RUN_STOPPED`), cancels its jobs, then ends it with keep. Ctrl+Z then undoes the whole run and Ctrl+Shift+Z brings it back.
 - `undo_run(run_id)` works only while that run is the last history entry.
 - Every result carries `revision` and `session_epoch`; mutations may pass `expected_revision` to fail fast on stale state.

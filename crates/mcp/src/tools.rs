@@ -105,6 +105,15 @@ impl Backend {
             || (name == "job" && arguments["action"] == "get");
         let mut runs = (!read).then(|| self.runs.lock().unwrap());
         ensure!(!self.closed.load(Ordering::Acquire), "CLIENT_CLOSED: client disconnected");
+        // Reads never hold this client's run lock while the session is locked.
+        let owned = match &runs {
+            Some(runs) => self.host.session.touch_run(|run| runs.contains(run)),
+            None => {
+                let runs = self.runs.lock().unwrap().clone();
+                self.host.session.touch_run(|run| runs.contains(run))
+            }
+        };
+        owned?;
         let mut state = self.host.session.state()?;
         if matches!(name, "analyze" | "transcribe" | "export_video")
             && state.open_run.as_ref().is_some_and(|run| !runs.as_ref().is_some_and(|runs| runs.contains(&run.run_id)))
@@ -510,12 +519,10 @@ pub(crate) fn error_message(message: String) -> String {
 
 pub(crate) fn tool_error(backend: &Backend, message: String) -> CallToolResult {
     let message = error_message(message);
-    match backend.host.session.state() {
-        Ok(state) => CallToolResult::structured_error(json!({
-            "error": message, "revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
-        })),
-        Err(_) => CallToolResult::error(vec![ContentBlock::text(message)]),
-    }
+    let stamp = backend.host.session.stamp();
+    CallToolResult::structured_error(json!({
+        "error": message, "revision": stamp.revision, "session_epoch": stamp.session_epoch,
+    }))
 }
 
 fn caption_stats(project: &Project) -> Value {
@@ -587,6 +594,36 @@ mod tests {
         add(&asset, "ok").unwrap();
         assert_eq!(backend.host.session.state().unwrap().project.assets.len(), 1);
         drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn other_clients_reads_do_not_keep_an_idle_run_open() {
+        let dir = std::env::temp_dir().join(format!("idle-clients-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.capopen");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("idle")).unwrap()).unwrap();
+        let timeout = std::time::Duration::from_millis(300);
+        let session = ProjectSession::open_with_idle_timeout(&path, Mode::Write, timeout, None).unwrap();
+        let host = Arc::new(Host::new(session, dir.join("cache")).unwrap());
+        let client = |access| Backend::shared(host.clone(), &path, Client { id: new_id(), access }).unwrap();
+        let (agent, viewer) = (client(Access::Write), client(Access::ReadOnly));
+        agent.call("begin_run", json!({"label":"abandoned"})).unwrap();
+        let began = std::time::Instant::now();
+        while host.session.state().unwrap().open_run.is_some() {
+            assert!(began.elapsed() < timeout * 5, "another client's reads kept the run open");
+            viewer.call("get_state", json!({})).unwrap();
+            let _ = viewer.call("job", json!({"job_id":"missing","action":"get"}));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        agent.call("begin_run", json!({"label":"active"})).unwrap();
+        let began = std::time::Instant::now();
+        while began.elapsed() < timeout * 3 {
+            agent.call("get_state", json!({})).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(host.session.state().unwrap().open_run.is_some());
+        drop((agent, viewer));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

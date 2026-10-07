@@ -209,7 +209,7 @@ fn connection(mut stream: UnixStream, host: Arc<Host>, project: &Path, token: &s
         }
     };
     let backend = Arc::new(Backend::shared(host, project, Client { id: new_id(), access: hello.access })?);
-    send(&mut stream, &json!({"ok":true,"session_epoch":backend.host.session.state()?.stamp.session_epoch}))?;
+    send(&mut stream, &json!({"ok":true,"session_epoch":backend.host.session.stamp().session_epoch}))?;
     stream.set_read_timeout(None)?;
     serve_requests(&mut reader, backend, Arc::new(Mutex::new(stream)), MAX_LINE_BYTES)
 }

@@ -191,6 +191,34 @@ fn save_failure_keeps_live_commit_and_retry_does_not_reapply() {
 }
 
 #[test]
+fn only_the_run_owner_postpones_idle_auto_keep() {
+    let f = Fixture::new();
+    let timeout = Duration::from_millis(300);
+    let s = ProjectSession::open_with_idle_timeout(&f.0, Mode::Write, timeout, None).unwrap();
+    let run = s.begin_run("abandoned".into()).unwrap().run_id;
+    apply(&s, &run, "Agent");
+    // The UI keeps reading the project and the user keeps trying to edit.
+    let began = Instant::now();
+    while s.state().unwrap().open_run.is_some() {
+        assert!(began.elapsed() < timeout * 5, "UI activity kept the abandoned run open");
+        s.view().unwrap();
+        s.stamp();
+        let _ = s.edit(rename("User"), None, Expect::default());
+        let _ = s.apply_edits("someone-else", &new_id(), rename("Other"), Expect::default());
+        s.touch_run(|_| false).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let run = s.begin_run("active".into()).unwrap().run_id;
+    let began = Instant::now();
+    while began.elapsed() < timeout * 3 {
+        s.touch_run(|id| id == run).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(s.state().unwrap().open_run.map(|r| r.run_id), Some(run.clone()));
+    apply(&s, &run, "Still open");
+}
+
+#[test]
 fn idle_timeout_and_disconnect_keep_edits() {
     let f = Fixture::new();
     let s = ProjectSession::open_with_idle_timeout(&f.0, Mode::Write, Duration::from_millis(30), None).unwrap();
