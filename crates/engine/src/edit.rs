@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, Clip, ClipContent, Keyframe, Project, TextStyle,
-    Track, TrackKind, Transform, Transition,
+    Track, TrackKind, Transform, Transition, WordCorrection,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -157,6 +157,11 @@ pub enum EditCmd {
     },
     RenameProject {
         name: String,
+    },
+    /// Sets how recognised words read, each found by its media file, its start in the file and
+    /// its recognised text. Setting a word back to its recognised text removes the correction.
+    CorrectWords {
+        corrections: Vec<WordCorrection>,
     },
 }
 
@@ -414,6 +419,7 @@ impl Project {
             EditCmd::AddCaptions { .. } | EditCmd::ReplaceCaptions { .. } | EditCmd::RippleDeleteRanges { .. } => {
                 self.apply_captions(cmd, &mut out)?
             }
+            EditCmd::CorrectWords { corrections } => self.correct_words(corrections)?,
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();
@@ -848,6 +854,23 @@ impl Project {
                 }
             }
             _ => unreachable!("command dispatched to the wrong edit group"),
+        }
+        Ok(())
+    }
+
+    fn correct_words(&mut self, corrections: Vec<WordCorrection>) -> Result<()> {
+        for correction in corrections {
+            ensure!(self.asset(&correction.asset_id).is_some(), "Unknown media {}", correction.asset_id);
+            let same = |c: &WordCorrection| {
+                c.asset_id == correction.asset_id
+                    && c.source_start_us == correction.source_start_us
+                    && c.original == correction.original
+            };
+            self.word_corrections.retain(|c| !same(c));
+            let text = correction.text.trim().to_string();
+            if text != correction.original {
+                self.word_corrections.push(WordCorrection { text, ..correction });
+            }
         }
         Ok(())
     }
@@ -1961,5 +1984,62 @@ mod tests {
         })
         .unwrap();
         assert_eq!(main_layout(&p), vec![(0, 4000)]);
+    }
+
+    #[test]
+    fn correct_words_sets_replaces_and_removes_and_undoes_in_one_step() {
+        let fix = |start_us: i64, original: &str, text: &str| WordCorrection {
+            asset_id: "a".into(),
+            source_start_us: start_us,
+            original: original.into(),
+            text: text.into(),
+        };
+        let mut editor = Editor::new(project());
+        let before = editor.project.clone();
+        editor
+            .apply(
+                EditCmd::CorrectWords { corrections: vec![fix(500_000, "oka", " okna "), fix(900_000, "to", "tu")] },
+                None,
+            )
+            .unwrap();
+        assert_eq!(editor.project.word_corrections, [fix(500_000, "oka", "okna"), fix(900_000, "to", "tu")]);
+        // The same word again replaces its correction; its recognised text removes it.
+        editor.apply(EditCmd::CorrectWords { corrections: vec![fix(500_000, "oka", "okno")] }, None).unwrap();
+        editor.apply(EditCmd::CorrectWords { corrections: vec![fix(900_000, "to", "to")] }, None).unwrap();
+        assert_eq!(editor.project.word_corrections, [fix(500_000, "oka", "okno")]);
+        // Another word with the same start is another correction.
+        editor.apply(EditCmd::CorrectWords { corrections: vec![fix(500_000, "okno", "okna")] }, None).unwrap();
+        assert_eq!(editor.project.word_corrections.len(), 2);
+        let unknown = WordCorrection { asset_id: "gone".into(), ..fix(0, "a", "b") };
+        let kept = editor.project.clone();
+        assert!(editor.apply(EditCmd::CorrectWords { corrections: vec![unknown] }, None).is_err());
+        assert_eq!(editor.project, kept);
+        for _ in 0..4 {
+            editor.undo();
+        }
+        assert_eq!(editor.project, before);
+    }
+
+    #[test]
+    fn projects_without_corrections_read_and_write_as_before() {
+        let mut p = project();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("wordCorrections").is_none());
+        assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
+        p.apply(EditCmd::CorrectWords {
+            corrections: vec![WordCorrection {
+                asset_id: "a".into(),
+                source_start_us: 1,
+                original: "oka".into(),
+                text: "okna".into(),
+            }],
+        })
+        .unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            json["wordCorrections"],
+            serde_json::json!([{"assetId": "a", "sourceStartUs": 1, "original": "oka", "text": "okna"}])
+        );
+        assert_eq!(serde_json::from_value::<Project>(json).unwrap(), p);
     }
 }
