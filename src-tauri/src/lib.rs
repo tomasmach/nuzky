@@ -33,6 +33,8 @@ pub struct AppState {
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Saving failed when the window was closed; the next close quits without retrying the warning.
     close_failed: AtomicBool,
+    /// The user agreed to cancel running work when closing the window.
+    quit_confirmed: AtomicBool,
     thumbs: Mutex<HashMap<String, String>>,
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
     preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
@@ -652,6 +654,7 @@ pub fn run() {
                 cache_dir,
                 jobs: Mutex::new(HashMap::new()),
                 close_failed: AtomicBool::new(false),
+                quit_confirmed: AtomicBool::new(false),
                 thumbs: Mutex::new(HashMap::new()),
                 filmstrips: Mutex::new(HashMap::new()),
                 preview_locks: Mutex::new(HashMap::new()),
@@ -700,8 +703,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building CapOpen")
         .run(|app, event| match event {
-            tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
+            tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
                 let state = app.state::<AppState>();
+                if !state.quit_confirmed.load(Ordering::Acquire)
+                    && let Some(question) = state.running_work()
+                {
+                    api.prevent_close();
+                    confirm_quit(app, &label, question);
+                    return;
+                }
                 let saved = state.session.lock().unwrap().host.session.disconnect();
                 // A second close after a failed save quits anyway; the user has been told what is lost.
                 if let Err(error) = saved
@@ -711,20 +721,93 @@ pub fn run() {
                     app.emit("close-save-failed", format!("{error:#}")).ok();
                 }
             }
-            tauri::RunEvent::Exit => {
-                let state = app.state::<AppState>();
-                let mut current = state.session.lock().unwrap();
-                current.close_ipc();
-                if let Err(error) = current.host.retire() {
-                    log::error!("{error:#}");
-                }
-                current.stopped.store(true, Ordering::Release);
-                if let Err(error) = current.host.session.disconnect() {
-                    log::error!("Cannot save project on exit: {error:#}");
-                }
-            }
+            tauri::RunEvent::Exit => app.state::<AppState>().quit(),
             _ => {}
         });
+}
+
+/// How long quitting waits for cancelled jobs, so exports can remove their unfinished files.
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl AppState {
+    /// Running work that closing the window would cancel. Audio preparation is not asked
+    /// about: it starts again with the project.
+    fn running_work(&self) -> Option<&'static str> {
+        let mut kinds: Vec<String> =
+            self.jobs.lock().unwrap().keys().map(|id| id.split(':').next().unwrap_or(id).to_owned()).collect();
+        let host = self.session.lock().unwrap().host.clone();
+        kinds.extend(host.jobs.running().into_iter().map(String::from));
+        quit_question(&kinds)
+    }
+
+    /// Quitting stops agents, cancels every job, gives exports a moment to remove their
+    /// unfinished files, then saves and releases the project.
+    fn quit(&self) {
+        let host = {
+            let mut current = self.session.lock().unwrap();
+            current.stopped.store(true, Ordering::Release);
+            current.close_ipc();
+            current.host.clone()
+        };
+        if !drain(&self.jobs, &host, QUIT_WAIT) {
+            log::warn!("Quitting before every cancelled job stopped");
+        }
+        if let Err(error) = host.session.disconnect() {
+            log::error!("Cannot save project on exit: {error:#}");
+        }
+    }
+}
+
+fn quit_question(kinds: &[String]) -> Option<&'static str> {
+    if kinds.iter().any(|kind| kind == "export") {
+        Some("An export is still running. Quitting cancels it and removes the unfinished file.")
+    } else if kinds.iter().any(|kind| kind != "audio") {
+        Some("Speech recognition or analysis is still running. Quitting cancels it.")
+    } else {
+        None
+    }
+}
+
+fn confirm_quit(app: &AppHandle, label: &str, question: &'static str) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    let window = app.get_webview_window(label);
+    let mut dialog = app
+        .dialog()
+        .message(question)
+        .title("Quit CapOpen?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Keep working".into()));
+    if let Some(window) = &window {
+        dialog = dialog.parent(window);
+    }
+    let app = app.clone();
+    dialog.show(move |quit| {
+        if quit {
+            app.state::<AppState>().quit_confirmed.store(true, Ordering::Release);
+            if let Some(window) = window {
+                window.close().ok();
+            }
+        }
+    });
+}
+
+/// Cancels desktop and agent jobs and waits until they end, or until the timeout.
+fn drain(jobs: &Mutex<HashMap<String, Arc<AtomicBool>>>, host: &Host, timeout: std::time::Duration) -> bool {
+    host.jobs.begin_shutdown();
+    for flag in jobs.lock().unwrap().values() {
+        flag.store(true, Ordering::Relaxed);
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let audio_only = jobs.lock().unwrap().keys().all(|id| id.starts_with("audio:"));
+        if audio_only && host.jobs.running().is_empty() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 #[cfg(test)]
@@ -826,6 +909,51 @@ mod ipc_lifecycle_tests {
         assert!(opened.is_none() && notice.is_some());
         assert_eq!(store::list_in(&dir).len(), 2, "no new project is created while projects are busy");
         drop((current, agent));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn quitting_asks_about_real_work_and_waits_for_cancelled_jobs_to_clean_up() {
+        let kinds = |list: &[&str]| list.iter().map(|kind| kind.to_string()).collect::<Vec<_>>();
+        assert_eq!(quit_question(&kinds(&["audio"])), None);
+        assert!(quit_question(&kinds(&["audio", "captions"])).unwrap().starts_with("Speech recognition"));
+        assert!(quit_question(&kinds(&["transcription", "export"])).unwrap().starts_with("An export"));
+        let dir = std::env::temp_dir().join(format!("capopen-quit-{}", new_id()));
+        let path = dir.join("project.capopen");
+        store::create(&path, &Project::new("quit")).unwrap();
+        let (current, _) = OpenSession::open(path).unwrap();
+        let unfinished = dir.join(".capopen-part-agent.mp4");
+        std::fs::write(&unfinished, b"partial").unwrap();
+        let stamp = current.host.session.stamp();
+        let file = unfinished.clone();
+        current
+            .host
+            .start_job("agent", None, "export", stamp, move |cancel, _| {
+                while !cancel.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                std::fs::remove_file(&file).unwrap();
+                anyhow::bail!("CANCELLED: job cancelled")
+            })
+            .unwrap();
+        let jobs = Arc::new(Mutex::new(HashMap::new()));
+        let flag = Arc::new(AtomicBool::new(false));
+        jobs.lock().unwrap().insert("export:desktop".to_string(), flag.clone());
+        jobs.lock().unwrap().insert("audio:clip".to_string(), Arc::new(AtomicBool::new(false)));
+        let desktop = jobs.clone();
+        let worker = std::thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            desktop.lock().unwrap().remove("export:desktop");
+        });
+        assert!(drain(&jobs, &current.host, Duration::from_secs(5)));
+        assert!(!unfinished.exists(), "the agent export removed its unfinished file before quitting");
+        assert!(!jobs.lock().unwrap().contains_key("export:desktop"));
+        worker.join().unwrap();
+        drop(current);
         let _ = std::fs::remove_dir_all(dir);
     }
 

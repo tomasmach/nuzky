@@ -148,6 +148,12 @@ impl Jobs {
         Ok(state.json())
     }
 
+    /// Kinds of the jobs that are still running.
+    pub fn running(&self) -> Vec<&'static str> {
+        let entries = self.entries.lock().unwrap();
+        entries.values().map(|state| state.lock().unwrap()).filter(|s| s.status == "running").map(|s| s.kind).collect()
+    }
+
     pub fn cancel_owner(&self, owner: &str) {
         let mut lifecycle = self.lifecycle.lock().unwrap();
         lifecycle.disconnected_clients.insert(owner.into());
