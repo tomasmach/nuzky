@@ -10,6 +10,9 @@ use capopen_engine::{
     },
 };
 
+/// More words than any caption shows; bounds the per-frame search for the spoken word.
+const MAX_CAPTION_WORDS: usize = 1000;
+
 /// Structural validity; missing media is reported by media tools, not by editing.
 pub fn validate(project: &Project) -> Result<()> {
     ensure!(project.version == PROJECT_VERSION, "INVALID_PROJECT: unsupported version");
@@ -142,7 +145,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             );
             transform(t)?;
         }
-        ClipContent::Text { style, transform: t, .. } => {
+        ClipContent::Text { style, transform: t, words, .. } => {
             ensure!(
                 style.font_size.is_finite()
                     && style.font_size > 0.0
@@ -160,6 +163,15 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             if let Some(background) = &style.background {
                 color(background, "text background")?;
             }
+            if let Some(highlight) = &style.highlight {
+                color(highlight, "highlight color")?;
+            }
+            // Words that no longer spell the text are kept but ignored, so only their times are checked.
+            ensure!(
+                words.len() <= MAX_CAPTION_WORDS && words.iter().all(|w| w.start_us <= w.end_us),
+                "INVALID_PROJECT: caption words of {} must be at most {MAX_CAPTION_WORDS}, each ending after it starts",
+                clip.id
+            );
             transform(t)?;
         }
     }
@@ -230,6 +242,27 @@ mod tests {
     }
 
     #[test]
+    fn caption_words_need_ordered_times_but_may_differ_from_the_text() {
+        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+            "fontSize":95.0,"color":"#ffffff","highlight":"#ffe14d"
+        }))
+        .unwrap();
+        let mut project = Project::new("words");
+        project.apply(EditCmd::AddText { start_us: 0, text: "Ahoj".into(), style }).unwrap();
+        let word = |start_us, end_us| capopen_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us };
+        for (words, valid) in [
+            (vec![word(0, 0), word(-500, 100)], true),
+            (vec![word(i64::MIN, i64::MAX)], true),
+            (vec![word(100, 99)], false),
+            (vec![word(0, 1); MAX_CAPTION_WORDS + 1], false),
+        ] {
+            let ClipContent::Text { words: stored, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+            *stored = words;
+            assert_eq!(validate(&project).is_ok(), valid, "{:?}", validate(&project));
+        }
+    }
+
+    #[test]
     fn asset_paths_must_be_absolute_and_local_but_may_be_missing() {
         let mut project = Project::new("paths");
         project.assets.push(Asset {
@@ -277,7 +310,7 @@ mod tests {
         let mut project = Project::new("colors");
         project.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         validate(&project).unwrap();
-        for field in 0..4 {
+        for field in 0..5 {
             for (value, valid) in [
                 ("#fff", true),
                 ("#FFAA00", true),
@@ -297,7 +330,8 @@ mod tests {
                     0 => candidate.canvas.background = value.into(),
                     1 => style.color = value.into(),
                     2 => style.stroke_color = value.into(),
-                    _ => style.background = Some(value.into()),
+                    3 => style.background = Some(value.into()),
+                    _ => style.highlight = Some(value.into()),
                 }
                 let result = validate(&candidate);
                 assert_eq!(result.is_ok(), valid, "field {field}: {value:?}");

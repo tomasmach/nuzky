@@ -227,6 +227,7 @@ mod tests {
             stroke_color: "#000000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
         p.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         let video = main_id(&p, 0);

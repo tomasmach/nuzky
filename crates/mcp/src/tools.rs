@@ -462,7 +462,7 @@ impl Backend {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before captions");
         let grouping = args.grouping();
-        let style = args.style.unwrap_or_else(reel_style);
+        let style = args.style()?;
         let (edit, _) = transcript::caption_edit(&derived.words, &state.project, style, grouping)?;
         let result = self.host.session.apply_edits(
             &args.run_id,
@@ -798,6 +798,7 @@ mod tests {
             stroke_color: "#000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
         project
             .apply(EditCmd::AddText { start_us: 0, text: "A very long unrelated title".into(), style: style.clone() })
@@ -808,6 +809,7 @@ mod tests {
                     start_us: 0,
                     end_us: 1_000_000,
                     text: "Příliš žluťoučký".into(),
+                    words: Vec::new(),
                 }],
                 style,
             })
