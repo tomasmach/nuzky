@@ -4,13 +4,11 @@ together. Then an agent does the same over MCP."""
 import difflib, json, time
 
 from e2e.harness import (FIXTURES, MODELS, Bridge, Session, flow, link_models, preview_crop, preview_rect,
-                         preview_redraw, wait, webdriver)
+                         preview_redraw, wait)
 from e2e.reel import phrases, words as plain
 
 TAKE = FIXTURES / 'reel-2.mp4'
 MODEL = 'large-v3-turbo-q5_0'
-ELEMENT = 'element-6066-11e4-a52e-4f735466cecf'
-ENTER = '\ue007'  # WebDriver's Enter key
 # Words of the transcript as the panel shows them; pause chips carry an aria-label instead of text.
 SHOWN = """return [...document.querySelectorAll('[role=listbox][aria-label=Transcript] [role=option][data-t]')]
     .filter((e) => !e.hasAttribute('aria-label'))
@@ -70,27 +68,71 @@ def shown(r):
     return r.s.run(SHOWN, retries=3) or []
 
 
-def actions(r, *devices):
-    webdriver('POST', r.s.path + '/actions', {'actions': list(devices)})
-    webdriver('DELETE', r.s.path + '/actions')
+class Hands:
+    """A user's mouse and keyboard: real input through the X server (XTEST), so the webview itself turns two
+    clicks into a double-click and keys into text. WebKitWebDriver here has no Actions or element click."""
 
+    KEYS = {'.': 'period', ',': 'comma', ' ': 'space', '\n': 'Return', '!': 'exclam', '?': 'question'}
 
-def double_click(r, t):
-    """Two real clicks on the word, so the webview itself makes the double-click."""
-    element = webdriver('POST', r.s.path + '/element', {'using': 'css selector', 'value': f'[data-t="{t}"]'})
-    click = [{'type': 'pointerDown', 'button': 0}, {'type': 'pointerUp', 'button': 0}]
-    actions(r, {'type': 'pointer', 'id': 'mouse', 'parameters': {'pointerType': 'mouse'},
-                'actions': [{'type': 'pointerMove', 'origin': {ELEMENT: element[ELEMENT]}, 'x': 0, 'y': 0}] + click + click})
+    def __init__(self, r):
+        from Xlib import display
+        self.r, self.d = r, display.Display()
+        r.s.run("window.__pointerAt = null;"
+                "addEventListener('pointermove', (e) => { window.__pointerAt = [e.clientX, e.clientY]; }, true);")
+        # Where the page sits on the screen and how large its pixels are, from two pointer positions.
+        (x0, y0), (x1, y1) = (500, 300), (900, 600)
+        from Xlib import X
+        self.fake(X.MotionNotify, x=x0 - 40, y=y0 - 40)
+        (c0, d0), (c1, d1) = self.read(x0, y0), self.read(x1, y1)
+        self.scale = (x1 - x0) / (c1 - c0)
+        self.origin = (x0 - c0 * self.scale, y0 - d0 * self.scale)
 
+    def fake(self, kind, detail=0, **at):
+        from Xlib.ext import xtest
+        xtest.fake_input(self.d, kind, detail, **at)
+        self.d.sync()
 
-def type_keys(r, text):
-    keys = [a for c in text for a in ({'type': 'keyDown', 'value': c}, {'type': 'keyUp', 'value': c})]
-    actions(r, {'type': 'key', 'id': 'keyboard', 'actions': keys})
+    def read(self, x, y):
+        from Xlib import X
+        self.r.s.run('window.__pointerAt = null')
+        self.fake(X.MotionNotify, x=x, y=y)
+        at = wait(lambda: self.r.s.run('return window.__pointerAt'), 5, 0.05)
+        if not at:
+            raise RuntimeError('the page did not see the pointer move')
+        return at
+
+    def double_click(self, css):
+        from Xlib import X
+        left, top = self.r.s.run('const b = document.querySelector(arguments[0]).getBoundingClientRect();'
+                                 'return [b.left + b.width / 2, b.top + b.height / 2];', css)
+        self.fake(X.MotionNotify, x=round(self.origin[0] + left * self.scale), y=round(self.origin[1] + top * self.scale))
+        for _ in range(2):
+            self.fake(X.ButtonPress, 1)
+            time.sleep(0.03)
+            self.fake(X.ButtonRelease, 1)
+            time.sleep(0.06)
+
+    def type(self, text):
+        from Xlib import X, XK
+        for c in text:
+            keysym = XK.string_to_keysym(self.KEYS.get(c, c))
+            code = self.d.keysym_to_keycode(keysym)
+            if not code:
+                raise RuntimeError(f'no key for {c!r} on this keyboard')
+            shift = self.d.keycode_to_keysym(code, 0) != keysym
+            if shift:
+                self.fake(X.KeyPress, self.d.keysym_to_keycode(XK.XK_Shift_L))
+            self.fake(X.KeyPress, code)
+            self.fake(X.KeyRelease, code)
+            if shift:
+                self.fake(X.KeyRelease, self.d.keysym_to_keycode(XK.XK_Shift_L))
+            time.sleep(0.02)
 
 
 def field(r):
     return r.s.run("const f = document.querySelector('[role=listbox][aria-label=Transcript] input');"
-                   "return f && {value: f.value, focused: document.activeElement === f};")
+                   "return f && {value: f.value, focused: document.activeElement === f, "
+                   "selected: f.selectionStart === 0 && f.selectionEnd === f.value.length};")
 
 
 def generate_captions(r):
@@ -154,13 +196,15 @@ def corrections(r):
     r.shot('caption-before')
     before = preview_crop(r.work / 'caption-before.png', preview_rect(r))
 
-    double_click(r, target)
+    hands = Hands(r)
+    hands.double_click(f'[data-t="{target}"]')
     opened = wait(lambda: field(r), 5)
-    r.check(f'double-clicking "{word}" opens it for typing', opened and opened['value'] == word and opened['focused'], opened)
-    type_keys(r, right)
+    r.check(f'double-clicking "{word}" opens it for typing, the whole word selected',
+            opened and opened['value'] == word and opened['focused'] and opened['selected'], opened)
+    hands.type(right)
     r.check('typing replaces the word', (field(r) or {}).get('value') == right, field(r))
     r.shot('word-editing')
-    type_keys(r, ENTER)
+    hands.type('\n')
     fixed = lambda: next((w for w in shown(r) if w['t'] == target), {})
     r.check(f'the transcript reads "{right}", underlined with dots, and says what was recognised',
             wait(lambda: fixed().get('text') == right, 10) and fixed().get('title') == f'Recognised as “{word}”'

@@ -41,7 +41,7 @@ function WordField({ word, onDone }: { word: string; onDone: (text: string | nul
       }}
       onBlur={() => finish(value)}
       style={{ width: `${Math.max(value.length, 2) + 1}ch` }}
-      className="rounded-sm bg-raised px-0.5 text-[13px] leading-[18px] text-fg"
+      className="mx-0.5 rounded-sm bg-raised px-0.5 text-[13px] leading-[18px] text-fg"
     />
   );
 }
