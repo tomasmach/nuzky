@@ -758,6 +758,34 @@ mod tests {
     }
 
     #[test]
+    fn scaled_white_text_over_white_has_no_dark_fringe() {
+        let mut project = Project::new("fringe");
+        (project.canvas.width, project.canvas.height) = (640, 360);
+        project.canvas.background = "#ffffff".into();
+        let style = TextStyle {
+            font_family: None,
+            font_size: 48.0,
+            color: "#ffffff".into(),
+            bold: false,
+            stroke_width: 0.0,
+            stroke_color: "#000000".into(),
+            background: None,
+            max_width: None,
+        };
+        // Rasterised at 2x and drawn at 1.3x, so every glyph edge is filtered down.
+        let transform = Transform { scale: 1.3, rotation: 7.0, ..Transform::default() };
+        project.tracks[0].clips.push(Clip::new(
+            "text".into(),
+            0,
+            1_000_000,
+            ClipContent::Text { text: "Soft edges".into(), style, transform },
+        ));
+        let frame = Renderer::new().unwrap().render(&project, 0, 640, 360, Wait::Exact, false).unwrap();
+        let darkest = frame.chunks_exact(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
+        assert!(darkest >= 253, "darkest pixel {darkest}");
+    }
+
+    #[test]
     fn text_bounds_match_canvas_raster_and_hidden_tracks_are_excluded() {
         let mut project = Project::new("bounds");
         let mut text = TextRenderer::new();

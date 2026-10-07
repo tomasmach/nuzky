@@ -19,7 +19,6 @@ struct Layer {
 };
 @group(0) @binding(0) var<uniform> layer: Layer;
 @group(0) @binding(1) var tex: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -43,23 +42,42 @@ fn linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(rgb, vec3<f32>(1.0 / 2.4)) - 0.055, rgb * 12.92, rgb <= vec3<f32>(0.0031308));
 }
 
+fn premultiplied_texel(p: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
+    let c = textureLoad(tex, clamp(p, vec2<i32>(0), size - 1), 0);
+    return select(vec4<f32>(c.rgb * c.a, c.a), c, layer.effects.z > 0.0);
+}
+
+// Bilinear filtering of premultiplied colour, so the colour of transparent texels cannot darken
+// soft edges. Textures hold straight alpha except the premultiplied transition intermediate.
+fn sample_premultiplied(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(tex));
+    let p = uv * vec2<f32>(size) - 0.5;
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    let top = mix(premultiplied_texel(i, size), premultiplied_texel(i + vec2<i32>(1, 0), size), f.x);
+    let bottom = mix(premultiplied_texel(i + vec2<i32>(0, 1), size), premultiplied_texel(i + 1, size), f.x);
+    return mix(top, bottom, f.y);
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     if in.pos.x < layer.clip.x || in.pos.y < layer.clip.y || in.pos.x >= layer.clip.z || in.pos.y >= layer.clip.w {
         discard;
     }
-    var c = textureSample(tex, samp, in.uv);
+    var c = sample_premultiplied(in.uv);
     if layer.effects.y > 0.0 {
         let step = vec2<f32>(layer.effects.y) / vec2<f32>(textureDimensions(tex));
         c = vec4<f32>(0.0);
         for (var y = -2; y <= 2; y += 1) {
             for (var x = -2; x <= 2; x += 1) {
-                c += textureSample(tex, samp, in.uv + vec2<f32>(f32(x), f32(y)) * step) / 25.0;
+                c += sample_premultiplied(in.uv + vec2<f32>(f32(x), f32(y)) * step) / 25.0;
             }
         }
     }
     var rgb = c.rgb;
     if any(layer.adjust != vec4<f32>(0.0)) || any(layer.grading != vec4<f32>(0.0)) || layer.effects.x != 0.0 || layer.effects.w != 0.0 {
+        // Adjustments work on straight colour.
+        rgb = select(vec3<f32>(0.0), rgb / c.a, c.a > 0.0);
         const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
         const EXPOSURE_STOPS = 2.0;
         const TONE_STRENGTH = 0.25;
@@ -87,11 +105,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         rgb = rgb * (1.0 - layer.effects.w * (FADE_BLACK + FADE_WHITE)) + layer.effects.w * FADE_BLACK;
         let edge = smoothstep(0.2, 0.72, distance(in.uv, vec2<f32>(0.5)));
         rgb *= 1.0 - edge * layer.effects.x * 0.85;
-        rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+        rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * c.a;
     }
-    let a = c.a * layer.opacity.x;
-    let premult = select(a, layer.opacity.x, layer.effects.z > 0.0);
-    return vec4<f32>(rgb * premult, a);
+    return vec4<f32>(rgb, c.a) * layer.opacity.x;
 }
 "#;
 
@@ -155,7 +171,6 @@ pub struct Gpu {
     additive: wgpu::RenderPipeline,
     transitions: Vec<TransitionTarget>,
     layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     target: Option<Target>,
     /// Textures from the previous frame, keyed by the image allocation they hold.
     textures: HashMap<usize, (Arc<Vec<u8>>, wgpu::Texture)>,
@@ -197,16 +212,10 @@ impl Gpu {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
             ],
@@ -253,14 +262,6 @@ impl Gpu {
             operation: wgpu::BlendOperation::Add,
         };
         let additive = make_pipeline(wgpu::BlendState { color: component, alpha: component });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("linear"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
         Ok(Self {
             device,
             queue,
@@ -268,7 +269,6 @@ impl Gpu {
             additive,
             transitions: Vec::new(),
             layout,
-            sampler,
             target: None,
             textures: HashMap::new(),
             adapter_name,
@@ -379,7 +379,6 @@ impl Gpu {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         })
     }
@@ -563,6 +562,34 @@ mod tests {
             gpu.render(max + 1, 2, [0.0; 4], &[]).unwrap_err().to_string(),
             format!("This resolution is larger than your GPU supports (max {max} px)")
         );
+    }
+
+    /// Text and PNG edges store transparent texels as black; filtering them unpremultiplied
+    /// drew a dark fringe around scaled white text over a light background.
+    #[test]
+    fn scaled_soft_edges_have_no_dark_fringe() {
+        let mut gpu = Gpu::new().unwrap();
+        let mut layer = Layer {
+            image: Image { width: 2, height: 1, data: Arc::new(vec![255, 255, 255, 255, 0, 0, 0, 0]) },
+            corners: [[0.0, 0.0], [64.0, 0.0], [64.0, 2.0], [0.0, 2.0]],
+            uv_rotation: 0,
+            opacity: 1.0,
+            adjust: Adjust::default(),
+            blur: 0.0,
+            clip: None,
+        };
+        for adjust in [false, true] {
+            layer.adjust.contrast = if adjust { 0.2 } else { 0.0 };
+            let out = gpu.render(64, 2, [1.0; 4], &[Draw::Layer(layer.clone())]).unwrap();
+            let darkest = out.chunks_exact(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
+            assert!(darkest >= 254, "adjust={adjust}: darkest edge pixel {darkest}");
+        }
+        // Half-covered texels keep their straight colour through adjustments.
+        layer.image = Image { width: 1, height: 1, data: Arc::new(vec![200, 100, 50, 128]) };
+        layer.adjust = Adjust { saturation: -1.0, ..Adjust::default() };
+        let out = gpu.render(2, 2, [0.0, 0.0, 0.0, 1.0], &[Draw::Layer(layer)]).unwrap();
+        let grey = (0.2126 * 200.0 + 0.7152 * 100.0 + 0.0722 * 50.0) * 128.0 / 255.0;
+        assert!(out[..3].iter().all(|&v| (v as f32 - grey).abs() <= 1.5), "{:?} vs {grey}", &out[..4]);
     }
 
     #[test]
