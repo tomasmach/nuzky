@@ -54,7 +54,8 @@ export function Timeline({ height }: { height: number }) {
   // A boolean, so playback re-renders the timeline only when it changes.
   const canSplit = useEditor((s) => (s.snap ? splitTargets(s.snap.project, s.selection, s.timeUs).length > 0 : false));
   const zoom = useEditor((s) => s.zoom);
-  const assetDrag = useEditor((s) => s.assetDrag);
+  // Media dragged from the panel, or files dragged in from the desktop.
+  const assetDrag = useEditor((s) => s.assetDrag ?? s.fileDrag);
   const locked = useAiLocked();
   const { select, setZoom } = useEditor.getState();
   const scroller = useRef<HTMLDivElement>(null);

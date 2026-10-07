@@ -9,6 +9,9 @@ export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opu
 export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, "png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
+const extension = (path: string) => path.split(".").pop()?.toLowerCase() ?? "";
+
+let importKey = 0;
 
 /**
  * One short line for the files that failed: the name only, never the full path or FFmpeg's wording.
@@ -32,9 +35,14 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
   const { setSnap, toast, edit } = useEditor.getState();
   if (paths.length === 0 || aiLocked()) return;
   const epoch = currentEpoch();
+  // Placeholders show at once, while the files are probed.
+  const pending = paths.map((p) => ({ key: ++importKey, name: fileName(p), audio: AUDIO_EXTENSIONS.includes(extension(p)) }));
+  useEditor.setState({ importing: [...useEditor.getState().importing, ...pending] });
+  const done = () => useEditor.setState({ importing: useEditor.getState().importing.filter((i) => !pending.includes(i)) });
   try {
     const res = await api.importMedia(paths, epoch);
     setSnap(res.snapshot);
+    done();
     if (res.failed.length > 0) toast({ kind: "error", text: importFailures(res.failed) });
     // Placing waits for the import; another project may have opened meanwhile.
     if (place && currentEpoch() === epoch) {
@@ -48,7 +56,29 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
     }
   } catch (e) {
     toast({ kind: "error", text: errorText(e) });
+  } finally {
+    done();
   }
+}
+
+/** A file being imported: the name and a skeleton where its thumbnail will be. */
+export function ImportPlaceholder({ name, audio, compact }: { name: string; audio: boolean; compact?: boolean }) {
+  if (compact)
+    return (
+      <div className="flex items-center gap-2 rounded-md p-1.5" role="status" aria-label={`Importing ${name}`}>
+        <div className="skeleton h-10 w-10 shrink-0 rounded" />
+        <span className="min-w-0 flex-1 truncate text-[13px] text-muted">{name}</span>
+      </div>
+    );
+  return (
+    <div className="flex flex-col gap-1 rounded-md p-1" role="status" aria-label={`Importing ${name}`}>
+      <div className="skeleton aspect-video rounded" />
+      <div className="flex items-center gap-1 px-0.5 text-[12px] text-muted">
+        <KindIcon kind={audio ? "audio" : "video"} size={12} />
+        <span className="truncate">{name}</span>
+      </div>
+    </div>
+  );
 }
 
 export async function pickAndImport(audioOnly = false) {

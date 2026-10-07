@@ -4,7 +4,7 @@ import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { Button, ProgressBar } from "../ui";
-import { KindIcon, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
+import { ImportPlaceholder, KindIcon, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 function MediaItem({ asset }: { asset: Asset }) {
   const thumb = useEditor((s) => s.thumbs[asset.id]);
@@ -71,6 +71,7 @@ function MediaItem({ asset }: { asset: Asset }) {
 
 export function MediaTab() {
   const assets = useEditor((s) => s.snap?.project.assets ?? []);
+  const importing = useEditor((s) => s.importing);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="p-3">
@@ -78,7 +79,7 @@ export function MediaTab() {
           <Upload size={15} /> Import media
         </Button>
       </div>
-      {assets.length === 0 ? (
+      {assets.length === 0 && importing.length === 0 ? (
         <div className="m-3 mt-0 flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line p-6 text-center">
           <Film size={28} className="text-muted" />
           <p className="text-[13px] text-fg">No media yet</p>
@@ -88,6 +89,9 @@ export function MediaTab() {
         <div className="grid min-h-0 grid-cols-2 content-start gap-1 overflow-y-auto px-2 pb-3">
           {assets.map((a) => (
             <MediaItem key={a.id} asset={a} />
+          ))}
+          {importing.map((i) => (
+            <ImportPlaceholder key={i.key} name={i.name} audio={i.audio} />
           ))}
         </div>
       )}

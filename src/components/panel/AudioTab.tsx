@@ -4,7 +4,7 @@ import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { Waveform } from "../timeline/Waveform";
 import { Button, ProgressBar } from "../ui";
-import { addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
+import { ImportPlaceholder, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 function AudioItem({ asset }: { asset: Asset }) {
   const job = useEditor((s) => s.jobs[`audio:${asset.id}`]);
@@ -54,6 +54,7 @@ function AudioItem({ asset }: { asset: Asset }) {
 export function AudioTab() {
   const assets = useEditor((s) => s.snap?.project.assets);
   const audio = (assets ?? []).filter((a) => a.kind === "audio");
+  const importing = useEditor((s) => s.importing.filter((i) => i.audio));
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="p-3">
@@ -61,7 +62,7 @@ export function AudioTab() {
           <Plus size={15} /> Add music or sound
         </Button>
       </div>
-      {audio.length === 0 ? (
+      {audio.length === 0 && importing.length === 0 ? (
         <div className="m-3 mt-0 flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line p-6 text-center">
           <Music size={28} className="text-muted" />
           <p className="text-[13px] text-fg">No music yet</p>
@@ -71,6 +72,9 @@ export function AudioTab() {
         <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
           {audio.map((a) => (
             <AudioItem key={a.id} asset={a} />
+          ))}
+          {importing.map((i) => (
+            <ImportPlaceholder key={i.key} name={i.name} audio compact />
           ))}
         </div>
       )}

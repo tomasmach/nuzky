@@ -20,6 +20,8 @@ import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
 import { Button, DisabledHint } from "./components/ui";
 
+const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
+
 const TEXT_INPUTS = new Set(["text", "search", "email", "number", "password", "url", "tel"]);
 
 function isTyping(el: HTMLElement | null) {
@@ -155,6 +157,7 @@ function useBackendEvents() {
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
+    let hasMedia = false;
     // The run seen last, also one already open at boot; a snapshot can clear `aiRun` before this event.
     let lastRun: string | null = useEditor.getState().aiRun;
     // The revision the run started from, unknown for a run already open at boot.
@@ -182,14 +185,19 @@ function useBackendEvents() {
     );
     offs.push(
       getCurrentWebview().onDragDropEvent((e) => {
-        if (e.payload.type !== "drop" || useEditor.getState().snap?.recovery) return;
-        const paths = e.payload.paths.filter((p) => MEDIA_EXTENSIONS.includes(p.split(".").pop()?.toLowerCase() ?? ""));
+        const dpr = window.devicePixelRatio || 1;
+        const p = e.payload;
+        // While media files are dragged over the window, the timeline shows where they would land.
+        if (p.type === "enter") hasMedia = p.paths.some(isMedia);
+        if ((p.type === "enter" || p.type === "over") && hasMedia) useEditor.setState({ fileDrag: { x: p.position.x / dpr, y: p.position.y / dpr } });
+        if (p.type === "leave" || p.type === "drop") useEditor.setState({ fileDrag: null });
+        if (p.type !== "drop" || useEditor.getState().snap?.recovery) return;
+        const paths = p.paths.filter(isMedia);
         if (paths.length === 0) {
           useEditor.getState().toast({ kind: "error", text: "Those files are not video, audio or images CapOpen can open." });
           return;
         }
-        const dpr = window.devicePixelRatio || 1;
-        const target = dropResolver?.(e.payload.position.x / dpr, e.payload.position.y / dpr) ?? undefined;
+        const target = dropResolver?.(p.position.x / dpr, p.position.y / dpr) ?? undefined;
         importPaths(paths, target);
       }),
     );

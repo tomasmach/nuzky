@@ -20,7 +20,7 @@ Drag the line above the timeline to resize it; double-click resets it, ↑/↓ o
 ## Flows
 
 ### Import
-Entry: Import button, `Ctrl+I`, or files dropped on the window. Files dropped on the timeline are also placed on it. The Audio tab's "Add music or sound" opens the picker filtered to audio.
+Entry: Import button, `Ctrl+I`, or files dropped on the window. Files dropped on the timeline are also placed on it; while media files are dragged over the timeline, an `accent` line shows where they would land. Each picked or dropped file shows at once in Media (and Audio for sound files) with its name and a skeleton thumbnail while it is read. The Audio tab's "Add music or sound" opens the picker filtered to audio.
 Outcome: items appear in Media (all kinds) and, for audio, in Audio. Unsupported files produce one toast naming each file by name only with a short reason ("build.log is not a video, audio or image file"); the rest still import.
 Hovering or focusing a media or audio item shows `+` (add at playhead) and a trash button (remove the item and its clips at once; a toast offers Undo, like deleting clips).
 

@@ -43,6 +43,10 @@ interface EditorState {
   filmstrips: Record<string, Filmstrip | null>;
   waveforms: Record<string, number[] | null>;
   assetDrag: AssetDrag | null;
+  /** Where files dragged in from the desktop are over the window, in CSS pixels, while they include media. */
+  fileDrag: { x: number; y: number } | null;
+  /** Files being probed by an import, shown as placeholders until they arrive. */
+  importing: { key: number; name: string; audio: boolean }[];
   exportOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
@@ -209,6 +213,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   filmstrips: {},
   waveforms: {},
   assetDrag: null,
+  fileDrag: null,
+  importing: [],
   exportOpen: false,
   exportJobId: null,
   panelTab: "media",
