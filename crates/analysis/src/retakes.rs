@@ -220,14 +220,19 @@ pub fn retakes(words: &[TimelineWord]) -> Retakes {
     // Restarts inside a sentence, where recognition put no full stop between the attempts. A
     // sentence a group already deletes needs no second look.
     let deleted: Vec<[usize; 2]> = groups.iter().flat_map(|g| g.delete.iter().copied()).collect();
+    let mut reviews_within = Vec::new();
     for sentence in sentences.iter().filter(|s| !deleted.contains(&[s.from, s.to])) {
-        groups.extend(restarts_within(sentence, words));
+        let (found, review) = restarts_within(sentence, words);
+        groups.extend(found);
+        reviews_within.extend(review);
     }
     groups.sort_by_key(|g| g.sentences[0].from);
-    let review = pairs
+    let mut review: Vec<Review> = pairs
         .into_iter()
         .map(|(p, s, reason)| Review { sentences: attempts(&[p, s], &sentences, words), reason })
         .collect();
+    review.extend(reviews_within);
+    review.sort_by_key(|r| r.sentences[0].from);
     let fillers: Vec<Filler> = sentences
         .iter()
         .filter_map(|s| s.filler_to.map(|to| Filler { from: s.from, to, text: text(words, s.from, to) }))
@@ -259,23 +264,24 @@ pub fn retakes(words: &[TimelineWord]) -> Retakes {
 /// UNFINISHED_WORDS long, so a long passage that only ends hesitantly stays.
 fn trailing_off(words: &[TimelineWord]) -> Vec<[usize; 2]> {
     let mut found = Vec::new();
+    // Where the clause that may trail off begins: after a sentence end, a pause, or a comma, so
+    // what the speaker finished saying before it stays.
     let mut from = 0;
     for (i, word) in words.iter().enumerate() {
         let text = word.text.trim();
         let next = words.get(i + 1).filter(|n| n.asset_id == word.asset_id);
-        if next.is_none() || text.ends_with(['.', '!', '?']) && !text.ends_with("...") {
+        let trails = text.ends_with("...") || text.ends_with('…');
+        if trails {
+            let restarts =
+                next.and_then(|n| n.text.trim().chars().find(|c| c.is_alphanumeric())).is_some_and(char::is_uppercase);
+            if restarts && i + 1 - from <= UNFINISHED_WORDS {
+                found.push([from, i]);
+            }
+        }
+        let paused = next.is_none_or(|n| n.start_us - word.end_us >= SENTENCE_GAP_US);
+        if trails || paused || text.ends_with(['.', '!', '?', ',', ';', ':']) {
             from = i + 1;
-            continue;
         }
-        if !text.ends_with("...") && !text.ends_with('…') {
-            continue;
-        }
-        let restarts =
-            next.and_then(|n| n.text.trim().chars().find(|c| c.is_alphanumeric())).is_some_and(char::is_uppercase);
-        if restarts && i + 1 - from <= UNFINISHED_WORDS {
-            found.push([from, i]);
-        }
-        from = i + 1;
     }
     found
 }
@@ -283,7 +289,7 @@ fn trailing_off(words: &[TimelineWord]) -> Vec<[usize; 2]> {
 /// Restarts inside one sentence: the same opening of at least RESTART_WORDS words said again
 /// within RESTART_SPAN words, as in "Co mi třeba přijde je, co mi třeba přijde je, že…" Each such
 /// chain of attempts is a group that keeps the last one, which runs to the end of the sentence.
-fn restarts_within(sentence: &Sentence, words: &[TimelineWord]) -> Vec<RetakeGroup> {
+fn restarts_within(sentence: &Sentence, words: &[TimelineWord]) -> (Vec<RetakeGroup>, Vec<Review>) {
     let tokens = sentence.tokens();
     let n = tokens.len();
     let opens_alike = |i: usize, j: usize| {
@@ -293,35 +299,57 @@ fn restarts_within(sentence: &Sentence, words: &[TimelineWord]) -> Vec<RetakeGro
     let restart = |i: usize| {
         (i + RESTART_WORDS..=(i + RESTART_SPAN).min(n.saturating_sub(RESTART_WORDS))).find(|&j| opens_alike(i, j))
     };
-    let mut found = Vec::new();
+    let word = |k: usize| sentence.words[k].0;
+    let attempt = |from: usize, to: usize, complete: bool| Attempt {
+        from,
+        to,
+        start_us: words[from].start_us,
+        end_us: words[to].end_us,
+        text: text(words, from, to),
+        complete,
+    };
+    let (mut found, mut review) = (Vec::new(), Vec::new());
     let mut i = 0;
     while i + 2 * RESTART_WORDS <= n {
-        let Some(mut next) = restart(i) else {
+        let Some(next) = restart(i) else {
             i += 1;
             continue;
         };
         let mut starts = vec![i, next];
-        while let Some(again) = restart(next) {
+        while let Some(again) = restart(*starts.last().unwrap()) {
             starts.push(again);
-            next = again;
         }
-        let word = |k: usize| sentence.words[k].0;
-        let attempt = |from: usize, to: usize, complete: bool| Attempt {
-            from,
-            to,
-            start_us: words[from].start_us,
-            end_us: words[to].end_us,
-            text: text(words, from, to),
-            complete,
-        };
-        let mut attempts: Vec<Attempt> =
-            starts.windows(2).map(|pair| attempt(word(pair[0]), word(pair[1]) - 1, false)).collect();
-        attempts.push(attempt(word(next), sentence.to, true));
-        let delete = attempts[..attempts.len() - 1].iter().map(|a| [a.from, a.to]).collect();
-        found.push(RetakeGroup { keep: attempts.len() - 1, sentences: attempts, delete });
-        i = next + RESTART_WORDS;
+        starts.push(n);
+        // An attempt is given up only when the next one says all of it again, give or take
+        // recognition errors; "kávu a mám rád černou čokoládu" says something else, for review.
+        let mut kept = 0;
+        for m in 0..starts.len() - 2 {
+            let (earlier, later) = (&tokens[starts[m]..starts[m + 1]], &tokens[starts[m + 1]..starts[m + 2]]);
+            let found = prefix_match(earlier, later);
+            if found.accepted() && found.meaning.is_empty() && found.swapped.is_empty() {
+                kept = m + 1;
+                continue;
+            }
+            let span =
+                |m: usize| (word(starts[m]), if starts[m + 1] == n { sentence.to } else { word(starts[m + 1]) - 1 });
+            let ((a, b), (c, d)) = (span(m), span(m + 1));
+            review.push(Review {
+                sentences: vec![attempt(a, b, true), attempt(c, d, true)],
+                reason: "a restart inside one sentence goes on differently".into(),
+            });
+            break;
+        }
+        if kept > 0 {
+            let end = if starts[kept + 1] == n { sentence.to } else { word(starts[kept + 1]) - 1 };
+            let mut attempts: Vec<Attempt> =
+                (0..kept).map(|m| attempt(word(starts[m]), word(starts[m + 1]) - 1, false)).collect();
+            attempts.push(attempt(word(starts[kept]), end, true));
+            let delete = attempts[..kept].iter().map(|a| [a.from, a.to]).collect();
+            found.push(RetakeGroup { keep: kept, sentences: attempts, delete });
+        }
+        i = starts[starts.len() - 2] + RESTART_WORDS;
     }
-    found
+    (found, review)
 }
 
 /// Sentences end at . ! ? …, at a pause of SENTENCE_GAP_US and where the timeline moves to
@@ -826,7 +854,8 @@ mod tests {
         assert_eq!((found.groups.len(), found.groups[0].keep), (1, 1), "{found:#?}");
     }
 
-    /// Recognition often puts no full stop between attempts said in one breath.
+    /// Recognition often puts no full stop between attempts said in one breath. Only an attempt
+    /// the next one says all of again is given up; one that goes on differently is for review.
     #[test]
     fn restarts_inside_one_sentence_keep_the_last_attempt() {
         let found = one(&[
@@ -836,7 +865,7 @@ mod tests {
                 900_000,
             ),
             ("Ptám se, jestli s ním pracuješ, jestli tě baví, jestli za něj platíš.", 900_000),
-            ("Mám rád kávu a mám rád čaj.", 900_000),
+            ("Mám rád černou kávu a mám rád černou čokoládu.", 900_000),
         ]);
         let groups: Vec<_> = found.groups.iter().map(|g| (texts(g), g.keep, g.delete.clone())).collect();
         assert_eq!(groups.len(), 2, "{groups:#?}");
@@ -845,9 +874,20 @@ mod tests {
             [("Co mi třeba přijde je,", false), ("co mi třeba přijde je, že má dobrý zvuk.", true)]
         );
         assert_eq!((groups[0].1, &groups[0].2), (1, &vec![[0, 4]]));
-        assert_eq!(groups[1].0.len(), 3);
-        assert_eq!(groups[1].0[2], ("Protože jsem si uvědomil, že mi zmizela úzkost.", true));
-        assert_eq!(found.suggested_delete, [[0, 4], [14, 28]], "{found:#?}");
+        assert_eq!(
+            groups[1].0,
+            [("Protože jsem si uvědomil, že jsem měl", false), ("Protože jsem si uvědomil, že jsem měl malý", true)]
+        );
+        assert_eq!(found.suggested_delete, [[0, 4], [14, 20]], "{found:#?}");
+        let reviewed: Vec<Vec<&str>> =
+            found.review.iter().map(|r| r.sentences.iter().map(|a| a.text.as_str()).collect()).collect();
+        assert_eq!(
+            reviewed,
+            [
+                vec!["Protože jsem si uvědomil, že jsem měl malý", "Protože jsem si uvědomil, že mi zmizela úzkost."],
+                vec!["Mám rád černou kávu a", "mám rád černou čokoládu."]
+            ]
+        );
     }
 
     /// Recognition marks words the speaker trailed off with an ellipsis; a new sentence follows.
@@ -865,6 +905,15 @@ mod tests {
         // after them; "A když se mi podařilo…" is already an earlier attempt of a restarted sentence.
         assert_eq!(unfinished, ["Měl jsem několik...", "I když jsme..."], "{found:#?}");
         assert_eq!(found.suggested_delete, [[0, 2], [8, 15]], "{found:#?}");
+        // What was finished before a pause or a comma stays; only the clause that trails off goes.
+        let found = one(&[
+            ("Mikrofon má velmi dobrý zvuk", 900_000),
+            ("Ale když...", 900_000),
+            ("Teď ukážu nastavení, ale nejdřív...", 900_000),
+            ("Kamera musí stát.", 900_000),
+        ]);
+        let unfinished: Vec<_> = found.unfinished.iter().map(|u| u.text.as_str()).collect();
+        assert_eq!(unfinished, ["Ale když...", "ale nejdřív..."], "{found:#?}");
     }
 
     #[test]
