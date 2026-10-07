@@ -109,9 +109,8 @@ impl Backend {
     }
 
     fn call_inner(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
-        let read = matches!(name, "get_state" | "get_transcript" | "inspect_frames")
-            || (name == "job" && arguments["action"] == "get")
-            || (name == "edit_transcript" && arguments["dry_run"] == true);
+        let rules = crate::rules::find(name);
+        let read = rules.is_some_and(|rules| rules.reads(&arguments));
         let mut runs = (!read).then(|| self.runs.lock().unwrap());
         ensure!(!self.closed.load(Ordering::Acquire), "CLIENT_CLOSED: client disconnected");
         // Reads never hold this client's run lock while the session is locked.
@@ -124,7 +123,7 @@ impl Backend {
         };
         owned?;
         let mut state = self.host.session.state()?;
-        if matches!(name, "analyze" | "transcribe" | "export_video")
+        if rules.is_some_and(|rules| rules.run_job)
             && state.open_run.as_ref().is_some_and(|run| !runs.as_ref().is_some_and(|runs| runs.contains(&run.run_id)))
         {
             state.open_run = None;

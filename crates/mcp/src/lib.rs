@@ -5,6 +5,7 @@ pub mod ipc;
 mod limits;
 mod media;
 mod params;
+mod rules;
 mod tools;
 pub mod transcript;
 
@@ -28,14 +29,11 @@ struct Server {
 fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<Tool> {
     let schema = schema_for!(T);
     let object = schema.as_object().context("Tool schema must be an object")?.clone();
-    let read_only = matches!(name, "get_state" | "get_transcript" | "inspect_frames");
+    let rules = rules::find(name).with_context(|| format!("Tool {name} has no access rules"))?;
     let annotations = ToolAnnotations::new()
-        .read_only(read_only)
-        .destructive(matches!(
-            name,
-            "apply_edits" | "edit_transcript" | "end_run" | "undo_run" | "build_captions" | "resolve_recovery"
-        ))
-        .idempotent(matches!(name, "get_state" | "get_transcript" | "inspect_frames" | "apply_edits"))
+        .read_only(matches!(rules.reads, rules::Reads::Always))
+        .destructive(rules.destructive)
+        .idempotent(rules.idempotent)
         .open_world(false);
     Ok(Tool::new(name, description, object).with_annotations(annotations))
 }
