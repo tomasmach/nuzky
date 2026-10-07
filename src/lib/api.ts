@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
+import type { AgentConnection, AgentKind, Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -49,6 +49,11 @@ export const api = {
   removePauses: (key: string, pauseUs: number, only: number[] | null, epoch: Epoch) =>
     invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only, expectedEpoch: epoch }),
   listFonts: () => invoke<FontFamilies>("list_fonts"),
+  /** Sentences of the timeline said with emphasis, for a punch-in. */
+  suggestZooms: () => invoke<ZoomSuggestions>("suggest_zooms"),
+  /** Punch-ins on inclusive word ranges of the view with `key`, as one undo step. */
+  applyZooms: (key: string, zooms: { from: number; to: number; scale: number }[], epoch: Epoch) =>
+    invoke<ZoomsApplied>("apply_zooms", { key, zooms, expectedEpoch: epoch }),
 };
 
 /** The error as the backend sent it, "CODE: detail" included; code checks use this. */
