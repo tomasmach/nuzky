@@ -47,7 +47,7 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 - **Tabs**: inspector tabs are text with a 2 px accent underline; left panel tabs are icon plus label, sized to their label with a 4 px gap so no two labels touch or truncate.
 - **Segmented**: small exclusive choices (In/Out, speed presets, export options). The selected segment is `line` on a `bg` track with medium weight.
 - **Preset tile**: preview on top, 11 px label below. Selected: accent border plus a check badge.
-- **Checkbox**: dark custom box, accent fill with a black check when on.
+- **Checkbox**: dark custom box, accent fill with a black check when on. With several clips that differ (mixed), accent fill with a black dash.
 - **Track toggles** (hide, mute): the off state swaps the icon (eye-off, speaker-off) and shows `fg` on `raised`. Accent is reserved for selection and "on" features, so a hidden track never looks active. Fixed columns, eye then speaker; a track without one keeps an empty slot so the columns line up.
 - **Keyframe diamond**: outline when no keyframe sits at the playhead, filled accent when one does. Timeline diamonds are `fg` with a dark border on the selected clip, at mid-height, or along the bottom on the main track so the cut markers never cover them, and clear of the trim handles.
 - **Transition marker**: an 18 px square on the cut. Empty: dark with a faint border, "+" on hover. Set: `fg` square with the kind icon, a darkened band shows the transition length; selected: accent.

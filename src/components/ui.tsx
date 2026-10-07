@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { Check } from "lucide-react";
+import { Check, Minus } from "lucide-react";
 import { fontCss } from "../lib/fonts";
 import { AI_EDITING, useAiLocked } from "../lib/store";
 import type { TextStyle } from "../lib/types";
@@ -389,21 +389,29 @@ export function Checkbox({
   onChange,
   disabled,
   title,
+  mixed = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
   title?: string;
+  /** Some of the selected clips have it on: a dash, and checking turns it on for all of them. */
+  mixed?: boolean;
 }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (input.current) input.current.indeterminate = mixed;
+  }, [mixed]);
   return (
     <label className="flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40" title={lock ?? title}>
       <span className="relative inline-flex">
         <input
+          ref={input}
           type="checkbox"
-          checked={checked}
+          checked={checked && !mixed}
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}
           className="peer absolute inset-0 m-0 h-full w-full cursor-[inherit] opacity-0"
@@ -411,10 +419,10 @@ export function Checkbox({
         <span
           aria-hidden
           className={`flex h-4 w-4 items-center justify-center rounded border transition-colors duration-[120ms] ease-out peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-accent ${
-            checked ? "border-accent bg-accent text-black" : "border-muted/60 bg-raised"
+            checked || mixed ? "border-accent bg-accent text-black" : "border-muted/60 bg-raised"
           }`}
         >
-          {checked && <Check size={12} strokeWidth={3} />}
+          {mixed ? <Minus size={12} strokeWidth={3} /> : checked && <Check size={12} strokeWidth={3} />}
         </span>
       </span>
       <span className="text-[12px] text-fg">{label}</span>

@@ -14,6 +14,7 @@ use crate::loudness::{Limiter, Meter, db_to_gain};
 use crate::media::{init, set_sws_colorspace};
 use crate::model::{CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 use crate::render::{Renderer, Wait};
+use crate::voice::ensure_voice_pcm;
 
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -150,22 +151,26 @@ pub fn export(
     }
     check_options(project, options)?;
     check_source_path(project, out)?;
-    let heard: std::collections::HashSet<&str> = project
-        .tracks
-        .iter()
-        .filter(|track| !track.muted && track.kind != TrackKind::Text)
-        .flat_map(|track| &track.clips)
-        .filter_map(|clip| match &clip.content {
-            ClipContent::Media { asset_id, volume, .. }
-                if *volume > 0.0 && clip.end_us() > 0 && clip.start_us < duration =>
-            {
-                Some(asset_id.as_str())
-            }
-            _ => None,
-        })
-        .collect();
-    for asset in project.assets.iter().filter(|a| heard.contains(a.id.as_str()) && has_audio(a)) {
-        ensure_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
+    // Each heard file, and whether a clip of it cleans the voice: the file then has the cleaned sound.
+    let mut heard = std::collections::HashMap::<&str, bool>::new();
+    for clip in
+        project.tracks.iter().filter(|track| !track.muted && track.kind != TrackKind::Text).flat_map(|t| &t.clips)
+    {
+        if let ClipContent::Media { asset_id, volume, clean_voice, .. } = &clip.content
+            && *volume > 0.0
+            && clip.end_us() > 0
+            && clip.start_us < duration
+        {
+            *heard.entry(asset_id.as_str()).or_default() |= *clean_voice;
+        }
+    }
+    for asset in project.assets.iter().filter(|a| has_audio(a)) {
+        let Some(&clean_voice) = heard.get(asset.id.as_str()) else { continue };
+        if clean_voice {
+            ensure_voice_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
+        } else {
+            ensure_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
+        }
     }
     // Reserve beside the destination so rename stays on the same filesystem.
     let tmp = loop {

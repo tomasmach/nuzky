@@ -65,10 +65,10 @@ Shows the selected clip with CapCut's tabs, remembering the last tab per clip ki
 | Video clip | Video (transform), Adjust, Speed, Animation, Audio (only when the file has sound) |
 | Image clip | Image (transform), Adjust, Animation |
 | Text or caption clip | Text, Animation, Transform |
-| Audio clip (also detached sound) | Audio: volume, fades, speed |
+| Audio clip (also detached sound) | Audio: volume, fades, Clean voice, speed |
 | Transition | Kind name, duration, Remove |
 | Nothing | Project: format (opens Ratio) and frame rate, background colour or blur with strength |
-| Several clips | Duplicate, Delete, and the controls they all share: Transform, Font (text), Adjust (video, images), Audio volume (clips with sound) |
+| Several clips | Duplicate, Delete, and the controls they all share: Transform, Font (text), Adjust (video, images), Audio volume and Clean voice (clips with sound) |
 
 Adjust offers Exposure, Brightness, Contrast, Highlights, Shadows, Saturation, Temperature, Tint, Fade, and Vignette for single or multiple media clips.
 
@@ -79,7 +79,8 @@ Number fields keep what you type until Enter or blur, so "-" or "1," is never re
 - **Several clips**: one change applies to every selected clip as one undo step, a slider drag included. Where the clips differ the field shows "—"; a typed value then applies to all. A transform change applies to the whole clip, every keyframe included, so "110 % on every clip" is Select all on track plus one value.
 - **Speed**: presets 0.5x–3x or a logarithmic slider from 0.1x to 10x. Speed changes the clip length; the tab shows the new duration and the source length used.
 - **Animation**: In and Out each take one preset with a duration; the selected preset is marked and the slot label shows a dot when set.
-- **Audio**: volume, fade in and fade out (up to half the clip). Detach audio moves the sound to its own audio track and silences the video clip; disabled with the reason when there is nothing to detach.
+- **Audio**: volume, fade in and fade out (up to half the clip), Clean voice. Detach audio moves the sound to its own audio track and silences the video clip; disabled with the reason when there is nothing to detach.
+- **Clean voice**: a checkbox for speech recorded on a phone, off by default. A high-pass at 80 Hz takes away rumble and 50/60 Hz hum, gentle noise reduction (RNNoise with 15 % of the original mixed back, so speech does not sound processed) lowers steady room noise by about 15 dB between words, and a de-esser softens harsh s sounds by up to 6 dB. Each file's cleaned sound is prepared once in the background: meanwhile "Cleaning voice · 42%" with a bar shows under the checkbox, the top bar lists the job, and playback keeps the original sound, then switches to the cleaned one without stopping. Export always has the cleaned sound; it waits for the preparation or does it itself. Turning it off, removing the clip or opening another project stops a preparation that no clip needs any more. Cuts, crossfades and word times stay where they are; the waveform shows the original sound. A split whose halves differ in Clean voice crossfades like a cut. With several clips selected, a dash means only some have it; checking turns it on for all of them, as one undo step.
 
 ### Text and captions
 Text presets add a text clip at the playhead, centred in the frame, and select it; captions sit a little below the middle (y +0.15, where reels put them). Transform Reset puts each back there. The inspector offers the same style presets under the same names as the Text tab, or the Captions tab for a caption. The inspector calls a caption clip "Caption".

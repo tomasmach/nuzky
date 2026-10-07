@@ -100,7 +100,17 @@ fn transform(value: &Transform) -> Result<()> {
 fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> {
     ensure!(clip.start_us >= 0 && clip.duration_us > 0, "INVALID_PROJECT: clip {} timing", clip.id);
     match &clip.content {
-        ClipContent::Media { asset_id, source_in_us, speed, volume, transform: t, fade_in_us, fade_out_us, adjust } => {
+        ClipContent::Media {
+            asset_id,
+            source_in_us,
+            speed,
+            volume,
+            transform: t,
+            fade_in_us,
+            fade_out_us,
+            adjust,
+            clean_voice,
+        } => {
             let asset =
                 project.asset(asset_id).ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
             ensure!(
@@ -123,6 +133,11 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                 clip.id
             );
             ensure!(*fade_in_us >= 0 && *fade_out_us >= 0, "INVALID_PROJECT: negative fade");
+            ensure!(
+                !clean_voice || capopen_engine::audio::has_audio(asset),
+                "INVALID_PROJECT: clip {} cleans the voice of media without sound",
+                clip.id
+            );
             ensure!(
                 [
                     adjust.exposure,
@@ -349,5 +364,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn clean_voice_needs_a_clip_with_sound() {
+        let mut project = Project::new("clean voice");
+        for (id, kind, sound) in [("photo", AssetKind::Image, false), ("take", AssetKind::Video, true)] {
+            project.assets.push(Asset {
+                id: id.into(),
+                name: id.into(),
+                path: format!("/{id}"),
+                kind,
+                duration_us: if sound { 2_000_000 } else { 0 },
+                width: 16,
+                height: 16,
+                fps: 30.0,
+                has_audio: sound,
+                rotation: 0,
+                mirror: false,
+            });
+            project.apply(EditCmd::AddClip { asset_id: id.into(), start_us: None, track_id: None }).unwrap();
+        }
+        let clean = |project: &mut Project, index: usize| {
+            let ClipContent::Media { clean_voice, .. } = &mut project.tracks[0].clips[index].content else { panic!() };
+            *clean_voice = true;
+        };
+        let mut sound = project.clone();
+        clean(&mut sound, 1);
+        validate(&sound).unwrap();
+        clean(&mut project, 0);
+        let error = validate(&project).unwrap_err().to_string();
+        assert!(error.starts_with("INVALID_PROJECT:") && error.contains("without sound"), "{error}");
     }
 }

@@ -1,10 +1,10 @@
 import { RotateCcw, Unlink } from "lucide-react";
 import { LIMITS } from "../../lib/limits";
 import { ADJUST_ROWS, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
-import { detachAudio, detachBlocker, editClip, findClip, useEditor } from "../../lib/store";
+import { detachAudio, detachBlocker, editClip, findClip, setCleanVoice, useEditor, useVoicePreparation } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
-import { Button, IconButton, Section, Segmented, Slider } from "../ui";
+import { Button, Checkbox, IconButton, ProgressBar, Section, Segmented, Slider } from "../ui";
 
 type Media = Extract<Clip["content"], { type: "media" }>;
 
@@ -66,6 +66,36 @@ export function SpeedSection({ clip, content, asset }: { clip: Clip; content: Me
   );
 }
 
+/**
+ * Clean voice for one or more clips with sound. While the cleaned sound of their files is being
+ * prepared, playback keeps the original sound and the row shows how far it is.
+ */
+export function CleanVoiceRow({ clips }: { clips: Clip[] }) {
+  const on = clips.map((c) => c.content.type === "media" && c.content.cleanVoice);
+  const all = on.every(Boolean);
+  const assets = clips.flatMap((c) => (c.content.type === "media" && c.content.cleanVoice ? [c.content.assetId] : []));
+  const preparing = useVoicePreparation(assets);
+  return (
+    <>
+      <Checkbox
+        label="Clean voice"
+        checked={all}
+        mixed={!all && on.some(Boolean)}
+        title="Less background noise, rumble and harsh s sounds in speech"
+        onChange={(v) => setCleanVoice(clips.map((c) => c.id), v)}
+      />
+      {preparing !== null && (
+        <div className="flex flex-col gap-1.5" role="status">
+          <span className="tabular text-[12px] text-muted">
+            Cleaning voice{preparing > 0 && ` · ${Math.round(preparing * 100)}%`}
+          </span>
+          <ProgressBar value={preparing} label="Cleaning voice" />
+        </div>
+      )}
+    </>
+  );
+}
+
 export function AudioSection({ clip, content }: { clip: Clip; content: Media }) {
   const project = useEditor((s) => s.snap!.project);
   const edit = useEditor((s) => s.edit);
@@ -105,6 +135,7 @@ export function AudioSection({ clip, content }: { clip: Clip; content: Media }) 
         format={(v) => v.toFixed(1)}
         onChange={(v) => edit({ type: "updateClip", clipId: clip.id, fadeOutUs: Math.round(v * US) }, `${clip.id}:fadeOut`)}
       />
+      <CleanVoiceRow clips={[clip]} />
       {isVideo && (
         <Button className="w-full" disabled={!!blocker} disabledReason={blocker ?? undefined} title="Move the sound to its own audio track" onClick={() => detachAudio([clip.id])}>
           <Unlink size={14} /> Detach audio

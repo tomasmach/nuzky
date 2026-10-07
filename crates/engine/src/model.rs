@@ -287,6 +287,11 @@ pub enum ClipContent {
         fade_in_us: i64,
         #[serde(default)]
         fade_out_us: i64,
+        /// Clean voice: a high-pass against rumble and hum, gentle noise reduction and a de-esser,
+        /// for speech recorded on a phone. Only clips with sound. Playback uses the original sound
+        /// until the cleaned sound is prepared; export always has the cleaned sound.
+        #[serde(default)]
+        clean_voice: bool,
     },
     #[serde(rename_all = "camelCase")]
     Text {

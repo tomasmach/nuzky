@@ -87,7 +87,7 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 
 /// Raised whenever extraction changes its output, so caches made before are extracted again.
 /// v4: gaps are filled by timestamp for long audio-only recordings too.
-const PCM_VERSION: &str = "v4";
+pub(crate) const PCM_VERSION: &str = "v4";
 
 /// Removes this asset's caches from older extraction versions, which nothing reads any more.
 /// Other revisions of the current version stay: a project may still play from them.
@@ -135,16 +135,28 @@ impl Mixer {
         Self { cache_dir, sources: HashMap::new(), cuts: HashMap::new() }
     }
 
-    fn source(&mut self, asset: &Asset) -> Option<Arc<Pcm>> {
-        let path = pcm_path(&self.cache_dir, asset);
+    /// The sound `asset` plays with: its cleaned cache for a clip with Clean voice once that is
+    /// ready, otherwise the raw cache. Only cache files change hands here; no processing runs.
+    fn source(&mut self, asset: &Asset, clean_voice: bool) -> Option<Arc<Pcm>> {
+        let raw = pcm_path(&self.cache_dir, asset);
+        if clean_voice && let Some(pcm) = self.open(crate::voice::path_for(&self.cache_dir, &raw), asset) {
+            return Some(pcm);
+        }
+        self.open(raw, asset)
+    }
+
+    fn open(&mut self, path: PathBuf, asset: &Asset) -> Option<Arc<Pcm>> {
         if let Some(Some(pcm)) = self.sources.get(&path) {
             return Some(pcm.clone());
         }
-        // Missing caches are retried, since extraction may still be running. Another revision of
-        // this asset is no longer played.
+        // Missing caches are retried, since extraction or cleaning may still be running. Another
+        // revision of this asset's cache of the same kind (raw or cleaned) is no longer played.
         let pcm = Pcm::open(&path).ok().map(Arc::new);
         let prefix = format!("{}.", asset.id);
-        self.sources.retain(|other, _| !other.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)));
+        self.sources.retain(|other, _| {
+            other.parent() != path.parent()
+                || !other.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
+        });
         self.sources.insert(path, pcm.clone());
         pcm
     }
@@ -193,7 +205,7 @@ impl Mixer {
                 if !has_audio(asset) {
                     continue;
                 }
-                let Some(pcm) = self.source(asset) else { continue };
+                let Some(pcm) = self.source(asset, cleans_voice(clip)) else { continue };
                 let samples = pcm.samples();
                 let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
@@ -240,8 +252,13 @@ fn fade_gain(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64) -> f32 {
     ramp(i - start, fade_in) * ramp(end - 1 - i, fade_out)
 }
 
+fn cleans_voice(clip: &Clip) -> bool {
+    matches!(clip.content, ClipContent::Media { clean_voice: true, .. })
+}
+
 /// Whether `next` starts where `clip` ends and plays on from the same source at the same
-/// level, as the two halves of a split do.
+/// level, as the two halves of a split do. Halves of which only one cleans the voice sound
+/// different, so they crossfade like a cut.
 fn continues(clip: &Clip, next: &Clip) -> bool {
     let (
         ClipContent::Media { asset_id: a, source_in_us: source_a, volume: volume_a, speed: speed_a, .. },
@@ -255,6 +272,7 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
         && clip.end_us() == next.start_us
         && speed_a == speed_b
         && volume_a == volume_b
+        && cleans_voice(clip) == cleans_voice(next)
         && (source_b - source_end).abs() <= samples_to_us(1)
 }
 
@@ -483,7 +501,7 @@ mod tests {
         ensure_pcm(&cache, &first, |_| Ok(())).unwrap();
         ensure_pcm(&cache, &second, |_| Ok(())).unwrap();
         let mut mixer = Mixer::new(cache.clone());
-        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset).unwrap().samples()[1000];
+        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset, false).unwrap().samples()[1000];
         let quiet = level(&mut mixer, &first);
         let loud = level(&mut mixer, &second);
         assert!((loud - quiet * 3.0).abs() < 1e-3, "{quiet} then {loud}");
@@ -574,6 +592,7 @@ mod tests {
                     adjust: Default::default(),
                     fade_in_us: 0,
                     fade_out_us: 0,
+                    clean_voice: false,
                 },
             );
             if id == "b" {
@@ -634,6 +653,7 @@ mod tests {
                     adjust: Default::default(),
                     fade_in_us: 0,
                     fade_out_us: 0,
+                    clean_voice: false,
                 },
             );
             if id == "b" {
