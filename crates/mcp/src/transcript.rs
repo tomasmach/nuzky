@@ -311,7 +311,7 @@ fn speech_cut(
     let (bounds, unnumbered, speech) = editing_bounds(project, derived);
     let mut ranges = deletion_ranges(&bounds, &speech, delete, keep, pause)?;
     // A surviving fragment whose midpoint was cut away has no selectable index. Keep it audible.
-    for protected in unnumbered {
+    for &protected in &unnumbered {
         ranges = ranges
             .into_iter()
             .flat_map(|range| {
@@ -329,7 +329,7 @@ fn speech_cut(
             })
             .collect();
     }
-    Ok((without_slivers(project, &bounds, ranges), speech))
+    Ok((without_slivers(project, &bounds, &unnumbered, ranges), speech))
 }
 
 /// Where a take starts speaking at once, the silence a cut keeps before its first word lies at
@@ -337,7 +337,12 @@ fn speech_cut(
 /// timeline. That silence moves next to the last word instead, so the pause keeps its length and
 /// the takes meet at one cut; when the cut also removes words there, the sliver just goes. The
 /// same holds the other way round, for a take that ends speaking at once.
-fn without_slivers(project: &Project, words: &[TimelineWord], mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
+fn without_slivers(
+    project: &Project,
+    words: &[TimelineWord],
+    fragments: &[TimeRange],
+    mut ranges: Vec<TimeRange>,
+) -> Vec<TimeRange> {
     const SLIVER_US: i64 = 400_000;
     let joins: Vec<i64> = project
         .tracks
@@ -351,7 +356,11 @@ fn without_slivers(project: &Project, words: &[TimelineWord], mut ranges: Vec<Ti
                 .collect::<Vec<_>>()
         })
         .collect();
-    let silent = |from: i64, to: i64| words.iter().all(|w| w.end_us <= from || w.start_us >= to);
+    // Kept fragments of words count as speech like numbered words.
+    let silent = |from: i64, to: i64| {
+        words.iter().all(|w| w.end_us <= from || w.start_us >= to)
+            && fragments.iter().all(|f| f.end_us <= from || f.start_us >= to)
+    };
     let edges: Vec<(i64, i64)> = ranges.iter().map(|r| (r.start_us, r.end_us)).collect();
     for (i, range) in ranges.iter_mut().enumerate() {
         let next = edges.get(i + 1).map_or(i64::MAX, |r| r.0);
@@ -733,6 +742,38 @@ pub(crate) mod tests {
                 if delete.is_none() { 300_000 } else { AFTER_WORD_US + BEFORE_WORD_US }
             );
         }
+    }
+
+    /// The kept start of a word whose middle lies past the end of its clip is speech too: moving
+    /// a pause cut onto the join must not swallow it.
+    #[test]
+    fn a_kept_piece_of_a_word_at_the_end_of_a_take_is_not_taken_for_a_sliver() {
+        let (mut project, mut sources) = fixture();
+        project
+            .apply(EditCmd::RippleDeleteRanges {
+                ranges: vec![TimeRange { start_us: 1_000_000, end_us: 10_000_000 }],
+                keep_track_ids: None,
+            })
+            .unwrap();
+        let mut next = project.assets[0].clone();
+        (next.id, next.path, next.duration_us) = ("next".into(), "/next.mov".into(), 3_000_000);
+        project.apply(EditCmd::AddAssets { assets: vec![next] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "next".into(), start_us: None, track_id: None }).unwrap();
+        let word = |start_us, end_us, text: &str| Word { start_us, end_us, text: text.into(), probability: 1.0 };
+        sources.insert("talk".into(), vec![word(200_000, 500_000, "first"), word(900_000, 1_300_000, "half")]);
+        sources.insert("next".into(), vec![word(0, 400_000, "next0"), word(1_000_000, 1_400_000, "next1")]);
+        let derived = Derived { words: map_words(&project, &sources), sources, untranscribed: vec![] };
+        // "half" has its middle past the take's end, so only "first" is numbered in the take.
+        assert_eq!(derived.words.iter().filter(|w| w.asset_id == "talk").count(), 1);
+        let ranges = edit_ranges(&project, &derived, None, None, Some(300_000)).unwrap();
+        let cut = plan_cut(&project, &derived, ranges).unwrap();
+        let plays = |from: i64, to: i64| {
+            cut.preview.tracks[0].clips.iter().any(|clip| {
+                let ClipContent::Media { asset_id, source_in_us, .. } = &clip.content else { return false };
+                asset_id == "talk" && *source_in_us <= from && source_in_us + clip.duration_us >= to
+            })
+        };
+        assert!(plays(900_000, 1_000_000), "the kept start of \"half\" still plays: {:?}", cut.ranges);
     }
 
     #[test]
