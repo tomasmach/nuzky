@@ -40,7 +40,7 @@ More detail: [docs/INTERACTION.md](docs/INTERACTION.md) (behaviour), [DESIGN.md]
 
 ## Build and run
 
-Use current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. CI builds Linux x86_64, macOS Apple Silicon and Windows x64. See [docs/BUILDING.md](docs/BUILDING.md) for exact dependencies, installers, runtime libraries and release limitations.
+Use current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. CI targets Linux x86_64, macOS Apple Silicon and Windows x64. See [docs/BUILDING.md](docs/BUILDING.md) for exact dependencies, installers, runtime libraries and release limitations.
 
 Fedora / Nobara:
 
@@ -55,7 +55,7 @@ npm install
 npm run tauri dev
 ```
 
-For macOS and Windows, install the platform dependencies in [BUILDING.md](docs/BUILDING.md) before running the same commands. CI artifacts contain installers; pushing a matching `v*` version tag prepares a draft GitHub Release. Builds are unsigned previews until verified on each target OS.
+For macOS and Windows, install the platform dependencies in [BUILDING.md](docs/BUILDING.md) before running the same commands. CI runs on `main` upload installers; pushing a matching `v*` version tag prepares a draft GitHub Release. Builds are unsigned previews until verified on each target OS.
 
 ## CLI
 
