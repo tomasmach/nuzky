@@ -57,7 +57,8 @@ function useFrameStream(url: string, canvas: React.RefObject<HTMLCanvasElement |
         el.height = h;
       }
       el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, HEADER, w * h * 4), w, h), 0, 0);
-      if (playing) useEditor.setState({ timeUs: t });
+      // A frame rendered just before a pause can arrive after it; the pause already set the time.
+      if (playing && useEditor.getState().playing) useEditor.setState({ timeUs: t });
     };
 
     const connect = () => {
