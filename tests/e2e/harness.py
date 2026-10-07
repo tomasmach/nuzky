@@ -14,7 +14,6 @@ MODELS = FIXTURES / 'xdg/data/capopen/models'
 OUT = ROOT / 'tmp-test/repro'
 TARGET = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target'))
 APP, CLI = TARGET / 'debug/capopen-app', TARGET / 'debug/capopen'
-DRIVER = shutil.which('tauri-driver') or str(Path.home() / '.cargo/bin/tauri-driver')
 WEBKIT_DRIVER = shutil.which('WebKitWebDriver') or '/usr/bin/WebKitWebDriver'
 AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
@@ -27,10 +26,10 @@ def flow(name, description, before=None):
     return register
 
 
-# --- WebDriver client for the app's webview, through tauri-driver -------------------------------------
+# --- WebDriver client for the app's webview, straight to WebKitWebDriver --------------------------------
 
 def webdriver(method, path, body=None, retries=0):
-    """Retries only queries: tauri-driver sometimes reuses a keep-alive connection WebKitWebDriver just closed."""
+    """Retries only queries, which are safe to send twice when a connection drops."""
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request('http://127.0.0.1:4444' + path, data=data, method=method,
                                      headers={'Content-Type': 'application/json'})
@@ -48,7 +47,10 @@ def webdriver(method, path, body=None, retries=0):
 
 class Session:
     def __init__(self):
-        caps = {'capabilities': {'alwaysMatch': {'browserName': 'wry', 'tauri:options': {'application': str(APP)}}}}
+        # What tauri-driver sends on Linux. Talking to WebKitWebDriver directly avoids tauri-driver's connection
+        # pool, whose stale connections now and then dropped a request mid-flow.
+        caps = {'capabilities': {'alwaysMatch': {'browserName': 'wry',
+                                                 'webkitgtk:browserOptions': {'binary': str(APP), 'args': []}}}}
         self.path = '/session/' + webdriver('POST', '/session', caps)['sessionId']
 
     def run(self, script, *args, retries=0):
@@ -187,13 +189,14 @@ def run_flow(name):
     try:
         if before:
             before(r)
-        # tauri-driver forwards to its own WebKitWebDriver on 4445; a stranger there would launch the app outside this run.
-        if not wait(lambda: not any(port_busy(port) for port in (4444, 4445)), 10):
-            raise RuntimeError('port 4444 or 4445 is in use by another session')
-        driver = start([DRIVER, '--port', '4444', '--native-port', '4445', '--native-driver', WEBKIT_DRIVER],
-                       r.work / 'driver.log', r.env)
+        # A WebDriver that is not ours would launch the app outside this run's directories.
+        if not wait(lambda: not port_busy(4444), 10):
+            raise RuntimeError('port 4444 is in use by another session')
+        # Tauri 2 lets WebDriver drive its webview only with this set, as tauri-driver does.
+        driver = start([WEBKIT_DRIVER, '--port=4444', '--host=127.0.0.1'], r.work / 'driver.log',
+                       dict(r.env, TAURI_WEBVIEW_AUTOMATION='true'))
         if not wait(lambda: port_busy(4444), 20):
-            raise RuntimeError('tauri-driver did not start, see driver.log')
+            raise RuntimeError('WebKitWebDriver did not start, see driver.log')
         r.s = Session()
         if not wait(lambda: r.s.run('return !!window.__capopen?.store.getState().snap', retries=3), 60):
             raise RuntimeError('the app did not load a project')
@@ -247,10 +250,11 @@ def ffprobe(path):
 
 
 def changed_share(a, b):
-    """Share of pixels whose brightness clearly differs. Encoding noise stays below the threshold;
-    the neighbouring frame of the test pattern changes about 1 % of the picture."""
+    """Share of pixels whose brightness clearly differs, for two image paths or Pillow images. Encoding noise
+    stays below the threshold; the neighbouring frame of the test pattern changes about 1 % of the picture."""
     from PIL import Image, ImageChops, ImageStat
-    first, second = Image.open(a).convert('L'), Image.open(b).convert('L')
+    first, second = (Image.open(x) if isinstance(x, (str, Path)) else x for x in (a, b))
+    first, second = first.convert('L'), second.convert('L')
     if first.size != second.size:
         return 1.0
     return ImageStat.Stat(ImageChops.difference(first, second).point(lambda v: 255 if v > 48 else 0)).mean[0] / 255

@@ -22,7 +22,7 @@ Pravidlo odsud, které bojuje s úkolem, neporušuj potichu. Řekni to nahlas.
 
 1. **Skutečná data uživatele.** Appka čte projekty, nedávné projekty a modely z `$XDG_DATA_HOME/capopen`, cache zvuku z `$XDG_CACHE_HOME/capopen` a IPC socket má v `$XDG_RUNTIME_DIR/capopen`. Appku, CLI ani `capopen mcp` nespouštěj se skutečnými adresáři uživatele: otevřela by jeho poslední projekt nebo se připojila k jeho běžící appce. `scripts/repro.py` všechno izoluje sám, ruční běh izoluj stejně. `~/.cache/capopen/deps` patří build skriptům, nemaž ho.
 2. **Disk a souběžné buildy.** Každý `CARGO_TARGET_DIR` je celý build s FFmpeg, wgpu a whisper.cpp. Sedmnáct `target-*` adresářů jednou zabralo 235 GB. Používej `target/` svého checkoutu. Vlastní target adresář založ jen pro souběžný build a po práci ho smaž. Dvě plné testovací sady naráz nespouštěj a velké testovací soubory nedávej do `/tmp`, je v paměti.
-3. **Okna a procesy na ploše.** Appka otevírá skutečná okna, nativní dialogy a notifikace. Proklikávej přes `scripts/repro.py`: headless gamescope a vypnutý D-Bus. Vite běží na pevném portu 1420 a `tauri-driver` na 4444. Obsazený port znamená cizí session; nezabíjej ji a počkej. Ukončuj jen vlastní procesy podle PID nebo skupiny.
+3. **Okna a procesy na ploše.** Appka otevírá skutečná okna, nativní dialogy a notifikace. Proklikávej přes `scripts/repro.py`: headless gamescope a vypnutý D-Bus. Vite běží na pevném portu 1420 a WebKitWebDriver na 4444. Obsazený port znamená cizí session; nezabíjej ji a počkej. Ukončuj jen vlastní procesy podle PID nebo skupiny.
 4. **GitHub Actions.** Repo je soukromé a minuty mají rozpočet, macOS se počítá desetkrát. Job, který skončí za pár sekund bez logu, neběžel kvůli rozpočtu. Řekni mi to a kód kvůli tomu neopravuj.
 
 ## Jak to funguje
@@ -48,7 +48,7 @@ Nejčastější vada je změna, která funguje jen na cestě, kterou jsi zkouše
 
 ## Ověřování
 
-- Nový checkout: `git config core.hooksPath .githooks`. Nástroje pro bránu na Fedoře a Nobaře: `sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib`, `cargo install --locked tauri-driver@2.1.0 cargo-deny@0.20.2` a gitleaks 8.30.1. První kompilace testů v čistém checkoutu trvá asi 7 minut.
+- Nový checkout: `git config core.hooksPath .githooks`. Nástroje pro bránu na Fedoře a Nobaře: `sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib`, `cargo install --locked cargo-deny@0.20.2` a gitleaks 8.30.1. První kompilace testů v čistém checkoutu trvá asi 7 minut.
 - Bug reprodukuj přesně v toku, kde se stal. Když první oprava nezabere, přestaň hádat a najdi stav, který ho spouští.
 - E2E jsou hlavní testy. Je to tok ve skutečné appce (`tests/e2e/<oblast>.py`, spouští ho `python3 scripts/repro.py <flow>`, `--list` ukáže toky) a integrační test nad skutečnou binárkou a médii (`crates/cli/tests/`, `crates/engine/tests/qa_*.rs`).
 - Nová funkce, oprava UI, toku nebo bugu není hotová bez E2E scénáře, který by bez ní selhal. Přidej nový flow, nebo kontrolu do existujícího. Scénář ověřuje, co uživatel uvidí: stav projektu, uložený soubor, pixely náhledu nebo exportu. Nestačí, že nic nespadlo.

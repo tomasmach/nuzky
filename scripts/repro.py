@@ -11,9 +11,8 @@ Each flow gets fresh data, cache and runtime directories, so the app never opens
 joins their running CapOpen. It runs inside headless gamescope with D-Bus switched off, so no window,
 dialog or notification reaches the desktop. Media and models come from scripts/fixtures.sh.
 
-Needs gamescope, WebKitWebDriver, tauri-driver (`cargo install tauri-driver --locked`), Pillow and
-python-xlib. Vite takes port 1420 (the app's dev URL), tauri-driver 4444 and its WebKitWebDriver 4445. A busy port belongs to
-another session, so the run stops instead of touching it.
+Needs gamescope, WebKitWebDriver, Pillow and python-xlib. Vite takes port 1420 (the app's dev URL) and
+WebKitWebDriver 4444. A busy port belongs to another session, so the run stops instead of touching it.
 """
 import importlib, json, os, shutil, subprocess, sys
 from pathlib import Path
@@ -21,7 +20,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 TESTS = Path(__file__).resolve().parent.parent / 'tests'
 sys.path.insert(0, str(TESTS))
-from e2e.harness import DRIVER, FIXTURES, FLOWS, MODELS, OUT, ROOT, WEBKIT_DRIVER, port_busy, run_flow, start, stop, wait  # noqa: E402
+from e2e.harness import FIXTURES, FLOWS, MODELS, OUT, ROOT, WEBKIT_DRIVER, port_busy, run_flow, start, stop, wait  # noqa: E402
 
 for module in sorted(p.stem for p in (TESTS / 'e2e').glob('*.py') if p.stem != 'harness'):
     importlib.import_module(f'e2e.{module}')
@@ -31,7 +30,7 @@ for module in sorted(p.stem for p in (TESTS / 'e2e').glob('*.py') if p.stem != '
 
 def preflight(names):
     problems = [f'{tool} is missing' for tool in ('gamescope', 'ffmpeg', 'npx') if not shutil.which(tool)]
-    problems += [f'{path} is missing' for path in (DRIVER, WEBKIT_DRIVER) if not Path(path).exists()]
+    problems += [f'{path} is missing' for path in (WEBKIT_DRIVER,) if not Path(path).exists()]
     for module, package in (('PIL', 'Pillow'), ('Xlib', 'python-xlib')):
         try:
             __import__(module)
@@ -39,7 +38,7 @@ def preflight(names):
             problems.append(f'Python package {package} is missing')
     if not (FIXTURES / 'talk.mp4').exists() or ('captions' in names and not (MODELS / 'ggml-small.bin').exists()):
         problems.append('test media or models are missing: run scripts/fixtures.sh')
-    problems += [f'port {port} is in use by another session' for port in (1420, 4444, 4445) if port_busy(port)]
+    problems += [f'port {port} is in use by another session' for port in (1420, 4444) if port_busy(port)]
     return problems
 
 
