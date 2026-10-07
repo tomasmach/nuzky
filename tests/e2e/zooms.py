@@ -80,6 +80,12 @@ def merged(clips):
     return out
 
 
+def remove_pauses(r):
+    """How long each pause is that Remove pauses would shorten now, asked of the app as the Transcript tab asks it."""
+    found = r.s.call('window.__capopen.api.transcriptView(500000).then((v) => JSON.stringify(v.pauses.map((p) => p.gapUs)))')
+    return found['value'] if found['ok'] else found
+
+
 def square(r, name):
     """Width, height and centre of the yellow square in the preview, in screen pixels."""
     crop = preview_crop(r.work / f'{name}.png', preview_rect(r)).convert('RGB')
@@ -146,6 +152,7 @@ def suggest_and_apply(r, bridge):
     r.shot('zoom-suggestions')
 
     project_before = r.s.run(PROJECT)
+    pauses_before = remove_pauses(r)
     press(ENTER)
     applied = wait(lambda: (c := main(r)) and len(c) > len(before) and c, 15)
     r.check('Apply splits the main track', applied, applied and pieces(applied))
@@ -153,14 +160,20 @@ def suggest_and_apply(r, bridge):
     r.check('a toast names the zooms and offers Undo', toast and str(len(analysis['zooms'])) in toast['text'], r.state()['toasts'])
     r.check('the suggestions close after Apply', not r.s.run("return !!document.querySelector('[data-zoom-bar]')"))
     zoomed = [p for p in pieces(applied) if p[2] != 1.0]
+    cuts = {t for start, end, *_ in pieces(before) for t in (start, end)}
+    silent = lambda a, b: all(w['end_us'] <= a or w['start_us'] >= b for w in words)
     expected = []
     for z in analysis['zooms']:
         first, last = words[z['from']]['start_us'], words[z['to']]['end_us']
-        # Midway into the silence, at most 0.15 s out; a cut closer than 0.3 s takes the edge.
-        match = [p for p in zoomed if first - 450_000 <= p[0] <= first and last <= p[1] <= last + 450_000 and abs(p[2] - z['scale']) < 1e-3]
+        # Midway into the silence, at most 0.15 s out (a cut closer than 0.3 s takes the edge), or at the cut
+        # when only silence lies between.
+        starts = lambda t: first - 450_000 <= t <= first or (t in cuts and silent(t, first))
+        ends = lambda t: last <= t <= last + 450_000 or (t in cuts and silent(last, t))
+        match = [p for p in zoomed if starts(p[0]) and ends(p[1]) and abs(p[2] - z['scale']) < 1e-3]
         expected.append({'zoom': z['text'], 'pieces': match})
     r.check('each suggested sentence plays zoomed by its factor, just around its words',
             all(len(e['pieces']) == 1 for e in expected) and len(zoomed) == len(expected), {'expected': expected, 'zoomed': zoomed})
+    r.check('every pause can still be removed as before', remove_pauses(r) == pauses_before, [pauses_before, remove_pauses(r)])
     project_after = r.s.run(PROJECT)
     same = (project_after['assets'] == project_before['assets'] and project_after['tracks'][1:] == project_before['tracks'][1:]
             and project_after['canvas'] == project_before['canvas'] and merged(applied) == merged(before))

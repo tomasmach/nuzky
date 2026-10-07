@@ -11,7 +11,8 @@ export const zoomLabel = (scale: number) => `${scale.toFixed(2).replace(/0$/, ""
 export interface ZoomSuggestionState {
   /** Suggested sentences of the current words, or null when none are shown. */
   zooms: SuggestedZoom[] | null;
-  pending: boolean;
+  /** What is waiting for the backend. */
+  pending: "suggesting" | "applying" | null;
   suggest: () => Promise<void>;
   /** Resolves to whether the zooms were applied and the suggestions closed. */
   apply: () => Promise<boolean>;
@@ -24,12 +25,12 @@ export interface ZoomSuggestionState {
  */
 export function useZoomSuggestions(view: TranscriptView | null): ZoomSuggestionState {
   const [found, setFound] = useState<ZoomSuggestions | null>(null);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<ZoomSuggestionState["pending"]>(null);
   const key = view?.key;
   useEffect(() => setFound((f) => (f && f.key === key ? f : null)), [key]);
 
   const suggest = async () => {
-    setPending(true);
+    setPending("suggesting");
     try {
       const next = await api.suggestZooms();
       if (next.zooms.length === 0) {
@@ -39,19 +40,19 @@ export function useZoomSuggestions(view: TranscriptView | null): ZoomSuggestionS
     } catch (e) {
       useEditor.getState().toast({ kind: "error", text: errorText(e) });
     } finally {
-      setPending(false);
+      setPending(null);
     }
   };
 
   const apply = async () => {
     if (!found || aiLocked()) return false;
-    setPending(true);
+    setPending("applying");
     try {
       const done = await applyZooms(found.key, found.zooms.map(({ from, to, scale }) => ({ from, to, scale })));
       if (done) setFound(null);
       return done;
     } finally {
-      setPending(false);
+      setPending(null);
     }
   };
 
@@ -64,7 +65,7 @@ export function SuggestZoomsButton({ state, blocker }: { state: ZoomSuggestionSt
     <Button
       className="h-7 px-2"
       data-suggest-zooms
-      disabled={!!blocker || state.pending}
+      disabled={!!blocker || state.pending === "suggesting"}
       disabledReason={blocker ?? "Finding sentences to zoom on…"}
       title="Mark the sentences said with emphasis for a subtle zoom"
       onClick={state.suggest}
@@ -101,18 +102,16 @@ export function ZoomBar({ state, blocker }: { state: ZoomSuggestionState; blocke
     dismiss();
   };
   const n = zooms.length;
-  const scales = [...new Set(zooms.map((z) => z.scale))].sort((a, b) => a - b);
-  const range = scales.length === 1 ? zoomLabel(scales[0]) : `${zoomLabel(scales[0])}–${zoomLabel(scales[scales.length - 1])}`;
   return (
     <div ref={bar} role="region" aria-label="Suggested zooms" data-zoom-bar className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2" onKeyDown={onKeyDown}>
       <ZoomIn size={14} className="shrink-0 text-accent" aria-hidden />
-      <span className="tabular flex-1 text-[12px] text-muted">
-        {n} sentence{n === 1 ? "" : "s"} · {range}
+      <span className="tabular flex-1 truncate text-[12px] text-muted">
+        {n} sentence{n === 1 ? "" : "s"} marked
       </span>
       <Button className="h-7 px-2" onClick={dismiss}>
         Dismiss
       </Button>
-      <Button data-zoom-apply variant="primary" className="h-7 px-2" disabled={!!blocker || state.pending} disabledReason={blocker ?? "Applying…"} onClick={apply}>
+      <Button data-zoom-apply variant="primary" className="h-7 px-2" disabled={!!blocker || state.pending === "applying"} disabledReason={blocker ?? "Applying…"} onClick={apply}>
         Apply {n} zoom{n === 1 ? "" : "s"}
       </Button>
     </div>

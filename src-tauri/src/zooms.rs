@@ -207,8 +207,9 @@ mod tests {
                 (c.start_us, transform.scale)
             })
             .collect();
-        // Each zoom starts 150 ms before its first word and ends 150 ms after its last.
-        assert_eq!(scales, [(0, 1.0), (850_000, 1.17), (3_050_000, 1.0), (15_850_000, 1.24), (18_050_000, 1.0)]);
+        // Each zoom starts 150 ms before its first word and ends 150 ms after its last; the hook
+        // takes the silence before it too, so no piece of the take is left without words.
+        assert_eq!(scales, [(0, 1.17), (3_050_000, 1.0), (15_850_000, 1.24), (18_050_000, 1.0)]);
         assert!(explain(apply(&host, &found.key, &zooms).unwrap_err()).starts_with("The transcript changed"));
         host.session.undo().unwrap();
         assert_eq!(host.session.state().unwrap().project, before);

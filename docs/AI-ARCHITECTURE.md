@@ -63,7 +63,7 @@ All times are integer microseconds on the timeline unless a field says `source`.
 | `transcribe(asset_ids?)` | Job recognising the heard media that has no transcript yet |
 | `get_transcript(range?)` | Numbered timeline words and sentences, `transcript_key`, untranscribed clips |
 | `edit_transcript(run_id?, transcript_key, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text. A dry run needs no open run |
-| `apply_zooms(run_id, transcript_key, zooms, request_id?)` | Punch-ins on word ranges as one `ZoomRanges` edit: each range runs from midway into the silence before its first word to midway into the silence after its last (at most 150 ms out); `SPEECH_CHANGED` on a stale key, retry-safe by `request_id` |
+| `apply_zooms(run_id, transcript_key, zooms, request_id?)` | Punch-ins on word ranges as one `ZoomRanges` edit: each range runs from midway into the silence before its first word to midway into the silence after its last (at most 150 ms out), or on to the cut when only silence lies between, so no piece of a take is left without words; `SPEECH_CHANGED` on a stale key, retry-safe by `request_id` |
 | `build_captions(run_id, style?, max_words?, max_chars?)` | Deterministic caption clips on one captions track, never across a cut; the Reel style by default |
 | `export_video(path, preset? or resolution + fps, quality?)` | Job exporting a snapshot; `preset: "reels"` writes 1080x1920 at 30 fps with the sound levelled to -14 LUFS, true peak at most -1 dBTP |
 | `job(job_id, get | cancel)` | Progress, result, cancel |
