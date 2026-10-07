@@ -570,10 +570,12 @@ export function detachBlocker(project: Project, clip: Clip): string | null {
   return null;
 }
 
-export async function detachAudio(clipId: string) {
+/** Moves the sound of each clip to an audio track, as one undo step. */
+export async function detachAudio(clipIds: string[]) {
   const { edit, toast } = useEditor.getState();
-  const snap = await edit({ type: "detachAudio", clipId });
-  if (snap) toast({ kind: "info", text: "Audio moved to its own track", action: undoAction(snap) });
+  const snap = await edit(clipIds.map((clipId): EditCmd => ({ type: "detachAudio", clipId })));
+  const text = clipIds.length === 1 ? "Audio moved to its own track" : `Audio of ${clipIds.length} clips detached`;
+  if (snap) toast({ kind: "info", text, action: undoAction(snap) });
 }
 
 /** Restyles every caption clip at once, as one undo step, keeping each caption's wrap width (the safe area). */

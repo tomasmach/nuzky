@@ -107,7 +107,7 @@ export function AudioSection({ clip, content }: { clip: Clip; content: Media }) 
       />
       {isVideo && (
         <span className="block" title={blocker ?? "Move the sound to its own audio track"}>
-          <Button className="w-full" disabled={!!blocker} onClick={() => detachAudio(clip.id)}>
+          <Button className="w-full" disabled={!!blocker} onClick={() => detachAudio([clip.id])}>
             <Unlink size={14} /> Detach audio
           </Button>
         </span>
