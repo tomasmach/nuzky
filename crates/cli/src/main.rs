@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use capopen_engine::edit::{EditCmd, new_id};
 use capopen_engine::export::{ExportOptions, check_source_path, export};
 use capopen_engine::media::probe;
@@ -25,7 +25,18 @@ fn cache_dir() -> PathBuf {
 
 fn load(path: &str) -> Result<Project> {
     let json = std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
-    serde_json::from_str(&json).with_context(|| format!("{path} is not a valid project"))
+    let project = serde_json::from_str(&json).with_context(|| format!("{path} is not a valid project"))?;
+    capopen_session::validate(&project).with_context(|| format!("{path} is not a valid project"))?;
+    Ok(project)
+}
+
+/// Frames must fit the renderer's textures, like the canvas itself.
+fn frame_size(project: &Project, width: u32) -> Result<(u32, u32)> {
+    const SIDE: std::ops::RangeInclusive<u32> = 16..=7680;
+    ensure!(SIDE.contains(&width), "Frame width must be 16..=7680 pixels");
+    let height = (width as u64 * project.canvas.height as u64 / project.canvas.width as u64) as u32;
+    ensure!(SIDE.contains(&height), "Frame height {height} must be 16..=7680 pixels; use another width");
+    Ok((width, height))
 }
 
 fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
@@ -142,7 +153,7 @@ fn main() -> Result<()> {
             let project = load(project)?;
             check_source_path(&project, Path::new(out))?;
             let width: u32 = rest.first().map(|w| w.parse()).transpose()?.unwrap_or(project.canvas.width);
-            let height = (width as u64 * project.canvas.height as u64 / project.canvas.width as u64) as u32;
+            let (width, height) = frame_size(&project, width)?;
             let t = (secs.parse::<f64>()? * 1e6) as i64;
             let mut renderer = Renderer::new()?;
             let start = Instant::now();
@@ -154,10 +165,10 @@ fn main() -> Result<()> {
             let project = load(project)?;
             let width: u32 = rest.first().map(|s| s.parse()).transpose()?.unwrap_or(576);
             let seconds: f64 = rest.get(1).map(|s| s.parse()).transpose()?.unwrap_or(5.0);
-            if width == 0 || !seconds.is_finite() || seconds <= 0.0 {
-                bail!("Width and seconds must be positive");
+            if !seconds.is_finite() || seconds <= 0.0 {
+                bail!("Seconds must be positive");
             }
-            let height = (width as u64 * project.canvas.height as u64 / project.canvas.width.max(1) as u64) as u32;
+            let (width, height) = frame_size(&project, width)?;
             let fps = project.canvas.fps.max(1) as u64;
             let frames = ((seconds * fps as f64).ceil() as u64).max(1);
             let mut renderer = Renderer::new()?;

@@ -166,3 +166,33 @@ fn new_refuses_existing_or_locked_project_and_publishes_complete_json() {
     assert!(!std::fs::read_dir(&dir).unwrap().any(|p| p.unwrap().path().extension().is_some_and(|x| x == "tmp")));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn frame_and_render_reject_bad_sizes_and_invalid_projects_without_panicking() {
+    let (dir, project, _) = fixture();
+    let out = dir.join("frame.png");
+    for (width, message) in
+        [("0", "Frame width"), ("8", "Frame width"), ("100000", "Frame width"), ("7000", "Frame height")]
+    {
+        let result = Command::new(env!("CARGO_BIN_EXE_capopen"))
+            .arg("frame")
+            .arg(&project)
+            .arg("0")
+            .arg(&out)
+            .arg(width)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1), "width {width}");
+        assert!(String::from_utf8_lossy(&result.stderr).contains(message), "width {width}");
+    }
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&project).unwrap()).unwrap();
+    json["canvas"]["background"] = serde_json::json!("#€");
+    std::fs::write(&project, serde_json::to_vec(&json).unwrap()).unwrap();
+    for command in ["frame", "render"] {
+        let result = write_output(command, &project, &dir.join(format!("out-{command}")));
+        assert_eq!(result.status.code(), Some(1), "{command}");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("INVALID_COLOR"), "{command}");
+    }
+    assert!(!out.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
