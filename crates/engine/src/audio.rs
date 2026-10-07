@@ -10,7 +10,7 @@ use memmap2::Mmap;
 
 use crate::effects::transition_window;
 use crate::media::extract_pcm;
-use crate::model::{Asset, AssetKind, CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
+use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
 /// Short fades at clip edges so cuts do not click.
 const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
@@ -149,10 +149,14 @@ impl Mixer {
                 let available_end = (origin + (pcm.frames() as f64 - src0) / *speed as f64).ceil() as i64;
                 let begin = begin.max(available_start);
                 let finish = finish.min(available_end);
+                // A split leaves pieces that play on seamlessly; ramping there would dip the sound.
+                let joined_before = begin == c0 && index > 0 && continues(&track.clips[index - 1], clip);
+                let joined_after = finish == c1 && track.clips.get(index + 1).is_some_and(|next| continues(clip, next));
+                let edges = (if joined_before { 0 } else { EDGE_FADE }, if joined_after { 0 } else { EDGE_FADE });
                 for i in from.max(begin)..to.min(finish) {
                     let src = src0 + (i as f64 - origin) * *speed as f64;
                     let gain = volume
-                        * gain_at(i, begin, finish, incoming, outgoing)
+                        * gain_at(i, begin, finish, edges, incoming, outgoing)
                         * fade_gain(i, c0, c1, us_to_samples(*fade_in_us), us_to_samples(*fade_out_us));
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
@@ -183,12 +187,38 @@ fn fade_gain(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64) -> f32 {
     ramp(i - start, fade_in) * ramp(end - 1 - i, fade_out)
 }
 
-fn gain_at(i: i64, start: i64, end: i64, incoming: Option<(i64, i64)>, outgoing: Option<(i64, i64)>) -> f32 {
+/// Whether `next` starts where `clip` ends and plays on from the same source at the same
+/// level, as the two halves of a split do.
+fn continues(clip: &Clip, next: &Clip) -> bool {
+    let (
+        ClipContent::Media { asset_id: a, source_in_us: source_a, volume: volume_a, speed: speed_a, .. },
+        ClipContent::Media { asset_id: b, source_in_us: source_b, volume: volume_b, speed: speed_b, .. },
+    ) = (&clip.content, &next.content)
+    else {
+        return false;
+    };
+    let source_end = source_a + (clip.duration_us as f64 * *speed_a as f64).round() as i64;
+    a == b
+        && clip.end_us() == next.start_us
+        && speed_a == speed_b
+        && volume_a == volume_b
+        && (source_b - source_end).abs() <= samples_to_us(1)
+}
+
+/// `edges` are the de-click ramp lengths at the start and the end; 0 leaves that edge open.
+fn gain_at(
+    i: i64,
+    start: i64,
+    end: i64,
+    edges: (i64, i64),
+    incoming: Option<(i64, i64)>,
+    outgoing: Option<(i64, i64)>,
+) -> f32 {
     if i < start || i >= end {
         return 0.0;
     }
     let ramp = |n: i64, d: i64| if d > 0 { (n as f32 / d as f32).clamp(0.0, 1.0) } else { 1.0 };
-    let mut gain = ramp((i - start).min(end - 1 - i), EDGE_FADE);
+    let mut gain = ramp(i - start, edges.0).min(ramp(end - 1 - i, edges.1));
     for (window, entering) in [(incoming, true), (outgoing, false)] {
         if let Some((a, b)) = window {
             let p = ((i - a) as f64 / (b - a).max(1) as f64).clamp(0.0, 1.0);
@@ -452,6 +482,51 @@ mod tests {
     }
 
     #[test]
+    fn cuts_ramp_without_clicks_and_split_halves_play_on_seamlessly() {
+        use crate::edit::{EditCmd, TimeRange};
+        let cache = std::env::temp_dir().join(format!("capopen-audio-cuts-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let asset = Asset {
+            id: "m".into(),
+            name: "m".into(),
+            path: String::new(),
+            kind: AssetKind::Audio,
+            duration_us: 4_000_000,
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            has_audio: true,
+            rotation: 0,
+        };
+        // A rising level, so a cut jumps between different values.
+        let samples: Vec<f32> = (0..192_000).flat_map(|i| [i as f32 / 192_000.0; CHANNELS]).collect();
+        std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&samples)).unwrap();
+        let mut project = Project::new("cuts");
+        project.apply(EditCmd::AddAssets { assets: vec![asset] }).unwrap();
+        let id = project.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap();
+        let id = id.select[0].clone();
+        let mix = |project: &Project| {
+            let mut out = vec![0.0; 192_000 * CHANNELS];
+            Mixer::new(cache.clone()).mix(project, 0, &mut out);
+            out.chunks_exact(CHANNELS).map(|f| f[0]).collect::<Vec<_>>()
+        };
+        let whole = mix(&project);
+        let mut split = project.clone();
+        split.apply(EditCmd::SplitClip { clip_id: id, at_us: 1_000_000 }).unwrap();
+        let difference = whole.iter().zip(mix(&split)).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        let mut cut = project.clone();
+        let range = TimeRange { start_us: 1_000_000, end_us: 2_000_000 };
+        cut.apply(EditCmd::RippleDeleteRanges { ranges: vec![range], keep_track_ids: Some(vec![]) }).unwrap();
+        let cut = mix(&cut);
+        let max_step = cut.windows(2).map(|p| (p[1] - p[0]).abs()).fold(0.0f32, f32::max);
+        std::fs::remove_dir_all(cache).unwrap();
+        assert!(difference < 1e-6, "split changed the sound by {difference}");
+        // Without the edge ramps the cut would jump from 0.25 to 0.5 in one sample.
+        assert!(max_step < 0.01, "sample step at the cut: {max_step}");
+        assert!((cut[47_000] - 47_000.0 / 192_000.0).abs() < 1e-6 && (cut[49_000] - 97_000.0 / 192_000.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn speed_reads_fractional_source_samples_and_silence_past_eof() {
         let samples = [0.0, 0.0, 0.2, -0.2, 0.4, -0.4, 0.6, -0.6];
         assert!((sample_at(&samples, 1.0 * 1.5, 0) - 0.3).abs() < 1e-6);
@@ -465,11 +540,11 @@ mod tests {
         assert_eq!(fade_gain(0, 0, 48000, 4800, 4800), 0.0);
         assert_eq!(fade_gain(2400, 0, 48000, 4800, 4800), 0.5);
         assert_eq!(fade_gain(45599, 0, 48000, 4800, 4800), 0.5);
-        assert_eq!(gain_at(47999, 0, 48000, None, None), 0.0);
+        assert_eq!(gain_at(47999, 0, 48000, (EDGE_FADE, EDGE_FADE), None, None), 0.0);
         assert!((fade_gain(120, 0, 48000, 4800, 0) - 0.025).abs() < 1e-6);
         for i in [12000, 18000, 24000] {
-            let a = gain_at(i, 0, 36000, None, Some((12000, 24000)));
-            let b = gain_at(i, 0, 36000, Some((12000, 24000)), None);
+            let a = gain_at(i, 0, 36000, (EDGE_FADE, EDGE_FADE), None, Some((12000, 24000)));
+            let b = gain_at(i, 0, 36000, (EDGE_FADE, EDGE_FADE), Some((12000, 24000)), None);
             assert!((a * a + b * b - 1.0).abs() < 1e-6);
             if i == 18000 {
                 assert!((a * 0.2 + b * 0.4 - 0.6 * std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);

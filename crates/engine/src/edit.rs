@@ -293,10 +293,14 @@ impl Project {
         second.id = new_id();
         second.start_us = at_us;
         second.duration_us = clip.end_us() - at_us;
-        if let ClipContent::Media { source_in_us, speed, .. } = &mut second.content {
+        if let ClipContent::Media { source_in_us, speed, fade_in_us, .. } = &mut second.content {
             *source_in_us += (offset as f64 * *speed as f64).round() as i64;
+            *fade_in_us = 0;
         }
-        // The first half keeps the entry animation, the second the exit.
+        // The first half keeps the entry animation and fade, the second the exit ones.
+        if let ClipContent::Media { fade_out_us, .. } = &mut clip.content {
+            *fade_out_us = 0;
+        }
         clip.anim_out = None;
         second.anim_in = None;
         second.transition_in = None;
@@ -1487,6 +1491,50 @@ mod tests {
     }
 
     #[test]
+    fn cuts_keep_the_fade_in_on_the_first_piece_and_the_fade_out_on_the_last() {
+        let fades = |p: &Project, ti: usize| {
+            p.tracks[ti]
+                .clips
+                .iter()
+                .map(|c| match &c.content {
+                    ClipContent::Media { fade_in_us, fade_out_us, .. } => (*fade_in_us / 1000, *fade_out_us / 1000),
+                    ClipContent::Text { .. } => panic!(),
+                })
+                .collect::<Vec<_>>()
+        };
+        // Music with 2 s fades split in the middle keeps playing through the split.
+        let mut p = project();
+        let id = p.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }).unwrap().select
+            [0]
+        .clone();
+        let fade: EditCmd = serde_json::from_value(serde_json::json!({
+            "type":"updateClip", "clipId":id, "fadeInUs":2_000_000, "fadeOutUs":2_000_000
+        }))
+        .unwrap();
+        p.apply(fade).unwrap();
+        p.apply(EditCmd::SplitClip { clip_id: id, at_us: 10_000_000 }).unwrap();
+        assert_eq!(fades(&p, 1), vec![(2000, 0), (0, 2000)]);
+        // Silence cuts on a clip with short fades do not fade every piece in and out.
+        let mut p = project();
+        let id = p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap().select[0]
+            .clone();
+        let fade: EditCmd = serde_json::from_value(serde_json::json!({
+            "type":"updateClip", "clipId":id, "fadeInUs":300_000, "fadeOutUs":300_000
+        }))
+        .unwrap();
+        p.apply(fade).unwrap();
+        p.apply(EditCmd::RippleDeleteRanges {
+            ranges: vec![
+                TimeRange { start_us: 1_000_000, end_us: 1_500_000 },
+                TimeRange { start_us: 3_000_000, end_us: 3_500_000 },
+            ],
+            keep_track_ids: None,
+        })
+        .unwrap();
+        assert_eq!(fades(&p, 0), vec![(300, 0), (0, 0), (0, 300)]);
+    }
+
+    #[test]
     fn duration_edits_reclamp_both_audio_fades_on_every_track() {
         for asset_id in ["a", "m"] {
             for operation in ["trim", "speed", "split", "ripple"] {
@@ -1518,11 +1566,14 @@ mod tests {
                     },
                 };
                 p.apply(cmd).unwrap();
-                for clip in p.tracks.iter().flat_map(|track| &track.clips) {
+                // Cut pieces lose the fade at the cut and keep the clamped fade at the outer edge.
+                let clips: Vec<_> = p.tracks.iter().flat_map(|track| &track.clips).collect();
+                for (index, clip) in clips.iter().enumerate() {
                     let ClipContent::Media { fade_in_us, fade_out_us, .. } = &clip.content else { panic!() };
+                    let half = clip.duration_us / 2;
                     assert_eq!(
                         (*fade_in_us, *fade_out_us),
-                        (clip.duration_us / 2, clip.duration_us / 2),
+                        (if index == 0 { half } else { 0 }, if index == clips.len() - 1 { half } else { 0 }),
                         "{asset_id}: {operation}"
                     );
                 }
