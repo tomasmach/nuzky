@@ -47,7 +47,9 @@ pub fn has_audio(asset: &Asset) -> bool {
     asset.has_audio && asset.kind != AssetKind::Image
 }
 
-/// All consumers use the same source revision, including desktop waveform extraction.
+/// All consumers use the same source revision, including desktop waveform extraction. The name
+/// holds the asset id, the source's size and time and a hash of its path, since a copied project
+/// can reuse an asset id for another file of the same size and time.
 pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
     let revision = match std::fs::metadata(&asset.path) {
         Ok(metadata) => {
@@ -65,7 +67,10 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
         }
         Err(_) => "missing".into(),
     };
-    cache_dir.join("pcm").join(format!("{}.{revision}.{PCM_VERSION}.f32", asset.id))
+    // FNV-1a: stable across builds, so the cache survives an update.
+    let source =
+        asset.path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    cache_dir.join("pcm").join(format!("{}.{revision}-{source:016x}.{PCM_VERSION}.f32", asset.id))
 }
 
 /// Raised whenever extraction changes its output, so caches made before are extracted again.
@@ -106,7 +111,9 @@ pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32) -> 
 
 pub struct Mixer {
     cache_dir: PathBuf,
-    sources: HashMap<String, Option<Arc<Pcm>>>,
+    /// Keyed by cache file, which names the source revision, so media rebound under the same
+    /// asset id plays its own sound.
+    sources: HashMap<PathBuf, Option<Arc<Pcm>>>,
 }
 
 impl Mixer {
@@ -115,13 +122,16 @@ impl Mixer {
     }
 
     fn source(&mut self, asset: &Asset) -> Option<Arc<Pcm>> {
-        if let Some(Some(pcm)) = self.sources.get(&asset.id) {
+        let path = pcm_path(&self.cache_dir, asset);
+        if let Some(Some(pcm)) = self.sources.get(&path) {
             return Some(pcm.clone());
         }
-        // Missing caches are retried, since extraction may still be running.
-        let path = pcm_path(&self.cache_dir, asset);
+        // Missing caches are retried, since extraction may still be running. Another revision of
+        // this asset is no longer played.
         let pcm = Pcm::open(&path).ok().map(Arc::new);
-        self.sources.insert(asset.id.clone(), pcm.clone());
+        let prefix = format!("{}.", asset.id);
+        self.sources.retain(|other, _| !other.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)));
+        self.sources.insert(path, pcm.clone());
         pcm
     }
 
@@ -341,6 +351,42 @@ mod tests {
             assert!(dir.join(format!("done-{}", child.id())).exists());
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A copied project can reuse an asset id for another file of the same size and time; it
+    /// gets its own cache, and a mixer that played the first file plays the second.
+    #[test]
+    fn an_asset_id_rebound_to_another_file_gets_its_own_cache_and_sound() {
+        let cache = std::env::temp_dir().join(format!("pcm-rebound-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let (one, two) = (cache.join("one.wav"), cache.join("two.wav"));
+        write_test_wav(&one, 4_096, 4_800);
+        write_test_wav(&two, 12_288, 4_800);
+        let time = std::fs::metadata(&one).unwrap().modified().unwrap();
+        File::options().write(true).open(&two).unwrap().set_modified(time).unwrap();
+        let asset = |path: &Path| Asset {
+            id: "same-id".into(),
+            name: "source".into(),
+            path: path.to_string_lossy().into(),
+            kind: AssetKind::Audio,
+            duration_us: 100_000,
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            has_audio: true,
+            rotation: 0,
+        };
+        let (first, second) = (asset(&one), asset(&two));
+        assert_ne!(pcm_path(&cache, &first), pcm_path(&cache, &second));
+        ensure_pcm(&cache, &first, |_| Ok(())).unwrap();
+        ensure_pcm(&cache, &second, |_| Ok(())).unwrap();
+        let mut mixer = Mixer::new(cache.clone());
+        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset).unwrap().samples()[1000];
+        let quiet = level(&mut mixer, &first);
+        let loud = level(&mut mixer, &second);
+        assert!((loud - quiet * 3.0).abs() < 1e-3, "{quiet} then {loud}");
+        assert_eq!(mixer.sources.len(), 1, "the first file is no longer held");
+        std::fs::remove_dir_all(cache).unwrap();
     }
 
     #[test]
