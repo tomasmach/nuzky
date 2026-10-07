@@ -13,8 +13,13 @@ use tungstenite::handshake::server::{Callback, ErrorResponse, Request, Response}
 use tungstenite::http::StatusCode;
 use tungstenite::{Bytes, Message};
 
-const ALLOWED_ORIGINS: &[&str] =
-    &["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420"];
+const ALLOWED_ORIGINS: &[&str] = &["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+/// The Vite dev server serves the UI only in debug builds.
+const DEV_ORIGIN: &str = "http://localhost:1420";
+
+fn allowed_origin(origin: &str) -> bool {
+    ALLOWED_ORIGINS.contains(&origin) || (cfg!(debug_assertions) && origin == DEV_ORIGIN)
+}
 
 /// Header layout (little endian): magic "CPF1", width u32, height u32, flags u32, time i64.
 pub const HEADER_LEN: usize = 24;
@@ -68,7 +73,7 @@ struct PreviewHandshake<'a>(&'a str);
 impl Callback for PreviewHandshake<'_> {
     fn on_request(self, req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
         let origin = req.headers().get("origin").and_then(|o| o.to_str().ok()).unwrap_or("");
-        if req.uri().path() != self.0 || !ALLOWED_ORIGINS.contains(&origin) {
+        if req.uri().path() != self.0 || !allowed_origin(origin) {
             log::warn!("Rejected preview connection from origin {origin:?}");
             let mut e = ErrorResponse::new(None);
             *e.status_mut() = StatusCode::FORBIDDEN;
@@ -105,5 +110,17 @@ fn serve(stream: TcpStream, path: &str, slot: Arc<Slot>) {
         {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_server_origin_is_allowed_only_in_debug_builds() {
+        assert!(allowed_origin("tauri://localhost"));
+        assert_eq!(allowed_origin(DEV_ORIGIN), cfg!(debug_assertions));
+        assert!(!allowed_origin("http://localhost:1421") && !allowed_origin(""));
     }
 }
