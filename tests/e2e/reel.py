@@ -95,7 +95,7 @@ def words(text):
 
 def recognise(path, work):
     out = subprocess.run([str(ANALYZE), str(path), 'words', '--lang', 'cs', '--model', str(MODELS / f'ggml-{MODEL}.bin'),
-                          '--cache', str(work / 'analysis-cache')], capture_output=True, text=True, check=True,
+                          '--cache', str(work / 'analysis-cache')], capture_output=True, encoding='utf-8', errors='replace', check=True,
                          timeout=600).stdout
     return json.loads(out)['words']
 
@@ -221,8 +221,11 @@ def rough_cut(r, bridge, truths):
     slivers = [(take, round(b - a, 3)) for take, a, b, _ in order if b - a < 0.3]
     r.check('no sliver of a clip is left between the takes', not slivers, slivers)
     r.check('no long pause is left between sentences', all(p <= 0.45 for p in pauses), pauses)
-    # Where the sound jumps: between takes, or where the cut skipped part of a take.
-    cuts = [b[3] for a, b in zip(order, order[1:]) if a[0] != b[0] or abs(a[2] - b[1]) > 0.001]
+    # Where the sound jumps: between takes, or where the cut skipped part of a take. Each side counts
+    # only where something was cut away from it: a take that starts speaking at once is not cut there.
+    length = {n: next(a['durationUs'] for a in state['assets'] if a['id'] == asset) / 1e6 for asset, n in assets.items()}
+    cuts = [(b[3], a[2] < length[a[0]] - 0.001, b[1] > 0.001) for a, b in zip(order, order[1:])
+            if a[0] != b[0] or abs(a[2] - b[1]) > 0.001]
     tracks = [t for t in state['tracks'] if t['kind'] == 'text']
     r.check('captions sit on one Captions track', len(tracks) == 1 and tracks[0]['name'] == 'Captions', [t['name'] for t in tracks])
 
@@ -279,11 +282,12 @@ def check_file(r, out, duration, cuts):
     lufs, peak = loudness(out)
     r.check('loudness is about -14 LUFS integrated', abs(lufs + 14) <= 1, lufs)
     r.check('true peak is at most -1 dBTP', peak <= -1.0, peak)
-    # A cut in speech is a jump the ear hears; each one must sit where the takes are quiet.
-    levels = [round(db(pcm(out, max(0, c - 0.01), 0.02)), 1) for c in cuts]
-    floor = db(pcm(out, 0, duration))
-    r.check('every cut lies in silence', all(level < floor - 12 for level in levels), {'cuts': cuts, 'levels': levels,
-                                                                                      'speech': round(floor, 1)})
+    # A cut in speech is a jump the ear hears: each side a cut took something from must be quiet there.
+    speech = db(pcm(out, 0, duration))
+    levels = [(c, round(db(pcm(out, c - 0.01, 0.01)), 1) if before else None, round(db(pcm(out, c, 0.01)), 1) if after else None)
+              for c, before, after in cuts]
+    r.check('every cut lies in silence', all(level is None or level < speech - 12 for _, *sides in levels for level in sides),
+            {'cuts (time, before, after)': levels, 'speech': round(speech, 1)})
 
 
 def check_words(r, out, transcript, truths):
