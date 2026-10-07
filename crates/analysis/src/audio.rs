@@ -55,7 +55,7 @@ pub fn loudness_cancellable(
     cancelled: impl Fn() -> bool,
 ) -> Result<Vec<f32>> {
     let pcm = open_pcm(asset, cache, &cancelled)?;
-    levels(pcm.samples(), window_us)
+    levels(pcm.samples(), window_us, &cancelled)
 }
 
 fn power(samples: &[f32]) -> Result<f64> {
@@ -71,12 +71,26 @@ fn db(power: f64) -> f32 {
     (10.0 * power.max(1e-12).log10()) as f32
 }
 
-fn levels(samples: &[f32], window_us: i64) -> Result<Vec<f32>> {
+/// `cancelled` is asked every few seconds of audio, so a long file stops soon after a request.
+fn levels(samples: &[f32], window_us: i64, cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>> {
     ensure!(window_us > 0, "Loudness window must be positive");
     let frames = usize::try_from(us_to_samples(window_us).max(1)).context("Window too large")?;
     let size = frames.checked_mul(CHANNELS).context("Window too large")?;
-    samples.chunks(size).map(|s| power(s).map(db)).collect()
+    let every = (CANCEL_CHECK_FRAMES / frames).max(1);
+    samples
+        .chunks(size)
+        .enumerate()
+        .map(|(i, s)| {
+            if i % every == 0 && cancelled() {
+                bail!("CANCELLED: analysis cancelled");
+            }
+            power(s).map(db)
+        })
+        .collect()
 }
+
+/// About ten seconds of audio between cancel checks.
+const CANCEL_CHECK_FRAMES: usize = 480_000;
 
 /// Ungated, unweighted approximation: -0.691 + 10 log10(sum of channel powers).
 /// This is NOT BS.1770/EBU R128 LUFS; no K-weighting or loudness gating is applied.
@@ -99,15 +113,15 @@ pub fn silences_cancellable(
     cancelled: impl Fn() -> bool,
 ) -> Result<Vec<Range>> {
     let pcm = open_pcm(asset, cache, &cancelled)?;
-    quiet_ranges(pcm.samples(), params)
+    quiet_ranges(pcm.samples(), params, &cancelled)
 }
 
-fn quiet_ranges(samples: &[f32], params: SilenceParams) -> Result<Vec<Range>> {
+fn quiet_ranges(samples: &[f32], params: SilenceParams, cancelled: &dyn Fn() -> bool) -> Result<Vec<Range>> {
     ensure!(params.min_silence_us > 0 && params.pad_us >= 0, "Invalid silence duration or padding");
     if let Some(threshold) = params.threshold_db {
         ensure!(threshold.is_finite(), "Silence threshold must be finite");
     }
-    let rms = levels(samples, WINDOW_US)?;
+    let rms = levels(samples, WINDOW_US, cancelled)?;
     if rms.is_empty() {
         return Ok(Vec::new());
     }
@@ -147,12 +161,21 @@ mod tests {
                 [x, -x]
             })
             .collect();
-        let values = levels(&tone, 60_000)?;
+        let values = levels(&tone, 60_000, &|| false)?;
         assert_eq!(values.len(), 2);
         assert!(values.iter().all(|x| (*x + 9.0309).abs() < 0.001));
-        assert_eq!(levels(&[0.0; 96], 1_000)?, vec![-120.0]);
-        assert!(levels(&tone, 0).is_err());
-        assert!(levels(&[f32::NAN], 10_000).is_err());
+        assert_eq!(levels(&[0.0; 96], 1_000, &|| false)?, vec![-120.0]);
+        assert!(levels(&tone, 0, &|| false).is_err());
+        assert!(levels(&[f32::NAN], 10_000, &|| false).is_err());
+        // A stop request ends a long analysis instead of waiting for the end of the file.
+        let asked = std::cell::Cell::new(0);
+        let stop = || {
+            asked.set(asked.get() + 1);
+            asked.get() > 1
+        };
+        let error = levels(&vec![0.1; 60 * 48_000 * 2], 10_000, &stop).unwrap_err();
+        assert!(error.to_string().starts_with("CANCELLED"), "{error}");
+        assert_eq!(asked.get(), 2, "asked again after about ten seconds of audio");
         Ok(())
     }
 
@@ -164,12 +187,12 @@ mod tests {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             *sample = (seed as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32 * 0.001;
         }
-        let gaps = quiet_ranges(&samples, SilenceParams::default())?;
+        let gaps = quiet_ranges(&samples, SilenceParams::default(), &|| false)?;
         assert_eq!(gaps, vec![Range { start_us: 1_120_000, end_us: 1_880_000 }]);
-        assert!(quiet_ranges(&[0.2; 48_000], SilenceParams::default())?.is_empty());
-        assert!(quiet_ranges(&[0.0; 960], SilenceParams::default())?.is_empty());
+        assert!(quiet_ranges(&[0.2; 48_000], SilenceParams::default(), &|| false)?.is_empty());
+        assert!(quiet_ranges(&[0.0; 960], SilenceParams::default(), &|| false)?.is_empty());
         assert_eq!(
-            quiet_ranges(&vec![0.0; 96_000], SilenceParams::default())?,
+            quiet_ranges(&vec![0.0; 96_000], SilenceParams::default(), &|| false)?,
             vec![Range { start_us: 120_000, end_us: 880_000 }]
         );
         Ok(())
