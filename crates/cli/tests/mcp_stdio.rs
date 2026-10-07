@@ -130,7 +130,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 15);
+    assert_eq!(tools.len(), 16);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -270,6 +270,97 @@ fn retakes_answer_at_once_even_for_read_only_clients() {
     let mut writer = Client::start(true, None, Some(None));
     assert!(writer.error("analyze", json!({"kind":"fillers"})).contains("asset_id is required"));
     writer.finish();
+}
+
+// Only on Linux does XDG_DATA_HOME choose where CapOpen keeps transcripts.
+#[cfg(target_os = "linux")]
+#[test]
+fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
+    use capopen_engine::{model::Asset, model::AssetKind, speech::Word};
+    use capopen_session::transcripts::{Record, TranscriptStore, VERSION};
+    let mut c = Client::start(true, None, Some(None));
+    // Words come from the store, so the file is never decoded and any bytes do.
+    let path = c.dir.join("take.mov");
+    std::fs::write(&path, b"take").unwrap();
+    let asset = Asset {
+        id: "take".into(),
+        name: "take.mov".into(),
+        path: path.to_string_lossy().into(),
+        kind: AssetKind::Video,
+        duration_us: 4_000_000,
+        width: 1080,
+        height: 1920,
+        fps: 30.0,
+        has_audio: true,
+        rotation: 0,
+        mirror: false,
+    };
+    let said = ["Mikrofon", "vejte", "co", "nejblíž."];
+    let words = said
+        .iter()
+        .enumerate()
+        .map(|(i, text)| Word {
+            start_us: 200_000 + i as i64 * 800_000,
+            end_us: 700_000 + i as i64 * 800_000,
+            text: (*text).into(),
+            probability: 0.9,
+        })
+        .collect();
+    let store = TranscriptStore::at(c.dir.join("data/capopen/transcripts")).unwrap();
+    let record = Record {
+        version: VERSION,
+        fingerprint: store.fingerprint(&asset).unwrap(),
+        duration_us: asset.duration_us,
+        model: "fixture".into(),
+        language: "cs".into(),
+        words,
+        segments: vec![],
+    };
+    store.put(&asset, &record).unwrap();
+
+    let tools = c.rpc("tools/list", json!({}));
+    let tool = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "correct_words").unwrap();
+    assert_eq!(tool["inputSchema"]["required"], json!(["run_id", "transcript_key", "corrections"]));
+    let run = c.call("begin_run", json!({"label":"fix a word"}));
+    let edits = json!([{"type":"addAssets","assets":[asset]},{"type":"addClip","assetId":"take"}]);
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":edits}));
+    let captions = |c: &mut Client| {
+        let state = c.call("get_state", json!({}));
+        let track = state["tracks"].as_array().unwrap().iter().find(|t| t["name"] == "Captions").unwrap().clone();
+        track["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["content"]["text"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    c.call("build_captions", json!({"run_id":run["run_id"]}));
+    assert!(captions(&mut c).iter().any(|t| t.contains("vejte")));
+    let transcript = c.call("get_transcript", json!({}));
+    assert_eq!(transcript["words"][1]["text"], "vejte");
+    let args = json!({"run_id":run["run_id"],"request_id":"dejte","transcript_key":transcript["transcript_key"],
+        "corrections":[{"i":1,"text":"dejte"}]});
+    let fixed = c.call("correct_words", args.clone());
+    assert_eq!(fixed["words"], json!([{"i":1,"before":"vejte","after":"dejte"}]));
+    assert_eq!(fixed["captions_changed"].as_array().unwrap().len(), 1);
+    assert_eq!(c.call("correct_words", args), fixed, "a retry with the same request_id corrects once");
+    let shown = captions(&mut c);
+    assert!(shown.iter().any(|t| t.contains("dejte")) && !shown.iter().any(|t| t.contains("vejte")), "{shown:?}");
+    let now = c.call("get_transcript", json!({}));
+    assert_eq!(now["words"][1]["text"], "dejte");
+    assert_eq!(now["transcript_key"], fixed["transcript_key"]);
+    let stale = json!({"run_id":run["run_id"],"transcript_key":transcript["transcript_key"],"corrections":[{"i":2,"text":"to"}]});
+    assert!(c.error("correct_words", stale).contains("SPEECH_CHANGED"));
+    // Building the captions again reads the corrected word.
+    c.call("build_captions", json!({"run_id":run["run_id"]}));
+    assert_eq!(captions(&mut c), shown);
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    c.finish();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    assert_eq!(
+        disk["wordCorrections"],
+        json!([{"assetId":"take","sourceStartUs":1_000_000,"original":"vejte","text":"dejte"}])
+    );
 }
 
 #[test]

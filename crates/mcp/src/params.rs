@@ -130,6 +130,23 @@ pub struct EditTranscript {
     #[serde(default)]
     pub dry_run: bool,
 }
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CorrectWords {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without correcting twice.
+    pub request_id: Option<String>,
+    pub transcript_key: String,
+    pub corrections: Vec<WordFix>,
+}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WordFix {
+    /// get_transcript word index.
+    pub i: usize,
+    /// What the word should read, punctuation included: one line, at most 100 characters.
+    pub text: String,
+}
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JobAction {
