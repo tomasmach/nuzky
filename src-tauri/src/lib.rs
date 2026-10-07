@@ -38,6 +38,8 @@ pub struct AppState {
     preview_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
     fonts: OnceLock<FontFamilies>,
+    /// Why the most recent project was not opened at startup.
+    startup_notice: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -53,6 +55,8 @@ pub struct Snapshot {
     can_redo: bool,
     path: String,
     select: Vec<String>,
+    /// Set when agents cannot attach to this project live; editing works without them.
+    agent_bridge_error: Option<String>,
 }
 
 fn snapshot_project<S: serde::Serializer>(project: &Project, serializer: S) -> Result<S::Ok, S::Error> {
@@ -70,6 +74,7 @@ pub struct Boot {
     preview_url: String,
     transport: Transport,
     engine_error: Option<String>,
+    startup_notice: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -97,6 +102,7 @@ struct OpenSession {
     host: Arc<Host>,
     #[cfg(unix)]
     listener: Option<capopen_mcp::ipc::Listener>,
+    bridge_error: Option<String>,
     path: PathBuf,
     stopped: Arc<AtomicBool>,
 }
@@ -118,18 +124,31 @@ impl OpenSession {
     fn open(path: PathBuf) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
         let (tx, rx) = mpsc::channel();
         let host = Arc::new(Host::new(store::open(&path, tx)?, store::cache_dir())?);
+        let mut session = Self {
+            host,
+            #[cfg(unix)]
+            listener: None,
+            bridge_error: None,
+            path,
+            stopped: Arc::new(AtomicBool::new(false)),
+        };
+        session.start_bridge();
+        Ok((session, rx))
+    }
+
+    /// The project stays open for editing when the live agent bridge cannot start.
+    fn start_bridge(&mut self) {
         #[cfg(unix)]
-        let listener = Some(capopen_mcp::ipc::Listener::start(host.clone())?);
-        Ok((
-            Self {
-                host,
-                #[cfg(unix)]
-                listener,
-                path,
-                stopped: Arc::new(AtomicBool::new(false)),
-            },
-            rx,
-        ))
+        match capopen_mcp::ipc::Listener::start(self.host.clone()) {
+            Ok(listener) => {
+                self.listener = Some(listener);
+                self.bridge_error = None;
+            }
+            Err(error) => {
+                log::error!("Agent bridge unavailable: {error:#}");
+                self.bridge_error = Some(format!("{error:#}"));
+            }
+        }
     }
 
     fn close_ipc(&mut self) {
@@ -140,13 +159,7 @@ impl OpenSession {
     fn prepare_switch(&mut self) -> anyhow::Result<()> {
         self.close_ipc();
         if let Err(error) = self.host.session.disconnect() {
-            #[cfg(unix)]
-            {
-                self.listener = Some(
-                    capopen_mcp::ipc::Listener::start(self.host.clone())
-                        .map_err(|restore| anyhow::anyhow!("{error:#}; restoring IPC failed: {restore:#}"))?,
-                );
-            }
+            self.start_bridge();
             return Err(error);
         }
         Ok(())
@@ -164,6 +177,7 @@ impl OpenSession {
             can_redo,
             path: self.path.to_string_lossy().into_owned(),
             select,
+            agent_bridge_error: self.bridge_error.clone(),
         })
     }
 
@@ -308,6 +322,7 @@ fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
         preview_url: state.preview_url.clone(),
         transport: *state.engine.transport.lock().unwrap(),
         engine_error: state.engine.error.lock().unwrap().clone(),
+        startup_notice: state.startup_notice.clone(),
     })
 }
 
@@ -584,19 +599,34 @@ fn cancel_job(state: State<'_, AppState>, id: String) {
     }
 }
 
-/// The most recent project, or a new one when it cannot be opened, e.g. while an agent edits it.
-fn initial_project() -> anyhow::Result<(OpenSession, Receiver<SessionEvent>)> {
-    if let Some(recent) = store::list().first() {
-        let opened = std::fs::canonicalize(&recent.path).map_err(anyhow::Error::from).and_then(OpenSession::open);
-        match opened {
-            Ok(found) => return Ok(found),
-            Err(error) => log::warn!("Starting with a new project: {error:#}"),
+/// The most recent project that opens, with a notice when a newer one could not, e.g. while an
+/// agent edits it. A new project is created only when none opens, so a busy project does not
+/// leave a new empty file behind on every start.
+fn initial_project() -> anyhow::Result<(OpenSession, Receiver<SessionEvent>, Option<String>)> {
+    let (opened, notice) = open_recent(store::list());
+    let (session, events) = match opened {
+        Some(opened) => opened,
+        None => {
+            let path = store::new_project_path();
+            store::create(&path, &Project::new("Untitled project"))?;
+            OpenSession::open(path)?
+        }
+    };
+    Ok((session, events, notice))
+}
+
+fn open_recent(recent: Vec<ProjectSummary>) -> (Option<(OpenSession, Receiver<SessionEvent>)>, Option<String>) {
+    let mut notice = None;
+    for project in recent {
+        match std::fs::canonicalize(&project.path).map_err(anyhow::Error::from).and_then(OpenSession::open) {
+            Ok(opened) => return (Some(opened), notice),
+            Err(error) => {
+                log::warn!("Cannot open {}: {error:#}", project.path);
+                notice.get_or_insert_with(|| format!("“{}” could not be opened. {error:#}", project.name));
+            }
         }
     }
-    let project = Project::new("Untitled project");
-    let path = store::new_project_path();
-    store::create(&path, &project)?;
-    OpenSession::open(path)
+    (None, notice)
 }
 
 pub fn run() {
@@ -609,7 +639,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let server = Arc::new(PreviewServer::start()?);
-            let (session, events) = initial_project()?;
+            let (session, events, startup_notice) = initial_project()?;
             let project = session.host.session.state()?.project;
             let cache_dir = store::cache_dir();
             let engine =
@@ -627,6 +657,7 @@ pub fn run() {
                 preview_locks: Mutex::new(HashMap::new()),
                 bounds_text: Mutex::new(None),
                 fonts: OnceLock::new(),
+                startup_notice,
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
@@ -749,6 +780,53 @@ mod ipc_lifecycle_tests {
         std::fs::remove_dir(&path).unwrap();
         current.host.session.disconnect().unwrap();
         drop(current);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn squatted_agent_endpoint_still_opens_the_project() {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!("capopen-squatted-{}", new_id()));
+        let path = dir.join("project.capopen");
+        store::create(&path, &Project::new("no bridge")).unwrap();
+        let socket = capopen_mcp::ipc::socket_path(&path).unwrap();
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(socket.parent().unwrap()).unwrap();
+        std::fs::create_dir(&socket).unwrap();
+        let opened = OpenSession::open(path.clone());
+        std::fs::remove_dir(&socket).unwrap();
+        let (current, _) = opened.unwrap();
+        assert!(current.listener.is_none());
+        let snapshot = current.snapshot(Vec::new()).unwrap();
+        assert_eq!(snapshot.project.name, "no bridge");
+        assert!(snapshot.agent_bridge_error.unwrap().starts_with("IPC_UNAVAILABLE"));
+        current
+            .host
+            .session
+            .edit(vec![EditCmd::RenameProject { name: "edited".into() }], None, Expect::default())
+            .unwrap();
+        drop(current);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn busy_recent_project_opens_the_next_one_with_a_notice() {
+        let dir = std::env::temp_dir().join(format!("capopen-busy-{}", new_id()));
+        let (older, newer) = (dir.join("older.capopen"), dir.join("newer.capopen"));
+        store::create(&older, &Project::new("Older")).unwrap();
+        store::create(&newer, &Project::new("Newer")).unwrap();
+        let an_hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&older).unwrap().set_modified(an_hour_ago).unwrap();
+        let agent = capopen_session::ProjectSession::open(&newer, capopen_session::Mode::Write, None).unwrap();
+        let (opened, notice) = open_recent(store::list_in(&dir));
+        let (current, _) = opened.unwrap();
+        assert_eq!(current.snapshot(Vec::new()).unwrap().project.name, "Older");
+        let notice = notice.unwrap();
+        assert!(notice.starts_with("“Newer” could not be opened.") && notice.contains("AI agent"), "{notice}");
+        let (opened, notice) = open_recent(store::list_in(&dir));
+        assert!(opened.is_none() && notice.is_some());
+        assert_eq!(store::list_in(&dir).len(), 2, "no new project is created while projects are busy");
+        drop((current, agent));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

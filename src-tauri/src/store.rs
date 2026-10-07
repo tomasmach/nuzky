@@ -69,7 +69,7 @@ pub fn list() -> Vec<ProjectSummary> {
     list_in(&projects_dir())
 }
 
-fn list_in(dir: &Path) -> Vec<ProjectSummary> {
+pub(crate) fn list_in(dir: &Path) -> Vec<ProjectSummary> {
     let mut out: Vec<ProjectSummary> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
