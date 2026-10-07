@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Copy, Magnet, Maximize2, PanelLeftClose, PanelRightClose, Scissors, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, projectDuration, splitAtPlayhead, splitTargets, useEditor } from "../../lib/store";
+import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, projectDuration, splitAtPlayhead, splitTargets, useAiLocked, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, Track } from "../../lib/types";
 import { setDropResolver } from "../panel/assets";
@@ -55,6 +55,7 @@ export function Timeline({ height }: { height: number }) {
   const canSplit = useEditor((s) => (s.snap ? splitTargets(s.snap.project, s.selection, s.timeUs).length > 0 : false));
   const zoom = useEditor((s) => s.zoom);
   const assetDrag = useEditor((s) => s.assetDrag);
+  const locked = useAiLocked();
   const { select, setZoom } = useEditor.getState();
   const scroller = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
@@ -157,23 +158,37 @@ export function Timeline({ height }: { height: number }) {
   const emptyTimeline = allClips(project).length === 0;
   const dragKind = drag ? project.tracks.find((t) => t.id === drag.trackId)?.kind : null;
   const deleteLabel = cut ? "Delete transition (Delete)" : selection.length ? "Delete selection (Delete)" : "Delete: select a clip first";
+  // While the AI edits, the editing buttons say so instead of what they would need.
+  const lockedLabel = (action: string) => `${action}: the AI is editing`;
 
   return (
     <section className="flex shrink-0 flex-col border-t border-line bg-panel" style={{ height }} aria-label="Timeline">
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
-        <IconButton label={canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={!canSplit} onClick={splitAtPlayhead}>
+        <IconButton label={locked ? lockedLabel("Split") : canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={locked || !canSplit} onClick={splitAtPlayhead}>
           <Scissors size={16} />
         </IconButton>
-        <IconButton label={canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"} disabled={!canSplit} onClick={() => deleteSide("left")}>
+        <IconButton
+          label={locked ? lockedLabel("Delete left") : canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"}
+          disabled={locked || !canSplit}
+          onClick={() => deleteSide("left")}
+        >
           <PanelLeftClose size={16} />
         </IconButton>
-        <IconButton label={canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"} disabled={!canSplit} onClick={() => deleteSide("right")}>
+        <IconButton
+          label={locked ? lockedLabel("Delete right") : canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"}
+          disabled={locked || !canSplit}
+          onClick={() => deleteSide("right")}
+        >
           <PanelRightClose size={16} />
         </IconButton>
-        <IconButton label={deleteLabel} disabled={selection.length === 0 && !cut} onClick={deleteSelection}>
+        <IconButton label={locked ? lockedLabel("Delete") : deleteLabel} disabled={locked || (selection.length === 0 && !cut)} onClick={deleteSelection}>
           <Trash2 size={16} />
         </IconButton>
-        <IconButton label={selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"} disabled={selection.length === 0} onClick={duplicateSelection}>
+        <IconButton
+          label={locked ? lockedLabel("Duplicate") : selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"}
+          disabled={locked || selection.length === 0}
+          onClick={duplicateSelection}
+        >
           <Copy size={15} />
         </IconButton>
         <span className="mx-1 h-5 w-px bg-line" />
@@ -241,7 +256,7 @@ export function Timeline({ height }: { height: number }) {
               const isMain = track.id === MAIN_TRACK;
               return (
                 <div key={track.id} className="flex" style={{ height: h }}>
-                  <TrackHeader track={track} width={HEADER_W} />
+                  <TrackHeader track={track} width={HEADER_W} locked={locked} />
                   <div
                     ref={(el) => {
                       if (el) rows.current.set(track.id, el);
@@ -277,12 +292,13 @@ export function Timeline({ height }: { height: number }) {
                           height={h}
                           visible={visible}
                           selected={selection.includes(clip.id)}
+                          locked={locked}
                           onPointerDown={startClipDrag}
                           onContextMenu={openMenu}
                         />
                       ),
                     )}
-                    {isMain && !drag?.moved && <CutMarkers project={project} zoom={zoom} />}
+                    {isMain && !drag?.moved && <CutMarkers project={project} zoom={zoom} locked={locked} />}
                     {drag?.moved && ghostTiming && ghostTrackId === track.id && (
                       <ClipView clip={drag.clip} track={track} project={project} zoom={zoom} height={h} visible={visible} selected ghost timing={ghostTiming} />
                     )}

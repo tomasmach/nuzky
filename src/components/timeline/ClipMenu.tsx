@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Copy, ListChecks, Scissors, Trash2, Unlink } from "lucide-react";
-import { canSplitClip, deleteSelection, detachAudio, detachBlocker, duplicateSelection, findClip, selectTrack, useEditor } from "../../lib/store";
+import { AI_EDITING, canSplitClip, deleteSelection, detachAudio, detachBlocker, duplicateSelection, findClip, selectTrack, useAiLocked, useEditor } from "../../lib/store";
 
 export interface MenuAt {
   clipId: string;
@@ -31,6 +31,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
   const project = useEditor((s) => s.snap!.project);
   const [pos, setPos] = useState({ x: at.x, y: at.y });
   const found = findClip(project, at.clipId);
+  const locked = useAiLocked();
   const splittable = useEditor((s) => !!found && canSplitClip(found.clip, s.timeUs, project.canvas.fps));
 
   useLayoutEffect(() => {
@@ -86,15 +87,15 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
         icon={<Scissors size={14} />}
         label="Split at playhead"
         shortcut="S"
-        disabled={!splittable}
-        reason="Move the playhead over this clip to split it"
+        disabled={locked || !splittable}
+        reason={locked ? AI_EDITING : "Move the playhead over this clip to split it"}
         onSelect={run(() => useEditor.getState().edit({ type: "splitClip", clipId: clip.id, atUs: Math.round(useEditor.getState().timeUs) }))}
       />
-      <Item icon={<Copy size={14} />} label="Duplicate" shortcut="Ctrl+D" onSelect={run(duplicateSelection)} />
-      <Item icon={<Unlink size={14} />} label="Detach audio" disabled={!!blocker} reason={blocker} onSelect={run(() => detachAudio(clip.id))} />
+      <Item icon={<Copy size={14} />} label="Duplicate" shortcut="Ctrl+D" disabled={locked} reason={AI_EDITING} onSelect={run(duplicateSelection)} />
+      <Item icon={<Unlink size={14} />} label="Detach audio" disabled={locked || !!blocker} reason={locked ? AI_EDITING : blocker} onSelect={run(() => detachAudio(clip.id))} />
       <Item icon={<ListChecks size={14} />} label="Select all on track" onSelect={run(() => selectTrack(clip.id))} />
       <div className="my-1 h-px bg-line" />
-      <Item icon={<Trash2 size={14} />} label="Delete" shortcut="Del" onSelect={run(deleteSelection)} />
+      <Item icon={<Trash2 size={14} />} label="Delete" shortcut="Del" disabled={locked} reason={AI_EDITING} onSelect={run(deleteSelection)} />
     </div>
   );
 }

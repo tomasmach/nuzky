@@ -164,6 +164,8 @@ export function useTimelineGestures({
       const maxDurUs = sourceInUs !== null && asset && media ? Math.floor((asset.durationUs - sourceInUs) / media.speed) : null;
       const candidates = [0, useEditor.getState().timeUs];
       for (const c of allClips(project)) if (c.id !== clip.id) candidates.push(c.startUs, c.startUs + c.durationUs);
+      // While the AI edits, pressing a clip only selects it.
+      const locked = !!useEditor.getState().aiRun;
       let d: Drag = { clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 };
       setDrag(d);
 
@@ -183,6 +185,7 @@ export function useTimelineGestures({
       // A cancelled pointer or a lost window focus ends the drag like Esc: nothing changes.
       const unfollow = followPointer({
         move: (ev) => {
+          if (locked) return;
           const next = step(d, ev, track.kind);
           if (next) setDrag((d = next));
         },

@@ -120,7 +120,7 @@ async function drain() {
     } catch (e) {
       const text = errorText(e);
       // EPOCH_CHANGED: the change was made for the project open before, which the editor no longer shows.
-      if (text.startsWith("RUN_ACTIVE")) useEditor.getState().toast({ kind: "info", text: "AI is editing. Stop it to edit yourself.", action: { label: "Stop and edit", run: stopAiRun } });
+      if (text.startsWith("RUN_ACTIVE")) noticeAiRun();
       else if (!text.startsWith("EPOCH_CHANGED")) useEditor.getState().toast({ kind: "error", text });
     }
     item.waiters.forEach((w) => w(snap));
@@ -140,7 +140,26 @@ export function undoAction(snap: Snapshot): NonNullable<Toast["action"]> {
     return !!now && now.revision === revision && now.sessionEpoch === sessionEpoch && now.canUndo;
   };
   // Checked again when its turn in the queue comes, after any edit made before it.
-  return { label: "Undo", valid: newest, run: () => void enqueue(async (epoch) => (newest() ? api.undo(epoch) : null)) };
+  return { label: "Undo", valid: newest, run: () => void (aiLocked() || enqueue(async (epoch) => (newest() ? api.undo(epoch) : null))) };
+}
+
+/** Why editing is locked while an agent's run is open. */
+export const AI_EDITING = "AI is editing. Stop it to edit yourself.";
+
+let aiNoticeShown = false;
+
+/** Says once per run that the AI is editing, with a way to take over; further refused edits stay quiet. */
+function noticeAiRun() {
+  if (aiNoticeShown) return;
+  aiNoticeShown = true;
+  useEditor.getState().toast({ kind: "info", text: AI_EDITING, action: { label: "Stop and edit", run: stopAiRun, valid: () => !!useEditor.getState().aiRun } });
+}
+
+/** True while an agent's run is open: the edit is not sent, and the notice shows once. */
+export function aiLocked(): boolean {
+  if (!useEditor.getState().aiRun) return false;
+  noticeAiRun();
+  return true;
 }
 
 /** Ends the agent's run with its changes kept, so the user can edit; Undo then removes the whole run. */
@@ -219,6 +238,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   edit: (input, coalesce) => {
+    if (aiLocked()) return Promise.resolve(null);
     // Keys are scoped to a gesture: one drag or one focus session is one undo step.
     const key = coalesce ? `${coalesce}#${gesture}` : null;
     return enqueue(async (epoch) => {
@@ -230,11 +250,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   undo: async () => {
-    await enqueue(async (epoch) => (get().snap?.canUndo ? api.undo(epoch) : null));
+    if (!aiLocked()) await enqueue(async (epoch) => (get().snap?.canUndo ? api.undo(epoch) : null));
   },
 
   redo: async () => {
-    await enqueue(async (epoch) => (get().snap?.canRedo ? api.redo(epoch) : null));
+    if (!aiLocked()) await enqueue(async (epoch) => (get().snap?.canRedo ? api.redo(epoch) : null));
   },
 
   select: (ids) => set({ selection: ids, cut: null }),
@@ -308,6 +328,16 @@ export const useEditor = create<EditorState>((set, get) => ({
       });
   },
 }));
+
+// When the run ends its notice goes, and the next run may show one again.
+useEditor.subscribe((s, prev) => {
+  if (!prev.aiRun || s.aiRun) return;
+  aiNoticeShown = false;
+  if (s.toasts.some((t) => t.text === AI_EDITING)) useEditor.setState({ toasts: s.toasts.filter((t) => t.text !== AI_EDITING) });
+});
+
+/** While an agent's run is open the editing controls are locked. */
+export const useAiLocked = () => useEditor((s) => s.aiRun !== null);
 
 export function allClips(project: Project): Clip[] {
   return project.tracks.flatMap((t) => t.clips);

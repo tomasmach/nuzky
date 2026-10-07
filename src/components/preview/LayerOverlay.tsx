@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { followPointer } from "../../lib/drag";
-import { findClip, setClipTransform, transformAtPlayhead, useEditor } from "../../lib/store";
+import { findClip, setClipTransform, transformAtPlayhead, useAiLocked, useEditor } from "../../lib/store";
 import type { LayerBounds, Transform } from "../../lib/types";
 
 type Pt = [number, number];
@@ -57,6 +57,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   const revision = useEditor((s) => s.snap!.revision);
   const selection = useEditor((s) => s.selection);
   const playing = useEditor((s) => s.playing);
+  const locked = useAiLocked();
   // The box hides while playing, so the playhead only matters once paused.
   const timeUs = useEditor((s) => (s.playing ? null : s.timeUs));
   const ref = useRef<HTMLDivElement>(null);
@@ -214,13 +215,14 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       return;
     }
     if (!useEditor.getState().selection.includes(hit.clipId) || useEditor.getState().selection.length > 1) useEditor.getState().select([hit.clipId]);
-    if (released) return;
+    // While the AI edits, a click still selects but nothing moves.
+    if (released || useEditor.getState().aiRun) return;
     const g = begin("move", hit.clipId, hit.corners as Pt[], down);
     if (g) run(g, latest);
   };
 
   const onHandle = (mode: Mode, clipId: string, corners: Pt[]) => (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || useEditor.getState().aiRun) return;
     e.stopPropagation();
     const g = begin(mode, clipId, corners, e);
     if (g) run(g, { x: e.clientX, y: e.clientY, shift: e.shiftKey });
@@ -255,7 +257,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   const guide = "pointer-events-none absolute bg-warn shadow-[0_0_0_1px_rgba(0,0,0,0.55)]";
 
   return (
-    <div ref={ref} className="absolute inset-0" style={{ cursor: selected ? "move" : "default" }} onPointerDown={onPointerDown} data-testid="layer-overlay">
+    <div ref={ref} className="absolute inset-0" style={{ cursor: selected && !locked ? "move" : "default" }} onPointerDown={onPointerDown} data-testid="layer-overlay">
       {live?.guideX && <div className={`${guide} inset-y-0 left-1/2 w-px`} />}
       {live?.guideY && <div className={`${guide} inset-x-0 top-1/2 h-px`} />}
       {screen && selected && !playing && top && up && (
@@ -264,7 +266,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
             <polygon points={screen.map((p) => p.join(",")).join(" ")} fill="none" stroke="var(--color-fg)" strokeWidth={1.5} />
             <line x1={top[0]} y1={top[1]} x2={up[0]} y2={up[1]} stroke="var(--color-fg)" strokeWidth={1.5} />
           </svg>
-          {screen.map(pin).map(([x, y], i) => (
+          {!locked && screen.map(pin).map(([x, y], i) => (
             <div
               key={i}
               role="presentation"
@@ -274,14 +276,14 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
               style={{ left: x - HANDLE / 2, top: y - HANDLE / 2, width: HANDLE, height: HANDLE, cursor: i % 2 === 0 ? "nwse-resize" : "nesw-resize" }}
             />
           ))}
-          <div
+          {!locked && <div
             role="presentation"
             title="Rotate (Shift snaps to 15°)"
             data-handle="rotate"
             onPointerDown={onHandle("rotate", selected.clipId, selected.corners as Pt[])}
             className="absolute rounded-full border border-black/60 bg-fg"
             style={{ left: up[0] - 6, top: up[1] - 6, width: 12, height: 12, cursor: "grab" }}
-          />
+          />}
         </>
       )}
     </div>

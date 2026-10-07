@@ -1,6 +1,7 @@
 import { useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { fontCss } from "../lib/fonts";
+import { useAiLocked } from "../lib/store";
 import type { TextStyle } from "../lib/types";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
@@ -53,6 +54,16 @@ export function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+/** Disables every control inside while an agent's run is open; the layout is unaffected. */
+export function AiLock({ children }: { children: ReactNode }) {
+  const locked = useAiLocked();
+  return (
+    <fieldset disabled={locked} className="contents">
+      {children}
+    </fieldset>
   );
 }
 
@@ -257,7 +268,7 @@ export function Section({ title, children, actions }: { title: string; children:
 
 export function ColorInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center justify-between gap-2">
+    <label className="flex items-center justify-between gap-2 has-[:disabled]:opacity-40">
       <span className="text-[12px] text-muted">{label}</span>
       <span className="flex items-center gap-2">
         <span className="tabular text-[12px] text-muted">{value.slice(0, 7).toUpperCase()}</span>
@@ -266,7 +277,7 @@ export function ColorInput({ label, value, onChange }: { label: string; value: s
           aria-label={label}
           value={value.slice(0, 7)}
           onChange={(e) => onChange(e.target.value + value.slice(7))}
-          className="h-7 w-9 cursor-pointer rounded border border-line bg-raised p-0.5"
+          className="h-7 w-9 cursor-pointer rounded border border-line bg-raised p-0.5 disabled:cursor-not-allowed"
         />
       </span>
     </label>
@@ -287,7 +298,7 @@ export function Checkbox({
   title?: string;
 }) {
   return (
-    <label className={`flex items-center gap-2 ${disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`} title={title}>
+    <label className="flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40" title={title}>
       <span className="relative inline-flex">
         <input
           type="checkbox"

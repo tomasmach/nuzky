@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Download, FilePlus2, FolderOpen, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { FORMATS } from "../lib/presets";
-import { openExport, projectDuration, stopAiRun, switchProject, useEditor } from "../lib/store";
+import { AI_EDITING, openExport, projectDuration, stopAiRun, switchProject, useAiLocked, useEditor } from "../lib/store";
 import { formatDuration } from "../lib/time";
 import type { ProjectSummary, Snapshot } from "../lib/types";
 import { Button, IconButton, ProgressBar } from "./ui";
@@ -31,15 +31,17 @@ function SaveStatus() {
 function ProjectName() {
   const name = useEditor((s) => s.snap?.project.name ?? "");
   const edit = useEditor((s) => s.edit);
+  const locked = useAiLocked();
   const [draft, setDraft] = useState<string | null>(null);
 
   if (draft === null)
     return (
       <button
         type="button"
-        title="Rename project"
+        title={locked ? AI_EDITING : "Rename project"}
+        disabled={locked}
         onClick={() => setDraft(name)}
-        className="max-w-[260px] truncate rounded px-1.5 py-0.5 text-[13px] font-medium text-fg hover:bg-raised"
+        className="max-w-[260px] truncate rounded px-1.5 py-0.5 text-[13px] font-medium text-fg enabled:hover:bg-raised disabled:cursor-not-allowed"
       >
         {name}
       </button>
@@ -191,8 +193,8 @@ function AiRunBar() {
       <span className="truncate">
         AI is editing <span className="text-muted">· {label}</span>
       </span>
-      <Button className="h-6 px-2 text-[12px]" title="Stop the AI and keep what it did so far" onClick={() => void stopAiRun()}>
-        Stop
+      <Button className="h-6 px-2 text-[12px]" title="Stop the AI, keep what it did so far, and edit yourself" onClick={() => void stopAiRun()}>
+        Stop and edit
       </Button>
     </div>
   );

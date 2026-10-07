@@ -142,15 +142,24 @@ function useBackendEvents() {
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     offs.push(listen<string>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));
+    // The run seen last, also one already open at boot; a snapshot can clear `aiRun` before this event.
     let lastRun: string | null = useEditor.getState().aiRun;
+    // The revision the run started from, unknown for a run already open at boot.
+    let runStart: number | null = null;
+    const unwatch = useEditor.subscribe((s, prev) => {
+      if (s.aiRun) lastRun = s.aiRun;
+      if (s.aiRun && !prev.aiRun) runStart = prev.snap ? (s.snap?.revision ?? null) : null;
+    });
     offs.push(
       listen<string | null>("run-changed", (e) => {
         const { toast, snap } = useEditor.getState();
         const aiRun = lastRun;
         lastRun = e.payload;
         useEditor.setState({ aiRun: e.payload });
-        // The run's last change arrived before this event, so Undo here removes the whole run.
-        if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap ? undoAction(snap) : undefined });
+        // The run's last change arrived before this event, so Undo here removes the whole run; a run
+        // that changed nothing offers none, as it would undo the step before it.
+        const changed = !!snap && snap.revision !== runStart;
+        if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap && changed ? undoAction(snap) : undefined });
       }),
     );
     offs.push(
@@ -171,7 +180,10 @@ function useBackendEvents() {
         importPaths(paths, target);
       }),
     );
-    return () => offs.forEach((p) => p.then((off) => off()));
+    return () => {
+      unwatch();
+      offs.forEach((p) => p.then((off) => off()));
+    };
   }, []);
 }
 

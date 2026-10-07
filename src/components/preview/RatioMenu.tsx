@@ -1,7 +1,7 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { Check, ChevronDown, RectangleHorizontal } from "lucide-react";
 import { FORMATS, formatLabel } from "../../lib/presets";
-import { useEditor } from "../../lib/store";
+import { AI_EDITING, useAiLocked, useEditor } from "../../lib/store";
 
 /**
  * CapCut's "Ratio" control next to the player: the one place to change the canvas format.
@@ -11,6 +11,7 @@ export function RatioMenu() {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   const edit = useEditor((s) => s.edit);
   const open = useEditor((s) => s.ratioOpen);
+  const locked = useAiLocked();
   const setOpen = (ratioOpen: boolean) => useEditor.setState({ ratioOpen });
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -54,10 +55,11 @@ export function RatioMenu() {
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Canvas ratio"
+        title={locked ? AI_EDITING : "Canvas ratio"}
+        disabled={locked}
         onClick={() => setOpen(!open)}
-        className={`flex h-8 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors duration-[120ms] ease-out ${
-          open ? "border-muted bg-raised text-fg" : "border-line text-fg hover:bg-raised"
+        className={`flex h-8 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+          open ? "border-muted bg-raised text-fg" : "border-line text-fg enabled:hover:bg-raised"
         }`}
       >
         <RectangleHorizontal size={14} className="text-muted" />

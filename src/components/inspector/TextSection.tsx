@@ -32,7 +32,7 @@ function TextField({ clipId, text }: { clipId: string; text: string }) {
         edit({ type: "updateClip", clipId, text: e.target.value }, `${clipId}:text`);
       }}
       onBlur={() => setDraft(null)}
-      className="resize-y rounded-md border border-line bg-raised p-2 text-[13px] text-fg focus:border-accent"
+      className="resize-y rounded-md border border-line bg-raised p-2 text-[13px] text-fg focus:border-accent disabled:opacity-40"
     />
   );
 }

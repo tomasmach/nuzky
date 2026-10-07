@@ -62,6 +62,7 @@ export const ClipView = memo(function ClipView({
   zoom,
   height,
   selected,
+  locked,
   ghost,
   timing,
   visible,
@@ -74,6 +75,8 @@ export const ClipView = memo(function ClipView({
   zoom: number;
   height: number;
   selected: boolean;
+  /** The AI is editing: the clip can be selected but not moved or trimmed. */
+  locked?: boolean;
   ghost?: boolean;
   timing?: { startUs: number; durationUs: number };
   /** Visible lane range in px, so long clips only draw the frames on screen. */
@@ -114,7 +117,7 @@ export const ClipView = memo(function ClipView({
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, clip) : undefined}
       className={`group absolute top-1 bottom-1 overflow-hidden rounded-md ${bg} ${
         ghost ? "z-30 opacity-85 shadow-xl shadow-black/60 ring-2 ring-accent" : selected ? "z-10 ring-2 ring-accent" : "ring-1 ring-black/40 hover:ring-muted/60"
-      } ${track.hidden ? "opacity-40" : ""} cursor-grab active:cursor-grabbing`}
+      } ${track.hidden ? "opacity-40" : ""} ${locked ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
       style={{
         left,
         width,
@@ -183,8 +186,12 @@ export const ClipView = memo(function ClipView({
       )}
 
       {/* Trim handles: visible on hover and selection so edges look grabbable. */}
-      <div className={`absolute inset-y-0 left-0 w-[7px] cursor-ew-resize rounded-l-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
-      <div className={`absolute inset-y-0 right-0 w-[7px] cursor-ew-resize rounded-r-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
+      {!locked && (
+        <>
+          <div className={`absolute inset-y-0 left-0 w-[7px] cursor-ew-resize rounded-l-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
+          <div className={`absolute inset-y-0 right-0 w-[7px] cursor-ew-resize rounded-r-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
+        </>
+      )}
     </div>
   );
 });

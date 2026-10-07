@@ -6,7 +6,7 @@ import { findClip, isCaptionTrack, mainCuts, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
 import type { Asset, Clip } from "../../lib/types";
 import { TransitionSettings } from "../panel/TransitionsTab";
-import { TabBar, TabPanel } from "../ui";
+import { AiLock, TabBar, TabPanel } from "../ui";
 import { AnimationSection } from "./AnimationSection";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
 import { MultiInspector } from "./MultiInspector";
@@ -66,17 +66,19 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
       <Header icon={KIND_ICON[kind]} title={title} detail={detail} />
       <TabBar group="clip" label="Clip settings" tabs={tabs} value={tab} onChange={(id) => onChoose({ ...chosen, [kind]: id })} />
       <TabPanel group="clip" id={tab} className="min-h-0 flex-1 overflow-y-auto">
-        {(tab === "video" || tab === "transform") && <TransformSection clip={clip} asset={asset} />}
-        {tab === "text" && c.type === "text" && <TextSection clip={clip} text={c.text} style={c.style} caption={kind === "caption"} />}
-        {tab === "adjust" && c.type === "media" && <AdjustSection clip={clip} content={c} />}
-        {tab === "speed" && c.type === "media" && <SpeedSection clip={clip} content={c} asset={asset} />}
-        {tab === "animation" && <AnimationSection clip={clip} />}
-        {tab === "audio" && c.type === "media" && (
-          <>
-            <AudioSection clip={clip} content={c} />
-            {kind === "audio" && <SpeedSection clip={clip} content={c} asset={asset} />}
-          </>
-        )}
+        <AiLock>
+          {(tab === "video" || tab === "transform") && <TransformSection clip={clip} asset={asset} />}
+          {tab === "text" && c.type === "text" && <TextSection clip={clip} text={c.text} style={c.style} caption={kind === "caption"} />}
+          {tab === "adjust" && c.type === "media" && <AdjustSection clip={clip} content={c} />}
+          {tab === "speed" && c.type === "media" && <SpeedSection clip={clip} content={c} asset={asset} />}
+          {tab === "animation" && <AnimationSection clip={clip} />}
+          {tab === "audio" && c.type === "media" && (
+            <>
+              <AudioSection clip={clip} content={c} />
+              {kind === "audio" && <SpeedSection clip={clip} content={c} asset={asset} />}
+            </>
+          )}
+        </AiLock>
       </TabPanel>
     </>
   );
@@ -95,7 +97,9 @@ function CutInspector({ clipId }: { clipId: string }) {
         detail={`${t ? "Transition · " : ""}cut at ${formatTime(cut.atUs)}`}
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <TransitionSettings cut={cut} />
+        <AiLock>
+          <TransitionSettings cut={cut} />
+        </AiLock>
       </div>
     </>
   );
@@ -112,8 +116,18 @@ export function Inspector() {
   let body;
   if (!project) body = null;
   else if (cut) body = <CutInspector clipId={cut} />;
-  else if (selection.length > 1) body = <MultiInspector ids={selection} />;
-  else if (!found) body = <ProjectSection />;
+  else if (selection.length > 1)
+    body = (
+      <AiLock>
+        <MultiInspector ids={selection} />
+      </AiLock>
+    );
+  else if (!found)
+    body = (
+      <AiLock>
+        <ProjectSection />
+      </AiLock>
+    );
   else {
     const { clip, track } = found;
     const c = clip.content;

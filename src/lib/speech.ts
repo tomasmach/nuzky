@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errorText } from "./api";
-import { currentEpoch, enqueue, undoAction, useEditor, whenIdle } from "./store";
+import { aiLocked, currentEpoch, enqueue, undoAction, useEditor, whenIdle } from "./store";
 import type { Project, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
 /** Characters per caption when captions show 1–3 words, like reels. */
@@ -77,6 +77,8 @@ export function useTranscriptView(): { view: TranscriptView | null; error: strin
 
 /** Starts recognition for the transcript, of every heard file with `refresh`, or for captions with `style`. */
 export async function startSpeech(captions: { style: TextStyle } | null, refresh = false) {
+  // Captions change the project; a transcript only reads it.
+  if (captions && aiLocked()) return;
   const { model, language, captionWords } = useSpeech.getState();
   // Taken before waiting, so a project opened meanwhile refuses the request instead of running it.
   const epoch = currentEpoch();
@@ -97,6 +99,7 @@ export async function startSpeech(captions: { style: TextStyle } | null, refresh
  * `what` describes it from the time removed. Resolves to null when nothing was cut.
  */
 async function cut(run: (epoch: string | undefined) => Promise<TranscriptCut>, what: (removedUs: number) => string): Promise<TranscriptCut | null> {
+  if (aiLocked()) return null;
   const out: { done?: TranscriptCut } = {};
   await enqueue(async (epoch) => (out.done = await run(epoch)).snapshot);
   if (!out.done) return null;

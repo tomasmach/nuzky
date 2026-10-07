@@ -1,6 +1,6 @@
 import { Blend, Captions, Film, Music, Palette, ScrollText, Type } from "lucide-react";
 import { useEditor, type PanelTab } from "../../lib/store";
-import { TabPanel, tabIds, tabListKeys } from "../ui";
+import { AiLock, TabPanel, tabIds, tabListKeys } from "../ui";
 import { AudioTab } from "./AudioTab";
 import { CaptionsTab } from "./CaptionsTab";
 import { FiltersTab } from "./FiltersTab";
@@ -50,13 +50,15 @@ export function LeftPanel() {
         ))}
       </div>
       <TabPanel group="library" id={tab} className="flex min-h-0 flex-1 flex-col">
-        {tab === "media" && <MediaTab />}
-        {tab === "audio" && <AudioTab />}
-        {tab === "text" && <TextTab />}
-        {tab === "captions" && <CaptionsTab />}
-        {tab === "transcript" && <TranscriptTab />}
-        {tab === "transitions" && <TransitionsTab />}
-        {tab === "filters" && <FiltersTab />}
+        <AiLock>
+          {tab === "media" && <MediaTab />}
+          {tab === "audio" && <AudioTab />}
+          {tab === "text" && <TextTab />}
+          {tab === "captions" && <CaptionsTab />}
+          {tab === "transcript" && <TranscriptTab />}
+          {tab === "transitions" && <TransitionsTab />}
+          {tab === "filters" && <FiltersTab />}
+        </AiLock>
       </TabPanel>
     </aside>
   );

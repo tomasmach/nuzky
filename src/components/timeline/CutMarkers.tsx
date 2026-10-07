@@ -7,7 +7,7 @@ import type { Project } from "../../lib/types";
 import { TRANSITION_ICONS } from "../panel/TransitionsTab";
 
 /** A square on every main-track cut: "+" adds a Dissolve, an icon opens the existing transition. */
-export const CutMarkers = memo(function CutMarkers({ project, zoom }: { project: Project; zoom: number }) {
+export const CutMarkers = memo(function CutMarkers({ project, zoom, locked }: { project: Project; zoom: number; locked: boolean }) {
   const selected = useEditor((s) => s.cut);
   const { edit, selectCut } = useEditor.getState();
   return (
@@ -29,8 +29,9 @@ export const CutMarkers = memo(function CutMarkers({ project, zoom }: { project:
             <button
               type="button"
               aria-label={t ? `${name} transition, ${formatDuration(t.durationUs)}` : "Add transition"}
-              title={t ? `${name} · ${formatDuration(t.durationUs)}` : "Add transition (Dissolve)"}
+              title={t ? `${name} · ${formatDuration(t.durationUs)}` : locked ? "Add transition: the AI is editing" : "Add transition (Dissolve)"}
               aria-pressed={on}
+              disabled={locked && !t}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={async () => {
                 if (!t && !(await edit({ type: "setTransition", clipId: cut.clipId, transition: { kind: "dissolve", durationUs: DEFAULT_TRANSITION_US } }))) return;

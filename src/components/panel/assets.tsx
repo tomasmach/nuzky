@@ -2,7 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Film, Image as ImageIcon } from "lucide-react";
 import { api, errorText } from "../../lib/api";
 import { followPointer } from "../../lib/drag";
-import { MAIN_TRACK, currentEpoch, findClip, useEditor } from "../../lib/store";
+import { MAIN_TRACK, aiLocked, currentEpoch, findClip, useEditor } from "../../lib/store";
 import type { Asset } from "../../lib/types";
 import { Button } from "../ui";
 
@@ -31,7 +31,7 @@ function importFailures(failed: { path: string; error: string }[]) {
 /** Imports files; optionally places them on the timeline one after another. */
 export async function importPaths(paths: string[], place?: { trackId: string | null; startUs: number | null }) {
   const { setSnap, toast, edit } = useEditor.getState();
-  if (paths.length === 0) return;
+  if (paths.length === 0 || aiLocked()) return;
   const epoch = currentEpoch();
   try {
     const res = await api.importMedia(paths, epoch);
@@ -53,6 +53,7 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
 }
 
 export async function pickAndImport(audioOnly = false) {
+  if (aiLocked()) return;
   const picked = await open({
     multiple: true,
     filters: [audioOnly ? { name: "Audio", extensions: AUDIO_EXTENSIONS } : { name: "Video, audio and images", extensions: MEDIA_EXTENSIONS }],

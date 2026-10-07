@@ -4,15 +4,16 @@ import { MAIN_TRACK, isCaptionTrack, useEditor } from "../../lib/store";
 import type { Track } from "../../lib/types";
 
 /** Track header toggle. Off states swap the icon and brighten it; accent stays for selection. */
-function TrackToggle({ off, label, onIcon, offIcon, onClick }: { off: boolean; label: string; onIcon: ReactNode; offIcon: ReactNode; onClick: () => void }) {
+function TrackToggle({ off, label, onIcon, offIcon, onClick, locked }: { off: boolean; label: string; onIcon: ReactNode; offIcon: ReactNode; onClick: () => void; locked: boolean }) {
   return (
     <button
       type="button"
-      aria-label={label}
-      title={label}
+      aria-label={locked ? `${label}: the AI is editing` : label}
+      title={locked ? `${label}: the AI is editing` : label}
       aria-pressed={off}
+      disabled={locked}
       onClick={onClick}
-      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out ${off ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${off ? "bg-raised text-fg" : "text-muted enabled:hover:bg-raised enabled:hover:text-fg"}`}
     >
       {off ? offIcon : onIcon}
     </button>
@@ -20,7 +21,7 @@ function TrackToggle({ off, label, onIcon, offIcon, onClick }: { off: boolean; l
 }
 
 /** Kind icon, name, and the hide and mute toggles of a track, pinned left while the lanes scroll. */
-export const TrackHeader = memo(function TrackHeader({ track, width }: { track: Track; width: number }) {
+export const TrackHeader = memo(function TrackHeader({ track, width, locked }: { track: Track; width: number; locked: boolean }) {
   const { edit } = useEditor.getState();
   const isMain = track.id === MAIN_TRACK;
   const KindIcon = track.kind === "audio" ? AudioLines : track.kind === "text" ? (isCaptionTrack(track) ? Captions : Type) : Film;
@@ -36,6 +37,7 @@ export const TrackHeader = memo(function TrackHeader({ track, width }: { track: 
           onIcon={<Eye size={14} />}
           offIcon={<EyeOff size={14} />}
           onClick={() => edit({ type: "updateTrack", trackId: track.id, hidden: !track.hidden })}
+          locked={locked}
         />
       ) : (
         <span className="w-7 shrink-0" aria-hidden />
@@ -47,6 +49,7 @@ export const TrackHeader = memo(function TrackHeader({ track, width }: { track: 
           onIcon={<Volume2 size={14} />}
           offIcon={<VolumeX size={14} />}
           onClick={() => edit({ type: "updateTrack", trackId: track.id, muted: !track.muted })}
+          locked={locked}
         />
       ) : (
         <span className="w-7 shrink-0" aria-hidden />
