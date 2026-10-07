@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 
 use crate::effects::{max_animation_scale, source_time, transform_at, transition_at, transition_window};
 use crate::gpu::{Draw, Gpu, Image, Layer};
-use crate::media::decode_size;
+use crate::media::{Transfer, decode_size};
 use crate::model::{
     Adjust, Asset, AssetKind, Clip, ClipContent, Project, Track, TrackKind, Transform, TransitionKind, parse_color,
 };
@@ -347,6 +347,7 @@ impl Renderer {
             adjust: layer.adjust,
             blur: 0.0,
             clip: layer.clip,
+            transfer: layer.transfer,
         }
     }
 
@@ -396,7 +397,7 @@ impl Renderer {
         let clip = visible.clip;
         let Some(place) = placement(project, visible, t_us, k, &mut self.text) else { return Ok(None) };
         let corners = placement_quad(project, &place, k);
-        let (image, rotation, adjust) = match &clip.content {
+        let (image, rotation, adjust, transfer) = match &clip.content {
             ClipContent::Media { asset_id, adjust, .. } => {
                 let Some(asset) = project.asset(asset_id) else { return Ok(None) };
                 // A stable conversion size avoids flushing the decoder queue on every animation frame.
@@ -420,11 +421,12 @@ impl Renderer {
                     self.late_layers += 1;
                 }
                 let Some(frame) = frame else { return Ok(None) };
-                (Image { width: frame.width, height: frame.height, data: frame.data }, asset.rotation, *adjust)
+                let image = Image { width: frame.width, height: frame.height, data: frame.data };
+                (image, asset.rotation, *adjust, frame.transfer)
             }
             ClipContent::Text { .. } => {
                 let Some(text) = place.text else { return Ok(None) };
-                (text, 0, Adjust::default())
+                (text, 0, Adjust::default(), Transfer::Sdr)
             }
         };
         Ok(Some(Layer {
@@ -435,6 +437,7 @@ impl Renderer {
             adjust,
             blur: 0.0,
             clip: None,
+            transfer,
         }))
     }
 }
@@ -501,6 +504,7 @@ fn solid(image: &Image, w: u32, h: u32) -> Layer {
         adjust: Adjust::default(),
         blur: 0.0,
         clip: None,
+        transfer: Transfer::Sdr,
     }
 }
 

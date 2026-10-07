@@ -474,3 +474,80 @@ fn mpeg_ts_seek_matches_ffmpeg_pts_and_pixels() {
     // used to start at the next one: up to a GOP late, or nothing at all in the last GOP.
     check_seek(&path, &[1_999_999, 3_960_000, 3_999_999, 4_000_000, 7_999_999, 9_000_000, 2_000_000]);
 }
+
+#[test]
+fn hlg_and_pq_sources_are_tone_mapped_to_sdr() {
+    if !available() {
+        return;
+    }
+    let tools = |kind: &str| {
+        String::from_utf8_lossy(&run(Command::new("ffmpeg").args(["-hide_banner", kind])).stdout).into_owned()
+    };
+    if !tools("-encoders").contains("libx265") || !tools("-filters").contains("zscale") {
+        eprintln!("SKIP: ffmpeg without libx265 or zscale");
+        return;
+    }
+    let d = dir("hdr");
+    let source = d.join("patches.png");
+    // Mid-grey and a saturated red, converted to BT.2020 HDR with HDR reference white at SDR white.
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x808080:s=160x90",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0xd02020:s=160x90",
+            "-filter_complex",
+            "[0][1]hstack,format=rgb24",
+            "-frames:v",
+            "1",
+        ],
+        &source,
+    );
+    let mut renderer = Renderer::new().unwrap();
+    for transfer in ["arib-std-b67", "smpte2084"] {
+        let path = d.join(format!("{transfer}.mp4"));
+        let filter = format!(
+            "zscale=tin=bt709:min=bt709:pin=bt709:rin=full:t={transfer}:m=2020_ncl:p=2020:r=limited:npl=203,format=yuv420p10le"
+        );
+        let input = source.to_str().unwrap();
+        ff(
+            &[
+                "-i",
+                input,
+                "-vf",
+                &filter,
+                "-c:v",
+                "libx265",
+                "-x265-params",
+                "pools=1:frame-threads=1:log-level=error",
+                "-color_primaries",
+                "bt2020",
+                "-color_trc",
+                transfer,
+                "-colorspace",
+                "bt2020nc",
+                "-frames:v",
+                "1",
+            ],
+            &path,
+        );
+        let p = project(&path, 200_000);
+        let frame = renderer.render(&p, 0, 320, 90, Wait::Exact, false).unwrap();
+        let patch = |x0: usize| -> [f64; 3] {
+            let pixels: Vec<&[u8]> = (30..60)
+                .flat_map(|y| (x0 + 40..x0 + 120).map(move |x| (y * 320 + x) * 4))
+                .map(|i| &frame[i..i + 3])
+                .collect();
+            std::array::from_fn(|c| pixels.iter().map(|p| p[c] as f64).sum::<f64>() / pixels.len() as f64)
+        };
+        let (grey, red) = (patch(0), patch(160));
+        eprintln!("QA HDR {transfer}: grey {grey:.0?}, red {red:.0?}");
+        // Untouched BT.2020 HDR used to show grey 105-112 and red as (123-147, 62-74, 40-55).
+        assert!(grey.iter().all(|v| (v - 128.0).abs() < 8.0), "{transfer}: grey {grey:?}");
+        assert!(red[0] > 175.0 && red[1] < 60.0 && red[2] < 60.0, "{transfer}: red {red:?}");
+    }
+}

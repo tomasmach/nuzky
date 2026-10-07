@@ -6,12 +6,13 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use wgpu::util::DeviceExt;
 
+use crate::media::Transfer;
 use crate::model::Adjust;
 
 const SHADER: &str = r#"
 struct Layer {
     corners: array<vec4<f32>, 4>, // xy = clip-space position, zw = uv
-    opacity: vec4<f32>,
+    opacity: vec4<f32>, // opacity, transfer (0 SDR, 1 PQ, 2 HLG)
     adjust: vec4<f32>,
     effects: vec4<f32>,
     grading: vec4<f32>, // exposure, tint, highlights, shadows
@@ -40,6 +41,36 @@ fn srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
 
 fn linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(rgb, vec3<f32>(1.0 / 2.4)) - 0.055, rgb * 12.92, rgb <= vec3<f32>(0.0031308));
+}
+
+const SDR_WHITE_NITS = 203.0;
+const ROLL_OFF_KNEE = 0.75;
+// Linear BT.2020 to BT.709 primaries; columns are the BT.2020 red, green and blue.
+const BT2020_TO_BT709 = mat3x3<f32>(
+    vec3<f32>(1.6605, -0.1246, -0.0182),
+    vec3<f32>(-0.5876, 1.1329, -0.1006),
+    vec3<f32>(-0.0728, -0.0083, 1.1187),
+);
+
+// PQ or HLG BT.2020 colour to SDR BT.709 as in ITU-R BT.2408: HDR reference white (203 nits) becomes
+// SDR white, highlights above the knee roll off on the brightest channel to keep their hue, and the
+// result is encoded for a BT.1886 display like the SDR video around it.
+fn hdr_to_sdr(rgb: vec3<f32>, transfer: f32) -> vec3<f32> {
+    let e = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    var nits: vec3<f32>;
+    if transfer < 1.5 {
+        let p = pow(e, vec3<f32>(1.0 / 78.84375));
+        nits = 10000.0 * pow(max(p - 0.8359375, vec3<f32>(0.0)) / (18.8515625 - 18.6875 * p), vec3<f32>(1.0 / 0.1593017578125));
+    } else {
+        let scene = select((exp((e - 0.55991073) / 0.17883277) + 0.28466892) / 12.0, e * e / 3.0, e <= vec3<f32>(0.5));
+        // HLG's OOTF on a 1000 nit display (system gamma 1.2).
+        nits = 1000.0 * pow(dot(scene, vec3<f32>(0.2627, 0.678, 0.0593)), 0.2) * scene;
+    }
+    let linear = max(BT2020_TO_BT709 * (nits / SDR_WHITE_NITS), vec3<f32>(0.0));
+    let peak = max(max(linear.r, linear.g), linear.b);
+    let rolled = ROLL_OFF_KNEE + (1.0 - ROLL_OFF_KNEE) * (1.0 - exp((ROLL_OFF_KNEE - peak) / (1.0 - ROLL_OFF_KNEE)));
+    let sdr = linear * select(1.0, rolled / peak, peak > ROLL_OFF_KNEE);
+    return pow(sdr, vec3<f32>(1.0 / 2.4));
 }
 
 fn premultiplied_texel(p: vec2<i32>, size: vec2<i32>) -> vec4<f32> {
@@ -75,36 +106,43 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
     var rgb = c.rgb;
-    if any(layer.adjust != vec4<f32>(0.0)) || any(layer.grading != vec4<f32>(0.0)) || layer.effects.x != 0.0 || layer.effects.w != 0.0 {
-        // Adjustments work on straight colour.
+    let adjusting = any(layer.adjust != vec4<f32>(0.0)) || any(layer.grading != vec4<f32>(0.0)) || layer.effects.x != 0.0 || layer.effects.w != 0.0;
+    let hdr = layer.opacity.y > 0.0;
+    if adjusting || hdr {
+        // Tone mapping and adjustments work on straight colour.
         rgb = select(vec3<f32>(0.0), rgb / c.a, c.a > 0.0);
-        const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
-        const EXPOSURE_STOPS = 2.0;
-        const TONE_STRENGTH = 0.25;
-        const FADE_BLACK = 0.25;
-        const FADE_WHITE = 0.05;
-        if layer.grading.x != 0.0 {
-            // Exposure multiplies linear light by 2^stops; skipping zero avoids a lossy round-trip.
-            rgb = linear_to_srgb(srgb_to_linear(rgb) * exp2(layer.grading.x * EXPOSURE_STOPS));
+        if hdr {
+            rgb = hdr_to_sdr(rgb, layer.opacity.y);
         }
-        rgb += vec3<f32>(0.15, 0.025, -0.15) * layer.adjust.w;
-        // Tint opposes green to equal red/blue shifts, with the temperature control's strength.
-        rgb += vec3<f32>(0.075, -0.15, 0.075) * layer.grading.y;
-        let tone_luma = dot(rgb, LUMA);
-        // Highlights smoothly approach white/black only above mid-grey; the bounded mix avoids hard clipping.
-        let highlights = smoothstep(0.5, 1.0, tone_luma) * layer.grading.z * TONE_STRENGTH;
-        rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, highlights > 0.0)), abs(highlights));
-        // Shadows use the mirrored mask below mid-grey; 0.25 keeps the grey ramp monotonic even at full strength.
-        let shadows = (1.0 - smoothstep(0.0, 0.5, tone_luma)) * layer.grading.w * TONE_STRENGTH;
-        rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, shadows > 0.0)), abs(shadows));
-        rgb = (rgb - 0.5) * (1.0 + layer.adjust.y * 0.8) + 0.5;
-        rgb += layer.adjust.x * 0.4;
-        let luma = dot(rgb, LUMA);
-        rgb = mix(vec3<f32>(luma), rgb, 1.0 + layer.adjust.z);
-        // Fade maps black to 0.25 and white to 0.95 at full strength, without changing hue.
-        rgb = rgb * (1.0 - layer.effects.w * (FADE_BLACK + FADE_WHITE)) + layer.effects.w * FADE_BLACK;
-        let edge = smoothstep(0.2, 0.72, distance(in.uv, vec2<f32>(0.5)));
-        rgb *= 1.0 - edge * layer.effects.x * 0.85;
+        if adjusting {
+            const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
+            const EXPOSURE_STOPS = 2.0;
+            const TONE_STRENGTH = 0.25;
+            const FADE_BLACK = 0.25;
+            const FADE_WHITE = 0.05;
+            if layer.grading.x != 0.0 {
+                // Exposure multiplies linear light by 2^stops; skipping zero avoids a lossy round-trip.
+                rgb = linear_to_srgb(srgb_to_linear(rgb) * exp2(layer.grading.x * EXPOSURE_STOPS));
+            }
+            rgb += vec3<f32>(0.15, 0.025, -0.15) * layer.adjust.w;
+            // Tint opposes green to equal red/blue shifts, with the temperature control's strength.
+            rgb += vec3<f32>(0.075, -0.15, 0.075) * layer.grading.y;
+            let tone_luma = dot(rgb, LUMA);
+            // Highlights smoothly approach white/black only above mid-grey; the bounded mix avoids hard clipping.
+            let highlights = smoothstep(0.5, 1.0, tone_luma) * layer.grading.z * TONE_STRENGTH;
+            rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, highlights > 0.0)), abs(highlights));
+            // Shadows use the mirrored mask below mid-grey; 0.25 keeps the grey ramp monotonic even at full strength.
+            let shadows = (1.0 - smoothstep(0.0, 0.5, tone_luma)) * layer.grading.w * TONE_STRENGTH;
+            rgb = mix(rgb, vec3<f32>(select(0.0, 1.0, shadows > 0.0)), abs(shadows));
+            rgb = (rgb - 0.5) * (1.0 + layer.adjust.y * 0.8) + 0.5;
+            rgb += layer.adjust.x * 0.4;
+            let luma = dot(rgb, LUMA);
+            rgb = mix(vec3<f32>(luma), rgb, 1.0 + layer.adjust.z);
+            // Fade maps black to 0.25 and white to 0.95 at full strength, without changing hue.
+            rgb = rgb * (1.0 - layer.effects.w * (FADE_BLACK + FADE_WHITE)) + layer.effects.w * FADE_BLACK;
+            let edge = smoothstep(0.2, 0.72, distance(in.uv, vec2<f32>(0.5)));
+            rgb *= 1.0 - edge * layer.effects.x * 0.85;
+        }
         rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * c.a;
     }
     return vec4<f32>(rgb, c.a) * layer.opacity.x;
@@ -141,6 +179,7 @@ pub struct Layer {
     pub adjust: Adjust,
     pub blur: f32,
     pub clip: Option<[f32; 4]>,
+    pub transfer: Transfer,
 }
 
 pub enum Draw {
@@ -357,7 +396,7 @@ impl Gpu {
         let a = layer.adjust;
         let uniform = LayerUniform {
             corners,
-            opacity: [layer.opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            opacity: [layer.opacity.clamp(0.0, 1.0), layer.transfer as u8 as f32, 0.0, 0.0],
             adjust: [a.brightness, a.contrast, a.saturation, a.temperature],
             effects: [a.vignette, layer.blur, premult as u8 as f32, a.fade],
             grading: [a.exposure, a.tint, a.highlights, a.shadows],
@@ -548,6 +587,7 @@ mod tests {
             adjust: Adjust::default(),
             blur: 0.0,
             clip: None,
+            transfer: Transfer::Sdr,
         };
         let draws = [Draw::Transition([layer.clone(), layer])];
         let first = gpu.render(2, 2, [0.0; 4], &draws).unwrap();
@@ -577,6 +617,7 @@ mod tests {
             adjust: Adjust::default(),
             blur: 0.0,
             clip: None,
+            transfer: Transfer::Sdr,
         };
         for adjust in [false, true] {
             layer.adjust.contrast = if adjust { 0.2 } else { 0.0 };
@@ -604,6 +645,7 @@ mod tests {
             adjust: Adjust::default(),
             blur: 0.0,
             clip: None,
+            transfer: Transfer::Sdr,
         };
         assert_eq!(gpu.render(2, 2, [0.0; 4], &[Draw::Layer(layer.clone())]).unwrap(), pixels);
         let mut half = layer.clone();

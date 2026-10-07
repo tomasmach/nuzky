@@ -167,6 +167,24 @@ pub struct RgbaFrame {
     pub width: u32,
     pub height: u32,
     pub data: Arc<Vec<u8>>,
+    pub transfer: Transfer,
+}
+
+/// How a frame's RGB values encode light. HDR frames are BT.2020 and get tone mapped when drawn.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Transfer {
+    #[default]
+    Sdr,
+    Pq,
+    Hlg,
+}
+
+fn transfer(f: &frame::Video) -> Transfer {
+    match f.color_transfer_characteristic() {
+        color::TransferCharacteristic::SMPTE2084 => Transfer::Pq,
+        color::TransferCharacteristic::ARIB_STD_B67 => Transfer::Hlg,
+        _ => Transfer::Sdr,
+    }
 }
 
 struct Scaler {
@@ -236,7 +254,7 @@ fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: 
     for y in 0..h as usize {
         data.extend_from_slice(&src[y * stride..y * stride + row]);
     }
-    Ok(RgbaFrame { t_us, width: w, height: h, data: Arc::new(data) })
+    Ok(RgbaFrame { t_us, width: w, height: h, data: Arc::new(data), transfer: transfer(f) })
 }
 
 pub type DecodedFrame = (i64, frame::Video);
