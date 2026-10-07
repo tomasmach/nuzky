@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CAPTION_STYLES, TEXT_PRESETS, sameStyle } from "../../lib/presets";
 import { editClip, useEditor } from "../../lib/store";
 import type { Clip, TextStyle } from "../../lib/types";
@@ -14,6 +15,28 @@ export function FieldRow({ label, children }: { label: string; children: React.R
   );
 }
 
+/**
+ * The clip's text. While it has focus the field shows what was typed, not the confirmed project,
+ * which arrives a moment later and would move the caret or drop keys typed in between.
+ */
+function TextField({ clipId, text }: { clipId: string; text: string }) {
+  const edit = useEditor((s) => s.edit);
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <textarea
+      aria-label="Text"
+      value={draft ?? text}
+      rows={3}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        edit({ type: "updateClip", clipId, text: e.target.value }, `${clipId}:text`);
+      }}
+      onBlur={() => setDraft(null)}
+      className="resize-y rounded-md border border-line bg-raised p-2 text-[13px] text-fg focus:border-accent"
+    />
+  );
+}
+
 /** Style tiles use the presets and names of the Text tab, or of the Captions tab for a caption. */
 export function TextSection({ clip, text, style, caption }: { clip: Clip; text: string; style: TextStyle; caption: boolean }) {
   const edit = useEditor((s) => s.edit);
@@ -24,13 +47,7 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
   return (
     <>
       <Section title="Text">
-        <textarea
-          aria-label="Text"
-          value={text}
-          rows={3}
-          onChange={(e) => edit({ type: "updateClip", clipId: clip.id, text: e.target.value }, `${clip.id}:text`)}
-          className="resize-y rounded-md border border-line bg-raised p-2 text-[13px] text-fg focus:border-accent"
-        />
+        <TextField clipId={clip.id} text={text} />
         <div className="grid grid-cols-3 gap-2">
           {presets.map((p) => (
             <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: style.fontFamily, maxWidth: style.maxWidth } })}>
