@@ -15,6 +15,9 @@ const SENTENCE_GAP_US: i64 = 600_000;
 const FILLER_PAUSE_US: i64 = 150_000;
 /// A sentence of at most this many compared words may stand between two attempts.
 const ASIDE_WORDS: usize = 3;
+/// A word this long is a content word: said differently instead of misheard, it changes what the
+/// sentence says ("mikrofonu" and "kamery"); shorter ones ("z" and "s") are often misheard.
+const CONTENT_LETTERS: usize = 4;
 /// Two attempts share at least two words with this many letters: "Tak jo." is too little.
 const MIN_SHARED_LETTERS: usize = 6;
 
@@ -278,7 +281,7 @@ fn relate(earlier: &Sentence, later: &Sentence, words: &[TimelineWord]) -> Relat
     if !found.accepted() {
         return Relation::Unrelated;
     }
-    if found.meaning.is_empty() {
+    if found.meaning.is_empty() && found.swapped.is_empty() {
         return Relation::Same;
     }
     let said = |sentence: &Sentence, k: Option<usize>| match k {
@@ -292,6 +295,14 @@ fn relate(earlier: &Sentence, later: &Sentence, words: &[TimelineWord]) -> Relat
             let (e, l) = if flipped { (said(long, l), said(short, s)) } else { (said(short, s), said(long, l)) };
             format!("a {what} differs: the earlier says {e}, the later {l}")
         })
+        .chain(found.swapped.iter().map(|&(s, l)| {
+            let (e, l) = if flipped {
+                (said(long, Some(l)), said(short, Some(s)))
+            } else {
+                (said(short, Some(s)), said(long, Some(l)))
+            };
+            format!("a word differs: the earlier says {e}, the later {l}")
+        }))
         .collect();
     Relation::Differs(reasons.join("; "))
 }
@@ -306,6 +317,9 @@ struct Match {
     matched_letters: usize,
     /// Edits that change meaning: positions in the short and long sentence, and what differs.
     meaning: Vec<(Option<usize>, Option<usize>, &'static str)>,
+    /// Content words said differently, not misheard: positions in the short and long sentence.
+    /// They count as edits, and they make the pair one to review rather than a restart.
+    swapped: Vec<(usize, usize)>,
 }
 
 impl Match {
@@ -320,6 +334,10 @@ impl Match {
 /// Aligns all of `short` with the best start of `long` by edits of whole words.
 fn prefix_match(short: &[&str], long: &[&str]) -> Match {
     let (n, m) = (short.len(), long.len());
+    // An unfinished attempt may stop inside its last word: "natoč" is the start of "natočit".
+    let same = |i: usize, j: usize| {
+        alike(short[i], long[j]) || (i + 1 == n && short[i].chars().count() >= 2 && long[j].starts_with(short[i]))
+    };
     let mut cost = vec![vec![0usize; m + 1]; n + 1];
     cost[0] = (0..=m).collect();
     for (i, row) in cost.iter_mut().enumerate() {
@@ -327,22 +345,32 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
     }
     for i in 1..=n {
         for j in 1..=m {
-            let step = usize::from(!alike(short[i - 1], long[j - 1]));
+            let step = usize::from(!same(i - 1, j - 1));
             cost[i][j] = (cost[i - 1][j - 1] + step).min(cost[i - 1][j] + 1).min(cost[i][j - 1] + 1);
         }
     }
     // The cheapest end, then the one closest to the short sentence's length, then the earlier.
     let end = (0..=m).min_by_key(|&j| (cost[n][j], j.abs_diff(n), j)).unwrap_or(0);
-    let mut found = Match { short: n, end, edits: cost[n][end], matched: 0, matched_letters: 0, meaning: Vec::new() };
+    let mut found = Match {
+        short: n,
+        end,
+        edits: cost[n][end],
+        matched: 0,
+        matched_letters: 0,
+        meaning: Vec::new(),
+        swapped: Vec::new(),
+    };
     let (mut i, mut j) = (n, end);
     while i > 0 || j > 0 {
-        if i > 0 && j > 0 && alike(short[i - 1], long[j - 1]) && cost[i][j] == cost[i - 1][j - 1] {
+        if i > 0 && j > 0 && same(i - 1, j - 1) && cost[i][j] == cost[i - 1][j - 1] {
             found.matched += 1;
             found.matched_letters += short[i - 1].chars().count();
             (i, j) = (i - 1, j - 1);
         } else if i > 0 && j > 0 && cost[i][j] == cost[i - 1][j - 1] + 1 {
             if let Some(what) = meaning((short[i - 1], i - 1), (long[j - 1], j - 1)) {
                 found.meaning.push((Some(i - 1), Some(j - 1), what));
+            } else if [short[i - 1], long[j - 1]].iter().all(|w| w.chars().count() >= CONTENT_LETTERS) {
+                found.swapped.push((i - 1, j - 1));
             }
             (i, j) = (i - 1, j - 1);
         } else if i > 0 && cost[i][j] == cost[i - 1][j] + 1 {
@@ -358,6 +386,7 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         }
     }
     found.meaning.reverse();
+    found.swapped.reverse();
     found
 }
 
@@ -398,7 +427,8 @@ fn alike(a: &str, b: &str) -> bool {
     if a == b {
         return true;
     }
-    if numeric(a) || numeric(b) || negated(a, b) {
+    // "nikdy" and "někdy" are a letter apart and mean the opposite.
+    if numeric(a) || numeric(b) || negated(a, b) || NEGATIONS.contains(&a) || NEGATIONS.contains(&b) {
         return false;
     }
     let allowed = match a.chars().count().min(b.chars().count()) {
@@ -676,6 +706,29 @@ mod tests {
         assert!(found.review[0].reason.contains("the earlier says nothing, the later \"not\""), "{found:#?}");
         let found = one(&[("Celé to zabere deset minut.", 900_000), ("Celé to zabere 10 minut.", 900_000)]);
         assert_eq!((found.groups.len(), found.review.len()), (1, 0), "{found:#?}");
+    }
+
+    /// Nearly the same sentences that say different things are for review, never deleted.
+    #[test]
+    fn a_different_word_or_a_sometimes_for_a_never_is_reviewed_not_deleted() {
+        let found = one(&[
+            ("Tohle se nikdy nepovede.", 900_000),
+            ("Tohle se někdy nepovede.", 900_000),
+            ("Teď ukážu nastavení mikrofonu.", 900_000),
+            ("Teď ukážu nastavení kamery.", 900_000),
+        ]);
+        assert!(found.groups.is_empty() && found.suggested_delete.is_empty(), "{found:#?}");
+        let reasons: Vec<&str> = found.review.iter().map(|r| r.reason.as_str()).collect();
+        assert_eq!(
+            reasons,
+            [
+                "a negation differs: the earlier says \"nikdy\", the later \"někdy\"",
+                "a word differs: the earlier says \"mikrofonu\", the later \"kamery\""
+            ]
+        );
+        // An attempt that stops inside its last word is still the start of the next one.
+        let found = one(&[("Dneska vám ukážu, jak natoč", 900_000), ("Dneska vám ukážu, jak natočit video.", 900_000)]);
+        assert_eq!((found.groups.len(), found.groups[0].keep), (1, 1), "{found:#?}");
     }
 
     #[test]
