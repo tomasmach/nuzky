@@ -434,76 +434,18 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     let tmp = out.with_file_name(format!(".capopen-pcm-{}.part", crate::edit::new_id()));
     let file = File::options().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
-        let mut writer = BufWriter::with_capacity(1 << 20, file);
-        let mut written: u64 = 0; // sample frames
-        let mut resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))> = None;
+        let mut sink = PcmSink {
+            writer: BufWriter::with_capacity(1 << 20, file),
+            written: 0,
+            resampler: None,
+            mono: false,
+            shift: None,
+            skip: 0,
+        };
         let mut decoded = frame::Audio::empty();
         let mut last_progress = 0.0;
-        let mut mono = false;
-
-        // Writes resampled audio as stereo. Mono sources are resampled as mono and duplicated,
-        // so they keep their level instead of FFmpeg's -3 dB pan.
-        let write_out =
-            |out: &frame::Audio, mono: bool, writer: &mut BufWriter<File>, written: &mut u64| -> Result<()> {
-                let n = out.samples();
-                if n == 0 {
-                    return Ok(());
-                }
-                if mono {
-                    let src: &[f32] = &bytemuck_slice(out.data(0))[..n];
-                    let mut buf = Vec::with_capacity(n * CHANNELS * 4);
-                    for s in src {
-                        buf.extend_from_slice(&s.to_le_bytes());
-                        buf.extend_from_slice(&s.to_le_bytes());
-                    }
-                    writer.write_all(&buf)?;
-                } else {
-                    writer.write_all(&out.data(0)[..n * CHANNELS * 4])?;
-                }
-                *written += n as u64;
-                Ok(())
-            };
-
-        let write_frame = |f: &frame::Audio,
-                           resampler: &mut Option<(resampling::Context, (ff::format::Sample, u64, u32))>,
-                           mono: &mut bool,
-                           writer: &mut BufWriter<File>,
-                           written: &mut u64,
-                           max_lead_us: i64|
-         -> Result<()> {
-            let mut layout = f.channel_layout();
-            if layout.is_empty() {
-                layout = ff::ChannelLayout::default(f.channels() as i32);
-            }
-            let key = (f.format(), layout.bits(), f.rate());
-            if resampler.as_ref().map(|r| r.1) != Some(key) {
-                *mono = layout.channels() == 1;
-                let dst = if *mono { ff::ChannelLayout::MONO } else { ff::ChannelLayout::STEREO };
-                let ctx = resampling::Context::get(f.format(), layout, f.rate(), PCM_FORMAT, dst, SAMPLE_RATE)?;
-                *resampler = Some((ctx, key));
-            }
-            // Align the first samples with the container origin.
-            if *written == 0
-                && let Some(pts) = f.timestamp().or(f.pts())
-            {
-                let start_us = ((pts as f64 * time_base * 1e6) as i64).saturating_sub(origin).max(0);
-                // The container duration includes a broken offset, so it cannot bound the silence.
-                if start_us > max_lead_us {
-                    bail!("Audio starts {} s after the video; the file's timestamps look broken", start_us / 1_000_000);
-                }
-                let pad = (start_us as u64 * SAMPLE_RATE as u64) / 1_000_000;
-                std::io::copy(&mut std::io::repeat(0).take(pad * (CHANNELS * 4) as u64), writer)?;
-                *written += pad;
-            }
-            let mut f = f.clone();
-            f.set_channel_layout(layout);
-            let (ctx, _) = resampler.as_mut().unwrap();
-            // ffmpeg-next sizes the output like the input, which drops samples when upsampling
-            // (22.05 or 44.1 kHz to 48 kHz). Allocate for the converted length instead.
-            let capacity = f.samples() * SAMPLE_RATE as usize / f.rate().max(1) as usize + 256;
-            let mut out = frame::Audio::new(PCM_FORMAT, capacity, ctx.output().channel_layout);
-            ctx.run(&f, &mut out)?;
-            write_out(&out, *mono, writer, written)
+        let start_us = |f: &frame::Audio| {
+            f.timestamp().or(f.pts()).map(|pts| ((pts as f64 * time_base * 1e6) as i64).saturating_sub(origin))
         };
 
         // Video read so far shows how late real audio may start; demuxing interleaves by time.
@@ -522,7 +464,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
                 continue;
             }
             while decoder.receive_frame(&mut decoded).is_ok() {
-                write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written, max_lead_us(video_end_us))?;
+                sink.write_frame(&decoded, start_us(&decoded), max_lead_us(video_end_us))?;
             }
             if let Some(pts) = packet.pts() {
                 let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
@@ -534,17 +476,18 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
         }
         decoder.send_eof().ok();
         while decoder.receive_frame(&mut decoded).is_ok() {
-            write_frame(&decoded, &mut resampler, &mut mono, &mut writer, &mut written, max_lead_us(video_end_us))?;
+            sink.write_frame(&decoded, start_us(&decoded), max_lead_us(video_end_us))?;
         }
-        if let Some((ctx, _)) = resampler.as_mut() {
+        if let Some((mut ctx, _)) = sink.resampler.take() {
             loop {
                 let mut tail = frame::Audio::new(PCM_FORMAT, 4096, ctx.output().channel_layout);
                 if ctx.flush(&mut tail).is_err() || tail.samples() == 0 {
                     break;
                 }
-                write_out(&tail, mono, &mut writer, &mut written)?;
+                sink.write_out(&tail)?;
             }
         }
+        let PcmSink { mut writer, written, .. } = sink;
         writer.flush()?;
         drop(writer);
         std::fs::rename(&tmp, out)?;
@@ -556,6 +499,120 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
     }
     result
 }
+
+/// Writes decoded audio as 48 kHz interleaved stereo f32, placed by its timestamps.
+struct PcmSink {
+    writer: BufWriter<File>,
+    /// Sample frames written so far.
+    written: u64,
+    resampler: Option<(resampling::Context, (ff::format::Sample, u64, u32))>,
+    mono: bool,
+    /// Sample frames added to frame times so they land at their timestamps; set by the first timed frame
+    /// and moved by timestamp jumps too large to be real.
+    shift: Option<i64>,
+    /// Converted sample frames still to drop because they overlap audio already written.
+    skip: u64,
+}
+
+fn us_to_frames(us: i64) -> i64 {
+    (us as i128 * SAMPLE_RATE as i128 / 1_000_000) as i64
+}
+
+impl PcmSink {
+    /// Writes resampled audio as stereo. Mono sources are resampled as mono and duplicated,
+    /// so they keep their level instead of FFmpeg's -3 dB pan.
+    fn write_out(&mut self, out: &frame::Audio) -> Result<()> {
+        let n = out.samples();
+        let dropped = self.skip.min(n as u64) as usize;
+        self.skip -= dropped as u64;
+        if n == dropped {
+            return Ok(());
+        }
+        if self.mono {
+            let src: &[f32] = &bytemuck_slice(out.data(0))[dropped..n];
+            let mut buf = Vec::with_capacity(src.len() * CHANNELS * 4);
+            for s in src {
+                buf.extend_from_slice(&s.to_le_bytes());
+                buf.extend_from_slice(&s.to_le_bytes());
+            }
+            self.writer.write_all(&buf)?;
+        } else {
+            self.writer.write_all(&out.data(0)[dropped * CHANNELS * 4..n * CHANNELS * 4])?;
+        }
+        self.written += (n - dropped) as u64;
+        Ok(())
+    }
+
+    fn silence(&mut self, frames: i64) -> Result<()> {
+        let frames = frames.max(0) as u64;
+        std::io::copy(&mut std::io::repeat(0).take(frames * (CHANNELS * 4) as u64), &mut self.writer)?;
+        self.written += frames;
+        Ok(())
+    }
+
+    /// Lines up the next samples with `start_us`: the first ones with the container origin, later ones
+    /// by filling gaps with silence and dropping overlaps, like FFmpeg's aresample async mode.
+    fn place(&mut self, start_us: i64, max_lead_us: i64) -> Result<()> {
+        let buffered = self.resampler.as_ref().and_then(|(ctx, _)| ctx.delay()).map_or(0, |d| d.output);
+        let position = self.written as i64 + buffered - self.skip as i64;
+        let Some(shift) = self.shift else {
+            // The container duration includes a broken offset, so it cannot bound the silence.
+            if start_us > max_lead_us {
+                bail!("Audio starts {} s after the video; the file's timestamps look broken", start_us / 1_000_000);
+            }
+            let target = us_to_frames(start_us).max(position);
+            self.shift = Some(target - us_to_frames(start_us));
+            return self.silence(target - position);
+        };
+        let target = us_to_frames(start_us) + shift;
+        let gap = target - position;
+        if gap.abs() <= us_to_frames(MIN_GAP_US) {
+            return Ok(());
+        }
+        // Silence is bounded like the lead-in, so broken timestamps cannot fill the disk.
+        if gap > 0 && target * 1_000_000 / SAMPLE_RATE as i64 <= max_lead_us {
+            return self.silence(gap);
+        }
+        if gap < 0 && -gap <= us_to_frames(MAX_OVERLAP_US) {
+            self.skip += (-gap) as u64;
+            return Ok(());
+        }
+        log::warn!("Ignoring an audio timestamp jump of {} ms", gap * 1000 / SAMPLE_RATE as i64);
+        self.shift = Some(shift - gap);
+        Ok(())
+    }
+
+    fn write_frame(&mut self, f: &frame::Audio, start_us: Option<i64>, max_lead_us: i64) -> Result<()> {
+        let mut layout = f.channel_layout();
+        if layout.is_empty() {
+            layout = ff::ChannelLayout::default(f.channels() as i32);
+        }
+        let key = (f.format(), layout.bits(), f.rate());
+        if self.resampler.as_ref().map(|r| r.1) != Some(key) {
+            self.mono = layout.channels() == 1;
+            let dst = if self.mono { ff::ChannelLayout::MONO } else { ff::ChannelLayout::STEREO };
+            let ctx = resampling::Context::get(f.format(), layout, f.rate(), PCM_FORMAT, dst, SAMPLE_RATE)?;
+            self.resampler = Some((ctx, key));
+        }
+        if let Some(start_us) = start_us {
+            self.place(start_us, max_lead_us)?;
+        }
+        let mut f = f.clone();
+        f.set_channel_layout(layout);
+        let (ctx, _) = self.resampler.as_mut().unwrap();
+        // ffmpeg-next sizes the output like the input, which drops samples when upsampling
+        // (22.05 or 44.1 kHz to 48 kHz). Allocate for the converted length instead.
+        let capacity = f.samples() * SAMPLE_RATE as usize / f.rate().max(1) as usize + 256;
+        let mut out = frame::Audio::new(PCM_FORMAT, capacity, ctx.output().channel_layout);
+        ctx.run(&f, &mut out)?;
+        self.write_out(&out)
+    }
+}
+
+/// Timestamp differences up to this are jitter, not gaps (FFmpeg's aresample min_hard_comp).
+const MIN_GAP_US: i64 = 100_000;
+/// Audio stepping back further than this restarted its timestamps rather than overlapping.
+const MAX_OVERLAP_US: i64 = 1_000_000;
 
 /// Audio may start this late even before the video read so far covers it; later starts past the
 /// video are broken timestamps.
@@ -672,6 +729,54 @@ mod tests {
         // A zoomed panorama stays inside the GPU texture limit and keeps its aspect.
         assert_eq!(decode_size((20000, 3000), 0, (12800.0, 1920.0), 8192), (8192, 1230));
         assert_eq!(decode_size((3000, 20000), 90, (12800.0, 1920.0), 8191), (1230, 8190));
+    }
+
+    /// Recorders that drop audio leave timestamp gaps; joined files can step back and overlap.
+    #[test]
+    fn pcm_places_samples_by_timestamp() {
+        let dir = std::env::temp_dir().join(format!("capopen-pcm-gap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ffmpeg = |args: &[&str], out: &Path| {
+            std::process::Command::new("ffmpeg")
+                .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=red:s=64x64:r=25", "-f", "lavfi", "-i"])
+                .args(args)
+                .args(["-c:v", "libx264", "-threads", "2", "-c:a", "aac"])
+                .arg(out)
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let (gap, a, b) = (dir.join("gap.mkv"), dir.join("a.ts"), dir.join("b.ts"));
+        // A 1 s tone, 1 s without audio packets, another 1 s tone.
+        if !ffmpeg(&["sine=f=440:r=48000:d=2,asetpts='PTS+if(gte(T,1),1/TB,0)'", "-t", "3"], &gap)
+            || !ffmpeg(&["sine=f=440:r=48000:d=1", "-t", "1"], &a)
+            || !ffmpeg(&["sine=f=880:r=48000:d=1", "-t", "1", "-output_ts_offset", "0.7"], &b)
+        {
+            eprintln!("ffmpeg CLI with libx264 not available, skipping");
+            return;
+        }
+        let pcm = |path: &Path| {
+            let out = path.with_extension("f32");
+            extract_pcm(path, &out, |_| {}).unwrap();
+            let samples: Vec<f32> = bytemuck::cast_slice(&std::fs::read(&out).unwrap()).to_vec();
+            // Peak level between two times in seconds.
+            move |from: f64, to: f64| {
+                let end = ((to * 96_000.0) as usize).min(samples.len());
+                samples[((from * 96_000.0) as usize).min(end)..end].iter().fold(0f32, |m, s| m.max(s.abs()))
+            }
+        };
+        let peak = pcm(&gap);
+        assert!(peak(0.1, 0.9) > 0.05 && peak(2.1, 2.9) > 0.05, "tones");
+        assert!(peak(1.1, 1.9) < 0.001, "the gap is silent");
+        assert!(peak(2.95, f64::MAX) > 0.05 && peak(3.05, f64::MAX) == 0.0, "the second tone ends at 3 s");
+        // The second file's audio starts about 0.4 s before the first one's ends. Appending it would
+        // give 2 s; placing it by time drops the overlapping start and leaves no hole.
+        let joined = dir.join("overlap.ts");
+        std::fs::write(&joined, [std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap()].concat()).unwrap();
+        let peak = pcm(&joined);
+        let length = (0..).map(|i| i as f64 * 0.05).find(|&t| peak(t, f64::MAX) == 0.0).unwrap();
+        assert!((1.55..1.75).contains(&length), "length {length} s");
+        assert!((0..30).all(|i| peak(i as f64 * 0.05, i as f64 * 0.05 + 0.05) > 0.05), "no hole");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Upsampled sources used to lose their tail; mono sources came out 3 dB quieter.
