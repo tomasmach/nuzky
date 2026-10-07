@@ -47,7 +47,10 @@ that preserves both size and mtime is not detected; this is not a content hash.
   side. The context is loaded once, with four CPU threads, greedy decoding and no
   temperature fallback. Output is repeatable for a fixed model/build/hardware;
   cross-platform floating-point bit identity is not promised. Region isolation
-  costs encoder runs and loses inter-region linguistic context.
+  costs encoder runs and loses inter-region linguistic context. Decoding nearby
+  regions together was measured 1.7-3x faster with fewer word errors, but its word
+  boundaries were 3-5x further off, so regions stay separate. With `auto`, the
+  language is detected once on up to 30 s of speech and used for every region.
 - Subword bytes are joined before UTF-8 decoding, preserving Czech characters.
   Non-speech annotation spans and segments with high no-speech probability are
   omitted. Word probability is the mean of text-token probabilities. Token timing

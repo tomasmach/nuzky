@@ -14,6 +14,8 @@ use crate::{Range, audio::open_pcm};
 const RATE: usize = 16_000;
 const CS: usize = RATE / 100;
 const GAP: usize = RATE / 5;
+/// Audio Whisper encodes in one pass.
+const WINDOW: usize = 30 * RATE;
 
 pub enum AudioSource<'a> {
     Asset { asset: &'a Asset, cache: &'a Path },
@@ -96,6 +98,25 @@ pub fn transcribe_words_cancellable(
         }
         Err(error) => return Err(error).context("Loading speech model"),
     };
+    if transcript.language == "auto" {
+        // Detect once on up to 30 s of speech: the first region alone may be a short
+        // greeting, and its guess would then decide every later region.
+        let enough = regions.iter().scan(0, |len, &(start, end)| {
+            (*len < WINDOW).then(|| {
+                *len += end - start + GAP;
+                (start, end)
+            })
+        });
+        let (speech, _) = compact_audio(audio, &enough.collect::<Vec<_>>());
+        // Its own state: recognising on the detecting one marked the first region as no speech.
+        let mut detect = context.create_state().context("Creating speech recognition state")?;
+        let mut params = recognition_params("auto");
+        params.set_detect_language(true);
+        detect.full(params, &speech).context("Detecting the spoken language")?;
+        transcript.language =
+            whisper_rs::get_lang_str(detect.full_lang_id_from_state()).context("Missing detected language")?.into();
+        check()?;
+    }
     let mut state = context.create_state().context("Creating speech recognition state")?;
     // Independent decoding prevents tokens from drifting across compacted pauses.
     for region in regions {
