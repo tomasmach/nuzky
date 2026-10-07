@@ -5,7 +5,7 @@ the preview shows how much the picture is scaled."""
 import json, subprocess, time
 
 from e2e.harness import (AI_EDITING, FIXTURES, Bridge, flow, link_models, preview_crop, preview_rect, preview_redraw,
-                         wait, webdriver)
+                         wait)
 
 MODEL = 'large-v3-turbo-q5_0'
 # The yellow square: 400 px wide in the 1080 px frame, centred.
@@ -34,14 +34,20 @@ def poll(bridge, job, timeout):
         time.sleep(1)
 
 
-def press(r, key):
-    """A real key press, as WebDriver's keyboard sends it to the focused element, so a focused button acts on Enter."""
-    keys = [{'type': 'keyDown', 'value': key}, {'type': 'keyUp', 'value': key}]
-    webdriver('POST', r.s.path + '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': keys}]})
-    webdriver('DELETE', r.s.path + '/actions')
+def press(key):
+    """A real key press through the X server (XTest), so a focused button acts on Enter as it does for a person.
+    WebKitWebDriver supports neither Element Send Keys on a button nor key actions."""
+    from Xlib import X, XK, display
+    from Xlib.ext import xtest
+    d = display.Display()
+    code = d.keysym_to_keycode(XK.string_to_keysym(key))
+    for kind in (X.KeyPress, X.KeyRelease):
+        xtest.fake_input(d, kind, code)
+    d.sync()
+    d.close()
 
 
-ENTER = '\ue007'  # WebDriver's Enter key
+ENTER = 'Return'
 
 
 def main(r):
@@ -108,7 +114,7 @@ def suggest_and_apply(r, bridge):
         "const b = document.querySelector('[data-suggest-zooms]'); return !!b && b.getAttribute('aria-disabled') !== 'true'"), 30))
     # From the keyboard: Enter on the focused button suggests, and Apply takes focus.
     r.s.run("document.querySelector('[data-suggest-zooms]').focus()")
-    press(r, ENTER)
+    press(ENTER)
     bar = wait(lambda: r.s.run("return document.querySelector('[data-zoom-bar]')?.textContent ?? null"), 15)
     r.check('Suggest zooms opens the bar with Dismiss and Apply', bar and 'Dismiss' in bar and 'Apply' in bar, bar)
     marked = r.s.run("""const words = {};
@@ -129,7 +135,7 @@ def suggest_and_apply(r, bridge):
     r.shot('zoom-suggestions')
 
     project_before = r.s.run(PROJECT)
-    press(r, ENTER)
+    press(ENTER)
     applied = wait(lambda: (c := main(r)) and len(c) > len(before) and c, 15)
     r.check('Apply splits the main track', applied, applied and pieces(applied))
     toast = wait(lambda: next((t for t in r.state()['toasts'] if t['text'].startswith('Zoomed in on')), None), 5)
