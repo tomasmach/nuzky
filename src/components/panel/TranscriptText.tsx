@@ -149,12 +149,15 @@ export function TranscriptText({
   const lo = live ? Math.min(live.anchor, live.focus) : -1;
   const hi = live ? Math.max(live.anchor, live.focus) : -1;
 
-  // Indices change with the words or the pause length; a corrected word keeps them.
+  // Indices change with the words or the pause length; a corrected word keeps them, and so does a
+  // word being corrected.
   const shown = useRef(tokens);
   useEffect(() => {
-    if (!sameShape(shown.current, tokens)) setSel(null);
+    if (!sameShape(shown.current, tokens)) {
+      setSel(null);
+      setEditing(null);
+    }
     shown.current = tokens;
-    setEditing(null);
   }, [tokens]);
 
   // An AI run that starts meanwhile closes the field without saving.
