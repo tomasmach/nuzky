@@ -1,7 +1,7 @@
 //! Timeline edits and undo history. The main track is magnetic like in CapCut:
 //! its clips always sit back to back from zero, so deleting or moving closes gaps.
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
@@ -755,6 +755,9 @@ impl Project {
                     t.hidden = h;
                 }
                 if let Some(k) = keep_in_place {
+                    // Keeping place across cuts is for music: a kept video or text track would drift
+                    // out of sync with the picture by every cut.
+                    ensure!(!k || t.kind == TrackKind::Audio, "Only audio tracks can keep their place while cutting");
                     t.keep_in_place = k;
                 }
             }
@@ -811,7 +814,8 @@ impl Project {
                 }
                 let kept: Vec<bool> = match &keep_track_ids {
                     Some(ids) => self.tracks.iter().map(|t| ids.contains(&t.id)).collect(),
-                    None => self.tracks.iter().map(|t| t.keep_in_place).collect(),
+                    // Only audio keeps its place, also in projects written before that was checked.
+                    None => self.tracks.iter().map(|t| t.keep_in_place && t.kind == TrackKind::Audio).collect(),
                 };
                 let mut ranges = merge_ranges(ranges);
                 if let Some(main) = self.track_index(MAIN_TRACK).filter(|&ti| !kept[ti]) {
@@ -1232,6 +1236,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(end(&p, &music), 19_000_000);
+    }
+
+    /// Only music keeps its place: a kept main track would leave the cut picture out of sync.
+    #[test]
+    fn only_audio_tracks_keep_their_place_through_ripple_cuts() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let keep = |id: &str| EditCmd::UpdateTrack {
+            track_id: id.into(),
+            muted: None,
+            hidden: None,
+            keep_in_place: Some(true),
+        };
+        let error = p.apply(keep(MAIN_TRACK)).unwrap_err();
+        assert!(error.to_string().contains("Only audio tracks"), "{error:#}");
+        // A project written before that was checked still cuts its main track.
+        p.tracks[0].keep_in_place = true;
+        p.apply(EditCmd::RippleDeleteRanges {
+            ranges: vec![TimeRange { start_us: 0, end_us: 1_000_000 }],
+            keep_track_ids: None,
+        })
+        .unwrap();
+        assert_eq!(p.tracks[0].clips[0].duration_us, 4_000_000);
     }
 
     #[test]
