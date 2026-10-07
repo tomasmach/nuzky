@@ -1,6 +1,7 @@
 //! Deterministic local editing analysis. Times are half-open microsecond ranges
 //! relative to the media/container origin, or to the supplied timeline audio.
 mod audio;
+mod boundaries;
 mod captions;
 mod fillers;
 mod scenes;
@@ -8,6 +9,7 @@ mod speech;
 pub mod style;
 
 pub use audio::{SilenceParams, integrated_lufs, loudness, loudness_cancellable, silences, silences_cancellable};
+pub use boundaries::{align_to_sound, align_words};
 pub use captions::{CaptionGrouping, group_words};
 pub use fillers::filler_words;
 pub use scenes::{SceneCut, SceneParams, scene_cuts, scene_cuts_cancellable};

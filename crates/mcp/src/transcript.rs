@@ -70,7 +70,7 @@ pub fn recognise(
 ) -> Result<Record> {
     let _slot = recognition_slot(&capopen_analysis::models_dir().join(".recognition.lock"), cancel, waiting)?;
     let fingerprint = store.fingerprint(asset)?;
-    let result = capopen_analysis::transcribe_words_cancellable(
+    let mut result = capopen_analysis::transcribe_words_cancellable(
         AudioSource::Asset { asset, cache },
         model_path,
         vad,
@@ -78,6 +78,8 @@ pub fn recognise(
         || cancel.load(Ordering::Relaxed),
     )?;
     check_cancel(cancel)?;
+    // Cuts are planned from these times, so they follow the sound, not Whisper's estimates.
+    capopen_analysis::align_to_sound(&mut result.words, asset, cache, || cancel.load(Ordering::Relaxed))?;
     let record = Record {
         version: VERSION,
         fingerprint,

@@ -12,8 +12,10 @@ use crate::effects::transition_window;
 use crate::media::extract_pcm;
 use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
-/// Short fades at clip edges so cuts do not click.
+/// Short fades at clip edges with nothing to crossfade with, so they do not click.
 const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
+/// How far a cut's crossfade reaches on each side of it.
+const CUT_FADE_US: i64 = 10_000;
 
 pub fn us_to_samples(us: i64) -> i64 {
     (us as i128 * SAMPLE_RATE as i128 / 1_000_000) as i64
@@ -152,13 +154,13 @@ impl Mixer {
                 };
                 let c0 = us_to_samples(clip.start_us);
                 let c1 = us_to_samples(clip.end_us());
+                let previous = index.checked_sub(1).map(|i| &track.clips[i]);
+                let next = track.clips.get(index + 1);
+                let transition =
+                    |clip: &Clip| if track.id == crate::edit::MAIN_TRACK { transition_window(clip) } else { None };
                 let incoming =
-                    if track.id == crate::edit::MAIN_TRACK && index > 0 { transition_window(clip) } else { None };
-                let outgoing = if track.id == crate::edit::MAIN_TRACK {
-                    track.clips.get(index + 1).and_then(transition_window)
-                } else {
-                    None
-                };
+                    previous.and_then(|previous| transition(clip).or_else(|| cut_window(project, previous, clip)));
+                let outgoing = next.and_then(|next| transition(next).or_else(|| cut_window(project, clip, next)));
                 let incoming = incoming.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let outgoing = outgoing.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let begin = incoming.map(|w| w.0).unwrap_or(c0);
@@ -234,6 +236,29 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
         && speed_a == speed_b
         && volume_a == volume_b
         && (source_b - source_end).abs() <= samples_to_us(1)
+}
+
+/// Where two pieces of sound that do not play on from each other meet, they overlap and
+/// crossfade over up to 10 ms on each side of the cut, so a cut neither clicks nor dips. Each side
+/// reaches past its clip only as far as its file has sound; a cut with no sound to spare on either
+/// side keeps the edge ramps.
+fn cut_window(project: &Project, before: &Clip, after: &Clip) -> Option<(i64, i64)> {
+    let (
+        ClipContent::Media { asset_id, source_in_us: source_before, speed: speed_before, .. },
+        ClipContent::Media { source_in_us: source_after, speed: speed_after, .. },
+    ) = (&before.content, &after.content)
+    else {
+        return None;
+    };
+    if before.end_us() != after.start_us || continues(before, after) {
+        return None;
+    }
+    let left_over = project.asset(asset_id)?.duration_us
+        - source_before
+        - (before.duration_us as f64 * *speed_before as f64).round() as i64;
+    let reach = |source_us: i64, speed: f32| ((source_us.max(0) as f64 / speed as f64) as i64).min(CUT_FADE_US);
+    let (early, late) = (reach(*source_after, *speed_after), reach(left_over, *speed_before));
+    (early + late > 0).then_some((after.start_us - early, after.start_us + late))
 }
 
 /// `edges` are the de-click ramp lengths at the start and the end; 0 leaves that edge open.
@@ -604,6 +629,60 @@ mod tests {
         // Without the edge ramps the cut would jump from 0.25 to 0.5 in one sample.
         assert!(max_step < 0.01, "sample step at the cut: {max_step}");
         assert!((cut[47_000] - 47_000.0 / 192_000.0).abs() < 1e-6 && (cut[49_000] - 97_000.0 / 192_000.0).abs() < 1e-6);
+    }
+
+    /// Room tone cut out of the middle of a take: the two sides crossfade over the cut, reading
+    /// past their clips, so the level neither drops to nothing nor jumps. Without sound to spare
+    /// at the start of the file, the edge ramps stay.
+    #[test]
+    fn a_cut_crossfades_without_a_dip_and_edges_without_sound_to_spare_still_ramp() {
+        use crate::edit::{EditCmd, TimeRange};
+        let cache = std::env::temp_dir().join(format!("capopen-audio-crossfade-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let asset = Asset {
+            id: "take".into(),
+            name: "take".into(),
+            path: String::new(),
+            kind: AssetKind::Video,
+            duration_us: 2_000_000,
+            width: 2,
+            height: 2,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+        };
+        let mut state = 0x9e37_79b9_u32;
+        let samples: Vec<f32> = (0..96_000)
+            .flat_map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                [(state as f32 / u32::MAX as f32 - 0.5) * 0.2; CHANNELS]
+            })
+            .collect();
+        std::fs::write(pcm_path(&cache, &asset), bytemuck::cast_slice(&samples)).unwrap();
+        let mut project = Project::new("crossfade");
+        project.apply(EditCmd::AddAssets { assets: vec![asset] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "take".into(), start_us: Some(0), track_id: None }).unwrap();
+        let range = TimeRange { start_us: 600_000, end_us: 1_400_000 };
+        project.apply(EditCmd::RippleDeleteRanges { ranges: vec![range], keep_track_ids: None }).unwrap();
+        assert_eq!(
+            cut_window(&project, &project.tracks[0].clips[0], &project.tracks[0].clips[1]),
+            Some((590_000, 610_000))
+        );
+        let mut out = vec![0.0; 57_600 * CHANNELS];
+        Mixer::new(cache.clone()).mix(&project, 0, &mut out);
+        let left: Vec<f32> = out.chunks_exact(CHANNELS).map(|f| f[0]).collect();
+        let rms = |from: usize| (left[from..from + 96].iter().map(|s| s * s).sum::<f32>() / 96.0).sqrt();
+        let steady = rms(20_000);
+        // 2 ms windows across the 20 ms crossfade around the cut at 0.6 s (sample 28 800).
+        let lowest = (28_320..29_280).step_by(96).map(rms).fold(f32::MAX, f32::min);
+        // The start of the file has no sound before it: the first clip still fades in.
+        let first = left[..48].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        std::fs::remove_dir_all(cache).unwrap();
+        assert!(lowest > steady * 0.6, "level at the cut {lowest} against {steady}");
+        assert!(first < 0.02, "the first 1 ms rises from silence: {first}");
     }
 
     #[test]
