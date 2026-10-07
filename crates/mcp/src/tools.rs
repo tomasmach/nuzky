@@ -23,6 +23,12 @@ use crate::{media, params::*, transcript};
 
 const PREVIEW_CHARS: usize = 400;
 
+struct PreparedImport {
+    paths: Vec<String>,
+    assets: Vec<capopen_engine::model::Asset>,
+    expect: Expect,
+}
+
 struct PreparedTranscriptEdit {
     arguments: Value,
     edit: EditCmd,
@@ -52,6 +58,7 @@ pub struct Backend {
     project_path: PathBuf,
     export_queue: Arc<Mutex<()>>,
     transcript_requests: Mutex<HashMap<(String, String), PreparedTranscriptEdit>>,
+    import_requests: Mutex<HashMap<(String, String), PreparedImport>>,
 }
 
 impl Backend {
@@ -77,6 +84,7 @@ impl Backend {
             project_path,
             export_queue: Arc::default(),
             transcript_requests: Mutex::default(),
+            import_requests: Mutex::default(),
         })
     }
 
@@ -229,21 +237,39 @@ impl Backend {
     fn import(&self, args: Import, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
         ensure!(!args.paths.is_empty(), "INVALID_ARGUMENTS: no paths to import");
-        let assets = args
-            .paths
-            .iter()
-            .map(|p| {
-                let path = self.resolve(p);
-                ensure!(path.is_file(), "MEDIA_MISSING: {}", path.display());
-                probe(&std::fs::canonicalize(&path).context("Resolving media path")?, new_id())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let ids: Vec<_> = assets.iter().map(|a| a.id.clone()).collect();
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let mut requests = self.import_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        // A retry after a failed save reuses the probed assets, so it never adds them twice.
+        let prepared = match requests.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                ensure!(entry.get().paths == args.paths, "REQUEST_CONFLICT: request_id was used with different paths");
+                entry.into_mut()
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let assets = args
+                    .paths
+                    .iter()
+                    .map(|p| {
+                        let path = self.resolve(p);
+                        ensure!(path.is_file(), "MEDIA_MISSING: {}", path.display());
+                        probe(&std::fs::canonicalize(&path).context("Resolving media path")?, new_id())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                entry.insert(PreparedImport {
+                    paths: args.paths,
+                    assets,
+                    expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+                })
+            }
+        };
+        let ids: Vec<_> = prepared.assets.iter().map(|a| a.id.clone()).collect();
         let result = self.host.session.apply_edits(
             &args.run_id,
-            &new_id(),
-            vec![EditCmd::AddAssets { assets }],
-            Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            &request_id,
+            vec![EditCmd::AddAssets { assets: prepared.assets.clone() }],
+            prepared.expect.clone(),
         )?;
         Ok(json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "asset_ids": ids}))
     }
@@ -646,6 +672,38 @@ mod tests {
     }
 
     #[test]
+    fn import_request_id_retries_a_failed_save_without_adding_assets_twice() {
+        let dir = std::env::temp_dir().join(format!("import-retry-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("still.ppm");
+        std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+        let path = dir.join("project.capopen");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("import")).unwrap()).unwrap();
+        let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
+        let run = backend.call("begin_run", json!({"label":"import"})).unwrap().structured_content.unwrap();
+        let args = json!({"run_id":run["run_id"],"paths":["still.ppm"],"request_id":"import-once"});
+        let backup = dir.join("backup");
+        std::fs::rename(&path, &backup).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = format!("{:#}", backend.call("import_media", args.clone()).unwrap_err());
+        assert!(error.contains("SAVE_FAILED"), "{error}");
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&backup, &path).unwrap();
+        let first = backend.call("import_media", args.clone()).unwrap().structured_content.unwrap();
+        let again = backend.call("import_media", args.clone()).unwrap().structured_content.unwrap();
+        assert_eq!(first["asset_ids"], again["asset_ids"]);
+        let disk: Project = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(disk.assets.len(), 1);
+        assert_eq!(backend.host.session.state().unwrap().project.assets.len(), 1);
+        let mut other = args;
+        other["paths"] = json!(["still.ppm", "still.ppm"]);
+        let conflict = format!("{:#}", backend.call("import_media", other).unwrap_err());
+        assert!(conflict.starts_with("REQUEST_CONFLICT"), "{conflict}");
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn loudness_windows_stay_bounded_for_long_media() {
         let hour = 3_600_000_000;
         assert_eq!(loudness_window(hour, None).unwrap(), 100_000);
@@ -733,6 +791,7 @@ mod transcript_tests {
             project_path: path,
             export_queue: Arc::default(),
             transcript_requests: Mutex::default(),
+            import_requests: Mutex::default(),
         };
         (dir, backend, project)
     }

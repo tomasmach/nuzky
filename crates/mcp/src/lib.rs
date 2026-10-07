@@ -68,7 +68,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Import>(
             "import_media",
-            "Probe existing local file paths and add assets through the owning run. Relative paths resolve beside the project. Returns asset_ids; follow with addClip edits to place them. No uploads, downloads or automatic insertion.",
+            "Probe existing local file paths and add assets through the owning run. Relative paths resolve beside the project. Optional request_id: reuse it with the same paths after a save failure to finish the original import without adding the assets twice. Returns asset_ids; follow with addClip edits to place them. No uploads, downloads or automatic insertion.",
         )?,
         tool::<params::Inspect>(
             "inspect_frames",

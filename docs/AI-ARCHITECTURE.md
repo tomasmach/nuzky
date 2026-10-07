@@ -56,7 +56,7 @@ All times are integer microseconds on the timeline unless a field says `source`.
 | `get_state(range?, clip_ids?)` | Project, tracks, clips with ids and times, the user's selection and playhead, revision, open run |
 | `begin_run(label)` / `end_run(run_id, action)` / `undo_run(run_id)` | Run lifecycle |
 | `apply_edits(run_id, request_id, edits[], expected_revision?)` | Atomic batch of `EditCmd` |
-| `import_media(run_id, paths[])` | Probe allowed files and add them as assets |
+| `import_media(run_id, paths[], request_id?)` | Probe local files and add them as assets; a repeated `request_id` never adds them twice |
 | `inspect_frames(times[], width?)` | Rendered frames as one image (contact sheet with timestamps); fails if media is missing |
 | `analyze(kind, asset_id, params)` | `silences`, `loudness`, `scenes`, `fillers` from `crates/analysis` |
 | `transcribe(asset_ids?)` | Job recognising the heard media that has no transcript yet |

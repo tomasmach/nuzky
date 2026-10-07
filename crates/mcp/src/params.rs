@@ -60,6 +60,8 @@ pub struct Undo {
 pub struct Import {
     pub run_id: String,
     pub paths: Vec<String>,
+    /// Reuse this id with the same paths to retry a failed save without importing twice.
+    pub request_id: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
