@@ -35,9 +35,10 @@ def poll(bridge, job, timeout):
 
 
 def press(r, key):
-    """A real key press on the focused element, as WebDriver types it, so a focused button acts on Enter."""
-    element = webdriver('GET', r.s.path + '/element/active')
-    webdriver('POST', f"{r.s.path}/element/{next(iter(element.values()))}/value", {'text': key})
+    """A real key press, as WebDriver's keyboard sends it to the focused element, so a focused button acts on Enter."""
+    keys = [{'type': 'keyDown', 'value': key}, {'type': 'keyUp', 'value': key}]
+    webdriver('POST', r.s.path + '/actions', {'actions': [{'type': 'key', 'id': 'keyboard', 'actions': keys}]})
+    webdriver('DELETE', r.s.path + '/actions')
 
 
 ENTER = '\ue007'  # WebDriver's Enter key

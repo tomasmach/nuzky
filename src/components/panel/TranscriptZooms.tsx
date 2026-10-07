@@ -13,7 +13,8 @@ export interface ZoomSuggestionState {
   zooms: SuggestedZoom[] | null;
   pending: boolean;
   suggest: () => Promise<void>;
-  apply: () => Promise<void>;
+  /** Resolves to whether the zooms were applied and the suggestions closed. */
+  apply: () => Promise<boolean>;
   dismiss: () => void;
 }
 
@@ -43,10 +44,12 @@ export function useZoomSuggestions(view: TranscriptView | null): ZoomSuggestionS
   };
 
   const apply = async () => {
-    if (!found || aiLocked()) return;
+    if (!found || aiLocked()) return false;
     setPending(true);
     try {
-      if (await applyZooms(found.key, found.zooms.map(({ from, to, scale }) => ({ from, to, scale })))) setFound(null);
+      const done = await applyZooms(found.key, found.zooms.map(({ from, to, scale }) => ({ from, to, scale })));
+      if (done) setFound(null);
+      return done;
     } finally {
       setPending(false);
     }
@@ -84,16 +87,18 @@ export function ZoomBar({ state, blocker }: { state: ZoomSuggestionState; blocke
   }, [shown]);
   if (!zooms) return null;
   const back = () => document.querySelector<HTMLElement>("[data-suggest-zooms]")?.focus();
-  const close = (run: () => void | Promise<void>) => async () => {
+  const dismiss = () => {
+    state.dismiss();
+    back();
+  };
+  const apply = async () => {
     const inside = !!document.activeElement?.closest("[data-zoom-bar]");
-    await run();
-    if (inside) back();
+    if ((await state.apply()) && inside) back();
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "Escape") return;
     e.stopPropagation();
-    state.dismiss();
-    back();
+    dismiss();
   };
   const n = zooms.length;
   const scales = [...new Set(zooms.map((z) => z.scale))].sort((a, b) => a - b);
@@ -104,10 +109,10 @@ export function ZoomBar({ state, blocker }: { state: ZoomSuggestionState; blocke
       <span className="tabular flex-1 text-[12px] text-muted">
         {n} sentence{n === 1 ? "" : "s"} · {range}
       </span>
-      <Button className="h-7 px-2" onClick={close(state.dismiss)}>
+      <Button className="h-7 px-2" onClick={dismiss}>
         Dismiss
       </Button>
-      <Button data-zoom-apply variant="primary" className="h-7 px-2" disabled={!!blocker || state.pending} disabledReason={blocker ?? "Applying…"} onClick={close(state.apply)}>
+      <Button data-zoom-apply variant="primary" className="h-7 px-2" disabled={!!blocker || state.pending} disabledReason={blocker ?? "Applying…"} onClick={apply}>
         Apply {n} zoom{n === 1 ? "" : "s"}
       </Button>
     </div>
