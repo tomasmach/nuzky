@@ -153,8 +153,10 @@ export function Timeline({ height }: { height: number }) {
   const [menu, setMenu] = useState<MenuAt | null>(null);
   /** The clip keyboard focus was on last; it stays the timeline's tab stop. */
   const [focusId, setFocusId] = useState<string | null>(null);
-  /** Where the focused clip was, so focus can move on when it is deleted; null once focus left. */
-  const focusPlace = useRef<{ id: string; trackId: string; startUs: number } | null>(null);
+  /** The focused clip, so focus can move on when it is deleted; null once focus left the clips. */
+  const focusPlace = useRef<string | null>(null);
+  /** The project as last shown, where a deleted clip's neighbours are found. */
+  const shown = useRef(project);
   const closeMenu = useCallback(() => setMenu(null), []);
 
   const tracks = useMemo(() => (project ? displayTracks(project) : []), [project]);
@@ -239,15 +241,19 @@ export function Timeline({ height }: { height: number }) {
 
   const { drag, startClipDrag, startScrub } = useTimelineGestures({ project, zoom, snapping, minUs, rows, timeAt });
 
-  // When the focused clip is deleted, focus and select the clip that took its place on the track,
-  // else the one before it, so the keyboard keeps its place.
+  // When the focused clip is deleted, focus and select the clip that followed it on its track, else
+  // the one before it, so the keyboard keeps its place. Neighbours come from the order shown before
+  // the deletion, so a clip moved meanwhile counts where it was.
   useLayoutEffect(() => {
-    const place = focusPlace.current;
-    if (!project || !place || findClip(project, place.id)) return;
+    const before = shown.current;
+    shown.current = project;
+    const id = focusPlace.current;
+    if (!project || !before || !id || findClip(project, id)) return;
     focusPlace.current = null;
     if (document.activeElement && document.activeElement !== document.body) return;
-    const clips = project.tracks.find((t) => t.id === place.trackId)?.clips ?? [];
-    const next = clips.find((c) => c.startUs >= place.startUs) ?? clips[clips.length - 1];
+    const clips = [...(findClip(before, id)?.track.clips ?? [])].sort((a, b) => a.startUs - b.startUs);
+    const at = clips.findIndex((c) => c.id === id);
+    const next = [...clips.slice(at + 1), ...clips.slice(0, at).reverse()].find((c) => findClip(project, c.id));
     if (!next) return;
     select([next.id]);
     scroller.current?.querySelector<HTMLElement>(`[data-clip-id="${next.id}"]`)?.focus({ preventScroll: true });
@@ -456,8 +462,7 @@ export function Timeline({ height }: { height: number }) {
               const id = (e.target as HTMLElement).getAttribute?.("data-clip-id");
               if (!id) return;
               setFocusId(id);
-              const found = findClip(project, id);
-              focusPlace.current = found ? { id, trackId: found.track.id, startUs: found.clip.startUs } : null;
+              focusPlace.current = id;
             }}
             // A removed element fires no blur, so a deleted clip keeps its place for the effect below.
             onBlur={(e) => e.target.isConnected && (focusPlace.current = null)}
