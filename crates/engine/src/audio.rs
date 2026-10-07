@@ -65,7 +65,26 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
         }
         Err(_) => "missing".into(),
     };
-    cache_dir.join("pcm").join(format!("{}.{revision}.v3.f32", asset.id))
+    cache_dir.join("pcm").join(format!("{}.{revision}.{PCM_VERSION}.f32", asset.id))
+}
+
+/// Raised whenever extraction changes its output, so caches made before are extracted again.
+/// v4: gaps are filled by timestamp for long audio-only recordings too.
+const PCM_VERSION: &str = "v4";
+
+/// Removes this asset's caches from older extraction versions, which nothing reads any more.
+/// Other revisions of the current version stay: a project may still play from them.
+fn remove_older_versions(path: &Path, asset: &Asset) {
+    let (Some(dir), prefix, current) = (path.parent(), format!("{}.", asset.id), format!(".{PCM_VERSION}.f32")) else {
+        return;
+    };
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let cache = name.strip_suffix(".lock").unwrap_or(&name);
+        if name.starts_with(&prefix) && cache.ends_with(".f32") && !cache.ends_with(&current) {
+            std::fs::remove_file(entry.path()).ok();
+        }
+    }
 }
 
 /// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
@@ -80,6 +99,7 @@ pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32) -> 
     lock.lock()?;
     if !path.exists() {
         extract_pcm(Path::new(&asset.path), &path, progress)?;
+        remove_older_versions(&path, asset);
     }
     Ok(path)
 }
@@ -343,8 +363,16 @@ mod tests {
         };
         let legacy = cache.join("pcm/same-id.v2.f32");
         std::fs::write(&legacy, b"old cache").unwrap();
+        let older = cache.join("pcm/same-id.123-456.v3.f32");
+        std::fs::write(&older, b"old cache").unwrap();
+        std::fs::write(cache.join("pcm/same-id.123-456.v3.f32.lock"), b"").unwrap();
+        let other = cache.join("pcm/other-id.123-456.v3.f32");
+        std::fs::write(&other, b"another asset").unwrap();
         let first = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
         assert_ne!(first, legacy);
+        // Caches of older extraction versions go; another asset's cache is left alone.
+        assert!(!legacy.exists() && !older.exists() && !cache.join("pcm/same-id.123-456.v3.f32.lock").exists());
+        assert!(other.exists());
         let old_audio = std::fs::read(&first).unwrap();
         let modified = std::fs::metadata(&source).unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
         write_test_wav(&source, 16_384, 4_800);
