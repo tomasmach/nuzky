@@ -180,9 +180,11 @@ def suggest_and_apply(r, bridge):
     r.check('nothing else changed: the pieces play the same source back to back', same,
             {'before': merged(before), 'after': merged(applied)})
 
-    # The picture: the yellow square is as much bigger as the zoom, around the same centre.
-    first = max(zoomed, key=lambda p: p[2])
-    at = (first[0] + first[1]) // 2
+    # The picture in the middle of the strongest suggestion: the yellow square is as much bigger as its zoom, around
+    # the same centre.
+    strongest = max(analysis['zooms'], key=lambda z: z['scale'])
+    scale = strongest['scale']
+    at = (strongest['start_us'] + strongest['end_us']) // 2
     r.s.run('window.__capopen.store.getState().select([])')
     r.seek(at)
     time.sleep(1.5)
@@ -196,9 +198,10 @@ def suggest_and_apply(r, bridge):
     plain_square = square(r, 'zoom-undone')
     ratio = zoomed_square and plain_square and zoomed_square['width'] / plain_square['width']
     r.check('the preview shows the picture scaled up by the zoom at that moment',
-            redrawn and ratio and abs(ratio - first[2]) < 0.05 and abs(zoomed_square['height'] / plain_square['height'] - first[2]) < 0.05
+            redrawn and ratio and abs(ratio - scale) < 0.05 and abs(zoomed_square['height'] / plain_square['height'] - scale) < 0.05
             and abs(zoomed_square['x'] - plain_square['x']) < 3 and abs(zoomed_square['y'] - plain_square['y']) < 3,
-            {'zoomed': zoomed_square, 'plain': plain_square, 'ratio': ratio and round(ratio, 3), 'scale': first[2]})
+            {'zoomed': zoomed_square, 'plain': plain_square, 'ratio': ratio and round(ratio, 3), 'scale': scale,
+             'redrawn': redrawn})
 
     # An agent: the same analysis twice, applied in a run, the panel locked meanwhile, one undo.
     again = bridge.call('analyze', {'kind': 'emphasis'})
