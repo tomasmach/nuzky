@@ -9,7 +9,7 @@ mod speech;
 pub use audio::{SilenceParams, integrated_lufs, loudness, silences};
 pub use captions::{CaptionGrouping, group_words};
 pub use fillers::filler_words;
-pub use scenes::{SceneCut, SceneParams, scene_cuts};
+pub use scenes::{SceneCut, SceneParams, scene_cuts, scene_cuts_cancellable};
 pub use speech::{AudioSource, Segment, Transcript, Word, transcribe_words, transcribe_words_cancellable};
 
 use serde::{Deserialize, Serialize};

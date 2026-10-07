@@ -122,10 +122,23 @@ fn lock_session<'a>(
     Ok(current)
 }
 
+/// Projects this app opened. A closed project keeps its lock until its jobs end.
+static HOSTS: Mutex<Vec<(PathBuf, std::sync::Weak<Host>)>> = Mutex::new(Vec::new());
+
 impl OpenSession {
     fn open(path: PathBuf) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
+        {
+            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let mut hosts = HOSTS.lock().unwrap();
+            hosts.retain(|(_, host)| host.strong_count() > 0);
+            anyhow::ensure!(
+                !hosts.iter().any(|(open, _)| open == &canonical),
+                "CapOpen is still finishing background work on this project. Try again in a few seconds."
+            );
+        }
         let (tx, rx) = mpsc::channel();
         let host = Arc::new(Host::new(store::open(&path, tx)?, store::cache_dir())?);
+        HOSTS.lock().unwrap().push((host.session.locked_path()?, Arc::downgrade(&host)));
         let mut session = Self {
             host,
             #[cfg(unix)]
@@ -1014,7 +1027,9 @@ mod ipc_lifecycle_tests {
         current = next;
         let elapsed = began.elapsed();
         let locked = capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_err();
+        let reopened = OpenSession::open(old_path.clone()).err().unwrap().to_string();
         release.send(()).unwrap();
+        assert!(reopened.starts_with("CapOpen is still finishing background work"), "{reopened}");
         assert!(elapsed < Duration::from_millis(300), "switch took {elapsed:?}");
         assert!(locked, "old project lock must survive until work ends");
         let deadline = Instant::now() + Duration::from_secs(3);

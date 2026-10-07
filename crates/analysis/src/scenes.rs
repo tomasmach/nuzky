@@ -32,6 +32,15 @@ pub struct SceneCut {
 /// Rotation is invariant: both compared frames retain the same source orientation.
 /// Fades are intentionally excluded; flashes and abrupt camera motion can trigger.
 pub fn scene_cuts(asset: &Asset, params: SceneParams) -> Result<Vec<SceneCut>> {
+    scene_cuts_cancellable(asset, params, || false)
+}
+
+/// `scene_cuts` that stops at the next decoded frame once `cancelled` returns true.
+pub fn scene_cuts_cancellable(
+    asset: &Asset,
+    params: SceneParams,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<SceneCut>> {
     ensure!(asset.kind == AssetKind::Video, "Scene analysis requires video");
     ensure!(
         params.threshold.is_finite() && params.threshold > 0.0 && params.threshold <= 1.0,
@@ -44,6 +53,7 @@ pub fn scene_cuts(asset: &Asset, params: SceneParams) -> Result<Vec<SceneCut>> {
     let mut motion = 0.0f32;
     let mut last_time = None;
     while let Some((time_us, frame)) = decoder.next_frame().context("Decoding scene frame")? {
+        ensure!(!cancelled(), "CANCELLED: scene analysis cancelled");
         let rgba = decoder.convert(&frame, time_us, 64, 36).context("Downscaling scene frame")?;
         if let Some(ref old) = previous {
             let score = difference(old, &rgba.data);
@@ -71,4 +81,31 @@ fn difference(a: &std::sync::Arc<Vec<u8>>, b: &[u8]) -> f32 {
         .map(|(a, b)| (0..3).map(|ch| a[ch].abs_diff(b[ch]) as u64).sum::<u64>())
         .sum();
     sum as f32 / (64.0 * 36.0 * 3.0 * 255.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn cancelled_scene_analysis_stops_at_the_next_frame() {
+        let dir = std::env::temp_dir().join(format!("capopen-scenes-{}", capopen_engine::edit::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("long.mp4");
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x36:rate=30:duration=10", "-pix_fmt", "yuv420p"])
+            .arg(&path)
+            .status()
+            .expect("ffmpeg is required for scene tests");
+        assert!(status.success());
+        let asset = capopen_engine::media::probe(&path, "long".into()).unwrap();
+        let checks = AtomicUsize::new(0);
+        let error =
+            scene_cuts_cancellable(&asset, SceneParams::default(), || checks.fetch_add(1, Ordering::Relaxed) >= 3)
+                .unwrap_err();
+        assert!(error.to_string().starts_with("CANCELLED"), "{error:#}");
+        assert_eq!(checks.load(Ordering::Relaxed), 4, "analysis must stop at the first frame after cancelling");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
