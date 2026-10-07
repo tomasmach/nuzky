@@ -192,7 +192,9 @@ pub struct VideoDecoder {
     sent_eof: bool,
     eof: bool,
     is_image: bool,
-    /// Last decoded frame and its time; frames are returned in display order.
+    /// The only frame of a still image, replayed after seeking: image2 loses it when seeked.
+    image: Option<DecodedFrame>,
+    image_rewound: bool,
     scaler: Option<Scaler>,
     pub rotation: u32,
     pub frame_duration_us: i64,
@@ -224,6 +226,8 @@ impl VideoDecoder {
             sent_eof: false,
             eof: false,
             is_image,
+            image: None,
+            image_rewound: false,
             scaler: None,
             rotation,
             frame_duration_us: (1_000_000.0 / fps.clamp(1.0, 240.0)) as i64,
@@ -245,6 +249,10 @@ impl VideoDecoder {
     /// Jumps to the keyframe at or before `t_us`. The next decoded frames start there.
     pub fn seek(&mut self, t_us: i64) -> Result<()> {
         use ff::util::mathematics::{Rescale, Rounding};
+        if self.is_image {
+            self.image_rewound = self.image.is_some();
+            return Ok(());
+        }
         let ts =
             t_us.max(0).saturating_add(self.origin_us).rescale_with((1, 1_000_000), self.time_base, Rounding::Down);
         // A global-time seek rounds to the nearest stream tick and can skip the covering GOP.
@@ -263,6 +271,11 @@ impl VideoDecoder {
 
     /// Decodes the next frame in display order. `None` at end of stream.
     pub fn next_frame(&mut self) -> Result<Option<(i64, frame::Video)>> {
+        if std::mem::take(&mut self.image_rewound)
+            && let Some((t, f)) = &self.image
+        {
+            return Ok(Some((*t, f.clone())));
+        }
         if self.eof {
             return Ok(None);
         }
@@ -272,6 +285,9 @@ impl VideoDecoder {
                 Ok(()) => {
                     let pts = f.timestamp().or(f.pts()).unwrap_or(0);
                     let t = (pts as f64 * f64::from(self.time_base) * 1e6).round() as i64 - self.origin_us;
+                    if self.is_image {
+                        self.image = Some((t, f.clone()));
+                    }
                     return Ok(Some((t, f)));
                 }
                 Err(ff::Error::Eof) => {
@@ -557,6 +573,30 @@ mod tests {
                 assert_eq!(pair[0].as_ref().map(|f| f.0), expected, "seek {name} at {target}");
             }
         }
+    }
+
+    /// FFmpeg 8 image2 returns no packets once seeked, so a .jpg never reached the preview.
+    #[test]
+    fn still_jpeg_decodes_after_every_seek() {
+        let path = std::env::temp_dir().join(format!("capopen-still-{}.jpg", uuid::Uuid::new_v4()));
+        let encoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=96x64", "-frames:v", "1"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !encoded {
+            eprintln!("ffmpeg CLI not available, skipping");
+            return;
+        }
+        let mut decoder = VideoDecoder::open(&path).unwrap();
+        for _ in 0..3 {
+            decoder.seek(0).unwrap();
+            let [covering, next] = decoder.frame_covering(0, [None, None]).unwrap();
+            assert_eq!(covering.map(|(t, f)| (t, f.width(), f.height())), Some((0, 96, 64)));
+            assert!(next.is_none());
+        }
+        drop(decoder);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
