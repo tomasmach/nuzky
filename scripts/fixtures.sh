@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Creates the media and models that `cargo test -- --ignored` and scripts/repro.py read from tmp-test/.
+# Media are synthetic (FFmpeg test patterns, espeak-ng speech), so no real video is needed or committed.
+# Models are downloaded once and checked against the SHA-256 the app pins in src-tauri/src/jobs.rs.
+# Existing files are kept; delete one to create it again.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+out=tmp-test
+models=$out/xdg/data/capopen/models
+mkdir -p "$out/engine-evidence" "$models"
+for tool in ffmpeg espeak-ng curl sha256sum; do
+  command -v "$tool" >/dev/null || { echo "fixtures: $tool is required" >&2; exit 1; }
+done
+
+# Writes to a temporary name next to the target, so an interrupted run leaves no half file behind.
+media() {
+  local file=$out/$1
+  shift
+  [ -s "$file" ] && return
+  echo "> $file"
+  local part
+  part=$(dirname "$file")/.part-$(basename "$file")
+  "$@" "$part"
+  mv "$part" "$file"
+}
+ff() { ffmpeg -v error -y "$@"; }
+
+speech="Welcome back to the channel. Today we cut a short video on the laptop. First we import the clips, \
+then we remove the pauses and add captions, so everyone can follow along without sound."
+
+say() { espeak-ng -v en-us -s 150 -w "$1" "$speech"; }
+media speech.wav say
+media talk.mp4 ff -f lavfi -i testsrc2=s=1080x1920:r=30 -i "$out/speech.wav" -shortest \
+  -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k
+media wide.mp4 ff -f lavfi -i testsrc2=s=1920x1080:r=25:d=5 -f lavfi -i sine=frequency=440:duration=5 \
+  -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k
+media portrait.mp4 ff -f lavfi -i testsrc2=s=1080x1920:r=30:d=6 -f lavfi -i sine=frequency=660:duration=6 \
+  -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k
+# Phone-like HEVC with a variable frame rate: three of every five 60 fps frames, original timestamps.
+media phone_hevc_vfr.mov ff -f lavfi -i testsrc2=s=1920x1080:r=60:d=4 -f lavfi -i sine=frequency=550:duration=4 \
+  -vf "select='lt(mod(n\,5)\,3)'" -fps_mode vfr -c:v libx265 -x265-params log-level=error -tag:v hvc1 \
+  -pix_fmt yuv420p -c:a aac -b:a 128k
+media music.mp3 ff -f lavfi -i "aevalsrc=0.3*sin(2*PI*(330+110*floor(mod(t\,4)))*t):s=44100:d=20" \
+  -c:a libmp3lame -b:a 128k
+# Ten minutes with a keyframe every ten seconds, for filmstrip timing.
+media filmstrip-long.mp4 ff -f lavfi -i testsrc=s=1920x1080:r=25:d=600 -c:v libx264 -preset ultrafast \
+  -g 250 -pix_fmt yuv420p -an
+media engine-evidence/identity.png ff -f lavfi -i testsrc2=s=540x960 -frames:v 1 -update 1
+
+model() {
+  local file=$models/$1 sha=$2 url=$3
+  if [ -f "$file" ] && echo "$sha  $file" | sha256sum --check --status; then return; fi
+  echo "> $file"
+  curl --fail --location --silent --show-error --output "$file.part" "$url"
+  echo "$sha  $file.part" | sha256sum --check --quiet
+  mv "$file.part" "$file"
+}
+model ggml-small.bin 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+model ggml-silero-v5.1.2.bin 29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
