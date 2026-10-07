@@ -615,6 +615,8 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
 
 /** A style preview in the font the engine draws it with. */
 export function TextSwatch({ style, label }: { style: TextStyle; label: string }) {
+  // Karaoke styles show the moment a word is spoken: the last word, or the end of a one-word label, lit.
+  const split = label.lastIndexOf(" ") + 1 || Math.ceil(label.length / 2);
   return (
     <span
       className="inline-block max-w-full truncate rounded px-1.5 text-[15px] leading-6"
@@ -627,7 +629,14 @@ export function TextSwatch({ style, label }: { style: TextStyle; label: string }
         paintOrder: "stroke fill",
       }}
     >
-      {label}
+      {style.highlight ? (
+        <>
+          {label.slice(0, split)}
+          <span style={{ color: style.highlight }}>{label.slice(split)}</span>
+        </>
+      ) : (
+        label
+      )}
     </span>
   );
 }

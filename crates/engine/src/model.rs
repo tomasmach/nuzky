@@ -299,7 +299,44 @@ pub enum ClipContent {
         style: TextStyle,
         #[serde(default)]
         transform: Transform,
+        /// The spoken words of a generated caption, in order, so `style.highlight` can mark the one
+        /// being said. They count only while `text` is exactly their texts joined by single spaces;
+        /// after a manual edit of the text nothing is highlighted.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        words: Vec<CaptionWord>,
     },
+}
+
+/// One spoken word of a caption. Times are relative to the clip start, like keyframes, so moving
+/// the clip keeps them; a trim may leave some outside the clip, where they never show.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionWord {
+    pub text: String,
+    pub start_us: i64,
+    pub end_us: i64,
+}
+
+/// Byte range in `text` of the word spoken at `t_us` (clip time), or `None` in a gap, outside the
+/// words, for zero-length words and when `text` is not the words joined by single spaces.
+pub fn spoken_word(text: &str, words: &[CaptionWord], t_us: i64) -> Option<std::ops::Range<usize>> {
+    let mut at = 0;
+    let mut spoken = None;
+    for (i, word) in words.iter().enumerate() {
+        if i > 0 {
+            at += text.get(at..)?.strip_prefix(' ').map(|_| 1)?;
+        }
+        let end = at + word.text.len();
+        if text.get(at..end)? != word.text {
+            return None;
+        }
+        if word.start_us <= t_us && t_us < word.end_us {
+            spoken = Some(at..end);
+        }
+        at = end;
+    }
+    (at == text.len()).then_some(spoken).flatten()
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -347,6 +384,10 @@ pub struct TextStyle {
     /// Lines wrap at this width in canvas pixels; `None` wraps at 90% of the canvas width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_width: Option<f32>,
+    /// `#rrggbb` fill of the word being spoken (karaoke captions); `None` draws every word in `color`.
+    /// Needs the clip's `words`; outline, box, size and wrapping stay the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<String>,
 }
 
 /// Oversized titles may extend beyond the canvas; these bounds still reject unbounded allocations.
@@ -465,13 +506,51 @@ mod tests {
                     stroke_color: "#000000".into(),
                     background: None,
                     max_width: None,
+                    highlight: Some("#ffe14d".into()),
                 },
                 transform: Transform::default(),
+                words: vec![
+                    CaptionWord { text: "Ahoj".into(), start_us: 0, end_us: 400_000 },
+                    CaptionWord { text: "světe".into(), start_us: 450_000, end_us: 900_000 },
+                ],
             },
         });
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains("\"type\":\"text\""));
+        assert!(json.contains(r##""highlight":"#ffe14d""##) && json.contains(r#""words":[{"text":"Ahoj","startUs":0"#));
         assert_eq!(serde_json::from_str::<Project>(&json).unwrap(), p);
+    }
+
+    #[test]
+    fn text_without_words_or_highlight_saves_as_before() {
+        let old = r##"{"type":"text","text":"Ahoj","style":{"fontFamily":null,"fontSize":95.0,"color":"#ffffff","bold":false,"strokeWidth":7.5,"strokeColor":"#000000","background":null},"transform":{"x":0.0,"y":0.15,"scale":1.0,"rotation":0.0,"opacity":1.0}}"##;
+        let content: ClipContent = serde_json::from_str(old).unwrap();
+        let ClipContent::Text { words, style, .. } = &content else { panic!() };
+        assert!(words.is_empty() && style.highlight.is_none());
+        assert_eq!(serde_json::to_string(&content).unwrap(), old);
+    }
+
+    #[test]
+    fn spoken_word_follows_the_words_and_ignores_edited_text() {
+        let word = |text: &str, start_us, end_us| CaptionWord { text: text.into(), start_us, end_us };
+        let words = [word("Příliš", 0, 300), word("žluťoučký", 400, 800), word("kůň", 800, 800)];
+        let text = "Příliš žluťoučký kůň";
+        let at = |t| spoken_word(text, &words, t).map(|r| &text[r]);
+        assert_eq!(at(0), Some("Příliš"));
+        assert_eq!(at(299), Some("Příliš"));
+        // The gap, the end of a word, a zero-length word and the time outside the words.
+        for t in [-1, 300, 399, 800, 801, 5_000] {
+            assert_eq!(at(t), None, "{t}");
+        }
+        assert_eq!(at(400), Some("žluťoučký"));
+        assert_eq!(at(799), Some("žluťoučký"));
+        // A manual edit, a cut inside a character, a double space or a missing word: nothing.
+        for edited in
+            ["Příliš žluťoučký kůň!", "Prilis zlutoucky kun", "Příliš  žluťoučký kůň", "Příliš žluťoučký", "Pří"]
+        {
+            assert_eq!(spoken_word(edited, &words, 500), None, "{edited}");
+        }
+        assert_eq!(spoken_word("", &[], 0), None);
     }
 
     #[test]

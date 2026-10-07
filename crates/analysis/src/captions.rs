@@ -1,6 +1,7 @@
 //! Groups transcript words into short on-screen captions, the way reels show them.
 
 use capopen_engine::edit::CaptionSegment;
+use capopen_engine::model::CaptionWord;
 use serde::{Deserialize, Serialize};
 
 use crate::Word;
@@ -29,6 +30,7 @@ const TAIL_US: i64 = 150_000;
 
 /// Captions in time order. A caption ends where the next one starts when they are close,
 /// so text does not flicker off between words, otherwise shortly after its last word.
+/// Each caption keeps its words and their times, for karaoke styles.
 pub fn group_words(words: &[Word], grouping: CaptionGrouping) -> Vec<CaptionSegment> {
     let mut groups: Vec<Vec<&Word>> = Vec::new();
     for word in words.iter().filter(|w| !w.text.trim().is_empty()) {
@@ -62,7 +64,11 @@ pub fn group_words(words: &[Word], grouping: CaptionGrouping) -> Vec<CaptionSegm
                 None => last_end + TAIL_US,
             };
             let text = group.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ");
-            CaptionSegment { start_us: group[0].start_us, end_us: end.max(group[0].start_us + 1), text }
+            let words = group
+                .iter()
+                .map(|w| CaptionWord { text: w.text.trim().into(), start_us: w.start_us, end_us: w.end_us })
+                .collect();
+            CaptionSegment { start_us: group[0].start_us, end_us: end.max(group[0].start_us + 1), text, words }
         })
         .collect()
 }
@@ -163,6 +169,20 @@ mod tests {
         let close = [word(0, 400, "musím"), word(500, 900, "se"), word(950, 1300, "víc,"), word(1350, 1700, "snažit")];
         let captions = group_words(&close, CaptionGrouping::default());
         assert_eq!(captions[0].end_us, captions[1].start_us);
+    }
+
+    #[test]
+    fn captions_keep_each_word_with_its_time_for_karaoke() {
+        let words = [word(0, 400, " Ahoj"), word(420, 800, "světe. "), word(2000, 2400, "Konec")];
+        let captions = group_words(&words, CaptionGrouping::default());
+        let spoken: Vec<Vec<(&str, i64, i64)>> = captions
+            .iter()
+            .map(|c| c.words.iter().map(|w| (w.text.as_str(), w.start_us / 1000, w.end_us / 1000)).collect())
+            .collect();
+        assert_eq!(spoken, [vec![("Ahoj", 0, 400), ("světe.", 420, 800)], vec![("Konec", 2000, 2400)]]);
+        for caption in &captions {
+            assert_eq!(caption.text, caption.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "));
+        }
     }
 
     #[test]

@@ -41,6 +41,7 @@ impl App {
                     stroke_color: "#000000".into(),
                     background: None,
                     max_width: None,
+                    highlight: None,
                 },
             })
             .unwrap();

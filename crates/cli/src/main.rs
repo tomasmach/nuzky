@@ -228,11 +228,14 @@ fn main() -> Result<()> {
             }
             let avg = times.iter().sum::<f64>() / times.len() as f64;
             times.sort_by(f64::total_cmp);
+            let text = renderer.text_stats();
             println!(
-                "{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers",
+                "{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers, text laid out {} times and painted {} times",
                 renderer.adapter_name(),
                 times[(times.len() * 95).div_ceil(100).saturating_sub(1)],
-                renderer.late_layers
+                renderer.late_layers,
+                text.layouts,
+                text.paints
             );
         }
         ["render", project, out, rest @ ..] => {

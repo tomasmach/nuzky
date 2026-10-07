@@ -853,6 +853,34 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn karaoke_captions_mark_each_word_where_it_is_heard() {
+        let (mut project, sources) = fixture();
+        project
+            .apply(EditCmd::RippleDeleteRanges {
+                ranges: vec![TimeRange { start_us: 3_000_000, end_us: 4_200_000 }],
+                keep_track_ids: None,
+            })
+            .unwrap();
+        let id = project.tracks[0].clips[1].id.clone();
+        project.apply(serde_json::from_value(json!({"type":"updateClip","clipId":id,"speed":1.5})).unwrap()).unwrap();
+        let words = map_words(&project, &sources);
+        let style = capopen_engine::edit::caption_preset("karaoke").unwrap().style.clone();
+        let grouping = CaptionGrouping { max_words: 3, max_chars: 30, break_gap_us: 1_000_000 };
+        let (edit, _) = caption_edit(&words, &project, style, grouping).unwrap();
+        project.apply(edit).unwrap();
+        let captions = &project.tracks.iter().find(|t| t.is_captions()).unwrap().clips;
+        assert!(captions.iter().any(|c| matches!(&c.content, ClipContent::Text { words, .. } if words.len() > 1)));
+        // In the middle of every word heard, its caption highlights that very word.
+        for word in &words {
+            let middle = (word.start_us + word.end_us) / 2;
+            let clip = captions.iter().find(|c| c.contains(middle)).unwrap();
+            let ClipContent::Text { text, words: spoken, .. } = &clip.content else { panic!() };
+            let range = capopen_engine::model::spoken_word(text, spoken, middle - clip.start_us).unwrap();
+            assert_eq!(&text[range], word.text.trim(), "at {middle}");
+        }
+    }
+
+    #[test]
     fn protect_word_fragments_at_clip_boundaries_and_speed() {
         for speed in [1.0, 0.5, 2.0] {
             for (word_start, word_end) in [(4_800_000, 5_400_000), (4_600_000, 5_200_000)] {

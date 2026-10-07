@@ -5,8 +5,8 @@ use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, Clip, ClipContent, Keyframe, Project, TextStyle,
-    Track, TrackKind, Transform, Transition,
+    Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Keyframe, Project,
+    TextStyle, Track, TrackKind, Transform, Transition,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -31,6 +31,12 @@ pub fn caption_presets() -> &'static [CaptionPreset] {
     &PRESETS
 }
 
+/// The caption preset named `name`, ignoring case, with `_` or `-` for spaces: "green_box" is Green box.
+pub fn caption_preset(name: &str) -> Option<&'static CaptionPreset> {
+    let name = name.trim().replace(['_', '-'], " ");
+    caption_presets().iter().find(|preset| preset.name.eq_ignore_ascii_case(&name))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Limits {
@@ -50,6 +56,10 @@ pub struct CaptionSegment {
     pub start_us: i64,
     pub end_us: i64,
     pub text: String,
+    /// The spoken words, with TIMELINE times, for karaoke styles; their texts joined by single spaces
+    /// must be `text`. The clip stores them relative to its start.
+    #[serde(default)]
+    pub words: Vec<CaptionWord>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -309,6 +319,7 @@ impl Project {
         for k in &mut second.keyframes {
             k.t_us -= offset;
         }
+        shift_words(&mut second, offset);
         clip.duration_us = offset;
         self.tracks[ti].clips.insert(ci + 1, second);
         ci + 1
@@ -324,10 +335,11 @@ impl Project {
                 if before >= after {
                     c.duration_us = before;
                 } else {
-                    // Keyframes stay on the kept text, as when a split drops the first half.
+                    // Keyframes and spoken words stay on the kept text, as when a split drops the first half.
                     for k in &mut c.keyframes {
                         k.t_us -= range.end_us - c.start_us;
                     }
+                    shift_words(c, range.end_us - c.start_us);
                     c.start_us = range.end_us;
                     c.duration_us = after;
                 }
@@ -491,6 +503,7 @@ impl Project {
                         style,
                         // Centred like CapCut; captions sit lower, so a hook title and captions do not collide.
                         transform: Transform::default(),
+                        words: Vec::new(),
                     },
                 );
                 out.select.push(clip.id.clone());
@@ -592,11 +605,12 @@ impl Project {
                     }
                     *src = new_src;
                 }
-                // Keyframes stay attached to the content when the left edge moves.
+                // Keyframes and spoken words stay attached to the content when the left edge moves.
                 let shift = start - old_start;
                 for k in &mut clip.keyframes {
                     k.t_us -= shift;
                 }
+                shift_words(clip, shift);
                 clip.start_us = start;
                 clip.duration_us = duration;
                 if ti != 0 {
@@ -721,11 +735,12 @@ impl Project {
                             }
                         }
                     }
-                    ClipContent::Text { transform: tr, text: tx, style: st } => {
+                    ClipContent::Text { transform: tr, text: tx, style: st, words } => {
                         if let Some(x) = transform {
                             *tr = x;
                         }
                         if let Some(x) = text {
+                            retext_words(words, tx, &x);
                             *tx = x;
                         }
                         if let Some(x) = style {
@@ -816,7 +831,7 @@ impl Project {
         let min = min_duration(self);
         match cmd {
             EditCmd::AddCaptions { segments, style } => {
-                let clips = caption_clips(segments, &style, &self.canvas, min);
+                let clips = caption_clips(segments, &style, &self.canvas, min)?;
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks.push(Track {
                     id: new_id(),
@@ -830,7 +845,7 @@ impl Project {
             }
             EditCmd::ReplaceCaptions { track_id, segments, style } => {
                 let ti = self.caption_track(&track_id)?;
-                let clips = caption_clips(segments, &style, &self.canvas, min);
+                let clips = caption_clips(segments, &style, &self.canvas, min)?;
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks[ti].clips = clips;
             }
@@ -907,7 +922,7 @@ pub fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
 /// One text clip per segment, sorted and never overlapping: a segment starting inside the
 /// previous one ends it there, and one starting within a frame of it is merged into it.
 /// On vertical videos captions wrap inside the Reels and TikTok safe area unless the style says otherwise.
-fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &Canvas, min: i64) -> Vec<Clip> {
+fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &Canvas, min: i64) -> Result<Vec<Clip>> {
     let mut style = style.clone();
     if style.max_width.is_none() {
         style.max_width = canvas.safe_area().map(|area| area.centered_width(canvas.width as f32));
@@ -917,28 +932,70 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &
     let mut merged: Vec<CaptionSegment> = Vec::with_capacity(segments.len());
     for s in segments {
         let text = s.text.trim().to_string();
+        // A highlight following other words than the ones shown would mark the wrong word.
+        ensure!(
+            s.words.is_empty() || s.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") == text,
+            "Caption words must be the caption text split at single spaces: {text:?}"
+        );
         let start_us = s.start_us.max(0);
         match merged.last_mut() {
             Some(prev) if start_us < prev.start_us + min => {
                 prev.text = format!("{} {text}", prev.text);
                 prev.end_us = prev.end_us.max(s.end_us);
+                // Both or neither keep their words, so the merged text still matches them.
+                if prev.words.is_empty() || s.words.is_empty() {
+                    prev.words.clear();
+                } else {
+                    prev.words.extend(s.words);
+                }
             }
             Some(prev) => {
                 prev.end_us = prev.end_us.min(start_us);
-                merged.push(CaptionSegment { start_us, end_us: s.end_us, text });
+                merged.push(CaptionSegment { start_us, end_us: s.end_us, text, words: s.words });
             }
-            None => merged.push(CaptionSegment { start_us, end_us: s.end_us, text }),
+            None => merged.push(CaptionSegment { start_us, end_us: s.end_us, text, words: s.words }),
         }
     }
-    merged
+    Ok(merged
         .into_iter()
         .map(|s| {
             // Where CapCut puts auto captions on a reel: a bit below the middle.
             let transform = Transform { y: CAPTION_Y, ..Transform::default() };
-            let content = ClipContent::Text { text: s.text, style: style.clone(), transform };
+            let words = s
+                .words
+                .into_iter()
+                .map(|w| CaptionWord {
+                    start_us: w.start_us.saturating_sub(s.start_us),
+                    end_us: w.end_us.saturating_sub(s.start_us),
+                    ..w
+                })
+                .collect();
+            let content = ClipContent::Text { text: s.text, style: style.clone(), transform, words };
             Clip::new(new_id(), s.start_us, (s.end_us - s.start_us).max(min), content)
         })
-        .collect()
+        .collect())
+}
+
+/// A caption corrected word for word keeps its timing: when its old text was its words and the new text
+/// has as many words (split at single spaces), each word takes its new text and keeps its times. Any
+/// other edit leaves the words as they were, so they no longer match and nothing is highlighted.
+fn retext_words(words: &mut [CaptionWord], old: &str, new: &str) {
+    let tokens: Vec<&str> = new.split(' ').collect();
+    if !words.is_empty() && tokens.len() == words.len() && words.iter().map(|w| w.text.as_str()).eq(old.split(' ')) {
+        for (word, token) in words.iter_mut().zip(tokens) {
+            word.text = token.to_string();
+        }
+    }
+}
+
+/// Keeps a text clip's spoken words on the same moments when its start moves `by` later.
+fn shift_words(clip: &mut Clip, by: i64) {
+    if let ClipContent::Text { words, .. } = &mut clip.content {
+        for word in words {
+            word.start_us = word.start_us.saturating_sub(by);
+            word.end_us = word.end_us.saturating_sub(by);
+        }
+    }
 }
 
 /// One undo or redo entry: the project to return to and the coalesce key that made it.
@@ -1792,8 +1849,9 @@ mod tests {
             stroke_color: "#000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
-        let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into() };
+        let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into(), words: Vec::new() };
         p.apply(EditCmd::AddCaptions {
             segments: vec![seg(0, 1_200_000, "Ahoj"), seg(1_000_000, 2_000_000, "světe")],
             style: style.clone(),
@@ -1840,14 +1898,16 @@ mod tests {
             stroke_color: "#000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
-        let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into() };
+        let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into(), words: Vec::new() };
         let clips = caption_clips(
             vec![seg(0, 1_000_000, "first"), seg(0, 2_000_000, "second"), seg(1_500_000, 3_000_000, "third")],
             &style,
             &Project::new("c").canvas,
             33_334,
-        );
+        )
+        .unwrap();
         let spans: Vec<_> = clips.iter().map(|c| (c.start_us, c.end_us())).collect();
         assert_eq!(spans, vec![(0, 1_500_000), (1_500_000, 3_000_000)]);
         let ClipContent::Text { text, .. } = &clips[0].content else { panic!() };
@@ -1881,6 +1941,7 @@ mod tests {
             stroke_color: "#000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
         p.apply(EditCmd::AddText { start_us: 2_000_000, text: "hi".into(), style }).unwrap();
         let music = p.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().id.clone();
@@ -1924,8 +1985,9 @@ mod tests {
             stroke_color: "#000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
-        let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into() };
+        let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into(), words: Vec::new() };
         p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
         let clip_id = p.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].id.clone();
         // A keyframe at 2.5 s on the timeline, inside the part that stays.
@@ -1961,9 +2023,15 @@ mod tests {
                 stroke_color: "#000".into(),
                 background: None,
                 max_width: None,
+                highlight: None,
             };
             p.apply(EditCmd::AddCaptions {
-                segments: vec![CaptionSegment { start_us: 2_000_000, end_us: 3_000_000, text: "aligned".into() }],
+                segments: vec![CaptionSegment {
+                    start_us: 2_000_000,
+                    end_us: 3_000_000,
+                    text: "aligned".into(),
+                    words: Vec::new(),
+                }],
                 style,
             })
             .unwrap();
@@ -1994,5 +2062,159 @@ mod tests {
         })
         .unwrap();
         assert_eq!(main_layout(&p), vec![(0, 4000)]);
+    }
+
+    /// The word a karaoke caption marks at timeline time `t_us`.
+    fn spoken_at(p: &Project, t_us: i64) -> Option<String> {
+        let clip = p.tracks.iter().filter(|t| t.is_captions()).flat_map(|t| &t.clips).find(|c| c.contains(t_us))?;
+        let ClipContent::Text { text, words, .. } = &clip.content else { return None };
+        crate::model::spoken_word(text, words, t_us - clip.start_us).map(|r| text[r].to_string())
+    }
+
+    /// Five seconds of video with one karaoke caption over [1 s, 4 s): "Dneska vám ukážu jak", the words
+    /// spoken at 1.0–1.4, 1.5–1.9, 2.4–2.9 and 3.2–3.8 s.
+    fn karaoke() -> (Project, String) {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let word = |text: &str, start_ms: i64, end_ms: i64| CaptionWord {
+            text: text.into(),
+            start_us: start_ms * 1000,
+            end_us: end_ms * 1000,
+        };
+        let style: TextStyle = serde_json::from_value(serde_json::json!({
+            "fontSize": 95.0, "color": "#ffffff", "strokeWidth": 7.5, "highlight": "#ffe14d"
+        }))
+        .unwrap();
+        let segment = CaptionSegment {
+            start_us: 1_000_000,
+            end_us: 4_000_000,
+            text: "Dneska vám ukážu jak".into(),
+            words: vec![
+                word("Dneska", 1000, 1400),
+                word("vám", 1500, 1900),
+                word("ukážu", 2400, 2900),
+                word("jak", 3200, 3800),
+            ],
+        };
+        let out = p.apply(EditCmd::AddCaptions { segments: vec![segment], style }).unwrap();
+        (p, out.select[0].clone())
+    }
+
+    fn spoken(p: &Project) -> Vec<Option<String>> {
+        (0..5_000_000).step_by(50_000).map(|t| spoken_at(p, t)).collect()
+    }
+
+    #[test]
+    fn karaoke_words_stay_on_their_moments_through_split_trim_duplicate_and_cuts() {
+        let (p, id) = karaoke();
+        let before = spoken(&p);
+        assert_eq!(before[20].as_deref(), Some("Dneska"));
+        assert_eq!(before[50].as_deref(), Some("ukážu"));
+        assert_eq!(before[42], None, "the gap between vám and ukážu");
+        // A split keeps every word where it was, in both halves.
+        let mut split = p.clone();
+        split.apply(EditCmd::SplitClip { clip_id: id.clone(), at_us: 2_200_000 }).unwrap();
+        assert_eq!(split.tracks[1].clips.len(), 2);
+        assert_eq!(spoken(&split), before, "split");
+        // Trimming the left edge keeps the words over the same moments.
+        let mut trimmed = p.clone();
+        let trim =
+            EditCmd::TrimClip { clip_id: id.clone(), start_us: 1_450_000, duration_us: 2_550_000, source_in_us: None };
+        trimmed.apply(trim).unwrap();
+        let expected: Vec<_> =
+            before.iter().enumerate().map(|(i, w)| if i * 50_000 < 1_450_000 { None } else { w.clone() }).collect();
+        assert_eq!(spoken(&trimmed), expected, "left trim");
+        // A copy says the same words at the same offsets.
+        let mut copied = p.clone();
+        let copy = copied.apply(EditCmd::DuplicateClip { clip_id: id }).unwrap().select[0].clone();
+        let copy_start = copied.tracks[1].clips.iter().find(|c| c.id == copy).unwrap().start_us;
+        for offset in (0..3_000_000).step_by(50_000) {
+            assert_eq!(spoken_at(&copied, copy_start + offset), spoken_at(&p, 1_000_000 + offset), "copy at {offset}");
+        }
+        // Ripple cuts inside the caption (keeping its later or earlier part) and across its start: every word
+        // left on the timeline moves with the picture.
+        for (cut_start, cut_end) in [(1_300_000, 2_000_000), (3_000_000, 3_500_000), (500_000, 1_600_000)] {
+            let mut cut = p.clone();
+            let ranges = vec![TimeRange { start_us: cut_start, end_us: cut_end }];
+            cut.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+            let length = cut_end - cut_start;
+            for (i, word) in before.iter().enumerate() {
+                let t = i as i64 * 50_000;
+                let caption = cut.tracks[1].clips[0].clone();
+                let at = if t < cut_start {
+                    t
+                } else if t >= cut_end {
+                    t - length
+                } else {
+                    continue;
+                };
+                if caption.contains(at) {
+                    assert_eq!(spoken_at(&cut, at), *word, "cut [{cut_start}, {cut_end}) at {t}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_caption_corrected_word_for_word_keeps_its_highlight() {
+        let (mut p, id) = karaoke();
+        let before = spoken(&p);
+        let retext = |text: &str| -> EditCmd {
+            serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": id, "text": text})).unwrap()
+        };
+        // A word correction replaces one word: the corrected word lights up exactly when the old one did.
+        p.apply(retext("Dneska vám ukážu kam")).unwrap();
+        let corrected: Vec<_> =
+            before.iter().map(|w| w.as_ref().map(|w| if w == "jak" { "kam".into() } else { w.clone() })).collect();
+        assert_eq!(spoken(&p), corrected);
+        // Typing in the inspector passes through a trailing space: still four words, the last one empty for now.
+        p.apply(retext("Dneska vám ukážu ")).unwrap();
+        p.apply(retext("Dneska vám ukážu, jak")).unwrap();
+        assert_eq!(spoken_at(&p, 2_600_000).as_deref(), Some("ukážu,"));
+        assert_eq!(spoken_at(&p, 3_500_000).as_deref(), Some("jak"));
+        // A word more or less: the words no longer match, so nothing lights up, and nothing guesses.
+        p.apply(retext("Dneska vám ukážu, jak na to")).unwrap();
+        assert!(spoken(&p).iter().all(Option::is_none));
+        let ClipContent::Text { words, .. } = &p.tracks[1].clips[0].content else { panic!() };
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Dneska", "vám", "ukážu,", "jak"]);
+        // Back to the words they were: lit again.
+        p.apply(retext("Dneska vám ukážu, jak")).unwrap();
+        assert_eq!(spoken_at(&p, 2_600_000).as_deref(), Some("ukážu,"));
+    }
+
+    #[test]
+    fn caption_words_must_spell_the_caption_and_survive_merging() {
+        let word = |text: &str, start_us: i64| CaptionWord { text: text.into(), start_us, end_us: start_us + 200_000 };
+        let segment = |start_us: i64, text: &str, words: Vec<CaptionWord>| CaptionSegment {
+            start_us,
+            end_us: start_us + 500_000,
+            text: text.into(),
+            words,
+        };
+        let style: TextStyle =
+            serde_json::from_value(serde_json::json!({"fontSize": 95.0, "color": "#ffffff", "highlight": "#ffe14d"}))
+                .unwrap();
+        let mut p = project();
+        let wrong = segment(0, "Ahoj světe", vec![word("Ahoj", 0), word("svete", 250_000)]);
+        let error = p.apply(EditCmd::AddCaptions { segments: vec![wrong], style: style.clone() }).unwrap_err();
+        assert!(error.to_string().contains("Caption words must be the caption text"), "{error}");
+        // Segments starting within a frame merge; the words of both stay, at their times.
+        let merged = vec![
+            segment(0, " Ahoj ", vec![word("Ahoj", 0)]),
+            segment(10_000, "světe", vec![word("světe", 250_000)]),
+            segment(1_000_000, "bez", vec![word("bez", 1_000_000)]),
+            segment(1_010_000, "slov", Vec::new()),
+        ];
+        p.apply(EditCmd::AddCaptions { segments: merged, style }).unwrap();
+        let captions = &p.tracks.iter().find(|t| t.is_captions()).unwrap().clips;
+        let ClipContent::Text { text, words, .. } = &captions[0].content else { panic!() };
+        assert_eq!(
+            (text.as_str(), words.iter().map(|w| w.start_us).collect::<Vec<_>>()),
+            ("Ahoj světe", vec![0, 250_000])
+        );
+        assert_eq!(spoken_at(&p, 300_000).as_deref(), Some("světe"));
+        // A merged caption with only some of its words cannot highlight the right one, so it highlights none.
+        let ClipContent::Text { text, words, .. } = &captions[1].content else { panic!() };
+        assert_eq!((text.as_str(), words.len()), ("bez slov", 0));
     }
 }

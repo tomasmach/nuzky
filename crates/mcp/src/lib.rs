@@ -113,7 +113,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Captions>(
             "build_captions",
-            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
+            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. style_preset picks a preset by name instead (reel, outline, yellow, box, clean, karaoke, green_box); karaoke is Reel with the word being spoken in yellow, green_box bold white on a dark box with the spoken word green. Karaoke captions store each word's time and highlight only while a word is spoken; updateClip text with as many words keeps that timing, adding or removing words turns the caption's highlight off. Give style or style_preset, not both. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
         )?,
         tool::<params::Export>(
             "export_video",
