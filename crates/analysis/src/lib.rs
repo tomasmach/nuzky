@@ -3,6 +3,7 @@
 mod audio;
 mod boundaries;
 mod captions;
+mod emphasis;
 mod fillers;
 mod retakes;
 mod scenes;
@@ -15,6 +16,7 @@ pub use audio::{
 };
 pub use boundaries::{align_to_sound, align_words};
 pub use captions::{CaptionGrouping, group_words};
+pub use emphasis::{Energy, Zoom, emphasis, word_energy};
 pub use fillers::filler_words;
 pub use retakes::{Attempt, Filler, RetakeGroup, Retakes, Review, retakes};
 pub use scenes::{SceneCut, SceneParams, scene_cuts, scene_cuts_cancellable};
