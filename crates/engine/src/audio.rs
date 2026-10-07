@@ -70,7 +70,8 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 
 /// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
 /// same file (import, export and captions) wait for one extraction instead of racing.
-pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32)) -> Result<PathBuf> {
+/// An error from `progress` stops the extraction; the next call starts it again.
+pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
     let path = pcm_path(cache_dir, asset);
     std::fs::create_dir_all(path.parent().unwrap())?;
     let mut lock_path = path.as_os_str().to_os_string();
@@ -342,20 +343,20 @@ mod tests {
         };
         let legacy = cache.join("pcm/same-id.v2.f32");
         std::fs::write(&legacy, b"old cache").unwrap();
-        let first = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+        let first = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
         assert_ne!(first, legacy);
         let old_audio = std::fs::read(&first).unwrap();
         let modified = std::fs::metadata(&source).unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
         write_test_wav(&source, 16_384, 4_800);
         File::options().write(true).open(&source).unwrap().set_modified(modified).unwrap();
-        let second = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+        let second = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
         assert_ne!(first, second);
         assert_ne!(std::fs::read(&second).unwrap(), old_audio);
         assert_eq!(std::fs::read(&first).unwrap(), old_audio);
         assert_eq!(ensure_pcm(&cache, &asset, |_| panic!("unchanged source extracted again")).unwrap(), second);
         write_test_wav(&source, 16_384, 9_600);
         File::options().write(true).open(&source).unwrap().set_modified(modified).unwrap();
-        let third = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+        let third = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
         assert_ne!(second, third);
         assert_eq!(std::fs::metadata(&third).unwrap().len(), std::fs::metadata(&second).unwrap().len() * 2);
         std::fs::remove_dir_all(cache).unwrap();

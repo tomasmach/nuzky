@@ -20,7 +20,7 @@ fn pcm_rates_layouts_length_level_and_reference_samples() {
             let expr = std::iter::repeat_n("0.25*sin(2*PI*440*t)", channels).collect::<Vec<_>>().join("|");
             ff(&["-f", "lavfi", "-i", &format!("aevalsrc={expr}:s={rate}:d=1"), "-c:a", "pcm_f32le"], &source);
             let out = d.join(format!("tone-{rate}-{channels}.f32"));
-            let frames = extract_pcm(&source, &out, |_| {}).unwrap();
+            let frames = extract_pcm(&source, &out, |_| Ok(())).unwrap();
             let samples = pcm(&out);
             let mut cmd = Command::new("ffmpeg");
             cmd.args(["-v", "error", "-i"]).arg(&source);
@@ -74,7 +74,7 @@ fn aac_priming_and_nonzero_container_origin_preserve_alignment() {
             &source,
         );
         let out = d.join(format!("offset-{offset}.f32"));
-        let n = extract_pcm(&source, &out, |_| {}).unwrap();
+        let n = extract_pcm(&source, &out, |_| Ok(())).unwrap();
         let samples = pcm(&out);
         let onset = samples.chunks_exact(2).position(|s| s[0].abs() > 0.02).unwrap();
         // The container's origin can include the encoder priming packet at nonzero offset.
@@ -127,7 +127,7 @@ fn late_audio_is_padded_to_video_container_origin() {
     if cached.exists() {
         std::fs::remove_file(&cached).unwrap();
     }
-    let out = ensure_pcm(&cache, &asset, |_| {}).unwrap();
+    let out = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
     let samples = pcm(&out);
     let onset = samples.chunks_exact(2).position(|s| s[0].abs() > 0.02).unwrap();
     eprintln!("QA late audio onset={onset}, frames={}", samples.len() / 2);
@@ -164,7 +164,7 @@ fn broken_audio_offset_is_rejected_without_writing_silence() {
     );
     let out = d.join("broken.pcm");
     let _ = std::fs::remove_file(&out);
-    let error = extract_pcm(&source, &out, |_| {}).unwrap_err();
+    let error = extract_pcm(&source, &out, |_| Ok(())).unwrap_err();
     assert!(error.to_string().contains("timestamps look broken"), "{error}");
     assert!(!out.exists());
     let leftovers =
@@ -202,7 +202,7 @@ fn microphone_switched_on_late_in_a_long_recording_is_kept() {
         &source,
     );
     let out = d.join("long.pcm");
-    let frames = extract_pcm(&source, &out, |_| {}).unwrap();
+    let frames = extract_pcm(&source, &out, |_| Ok(())).unwrap();
     std::fs::remove_file(&out).unwrap();
     assert!((frames as i64 - 651 * 48_000).abs() <= 2048, "frames={frames}");
 }
@@ -244,6 +244,6 @@ fn mp3_attached_picture_remains_audio_asset() {
     assert!(a.has_audio);
     assert!(capopen_engine::media::VideoDecoder::open(&source).is_err());
     let out = d.join("cover.f32");
-    let n = extract_pcm(&source, &out, |_| {}).unwrap();
+    let n = extract_pcm(&source, &out, |_| Ok(())).unwrap();
     assert!((n as i64 - 48000).abs() <= 1024, "frames={n}");
 }

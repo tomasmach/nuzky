@@ -815,8 +815,7 @@ fn drain(jobs: &Mutex<HashMap<String, Arc<AtomicBool>>>, host: &Host, timeout: s
     }
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let audio_only = jobs.lock().unwrap().keys().all(|id| id.starts_with("audio:"));
-        if audio_only && host.jobs.running().is_empty() {
+        if jobs.lock().unwrap().is_empty() && host.jobs.running().is_empty() {
             return true;
         }
         if std::time::Instant::now() >= deadline {
@@ -954,21 +953,24 @@ mod ipc_lifecycle_tests {
             })
             .unwrap();
         let jobs = Arc::new(Mutex::new(HashMap::new()));
-        let flag = Arc::new(AtomicBool::new(false));
-        jobs.lock().unwrap().insert("export:desktop".to_string(), flag.clone());
-        jobs.lock().unwrap().insert("audio:clip".to_string(), Arc::new(AtomicBool::new(false)));
-        let desktop = jobs.clone();
-        let worker = std::thread::spawn(move || {
-            while !flag.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            std::thread::sleep(Duration::from_millis(100));
-            desktop.lock().unwrap().remove("export:desktop");
+        let workers = ["export:desktop", "audio:clip"].map(|id| {
+            let flag = Arc::new(AtomicBool::new(false));
+            jobs.lock().unwrap().insert(id.to_string(), flag.clone());
+            let desktop = jobs.clone();
+            std::thread::spawn(move || {
+                while !flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                desktop.lock().unwrap().remove(id);
+            })
         });
         assert!(drain(&jobs, &current.host, Duration::from_secs(5)));
         assert!(!unfinished.exists(), "the agent export removed its unfinished file before quitting");
-        assert!(!jobs.lock().unwrap().contains_key("export:desktop"));
-        worker.join().unwrap();
+        assert!(jobs.lock().unwrap().is_empty(), "audio preparation also stops and removes its partial cache");
+        for worker in workers {
+            worker.join().unwrap();
+        }
         drop(current);
         let _ = std::fs::remove_dir_all(dir);
     }

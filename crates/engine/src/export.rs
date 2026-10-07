@@ -92,7 +92,7 @@ pub fn export(
         })
         .collect();
     for asset in project.assets.iter().filter(|a| heard.contains(a.id.as_str()) && has_audio(a)) {
-        ensure_pcm(cache_dir, asset, |_| {})?;
+        ensure_pcm(cache_dir, asset, |_| Ok(()))?;
     }
     // Reserve beside the destination so rename stays on the same filesystem.
     let tmp = loop {

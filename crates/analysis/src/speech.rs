@@ -68,7 +68,7 @@ pub fn transcribe_words_cancellable(
     let converted;
     let audio = match source {
         AudioSource::Asset { asset, cache } => {
-            let pcm = open_pcm(asset, cache)?;
+            let pcm = open_pcm(asset, cache, &cancelled)?;
             // Average three 48 kHz stereo frames (six channel samples) into one 16 kHz mono sample.
             converted = pcm.samples().chunks(6).map(|s| s.iter().sum::<f32>() / s.len() as f32).collect::<Vec<_>>();
             &converted
@@ -112,7 +112,10 @@ pub fn transcribe_words_cancellable(
         let mut detect = context.create_state().context("Creating speech recognition state")?;
         let mut params = recognition_params("auto");
         params.set_detect_language(true);
-        detect.full(params, &speech).context("Detecting the spoken language")?;
+        let abort: &dyn Fn() -> bool = &cancelled;
+        // SAFETY: `abort` outlives `full`, which calls the callback only while it runs.
+        unsafe { stop_on(&mut params, &abort) };
+        detect.full(params, &speech).map_err(|error| stopped(error, &cancelled, "Detecting the spoken language"))?;
         transcript.language =
             whisper_rs::get_lang_str(detect.full_lang_id_from_state()).context("Missing detected language")?.into();
         check()?;
@@ -122,13 +125,41 @@ pub fn transcribe_words_cancellable(
     for region in regions {
         check()?;
         let (compact, mapping) = compact_audio(audio, &[region]);
-        state.full(recognition_params(&transcript.language), &compact).context("Recognising speech region")?;
+        let mut params = recognition_params(&transcript.language);
+        let abort: &dyn Fn() -> bool = &cancelled;
+        // SAFETY: `abort` outlives `full`, which calls the callback only while it runs.
+        unsafe { stop_on(&mut params, &abort) };
+        state.full(params, &compact).map_err(|error| stopped(error, &cancelled, "Recognising speech region"))?;
         check()?;
         transcript.language =
             whisper_rs::get_lang_str(state.full_lang_id_from_state()).context("Missing detected language")?.into();
         append_segments(&state, context.token_eot(), &mapping, &mut transcript, &cancelled)?;
     }
     Ok(transcript)
+}
+
+/// Lets whisper.cpp stop after its current encoder or decoder step when `abort` returns true.
+///
+/// # Safety
+/// `abort` must stay alive until every `full` call that uses `params` has returned.
+unsafe fn stop_on(params: &mut FullParams<'_, '_>, abort: &&dyn Fn() -> bool) {
+    unsafe extern "C" fn poll(data: *mut std::ffi::c_void) -> bool {
+        // SAFETY: `data` is the `&&dyn Fn` passed to `stop_on`, alive for the whole `full` call.
+        unsafe { (*(data as *const &dyn Fn() -> bool))() }
+    }
+    unsafe {
+        params.set_abort_callback(Some(poll));
+        params.set_abort_callback_user_data(abort as *const &dyn Fn() -> bool as *mut std::ffi::c_void);
+    }
+}
+
+/// A recognition stopped by the abort callback is a cancellation, not a model failure.
+fn stopped(error: whisper_rs::WhisperError, cancelled: &impl Fn() -> bool, doing: &'static str) -> anyhow::Error {
+    if cancelled() {
+        anyhow::anyhow!("CANCELLED: transcription cancelled")
+    } else {
+        anyhow::Error::new(error).context(doing)
+    }
 }
 
 fn recognition_params(language: &str) -> FullParams<'_, '_> {

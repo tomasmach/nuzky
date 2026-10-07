@@ -471,7 +471,8 @@ pub fn decode_size(src: (u32, u32), rotation: u32, display: (f32, f32), max_side
 
 /// Decodes the whole audio stream to 48 kHz interleaved stereo f32 little-endian.
 /// The file starts at the container origin, padded with silence if audio starts late.
-pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Result<u64> {
+/// An error from `progress` stops the extraction and removes the partial file.
+pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Result<()>) -> Result<u64> {
     let mut input = open_input(path)?;
     let stream = input.streams().best(ff::media::Type::Audio).ok_or_else(|| anyhow!("No audio stream"))?;
     let stream_index = stream.index();
@@ -520,7 +521,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
                 let p = (pts as f64 * time_base * 1e6 / duration_us) as f32;
                 if p - last_progress > 0.02 {
                     last_progress = p;
-                    progress(p.clamp(0.0, 1.0));
+                    progress(p.clamp(0.0, 1.0))?;
                 }
             }
         }
@@ -541,7 +542,8 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32)) -> Re
         writer.flush()?;
         drop(writer);
         std::fs::rename(&tmp, out)?;
-        progress(1.0);
+        // The cache is complete and published; a late stop request has nothing left to stop.
+        progress(1.0).ok();
         Ok(written)
     })();
     if result.is_err() {
@@ -806,7 +808,7 @@ mod tests {
         }
         let pcm = |path: &Path| {
             let out = path.with_extension("f32");
-            extract_pcm(path, &out, |_| {}).unwrap();
+            extract_pcm(path, &out, |_| Ok(())).unwrap();
             let samples: Vec<f32> = bytemuck::cast_slice(&std::fs::read(&out).unwrap()).to_vec();
             // Peak level between two times in seconds.
             move |from: f64, to: f64| {
@@ -849,7 +851,7 @@ mod tests {
                 return;
             }
             let out = dir.join(format!("tone_{rate}.f32"));
-            let frames = extract_pcm(&src, &out, |_| {}).unwrap();
+            let frames = extract_pcm(&src, &out, |_| Ok(())).unwrap();
             assert!((frames as i64 - 3 * SAMPLE_RATE as i64).abs() < 2_000, "{rate} Hz gave {frames} frames");
             let bytes = std::fs::read(&out).unwrap();
             let samples: &[f32] = bytemuck::cast_slice(&bytes);

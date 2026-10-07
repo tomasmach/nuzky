@@ -16,7 +16,7 @@ fn open_errors(path: &Path, out: &Path) -> Vec<String> {
         let results = [
             probe(&path, "remote".into()).map(drop),
             VideoDecoder::open(&path).map(drop),
-            extract_pcm(&path, &out, |_| {}).map(drop),
+            extract_pcm(&path, &out, |_| Ok(())).map(drop),
         ];
         tx.send(results.map(|r| r.map_err(|e| format!("{e:#}")))).ok();
     });

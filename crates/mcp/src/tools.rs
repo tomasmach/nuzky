@@ -300,8 +300,8 @@ impl Backend {
             progress.set("analyzing", None);
             let p = args.params;
             let result = match args.kind {
-                AnalysisKind::Silences => json!({"ranges": capopen_analysis::silences(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) })?}),
-                AnalysisKind::Loudness => json!({"window_us": window, "dbfs": capopen_analysis::loudness(&asset, &cache, window)?}),
+                AnalysisKind::Silences => json!({"ranges": capopen_analysis::silences_cancellable(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) }, || cancel.load(Ordering::Relaxed))?}),
+                AnalysisKind::Loudness => json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
             };

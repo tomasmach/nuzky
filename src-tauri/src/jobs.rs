@@ -1,5 +1,5 @@
 //! Long-running work off the UI path: audio preparation, export, transcripts and auto captions.
-//! Every job reports through `job` events. Audio preparation cannot be cancelled.
+//! Every job reports through `job` events.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -122,13 +122,18 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
             continue;
         }
         let id = format!("audio:{}", asset.id);
-        let Some(_flag) = register(&app, &id) else { continue };
+        let Some(flag) = register(&app, &id) else { continue };
         let (app, asset, cache) = (app.clone(), asset.clone(), state.cache_dir.clone());
         std::thread::spawn(move || {
             let mut rep = Reporter::new(&app, &id, "audio", format!("Preparing audio for {}", asset.name));
-            let result = ensure_pcm(&cache, &asset, |p| rep.progress(p, None)).map(|_| None);
+            let result = ensure_pcm(&cache, &asset, |p| {
+                check_cancelled(&flag)?;
+                rep.progress(p, None);
+                Ok(())
+            })
+            .map(|_| None);
             let ok = result.is_ok();
-            rep.finish(result, false);
+            rep.finish(result, flag.load(Ordering::Relaxed));
             unregister(&app, &id);
             if ok {
                 app.emit("audio-ready", asset.id.clone()).ok();

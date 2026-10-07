@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use capopen_engine::{
     audio::{Pcm, ensure_pcm, has_audio, samples_to_us, us_to_samples},
     model::{Asset, CHANNELS},
@@ -28,9 +28,15 @@ impl Default for SilenceParams {
     }
 }
 
-pub(crate) fn open_pcm(asset: &Asset, cache: &Path) -> Result<Pcm> {
+pub(crate) fn open_pcm(asset: &Asset, cache: &Path, cancelled: &dyn Fn() -> bool) -> Result<Pcm> {
     ensure!(has_audio(asset), "Asset {} has no audio", asset.name);
-    let path = ensure_pcm(cache, asset, |_| {}).context("Preparing analysis PCM")?;
+    let path = ensure_pcm(cache, asset, |_| {
+        if cancelled() {
+            bail!("CANCELLED: analysis cancelled");
+        }
+        Ok(())
+    })
+    .context("Preparing analysis PCM")?;
     let size = std::fs::metadata(&path).context("Reading PCM metadata")?.len();
     ensure!(size > 0 && size % (CHANNELS * 4) as u64 == 0, "PCM must contain complete stereo f32 frames");
     Pcm::open(&path).with_context(|| format!("Mapping PCM {}", path.display()))
@@ -39,7 +45,16 @@ pub(crate) fn open_pcm(asset: &Asset, cache: &Path) -> Result<Pcm> {
 /// Non-overlapping RMS windows in dBFS, NOT LUFS. Includes a final partial window.
 /// Digital silence is -120 dBFS, keeping JSON finite. Channels contribute equally.
 pub fn loudness(asset: &Asset, cache: &Path, window_us: i64) -> Result<Vec<f32>> {
-    let pcm = open_pcm(asset, cache)?;
+    loudness_cancellable(asset, cache, window_us, || false)
+}
+
+pub fn loudness_cancellable(
+    asset: &Asset,
+    cache: &Path,
+    window_us: i64,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<f32>> {
+    let pcm = open_pcm(asset, cache, &cancelled)?;
     levels(pcm.samples(), window_us)
 }
 
@@ -67,14 +82,23 @@ fn levels(samples: &[f32], window_us: i64) -> Result<Vec<f32>> {
 /// This is NOT BS.1770/EBU R128 LUFS; no K-weighting or loudness gating is applied.
 /// Do not use it for delivery normalization. Silence is floored at -120.
 pub fn integrated_lufs(asset: &Asset, cache: &Path) -> Result<f32> {
-    let pcm = open_pcm(asset, cache)?;
+    let pcm = open_pcm(asset, cache, &|| false)?;
     Ok((db(power(pcm.samples())? * CHANNELS as f64) - 0.691).max(FLOOR_DB))
 }
 
 /// Quiet ranges safe to propose for removal, after breath padding. This is an
 /// energy detector, not a voice detector: a loud/varying music bed can hide pauses.
 pub fn silences(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Vec<Range>> {
-    let pcm = open_pcm(asset, cache)?;
+    silences_cancellable(asset, cache, params, || false)
+}
+
+pub fn silences_cancellable(
+    asset: &Asset,
+    cache: &Path,
+    params: SilenceParams,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<Range>> {
+    let pcm = open_pcm(asset, cache, &cancelled)?;
     quiet_ranges(pcm.samples(), params)
 }
 

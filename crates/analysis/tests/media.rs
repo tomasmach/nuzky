@@ -1,10 +1,14 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use anyhow::{Context, Result, ensure};
-use capopen_analysis::{SceneParams, SilenceParams, loudness, scene_cuts, silences};
+use capopen_analysis::{
+    AudioSource, SceneParams, SilenceParams, loudness, scene_cuts, silences, silences_cancellable,
+    transcribe_words_cancellable,
+};
 use capopen_engine::media::probe;
 
 fn directory(name: &str) -> Result<PathBuf> {
@@ -141,5 +145,58 @@ fn pcm_cache_audio_api_and_cli_are_consistent() -> Result<()> {
     assert!(result.status.success());
     let value: serde_json::Value = serde_json::from_slice(&result.stdout)?;
     assert_eq!(value["rms_dbfs"], serde_json::json!(vec![-120.0; 10]));
+    Ok(())
+}
+
+#[test]
+fn cancelled_analysis_stops_preparing_audio_and_leaves_no_partial_cache() -> Result<()> {
+    let dir = directory("cancel")?;
+    let path = dir.join("long.wav");
+    ffmpeg(&["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=600", "-c:a", "pcm_s16le"], &path)?;
+    let asset = probe(&path, "long".into())?;
+    let cache = dir.join("cache");
+    let polls = AtomicUsize::new(0);
+    let stop = || polls.fetch_add(1, Ordering::Relaxed) >= 2;
+    let error = silences_cancellable(&asset, &cache, SilenceParams::default(), stop).unwrap_err();
+    assert!(format!("{error:#}").contains("CANCELLED"), "{error:#}");
+    // Progress is reported every 2 %, so the stop came long before the end of the file.
+    assert_eq!(polls.load(Ordering::Relaxed), 3);
+    let left: Vec<_> = std::fs::read_dir(cache.join("pcm"))?
+        .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<_>>()?;
+    assert!(left.iter().all(|name| name.ends_with(".lock")), "partial cache left behind: {left:?}");
+    // The next request prepares the audio from the start.
+    assert!(silences(&asset, &cache, SilenceParams::default())?.is_empty());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires tmp-test/speech.wav and installed small + Silero models in tmp-test/xdg/data"]
+fn cancelling_stops_speech_recognition_inside_a_region() -> Result<()> {
+    let dir = directory("speech-cancel")?;
+    let root = dir.ancestors().nth(4).context("Missing workspace root")?;
+    let models = root.join("tmp-test/xdg/data/capopen/models");
+    let path = root.join("tmp-test/speech.wav");
+    let asset = probe(&path, "speech".into())?;
+    let cache = dir.join("cache");
+    let recognise = |cancelled: &dyn Fn() -> bool| {
+        transcribe_words_cancellable(
+            AudioSource::Asset { asset: &asset, cache: &cache },
+            &models.join("ggml-small.bin"),
+            &models.join("ggml-silero-v5.1.2.bin"),
+            // A fixed language skips detection, whose encoder pass whisper.cpp cannot stop.
+            "en",
+            cancelled,
+        )
+    };
+    let polls = AtomicUsize::new(0);
+    let words = recognise(&|| polls.fetch_add(1, Ordering::Relaxed) == usize::MAX)?.words.len();
+    let total = polls.load(Ordering::Relaxed);
+    // Whisper also asks after every encoder and decoder step, so a request no longer waits for the
+    // whole region. Measured on this clip: 99 polls for 21 words, 52 when only regions asked.
+    assert!(words > 5 && total > 4 * words, "{total} polls for {words} words");
+    let polls = AtomicUsize::new(0);
+    let error = recognise(&|| polls.fetch_add(1, Ordering::Relaxed) >= total / 2).unwrap_err();
+    assert!(format!("{error:#}").starts_with("CANCELLED"), "{error:#}");
     Ok(())
 }
