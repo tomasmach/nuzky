@@ -138,6 +138,14 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
             if ok {
                 app.emit("audio-ready", asset.id.clone()).ok();
             }
+            // A project opened meanwhile can use this asset id for another file (a copy keeps the
+            // ids); its request found this job running and was skipped, so it is made now.
+            let state = app.state::<AppState>();
+            if let Ok(open) = state.project()
+                && open.assets.iter().any(|a| a.id == asset.id && capopen_engine::audio::pcm_path(&cache, a) != path)
+            {
+                ensure_audio(&state, &open);
+            }
         });
     }
 }
