@@ -46,7 +46,7 @@ Layout widths: left panel 340 px, inspector 300 px. The timeline height is user-
 - **Slider track** (`RangeInput`): 4 px `line` track, `fg` round thumb, `accent` fill from the origin to the thumb. One-sided ranges fill from the left; two-sided ones (min < 0 < max: temperature, position, rotation) fill from 0 and mark 0 with a `muted` tick.
 - **Tabs**: inspector tabs are text with a 2 px accent underline; left panel tabs are icon plus label, sized to their label with a 4 px gap so no two labels touch or truncate.
 - **Segmented**: small exclusive choices (In/Out, speed presets, export options). The selected segment is `line` on a `bg` track with medium weight.
-- **Preset tile**: preview on top, 11 px label below. Selected: accent border plus a check badge.
+- **Preset tile**: preview on top, 11 px label below. Selected: accent border plus a check badge. Caption style tiles show their name in the style itself; a karaoke style lights the last word of the name, or the second half of a one-word name, in its highlight colour.
 - **Checkbox**: dark custom box, accent fill with a black check when on.
 - **Track toggles** (hide, mute): the off state swaps the icon (eye-off, speaker-off) and shows `fg` on `raised`. Accent is reserved for selection and "on" features, so a hidden track never looks active. Fixed columns, eye then speaker; a track without one keeps an empty slot so the columns line up.
 - **Keyframe diamond**: outline when no keyframe sits at the playhead, filled accent when one does. Timeline diamonds are `fg` with a dark border on the selected clip, at mid-height, or along the bottom on the main track so the cut markers never cover them, and clear of the trim handles.

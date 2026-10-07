@@ -146,7 +146,11 @@ pub struct Job {
 #[serde(deny_unknown_fields)]
 pub struct Captions {
     pub run_id: String,
+    /// A full caption style; leave it out to use style_preset or Reel.
     pub style: Option<TextStyle>,
+    /// A caption preset by name: reel, outline, yellow, box, clean, karaoke or green_box.
+    /// Karaoke and green_box highlight the word being spoken.
+    pub style_preset: Option<String>,
     pub max_words: Option<usize>,
     pub max_chars: Option<usize>,
 }
@@ -167,6 +171,24 @@ pub struct Export {
 }
 
 impl Captions {
+    /// The style asked for: a full style or a preset, Reel when neither is given.
+    pub fn style(&self) -> anyhow::Result<TextStyle> {
+        match (&self.style, &self.style_preset) {
+            (Some(_), Some(_)) => anyhow::bail!("INVALID_ARGUMENTS: give style or style_preset, not both"),
+            (Some(style), None) => Ok(style.clone()),
+            (None, Some(name)) => {
+                capopen_engine::edit::caption_preset(name).map(|p| p.style.clone()).ok_or_else(|| {
+                    let names: Vec<_> = capopen_engine::edit::caption_presets()
+                        .iter()
+                        .map(|p| p.name.to_lowercase().replace(' ', "_"))
+                        .collect();
+                    anyhow::anyhow!("INVALID_ARGUMENTS: unknown style_preset {name:?}; use one of {}", names.join(", "))
+                })
+            }
+            (None, None) => Ok(reel_style()),
+        }
+    }
+
     pub fn grouping(&self) -> capopen_analysis::CaptionGrouping {
         let defaults = capopen_analysis::CaptionGrouping::default();
         capopen_analysis::CaptionGrouping {
@@ -194,7 +216,7 @@ mod tests {
         let defaults = capopen_analysis::CaptionGrouping::default();
         assert_eq!(args.grouping().max_words, defaults.max_words);
         assert_eq!(args.grouping().max_chars, defaults.max_chars);
-        let style = args.style.unwrap_or_else(reel_style);
+        let style = args.style().unwrap();
         assert_eq!(
             serde_json::to_value(style).unwrap(),
             serde_json::json!({
@@ -202,5 +224,25 @@ mod tests {
                 "strokeWidth": 7.5, "strokeColor": "#000000", "background": null
             })
         );
+    }
+
+    #[test]
+    fn captions_pick_a_preset_by_name() {
+        let captions = |value: serde_json::Value| {
+            let mut args = serde_json::json!({"run_id": "run"});
+            args.as_object_mut().unwrap().extend(value.as_object().unwrap().clone());
+            serde_json::from_value::<Captions>(args).unwrap().style()
+        };
+        let karaoke = captions(serde_json::json!({"style_preset": "karaoke"})).unwrap();
+        assert_eq!(karaoke.highlight.as_deref(), Some("#ffe14d"));
+        assert_eq!(karaoke.font_size, reel_style().font_size);
+        let boxed = captions(serde_json::json!({"style_preset": "Green_Box"})).unwrap();
+        assert_eq!((boxed.highlight.as_deref(), boxed.background.is_some()), (Some("#4ade80"), true));
+        let unknown = captions(serde_json::json!({"style_preset": "neon"})).unwrap_err().to_string();
+        assert!(unknown.starts_with("INVALID_ARGUMENTS") && unknown.contains("karaoke, green_box"), "{unknown}");
+        let both = captions(
+            serde_json::json!({"style_preset": "karaoke", "style": serde_json::to_value(reel_style()).unwrap()}),
+        );
+        assert!(both.unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"));
     }
 }

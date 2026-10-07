@@ -36,6 +36,15 @@ export interface TextStyle {
   background: string | null;
   /** Lines wrap at this width in canvas pixels; captions on vertical videos keep to the Reels/TikTok safe area. */
   maxWidth?: number | null;
+  /** Karaoke: `#rrggbb` fill of the word being spoken; null or missing draws every word in `color`. */
+  highlight?: string | null;
+}
+
+/** A spoken word of a caption; times are relative to the clip start. */
+export interface CaptionWord {
+  text: string;
+  startUs: number;
+  endUs: number;
 }
 
 /** All 0 = unchanged. -1..1, fade and vignette 0..1. */
@@ -65,7 +74,14 @@ export type ClipContent =
       fadeInUs: number;
       fadeOutUs: number;
     }
-  | { type: "text"; text: string; style: TextStyle; transform: Transform };
+  | {
+      type: "text";
+      text: string;
+      style: TextStyle;
+      transform: Transform;
+      /** Generated captions: the spoken words, which highlight only while `text` is them joined by single spaces. */
+      words?: CaptionWord[];
+    };
 
 export type AnimationKind = "fade" | "zoomIn" | "zoomOut" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "pop" | "typewriter";
 export interface Animation {
@@ -273,6 +289,8 @@ export interface CaptionSegment {
   startUs: number;
   endUs: number;
   text: string;
+  /** Timeline times, unlike the words a clip stores. */
+  words?: CaptionWord[];
 }
 
 export type EditCmd =

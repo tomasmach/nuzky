@@ -136,6 +136,8 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
     let captions = tools.iter().find(|t| t["name"] == "build_captions").unwrap();
     assert!(!captions["inputSchema"]["required"].as_array().unwrap().contains(&json!("style")));
+    assert!(captions["inputSchema"]["properties"]["style_preset"].is_object());
+    assert!(captions["description"].as_str().unwrap().contains("karaoke"));
     let recovery = tools.iter().find(|t| t["name"] == "resolve_recovery").unwrap();
     assert!(recovery["description"].as_str().unwrap().contains("Ask the user"));
     let before = c.call("get_state", json!({}));
@@ -311,6 +313,19 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     assert_eq!(preview["duration_us"], edited["duration_us"]);
     let captions = c.call("build_captions", json!({"run_id":run["run_id"]}));
     assert!(captions["caption_count"].as_u64().unwrap() > 0);
+    // Rebuilt as karaoke: each caption keeps its spoken words, which spell its text.
+    assert!(c.error("build_captions", json!({"run_id":run["run_id"],"style_preset":"neon"})).contains("karaoke"));
+    let karaoke = c.call("build_captions", json!({"run_id":run["run_id"],"style_preset":"karaoke"}));
+    assert_eq!(karaoke["caption_count"], captions["caption_count"]);
+    let state = c.call("get_state", json!({}));
+    let track = state["tracks"].as_array().unwrap().iter().find(|t| t["name"] == "Captions").unwrap();
+    for clip in track["clips"].as_array().unwrap() {
+        let content = &clip["content"];
+        assert_eq!(content["style"]["highlight"], "#ffe14d", "{content}");
+        let words: Vec<&str> =
+            content["words"].as_array().unwrap().iter().map(|w| w["text"].as_str().unwrap()).collect();
+        assert_eq!(words.join(" "), content["text"].as_str().unwrap());
+    }
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     c.finish();
 }
