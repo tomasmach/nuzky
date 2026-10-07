@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errorText } from "./api";
-import { currentEpoch, enqueue, useEditor, whenIdle } from "./store";
+import { currentEpoch, enqueue, undoAction, useEditor, whenIdle } from "./store";
 import type { Project, TextStyle, TranscriptCut, TranscriptView } from "./types";
 
 /** Characters per caption when captions show 1–3 words, like reels. */
@@ -100,8 +100,7 @@ async function cut(run: (epoch: string | undefined) => Promise<TranscriptCut>, w
   const out: { done?: TranscriptCut } = {};
   await enqueue(async (epoch) => (out.done = await run(epoch)).snapshot);
   if (!out.done) return null;
-  const { toast, undo } = useEditor.getState();
-  toast({ kind: "info", text: `Removed ${what(out.done.removedUs)}`, action: { label: "Undo", run: undo } });
+  useEditor.getState().toast({ kind: "info", text: `Removed ${what(out.done.removedUs)}`, action: undoAction(out.done.snapshot) });
   return out.done;
 }
 

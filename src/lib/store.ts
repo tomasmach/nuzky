@@ -8,7 +8,8 @@ export interface Toast {
   id: number;
   kind: "info" | "success" | "error";
   text: string;
-  action?: { label: string; run: () => void };
+  /** `valid`: the action is offered only while it holds, e.g. Undo while its step is still the newest. */
+  action?: { label: string; run: () => void; valid?: () => boolean };
 }
 
 /** A media item being dragged from the media panel onto the timeline. */
@@ -125,6 +126,21 @@ async function drain() {
     item.waiters.forEach((w) => w(snap));
   }
   draining = false;
+}
+
+/**
+ * Undo for a toast about the step that produced `snap`. It undoes only while that step is still
+ * the newest one, so a later edit is never undone in its place, and the toast hides it once the
+ * history moved on.
+ */
+export function undoAction(snap: Snapshot): NonNullable<Toast["action"]> {
+  const { revision, sessionEpoch } = snap;
+  const newest = () => {
+    const now = useEditor.getState().snap;
+    return !!now && now.revision === revision && now.sessionEpoch === sessionEpoch && now.canUndo;
+  };
+  // Checked again when its turn in the queue comes, after any edit made before it.
+  return { label: "Undo", valid: newest, run: () => void enqueue(async (epoch) => (newest() ? api.undo(epoch) : null)) };
 }
 
 /** Ends the agent's run with its changes kept, so the user can edit; Undo then removes the whole run. */
@@ -405,18 +421,20 @@ export function setClipTransform(clipId: string, patch: Partial<Transform>, coal
 }
 
 export async function deleteSelection() {
-  const { selection, cut, edit, select, selectCut, toast, undo } = useEditor.getState();
+  const { selection, cut, edit, select, selectCut, toast } = useEditor.getState();
   if (cut) {
-    if (await edit({ type: "setTransition", clipId: cut, transition: null })) {
+    const snap = await edit({ type: "setTransition", clipId: cut, transition: null });
+    if (snap) {
       selectCut(null);
-      toast({ kind: "info", text: "Transition removed", action: { label: "Undo", run: undo } });
+      toast({ kind: "info", text: "Transition removed", action: undoAction(snap) });
     }
     return;
   }
   if (selection.length === 0) return;
-  if (await edit({ type: "deleteClips", clipIds: selection })) {
+  const snap = await edit({ type: "deleteClips", clipIds: selection });
+  if (snap) {
     select([]);
-    toast({ kind: "info", text: selection.length === 1 ? "Clip deleted" : `${selection.length} clips deleted`, action: { label: "Undo", run: undo } });
+    toast({ kind: "info", text: selection.length === 1 ? "Clip deleted" : `${selection.length} clips deleted`, action: undoAction(snap) });
   }
 }
 
@@ -523,8 +541,9 @@ export function detachBlocker(project: Project, clip: Clip): string | null {
 }
 
 export async function detachAudio(clipId: string) {
-  const { edit, toast, undo } = useEditor.getState();
-  if (await edit({ type: "detachAudio", clipId })) toast({ kind: "info", text: "Audio moved to its own track", action: { label: "Undo", run: undo } });
+  const { edit, toast } = useEditor.getState();
+  const snap = await edit({ type: "detachAudio", clipId });
+  if (snap) toast({ kind: "info", text: "Audio moved to its own track", action: undoAction(snap) });
 }
 
 /** Restyles every caption clip at once, as one undo step, keeping each caption's wrap width (the safe area). */

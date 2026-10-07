@@ -9,6 +9,8 @@ export function Toasts({ bottom }: { bottom: number }) {
   const toasts = useEditor((s) => s.toasts);
   const lift = useEditor((s) => s.toastLift);
   const dismiss = useEditor((s) => s.dismissToast);
+  // An action such as Undo checks the project each render, so it hides once the history moved on.
+  useEditor((s) => `${s.snap?.sessionEpoch}:${s.snap?.revision}`);
   return (
     <div className="pointer-events-none fixed left-3 z-[90] flex w-[316px] flex-col items-start gap-2" style={{ bottom: bottom + lift }} aria-live="polite">
       {toasts.map((t) => (
@@ -27,7 +29,7 @@ export function Toasts({ bottom }: { bottom: number }) {
             <Info size={16} className="shrink-0 text-muted" />
           )}
           <span className="min-w-0 break-words">{t.text}</span>
-          {t.action && (
+          {t.action && (t.action.valid?.() ?? true) && (
             <button
               type="button"
               className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-accent/10"

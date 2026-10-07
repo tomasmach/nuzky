@@ -7,7 +7,7 @@ import { api, errorText } from "./lib/api";
 import { followPointer } from "./lib/drag";
 import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
-import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, useEditor } from "./lib/store";
+import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US } from "./lib/time";
 import type { JobEvent, Snapshot, Transport } from "./lib/types";
 import { ExportDialog } from "./components/ExportDialog";
@@ -145,11 +145,12 @@ function useBackendEvents() {
     let lastRun: string | null = useEditor.getState().aiRun;
     offs.push(
       listen<string | null>("run-changed", (e) => {
-        const { toast, undo } = useEditor.getState();
+        const { toast, snap } = useEditor.getState();
         const aiRun = lastRun;
         lastRun = e.payload;
         useEditor.setState({ aiRun: e.payload });
-        if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: { label: "Undo", run: () => void undo() } });
+        // The run's last change arrived before this event, so Undo here removes the whole run.
+        if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap ? undoAction(snap) : undefined });
       }),
     );
     offs.push(
@@ -219,7 +220,7 @@ function RecoveryDialog() {
       const snap = await api.resolveRecovery(action, currentEpoch());
       useEditor.getState().setSnap(snap, true);
       useEditor.setState({ saveState: "saved" });
-      if (action === "restore") useEditor.getState().toast({ kind: "success", text: "Previous version restored", action: { label: "Undo", run: () => void useEditor.getState().undo() } });
+      if (action === "restore") useEditor.getState().toast({ kind: "success", text: "Previous version restored", action: undoAction(snap) });
     } catch (e) {
       setError(errorText(e));
       setBusy(false);

@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } fro
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
 import { LIMITS } from "../../lib/limits";
 import { DEFAULT_TRANSFORM } from "../../lib/presets";
-import { editClip, isCaptionTrack, setClipTransform, useEditor } from "../../lib/store";
+import { editClip, isCaptionTrack, setClipTransform, undoAction, useEditor } from "../../lib/store";
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
 import { Button, IconButton, NumberInput, Section, Slider } from "../ui";
 
@@ -61,7 +61,7 @@ function ZoomOverClip({ clip, scale }: { clip: Clip; scale: number }) {
   const end = to ?? (ks.length > 1 ? Math.round(ks[ks.length - 1].transform.scale * 100) : start + 20);
   const apply = async () => {
     const replaced = clip.keyframes.length;
-    const { timeUs, toast, undo } = useEditor.getState();
+    const { timeUs, toast } = useEditor.getState();
     const done = await editClip(clip.id, (c) => {
       const base = transformAt(c, c.content.transform, clipOffset(c, timeUs));
       return {
@@ -77,7 +77,7 @@ function ZoomOverClip({ clip, scale }: { clip: Clip; scale: number }) {
     // From now on the fields show the keyframes just written.
     setFrom(null);
     setTo(null);
-    if (replaced > 0) toast({ kind: "info", text: `Replaced ${replaced} keyframe${replaced === 1 ? "" : "s"} with the zoom`, action: { label: "Undo", run: undo } });
+    if (replaced > 0) toast({ kind: "info", text: `Replaced ${replaced} keyframe${replaced === 1 ? "" : "s"} with the zoom`, action: undoAction(done) });
   };
   const pct = (v: number) => String(Math.round(v));
   return (

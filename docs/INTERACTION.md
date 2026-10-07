@@ -37,7 +37,7 @@ Hovering or focusing a media or audio item shows `+` (add at playhead) and a tra
 - **Duplicate**: `Ctrl+D`, the Duplicate button or the context menu. The copy goes right after the original and is selected.
 - **Delete**: `Delete`, `Backspace`, the toolbar button or the context menu; all of them show a toast with Undo. With a transition selected they remove the transition.
 - **Context menu**: right-click a clip for Split, Duplicate, Detach audio, Select all on track and Delete. Unavailable items are disabled with the reason in a tooltip. ↑/↓ move, Esc closes.
-- **Undo/redo**: `Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`. A slider drag, a typing burst, a preview drag or a caption restyle is one step.
+- **Undo/redo**: `Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`. A slider drag, a typing burst, a preview drag or a caption restyle is one step. Undo in a toast undoes the step the toast names; once another change follows it, the toast no longer offers Undo.
 - **Order**: edits, undo and redo apply one at a time in the order they were made. An edit made before the previous one is confirmed builds on it, so two quick changes (two sliders, two keyframes) both stick.
 
 ### Timeline display
