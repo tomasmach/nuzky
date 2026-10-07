@@ -1,23 +1,10 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, Loader2, X } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
-import { useSpeech } from "../../lib/speech";
+import { SPEECH_LANGUAGES, setSpeechLanguage, useSpeech } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import type { JobEvent, SpeechModel } from "../../lib/types";
 import { Button, Field, ProgressBar } from "../ui";
-
-const LANGUAGES = [
-  ["auto", "Detect automatically"],
-  ["cs", "Czech"],
-  ["sk", "Slovak"],
-  ["en", "English"],
-  ["de", "German"],
-  ["pl", "Polish"],
-  ["es", "Spanish"],
-  ["fr", "French"],
-  ["it", "Italian"],
-  ["uk", "Ukrainian"],
-];
 
 export const selectClass = "h-8 rounded-md border border-line bg-raised px-2 text-[13px] text-fg disabled:cursor-not-allowed disabled:opacity-40";
 
@@ -50,8 +37,8 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
   return (
     <>
       <Field label="Spoken language">
-        <select value={language} disabled={disabled} onChange={(e) => useSpeech.setState({ language: e.target.value })} className={selectClass}>
-          {LANGUAGES.map(([id, name]) => (
+        <select value={language} disabled={disabled} onChange={(e) => setSpeechLanguage(e.target.value)} className={selectClass}>
+          {SPEECH_LANGUAGES.map(([id, name]) => (
             <option key={id} value={id}>
               {name}
             </option>

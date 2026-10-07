@@ -9,6 +9,37 @@ export const SHORT_CAPTION_CHARS = 15;
 /** A gap this long between two words starts a new paragraph in the transcript. */
 const PARAGRAPH_GAP_US = 1_000_000;
 
+/** Languages offered for recognition, as Whisper codes. */
+export const SPEECH_LANGUAGES: [string, string][] = [
+  ["auto", "Detect automatically"],
+  ["cs", "Czech"],
+  ["sk", "Slovak"],
+  ["en", "English"],
+  ["de", "German"],
+  ["pl", "Polish"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["it", "Italian"],
+  ["uk", "Ukrainian"],
+];
+
+const LANGUAGE_KEY = "capopen.speechLanguage";
+
+/** The language picked last, else the computer's language when it is offered, else detection. */
+function initialLanguage(): string {
+  const offered = (id: string | null | undefined) => !!id && SPEECH_LANGUAGES.some(([code]) => code === id);
+  const saved = localStorage.getItem(LANGUAGE_KEY);
+  if (offered(saved)) return saved!;
+  const system = (navigator.languages?.[0] ?? navigator.language ?? "").slice(0, 2).toLowerCase();
+  return offered(system) ? system : "auto";
+}
+
+/** Picks the spoken language for Captions and Transcript and remembers it for next time. */
+export function setSpeechLanguage(language: string) {
+  localStorage.setItem(LANGUAGE_KEY, language);
+  useSpeech.setState({ language });
+}
+
 interface SpeechState {
   /** Shared by Captions and Transcript, so both use the same recognition. */
   model: string;
@@ -26,7 +57,7 @@ interface SpeechState {
 
 export const useSpeech = create<SpeechState>(() => ({
   model: "large-v3-turbo-q5_0",
-  language: "cs",
+  language: initialLanguage(),
   captionWords: 2,
   captionStyle: 0,
   captionFont: null,
