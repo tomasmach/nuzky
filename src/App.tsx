@@ -35,6 +35,16 @@ function usesSpace(el: HTMLElement | null) {
   return /^(checkbox|radio|switch|menuitem|menuitemradio|menuitemcheckbox|option)$/.test(el.getAttribute("role") ?? "");
 }
 
+/** Swallows the next Space release, which would otherwise click the focused button. */
+function suppressSpaceRelease() {
+  const up = (e: KeyboardEvent) => {
+    if (e.key !== " ") return;
+    e.preventDefault();
+    window.removeEventListener("keyup", up, true);
+  };
+  window.addEventListener("keyup", up, true);
+}
+
 function DragChip() {
   const drag = useEditor((s) => s.assetDrag);
   const asset = useEditor((s) => s.snap?.project.assets.find((a) => a.id === s.assetDrag?.assetId));
@@ -60,8 +70,11 @@ function useShortcuts() {
       if (key === " ") {
         if (usesSpace(target)) return;
         e.preventDefault();
-        // Otherwise the focused button would also be clicked when Space is released.
-        (document.activeElement as HTMLElement | null)?.blur();
+        // A focused button would also be clicked when Space is released; that release is held back
+        // instead of taking focus away, so the keyboard user stays where they were.
+        // Holding Space plays or pauses once.
+        if (e.repeat) return;
+        suppressSpaceRelease();
         s.togglePlay();
       } else if (mod && key === "z" && !e.shiftKey) {
         e.preventDefault();
