@@ -104,6 +104,12 @@ select {
       inset 0 0 0 1px rgb(255 255 255 / 0.1),
       0 18px 50px rgb(0 0 0 / 0.55);
   }
+  /* While the video plays (App.tsx sets the attribute), the blur would be redone on every frame under it. */
+  [data-playing] .overlay {
+    background: rgb(42 42 47 / 0.97);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .overlay {
       background: #2a2a2f;

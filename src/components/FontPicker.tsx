@@ -96,8 +96,10 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
     setActive(Math.max(0, i));
   }, [items, query, value]);
 
+  // The list follows the keyboard and the search, not the pointer, which is already over the row it lights.
+  const follow = useRef(true);
   useEffect(() => {
-    list.current?.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest" });
+    if (follow.current) list.current?.querySelector(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active, items]);
 
   // Below the button when there is room, otherwise above; always inside the window.
@@ -129,6 +131,7 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
   }, [anchor, onClose]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    follow.current = true;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (items.length > 0) setActive((a) => (a + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length);
@@ -184,7 +187,10 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
               role="option"
               aria-selected={it.family === value}
               onPointerDown={(e) => e.preventDefault()}
-              onPointerMove={() => active !== i && setActive(i)}
+              onPointerMove={() => {
+                follow.current = false;
+                if (active !== i) setActive(i);
+              }}
               onClick={() => onPick(it.family)}
               className={`flex ${it.bundled ? "h-8" : "h-7"} cursor-pointer items-center gap-2 rounded-md px-2 ${i === active ? "bg-white/[.08]" : ""}`}
             >

@@ -117,6 +117,8 @@ function tickStep(zoom: number): number {
   return 1200;
 }
 
+const VISIBLE_STEP = 400;
+
 /** The playhead line, the one part of the timeline that follows playback frame by frame; it keeps itself in view while playing. */
 function Playhead({ zoom, scroller }: { zoom: number; scroller: RefObject<HTMLDivElement | null> }) {
   const timeUs = useEditor((s) => s.timeUs);
@@ -129,8 +131,9 @@ function Playhead({ zoom, scroller }: { zoom: number; scroller: RefObject<HTMLDi
     if (x > el.scrollLeft + lane - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
   }, [timeUs, playing, zoom, scroller]);
   // Above the ruler, below the track headers. The dark edges keep it visible on bright footage; no blur, it moves every frame.
+  // It moves by transform on its own layer, so playback never repaints the clips under it.
   return (
-    <div className="pointer-events-none absolute bottom-0 top-0 z-[45]" style={{ left: HEADER_W + (timeUs / US) * zoom }}>
+    <div className="pointer-events-none absolute bottom-0 top-0 z-[45] will-change-transform" style={{ left: HEADER_W, transform: `translateX(${(timeUs / US) * zoom}px)` }}>
       <div className="absolute -left-[0.75px] bottom-0 top-2 w-[1.5px] bg-white shadow-[0_0_0_0.5px_rgb(0_0_0/.4)]" />
       <div className="absolute -left-1.5 top-0.5 h-3.5 w-3 rounded-[3px_3px_6px_6px] bg-white shadow-[0_0_0_0.5px_rgb(0_0_0/.45)]" />
     </div>
@@ -167,7 +170,10 @@ export function Timeline({ height }: { height: number }) {
   const fps = project?.canvas.fps ?? 30;
   const minUs = Math.ceil(US / fps);
   const laneWidth = Math.max(view.width - HEADER_W, (duration / US + 30) * zoom);
-  const visible = useMemo<[number, number]>(() => [view.left - 200, view.left + view.width + 200], [view.left, view.width]);
+  // Clips get the window they draw filmstrip tiles in. It moves in steps, with at least 200 px of margin on
+  // each side, so scrolling re-renders the clips once per step instead of on every scroll event.
+  const windowFrom = Math.floor(view.left / VISIBLE_STEP) * VISIBLE_STEP;
+  const visible = useMemo<[number, number]>(() => [windowFrom - 200, windowFrom + view.width + VISIBLE_STEP + 200], [windowFrom, view.width]);
 
   const timeAt = useCallback(
     (clientX: number) => {

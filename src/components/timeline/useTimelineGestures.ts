@@ -169,9 +169,22 @@ export function useTimelineGestures({
       let d: Drag = { clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 };
       setDrag(d);
 
+      // Pointer moves are handled once per display frame: a fast mouse sends several per frame, and each
+      // one would re-render the timeline. The last one is applied before a release commits the drag.
+      let frame = 0;
+      let latest: globalThis.PointerEvent | null = null;
+      const apply = () => {
+        frame = 0;
+        const ev = latest;
+        latest = null;
+        const next = ev && step(d, ev, track.kind);
+        if (next) setDrag((d = next));
+      };
       const end = (commit: boolean) => {
         unfollow();
         window.removeEventListener("keydown", onKey, true);
+        cancelAnimationFrame(frame);
+        if (commit) apply();
         stopDrag.current = null;
         setDrag(null);
         if (commit) finishRef.current(d);
@@ -186,8 +199,8 @@ export function useTimelineGestures({
       const unfollow = followPointer({
         move: (ev) => {
           if (locked) return;
-          const next = step(d, ev, track.kind);
-          if (next) setDrag((d = next));
+          latest = ev;
+          frame ||= requestAnimationFrame(apply);
         },
         up: () => end(true),
         cancel: () => end(false),

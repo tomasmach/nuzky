@@ -101,7 +101,8 @@ function ProjectMenu() {
     setOpen(false);
     try {
       await switchProject(fn);
-      useEditor.setState({ timeUs: 0, thumbs: {}, filmstrips: {}, waveforms: {} });
+      // Opening another project starts a new session, and setSnap already drops (and frees) its media previews.
+      useEditor.setState({ timeUs: 0 });
     } catch (e) {
       toast({ kind: "error", text: errorText(e) });
     }

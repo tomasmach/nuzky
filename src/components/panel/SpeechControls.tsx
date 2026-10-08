@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useState, type SelectHTMLAttributes } from "react";
 import { AlertCircle, ChevronDown, Loader2, X } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
@@ -21,11 +22,17 @@ function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
 
 const isSpeech = (j: JobEvent) => j.kind === "captions" || j.kind === "transcript";
 
-/** The running recognition job (captions and transcripts share one slot) and the last one of `kind`. */
+/**
+ * The running recognition job (captions and transcripts share one slot) and the last one of `kind`. Only
+ * these two, so the progress of an export or another job does not re-render the tab using them.
+ */
 export function useSpeechJobs(kind: JobEvent["kind"]) {
-  const jobs = useEditor((s) => s.jobs);
-  const all = Object.values(jobs);
-  return { running: all.find((j) => isSpeech(j) && j.status === "running"), last: all.filter((j) => j.kind === kind).pop() };
+  return useEditor(
+    useShallow((s) => {
+      const all = Object.values(s.jobs);
+      return { running: all.find((j) => isSpeech(j) && j.status === "running"), last: all.filter((j) => j.kind === kind).pop() };
+    }),
+  );
 }
 
 /** Spoken language and model, shared by Captions and Transcript. */

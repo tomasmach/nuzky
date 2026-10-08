@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Copy, Layers, RotateCcw, Trash2 } from "lucide-react";
 import { LIMITS } from "../../lib/limits";
 import { ADJUST_ROWS, DEFAULT_TRANSFORM, NO_ADJUST, sameAdjust } from "../../lib/presets";
-import { deleteSelection, duplicateSelection, editClips, findClip, isCaptionTrack, transformAtPlayhead, useEditor } from "../../lib/store";
+import { deleteSelection, duplicateSelection, editClips, findClip, isCaptionTrack, readoutTime, transformAtPlayhead, useEditor } from "../../lib/store";
 import type { Adjust, Clip, EditCmd, Project, Track, Transform } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
 import { Button, IconButton, Section, Slider } from "../ui";
@@ -44,7 +44,7 @@ function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }
   const flat = useEditor(
     useShallow((s) =>
       found.flatMap((f) => {
-        const t = transformAtPlayhead(f.clip, s.timeUs);
+        const t = transformAtPlayhead(f.clip, readoutTime(s));
         return KEYS.map((k) => t[k]);
       }),
     ),

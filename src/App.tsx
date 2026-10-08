@@ -340,6 +340,11 @@ function Divider({ height, max, onChange }: { height: number; max: number; onCha
   );
 }
 
+// While the video plays, overlays drop their blur (index.css): a blur over moving pictures is redone every frame.
+useEditor.subscribe((s, prev) => {
+  if (s.playing !== prev.playing) document.documentElement.toggleAttribute("data-playing", s.playing);
+});
+
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api } });
 

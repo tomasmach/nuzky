@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } fro
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
 import { LIMITS } from "../../lib/limits";
 import { DEFAULT_TRANSFORM } from "../../lib/presets";
-import { editClip, isCaptionTrack, setClipTransform, undoAction, useEditor } from "../../lib/store";
+import { editClip, isCaptionTrack, readoutTime, setClipTransform, undoAction, useEditor } from "../../lib/store";
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
 import { Button, IconButton, NumberInput, Section, Segmented, Slider } from "../ui";
 import { QUIET } from "./Header";
@@ -123,7 +123,7 @@ function atPlayhead(clip: Clip, timeUs: number, fps: number): AtPlayhead {
 export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset }) {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   // Plain values, so playback re-renders the section only when a keyframed value moves or a keyframe is passed.
-  const at = useEditor(useShallow((s) => atPlayhead(clip, s.timeUs, canvas.fps)));
+  const at = useEditor(useShallow((s) => atPlayhead(clip, readoutTime(s), canvas.fps)));
   const { atIndex } = at;
   const transform = at;
   const set = (patch: Partial<Transform>, key: string) => setClipTransform(clip.id, patch, `${clip.id}:${key}`);
