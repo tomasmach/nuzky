@@ -76,6 +76,10 @@ npm run tauri dev
 
 Use the [versioned Homebrew formula](https://formulae.brew.sh/formula/ffmpeg@8) so a future `brew ffmpeg` upgrade does not silently change the FFmpeg major version. The [GitHub runner catalog](https://github.com/actions/runner-images) maps `macos-14` to arm64; CI also asserts `uname -m` is `arm64`.
 
+If every C link fails with `ld: tapi error: malformed file … libSystem.tbd … unknown architecture arm64e.x1-macos`, the selected Xcode is older than the Command Line Tools SDK the compiler picks (Xcode 26 on macOS 27). Update Xcode, or give the toolchain its own SDK: `export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"`. Switching to the Command Line Tools 27 instead builds in debug, but its `strip` with the macOS 27 SDK and the 14.0 deployment target writes proc-macro libraries that dyld rejects (`mis-aligned LINKEDIT string pool`), so release builds fail.
+
+For tests and fixtures: `brew install espeak-ng` for `scripts/fixtures.sh`. The engine tests draw frame numbers with FFmpeg's `drawtext`, which Homebrew's `ffmpeg` and `ffmpeg@8` lack. `brew install ffmpeg-full` (keg-only) and put it first only for test runs: `PATH="$(brew --prefix ffmpeg-full)/bin:$PATH" cargo test --workspace`. Installing it upgrades shared Homebrew libraries such as x265; run `brew linkage --test` afterwards and `brew upgrade` any formula it reports, then rebuild CapOpen. On macOS the app keeps data in `~/Library/Application Support/capopen` and cache in `~/Library/Caches/capopen` regardless of `XDG_DATA_HOME`/`XDG_CACHE_HOME`; isolate a manual run with `HOME=<test dir>` plus `XDG_RUNTIME_DIR`.
+
 ```sh
 node scripts/build-bundles.mjs
 ```
