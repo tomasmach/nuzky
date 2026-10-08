@@ -128,6 +128,10 @@ fn catalog() -> Result<Vec<Tool>> {
             "export_video",
             "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. For Instagram Reels or TikTok pass preset=\"reels\": 1080x1920, 30 fps, H.264 High, AAC 48 kHz stereo, sound levelled to -14 LUFS with true peak <= -1 dBTP in the file (the project and preview keep their levels); needs a 9:16 canvas, resolution/fps may be omitted or must be 1080/30. Without preset resolution (the SHORT side in pixels, 1080 gives 1080x1920 on a portrait canvas) and fps=1..240 are required. quality high/recommended/small, default recommended. path must be new; relative paths resolve beside the project. Requires --allow-write. Job phases: measuring_loudness (preset only), exporting. Poll job(get) until done before reporting success.",
         )?,
+        tool::<params::SuggestOptions>(
+            "suggest_options",
+            "Offer the user 2-6 choices when a decision is theirs to make, e.g. which take to keep, cut tight or loose, which caption style. In the CapOpen AI panel they show as buttons under your message, and the label picked arrives as the user's next message. Labels are short and distinct, at most 80 characters, in the user's language; detail is one optional line on what each choice does. Call it as the last thing in your turn, end the turn right after, and do not repeat the options in text. Never offer choices for something you can decide from the guide or the user's style.",
+        )?,
     ])
 }
 

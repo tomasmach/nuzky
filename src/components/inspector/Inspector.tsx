@@ -126,7 +126,7 @@ export function Inspector() {
   }
 
   return (
-    <aside className="pane flex w-[300px] shrink-0 flex-col overflow-hidden" aria-label="Inspector">
+    <aside className="pane flex w-[300px] shrink-0 flex-col overflow-hidden" aria-label="Inspector" data-dock-slot="inspector">
       {body}
     </aside>
   );

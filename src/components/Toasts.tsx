@@ -78,10 +78,11 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
 
 /**
  * Bottom-left above the timeline, over the library and no wider than it (360 px less 12 px on
- * each side), so they never cover the video frame or the transport. The stack is a polite live
+ * each side), so they never cover the video frame or the transport. With the AI panel docked on
+ * the left, they move right with the library. The stack is a polite live
  * region; errors are alerts. F8 moves focus to the newest toast, Esc there dismisses it.
  */
-export function Toasts({ bottom }: { bottom: number }) {
+export function Toasts({ bottom, left }: { bottom: number; left: number }) {
   const toasts = useEditor((s) => s.toasts);
   const lift = useEditor((s) => s.toastLift);
   const dismiss = useEditor((s) => s.dismissToast);
@@ -130,8 +131,8 @@ export function Toasts({ bottom }: { bottom: number }) {
       onFocus={() => setFocused(true)}
       onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused(false)}
       onKeyDown={onKeyDown}
-      className="pointer-events-none fixed left-[18px] z-[90] flex w-[336px] flex-col items-start gap-2"
-      style={{ bottom: bottom + lift }}
+      className="pointer-events-none fixed z-[90] flex w-[336px] flex-col items-start gap-2"
+      style={{ bottom: bottom + lift, left }}
     >
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} paused={hovered || focused} dismiss={dismiss} />

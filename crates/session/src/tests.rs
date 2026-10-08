@@ -810,6 +810,8 @@ fn user_autosave_debounces_and_events_follow_commits_with_origins() {
     assert_eq!(f.disk(), s.state().unwrap().project);
     s.end_run(&run, EndAction::Keep).unwrap();
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 3, error: None }));
+    // What the run changed comes just before the run ends, so the UI can show it with the run.
+    assert!(matches!(rx.recv().unwrap(), SessionEvent::RunSummary(changes) if !changes.is_empty()));
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Run(None)));
     s.undo_run(&run).unwrap();
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { revision: 4, origin: Origin::Undo }));

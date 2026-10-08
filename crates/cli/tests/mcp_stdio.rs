@@ -130,7 +130,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 17);
+    assert_eq!(tools.len(), 18);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -203,6 +203,14 @@ fn readonly_resources_prompts_and_clear_errors() {
     );
     let error = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0]}}));
     assert_eq!(error["result"]["isError"], true);
+    // Offering choices touches nothing, so a read-only client may do it; nonsense is refused with the reason.
+    let offer = json!({"question":"Which take?","options":[{"label":"The first one"},{"label":"The last one","detail":"Clearer"}]});
+    assert_eq!(c.call("suggest_options", offer)["shown"], 2);
+    assert!(c.error("suggest_options", json!({"options":[{"label":"Only one"}]})).contains("2 to 6 options"));
+    assert!(
+        c.error("suggest_options", json!({"options":[{"label":"Same"},{"label":"same"}]}))
+            .contains("labels must differ")
+    );
     c.finish();
 }
 

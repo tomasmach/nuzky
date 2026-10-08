@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""A stand-in for `claude -p` in the AI panel flows, so they never spend anyone's subscription.
+
+It takes the same arguments, refuses to run unless CapOpen passed every flag that keeps the agent to
+CapOpen's tools, and answers in Claude Code's stream-json lines. It is a real MCP client of the bridge
+from --mcp-config, so its edits go through CapOpen like a real agent's. The message picks what it does:
+  "cut"      reads the project, cuts 1-3 s out, adds two captions and answers
+  "options"  offers two takes with suggest_options
+  "slow"     opens a run, splits the clip and keeps working until stopped
+  "signin"   is not signed in;  "limit" has hit its usage limit
+  anything else is echoed back.
+Each start is logged to $CAPOPEN_FAKE_AGENT_LOG/runs.jsonl (argv, pid, session); sessions live there too.
+"""
+import json, os, signal, subprocess, sys, threading, queue, time
+from pathlib import Path
+
+if len(sys.argv) > 1 and sys.argv[1] == '--version':
+    print('2.1.292 (Claude Code)')
+    sys.exit(0)
+
+LOG = Path(os.environ.get('CAPOPEN_FAKE_AGENT_LOG', '/tmp/fake-agent'))
+LOG.mkdir(parents=True, exist_ok=True)
+args = sys.argv[1:]
+
+
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+def emit(obj):
+    print(json.dumps(obj, ensure_ascii=False), flush=True)
+
+
+# The flags that keep the agent to CapOpen's tools; without any of them this is a bug in CapOpen.
+REQUIRED = {'-p': None, '--output-format': 'stream-json', '--tools': '', '--strict-mcp-config': None,
+            '--permission-mode': 'dontAsk', '--allowedTools': 'mcp__capopen', '--setting-sources': 'user',
+            '--disable-slash-commands': None}
+missing = [f for f, v in REQUIRED.items() if f not in args or (v is not None and opt(f) != v)]
+settings = json.loads(opt('--settings') or '{}')
+if not settings.get('disableAllHooks'):
+    missing.append('--settings disableAllHooks')
+session = opt('--session-id') or opt('--resume')
+prompt = sys.stdin.read()
+with open(LOG / 'runs.jsonl', 'a') as f:
+    f.write(json.dumps({'pid': os.getpid(), 'argv': args, 'cwd': os.getcwd(), 'missing': missing, 'prompt': prompt,
+                        'resume': '--resume' in args, 'session': session}, ensure_ascii=False) + '\n')
+if missing:
+    print(f'fake agent: CapOpen left out {missing}', file=sys.stderr)
+    sys.exit(2)
+sessions = LOG / 'sessions'
+sessions.mkdir(exist_ok=True)
+if '--resume' in args and not (sessions / session).exists():
+    print(f'No conversation found with session ID: {session}', file=sys.stderr)
+    sys.exit(1)
+(sessions / session).write_text(prompt)
+
+
+class Mcp:
+    def __init__(self, server):
+        env = dict(os.environ, **server.get('env', {}))
+        self.p = subprocess.Popen([server['command'], *server['args']], env=env, stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=open(LOG / 'bridge.log', 'a'), text=True)
+        self.lines, self.id = queue.Queue(), 0
+        threading.Thread(target=lambda: [self.lines.put(l) for l in self.p.stdout], daemon=True).start()
+        self.rpc('initialize', {'protocolVersion': '2025-03-26', 'capabilities': {}, 'clientInfo': {'name': 'fake-agent', 'version': '1'}})
+        self.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+
+    def send(self, m):
+        self.p.stdin.write(json.dumps(m) + '\n')
+        self.p.stdin.flush()
+
+    def rpc(self, method, params):
+        self.id += 1
+        self.send({'jsonrpc': '2.0', 'id': self.id, 'method': method, 'params': params})
+        while True:
+            m = json.loads(self.lines.get(timeout=30))
+            if m.get('id') == self.id:
+                return m
+
+
+mcp = Mcp(json.loads(opt('--mcp-config'))['mcpServers']['capopen'])
+tools = [f"mcp__capopen__{t['name']}" for t in mcp.rpc('tools/list', {})['result']['tools']]
+style = settings.get('outputStyle', 'Proactive')
+emit({'type': 'system', 'subtype': 'init', 'session_id': session, 'tools': tools, 'output_style': style,
+      'mcp_servers': [{'name': 'capopen', 'status': 'connected'}], 'claude_code_version': '2.1.292'})
+calls = 0
+
+
+def say(text):
+    emit({'type': 'stream_event', 'parent_tool_use_id': None, 'event': {'type': 'message_start'}})
+    for i in range(0, len(text), 12):
+        emit({'type': 'stream_event', 'parent_tool_use_id': None,
+              'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': text[i:i + 12]}}})
+        time.sleep(0.02)
+    emit({'type': 'assistant', 'parent_tool_use_id': None, 'message': {'content': [{'type': 'text', 'text': text}]}})
+
+
+def call(tool, arguments):
+    global calls
+    calls += 1
+    tid, name = f'toolu_{calls}', f'mcp__capopen__{tool}'
+    emit({'type': 'stream_event', 'parent_tool_use_id': None, 'event': {'type': 'message_start'}})
+    emit({'type': 'stream_event', 'parent_tool_use_id': None,
+          'event': {'type': 'content_block_start', 'content_block': {'type': 'tool_use', 'id': tid, 'name': name, 'input': {}}}})
+    emit({'type': 'assistant', 'parent_tool_use_id': None, 'message': {'content': [{'type': 'tool_use', 'id': tid, 'name': name, 'input': arguments}]}})
+    result = mcp.rpc('tools/call', {'name': tool, 'arguments': arguments})['result']
+    emit({'type': 'user', 'parent_tool_use_id': None,
+          'message': {'content': [{'type': 'tool_result', 'tool_use_id': tid, 'is_error': bool(result.get('isError'))}]}})
+    if result.get('isError'):
+        raise RuntimeError(result['content'][0]['text'])
+    return result.get('structuredContent', {})
+
+
+def finish(error=False, text=''):
+    emit({'type': 'result', 'subtype': 'error_during_execution' if error else 'success', 'is_error': error, 'result': text})
+    mcp.p.stdin.close()
+    sys.exit(0)
+
+
+def interrupted(*_):
+    emit({'type': 'user', 'parent_tool_use_id': None, 'message': {'content': [{'type': 'text', 'text': '[Request interrupted by user]'}]}})
+    finish(error=True, text='')
+
+
+signal.signal(signal.SIGINT, interrupted)
+message = prompt.split('\n\n[CapOpen]')[0].strip().lower()
+
+if 'signin' in message:
+    emit({'type': 'assistant', 'error': 'authentication_failed', 'parent_tool_use_id': None,
+          'message': {'content': [{'type': 'text', 'text': 'Not logged in · Please run /login'}]}})
+    emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Not logged in · Please run /login'})
+    sys.exit(1)
+if 'limit' in message:
+    emit({'type': 'assistant', 'error': 'rate_limit', 'parent_tool_use_id': None,
+          'message': {'content': [{'type': 'text', 'text': "You've hit your limit · resets 9pm"}]}})
+    emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': "You've hit your limit · resets 9pm"})
+    sys.exit(1)
+
+if 'cut' in message:
+    state = call('get_state', {})
+    say('Vystřihnu pauzu na začátku a přidám titulky.')
+    run = call('begin_run', {'label': 'Tighten the start'})['run_id']
+    time.sleep(1.5)
+    call('apply_edits', {'run_id': run, 'request_id': 'cut', 'edits': [
+        {'type': 'rippleDeleteRanges', 'ranges': [{'startUs': 1_000_000, 'endUs': 3_000_000}]}]})
+    style = {'fontSize': 95.0, 'color': '#ffffff', 'strokeWidth': 7.5}
+    call('apply_edits', {'run_id': run, 'request_id': 'captions', 'edits': [{'type': 'addCaptions', 'style': style, 'segments': [
+        {'startUs': 0, 'endUs': 1_000_000, 'text': 'Dneska vám'}, {'startUs': 1_000_000, 'endUs': 2_000_000, 'text': 'ukážu jak'}]}]})
+    call('inspect_frames', {'times_us': [500_000, 1_500_000]})
+    call('end_run', {'run_id': run, 'action': 'keep'})
+    say(f"Hotovo. Video bylo {state['duration_us'] / 1e6:.1f} s, teď je o 2 s kratší a má dva titulky.")
+elif 'options' in message:
+    say('Mám dvě verze úvodu.')
+    call('suggest_options', {'question': 'Kterou verzi úvodu nechat?', 'options': [
+        {'label': 'The first take', 'detail': 'Shorter, a slip in the middle'}, {'label': 'The last take', 'detail': 'Clean, 2 s longer'}]})
+elif 'slow' in message:
+    clip = call('get_state', {})['tracks'][0]['clips'][0]
+    run = call('begin_run', {'label': 'Slow edit'})['run_id']
+    call('apply_edits', {'run_id': run, 'request_id': 'split', 'edits': [{'type': 'splitClip', 'clipId': clip['id'], 'atUs': 2_000_000}]})
+    say('Pracuju na dalších střizích…')
+    for _ in range(600):
+        time.sleep(0.1)
+else:
+    say(f'Rozumím: {message}')
+finish()

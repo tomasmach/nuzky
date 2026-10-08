@@ -45,6 +45,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("build_captions", Never, true, false, false),
     rules("apply_zooms", Never, true, false, false),
     rules("export_video", Never, false, false, true),
+    // Only shows choices to the user; the project is not touched.
+    rules("suggest_options", Always, false, true, false),
 ];
 
 pub(crate) fn find(name: &str) -> Option<&'static Rules> {
@@ -76,7 +78,10 @@ mod tests {
         let names =
             |keep: fn(&Rules) -> bool| TOOLS.iter().filter(|r| keep(r)).map(|r| r.name).collect::<BTreeSet<_>>();
         let set = |names: &[&'static str]| names.iter().copied().collect::<BTreeSet<_>>();
-        assert_eq!(names(|r| matches!(r.reads, Always)), set(&["get_state", "get_transcript", "inspect_frames"]));
+        assert_eq!(
+            names(|r| matches!(r.reads, Always)),
+            set(&["get_state", "get_transcript", "inspect_frames", "suggest_options"])
+        );
         assert_eq!(
             names(|r| r.destructive),
             set(&[
@@ -89,7 +94,10 @@ mod tests {
                 "resolve_recovery"
             ])
         );
-        assert_eq!(names(|r| r.idempotent), set(&["get_state", "get_transcript", "inspect_frames", "apply_edits"]));
+        assert_eq!(
+            names(|r| r.idempotent),
+            set(&["get_state", "get_transcript", "inspect_frames", "apply_edits", "suggest_options"])
+        );
         assert_eq!(names(|r| r.run_job), set(&["analyze", "transcribe", "export_video"]));
         let job = find("job").unwrap();
         assert!(job.reads(&json!({"action":"get"})) && !job.reads(&json!({"action":"cancel"})));

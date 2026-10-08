@@ -91,7 +91,15 @@ pub enum Origin {
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     TranscriptsChanged,
-    Changed { revision: u64, origin: Origin },
+    Changed {
+        revision: u64,
+        origin: Origin,
+    },
     Run(Option<RunInfo>),
-    Saved { revision: u64, error: Option<String> },
+    /// What the run that is ending changed, sent just before `Run(None)`.
+    RunSummary(Vec<crate::summary::RunChange>),
+    Saved {
+        revision: u64,
+        error: Option<String>,
+    },
 }

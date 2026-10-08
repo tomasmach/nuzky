@@ -18,6 +18,9 @@ import { MEDIA_EXTENSIONS, dropResolver, importPaths, pickAndImport } from "./co
 import { Preview } from "./components/preview/Preview";
 import { Timeline } from "./components/timeline/Timeline";
 import { Toasts } from "./components/Toasts";
+import { DockDragLayer, DockedAiPanel, FloatingAiPanel, InspectorAiPanel } from "./components/ai/AiDock";
+import { listenAgentEvents, panelRunEnded, useAgent } from "./lib/agent";
+import { togglePanel, useDock, useDockLayout } from "./lib/dock";
 import { TopBar } from "./components/TopBar";
 import { Button, DisabledHint } from "./components/ui";
 
@@ -63,6 +66,12 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      // Ctrl+J opens and closes the AI panel, also from inside its own field.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j" && !useEditor.getState().snap?.recovery) {
+        e.preventDefault();
+        togglePanel();
+        return;
+      }
       if (isTyping(target) || useEditor.getState().exportOpen || useEditor.getState().snap?.recovery) return;
       const s = useEditor.getState();
       const mod = e.ctrlKey || e.metaKey;
@@ -177,7 +186,9 @@ function useBackendEvents() {
         // The run's last change arrived before this event, so Undo here removes the whole run; a run
         // that changed nothing offers none, as it would undo the step before it.
         const changed = !!snap && snap.revision !== runStart;
-        if (aiRun && !e.payload) toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap && changed ? undoAction(snap) : undefined });
+        // A run the AI panel's agent made shows there, with what it changed and Undo; others get a toast.
+        if (aiRun && !e.payload && !panelRunEnded(aiRun, snap && changed ? snap : null))
+          toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap && changed ? undoAction(snap) : undefined });
       }),
     );
     offs.push(
@@ -346,7 +357,7 @@ useEditor.subscribe((s, prev) => {
 });
 
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
-if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api } });
+if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock } });
 
 async function startEditor() {
   const boot = await api.boot();
@@ -436,9 +447,11 @@ function BootScreen() {
 export default function App() {
   const snap = useEditor((s) => s.snap);
   const [timelineH, setTimelineH, timelineMaxH] = useTimelineHeight();
+  const dock = useDockLayout();
   useShortcuts();
   useBackendEvents();
   useUiContext();
+  useEffect(listenAgentEvents, []);
 
   if (!snap) return <BootScreen />;
 
@@ -446,18 +459,26 @@ export default function App() {
     <>
       <div className="flex h-full flex-col" inert={snap.recovery}>
         <TopBar />
-        <div className="flex min-h-0 flex-1 gap-1.5 px-1.5">
-          <LeftPanel />
-          <Preview />
-          <Inspector />
+        <div className="flex min-h-0 flex-1">
+          {dock.open && dock.mode === "left" && <DockedAiPanel side="left" width={dock.width} />}
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 gap-1.5 px-1.5">
+              <LeftPanel />
+              <Preview />
+              {dock.open && dock.mode === "inspector" ? <InspectorAiPanel /> : <Inspector />}
+            </div>
+            <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
+            <div className="shrink-0 px-1.5 pb-1.5">
+              <Timeline height={timelineH} />
+            </div>
+          </div>
+          {dock.open && dock.mode === "right" && <DockedAiPanel side="right" width={dock.width} />}
         </div>
-        <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
-        <div className="shrink-0 px-1.5 pb-1.5">
-          <Timeline height={timelineH} />
-        </div>
+        {dock.open && dock.mode === "float" && <FloatingAiPanel rect={dock.float} />}
+        <DockDragLayer />
         <ExportDialog />
         <ConnectAgentDialog />
-        <Toasts bottom={timelineH + 18} />
+        <Toasts bottom={timelineH + 18} left={dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
         <DisabledHint />
         <DragChip />
       </div>

@@ -27,11 +27,17 @@ def click(r, label, scope='document'):
         if (!b) return false; b.focus(); b.click(); return true;""", label)
 
 
-@flow('connect', 'Connect agent writes only the capopen entry into Claude Code and Codex settings, after a backup, '
+@flow('connect', 'Connect an agent in a terminal (in the AI panel) writes only the capopen entry into Claude Code and Codex settings, after a backup, '
       'and the agent they start edits the open project live', before=home)
 def connect(r):
     folder = r.work / 'home'
-    r.check('the top bar offers Connect agent', click(r, 'Connect agent'))
+    # Connect agent lives in the AI panel's agent menu: AI in the top bar, the agent's name, then the item.
+    r.check('AI in the top bar opens the panel', click(r, 'AI', "document.querySelector('header')")
+            and wait(lambda: r.s.run("return !!document.querySelector('aside[aria-label=AI]')"), 5))
+    r.check('its agent menu offers to connect an agent in a terminal',
+            r.s.run("document.querySelector('aside[aria-label=AI] button[title=\"Choose the agent\"]').click(); return true")
+            and wait(lambda: r.s.run("""const item = [...document.querySelectorAll('[role=menu] [role=menuitem]')]
+                .find((b) => b.textContent.includes('Connect an agent in a terminal')); if (!item) return false; item.click(); return true;"""), 5))
     rows = wait(lambda: r.s.run(ROWS) or None, 10)
     r.check('the dialog lists Claude Code and Codex, not yet connected',
             rows and [('Claude Code' in x['text'], 'Not connected' in x['text']) for x in rows][0] == (True, True)
