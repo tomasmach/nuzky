@@ -55,7 +55,7 @@ export function Button({
         type="button"
         title={disabled ? reason : title}
         {...disabledProps(disabled, onClick, reason ? reasonId : undefined)}
-        className={`inline-flex h-8 items-center justify-center gap-1.5 ${pill ? "rounded-full px-3.5" : "rounded-lg px-3"} text-[13px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+        className={`btn ${pill ? "btn-pill" : ""} transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
           disabled ? `cursor-not-allowed opacity-40 ${idle(variants[variant])}` : `active:brightness-90 ${variants[variant]}`
         } ${className}`}
         {...rest}
@@ -95,7 +95,7 @@ export function IconButton({
       title={lock ?? label}
       aria-pressed={active}
       {...disabledProps(disabled, onClick)}
-      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center ${round ? "rounded-full" : "rounded-lg"} transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+      className={`icon-btn ${round ? "icon-btn-round" : ""} transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
         disabled ? "cursor-not-allowed opacity-40" : "active:brightness-75"
       } ${active ? "bg-accent/[.18] text-accent" : disabled ? "text-muted" : "text-muted hover:bg-white/[.08] hover:text-fg"} ${className}`}
       {...rest}
@@ -284,7 +284,7 @@ export function RangeInput({
   const [lo, hi] = [Math.min(origin, frac(value)), Math.max(origin, frac(value))];
   return (
     <span className={`relative flex h-4 items-center ${className}`}>
-      {twoSided && <span aria-hidden className="pointer-events-none absolute top-1 h-2 w-0.5 -translate-x-1/2 rounded-full bg-white/30" style={{ left: at(origin) }} />}
+      {twoSided && <span aria-hidden className={`pointer-events-none absolute top-1 h-2 w-0.5 -translate-x-1/2 rounded-full ${disabled ? "bg-white/15" : "bg-white/30"}`} style={{ left: at(origin) }} />}
       <input
         type="range"
         aria-label={label}
@@ -295,7 +295,7 @@ export function RangeInput({
         aria-valuetext={valueText}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="range relative w-full disabled:opacity-40"
+        className="range relative w-full"
         style={{ "--fill-from": at(lo), "--fill-to": at(hi) } as CSSProperties}
       />
     </span>

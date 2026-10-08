@@ -145,14 +145,14 @@ export function TransitionsTab() {
   const target = useEditor(useShallow((s) => (s.snap ? transitionTarget(s.snap.project, s.selection, s.cut, s.timeUs) : null)));
   if (!target)
     return (
-      <div className="m-3 flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line p-6 text-center">
+      <div className="m-3.5 flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/[.1] p-6 text-center">
         <Blend size={28} className="text-muted" />
         <p className="text-[13px] text-fg">No cuts yet</p>
         <p className="text-[12px] text-muted">Put two clips on the main track to add a transition between them.</p>
       </div>
     );
   return (
-    <div className="flex flex-col gap-3 overflow-y-auto p-3">
+    <div className="flex flex-col gap-3 overflow-y-auto p-3.5">
       <p className="tabular text-[12px] text-muted">
         Cut at <span className="text-fg">{formatTime(target.atUs)}</span>
       </p>

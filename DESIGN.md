@@ -8,13 +8,13 @@ Defined in `src/index.css` (`@layer components`, so utilities still override the
 
 | Class | Look | Use |
 |---|---|---|
-| `pane` | `panel`, 12 px radius, 1 px white 6 % hairline | Library, inspector, timeline. The preview pane is `stage` with the same shape |
+| `pane` | `panel`, 12 px radius, 1 px white 6 % hairline drawn as an inset outline, so content at the edge never covers it | Library, inspector, timeline. The preview pane is `stage` with the same shape |
 | `bar` | White 7.5 % fill, white 10 % top highlight and 7 % hairline, soft shadow | Floating capsules: top bar groups, transport, timeline tool groups. Never blurs: it floats over still backgrounds, where a blur would look the same and cost a repaint on every frame below it |
 | `overlay` | 82 % graphite, `backdrop-filter: blur(28px) saturate(1.8)`, highlight, deep shadow | Short-lived layers only: menus, popovers, dialogs, toasts, the disabled-reason hint. Falls back to solid `#2a2a2f` where backdrop-filter is missing and with `prefers-contrast: more` |
 | `seg-track` / `seg-on` | Recessed white 4.5 % track; the chosen segment white 15 % with a top highlight and a small shadow | Segmented controls, the inspector tabs and the library tabs |
 | `btn-prominent` | `accent-strong` fill, white label, top highlight | The one or two prominent actions of a view: Export, Generate captions, the confirm button of a dialog |
 
-Performance rules: `backdrop-filter` only on `overlay`, never on anything that lives over the preview canvas or over the timeline while it scrolls or plays. No blur, filter or large shadow on repeated items (clips, media tiles, transcript words). No `transition: all`; transitions on colour, opacity or transform only.
+Performance rules: `backdrop-filter` only on `overlay`, never on anything that lives over the preview canvas or over the timeline while it scrolls or plays. No blur, filter or large shadow on repeated items (clips, media tiles, transcript words). No `transition: all`; transitions on colour, opacity or transform only. The preview frame has square corners and only a 1 px hairline: a rounded clip would mask the canvas on every frame, and in WebKitGTK a blurred shadow on the frame left the canvas black.
 
 ## Colour tokens
 

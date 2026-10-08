@@ -47,7 +47,7 @@ export function FontPicker({
         title={disabled ? disabledReason : missing ? `${current} is not installed on this computer, so ${DEFAULT_FONT} is used` : undefined}
         aria-disabled={disabled || undefined}
         onClick={disabled ? undefined : () => setOpen(!open)}
-        className={`flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-line bg-raised pl-2 pr-1.5 text-left text-fg transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${disabled ? "" : "enabled:hover:border-muted"}`}
+        className={`flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-white/[.09] pl-2.5 pr-2 text-left text-fg shadow-[inset_0_1px_0_rgb(255_255_255/.06),inset_0_0_0_1px_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${disabled ? "" : "hover:bg-white/[.14]"}`}
       >
         <span className="min-w-0 flex-1 truncate text-[15px] leading-5" style={{ fontFamily: mixed ? undefined : fontCss(current) }}>
           {mixed ? "—" : current}
@@ -146,8 +146,8 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
   const optionId = (i: number) => `${id}-${i}`;
 
   return (
-    <div ref={ref} className="fixed z-[110] flex flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-2xl shadow-black/60" style={pos}>
-      <div className="shrink-0 border-b border-line p-1.5">
+    <div ref={ref} className="overlay fixed z-[110] flex flex-col overflow-hidden rounded-xl" style={pos}>
+      <div className="shrink-0 border-b border-white/[.08] p-1">
         <input
           ref={search}
           type="text"
@@ -160,7 +160,7 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
-          className="h-8 w-full rounded-md border border-line bg-raised px-2 text-[13px] text-fg placeholder:text-muted focus:border-accent"
+          className="h-8 w-full rounded-lg border border-white/[.08] bg-white/[.055] px-2.5 text-[13px] text-fg outline-offset-0 placeholder:text-muted focus:border-accent"
         />
       </div>
       <div ref={list} id={`${id}-list`} role="listbox" aria-label="Fonts" className="min-h-0 flex-1 overflow-y-auto p-1">
@@ -174,7 +174,7 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
         {items.map((it, i) => (
           <div key={`${it.bundled}:${it.family}`}>
             {(i === 0 || i === firstSystem) && (
-              <div className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted" role="presentation">
+              <div className="px-2 pb-1 pt-2 text-[11px] font-semibold text-muted" role="presentation">
                 {it.bundled ? "Built in" : "On this computer"}
               </div>
             )}
@@ -186,7 +186,7 @@ function FontMenu({ anchor, value, onPick, onClose }: { anchor: HTMLElement; val
               onPointerDown={(e) => e.preventDefault()}
               onPointerMove={() => active !== i && setActive(i)}
               onClick={() => onPick(it.family)}
-              className={`flex h-8 cursor-pointer items-center gap-2 rounded px-2 ${i === active ? "bg-raised" : ""}`}
+              className={`flex ${it.bundled ? "h-8" : "h-7"} cursor-pointer items-center gap-2 rounded-md px-2 ${i === active ? "bg-white/[.08]" : ""}`}
             >
               <span className={`min-w-0 flex-1 truncate ${it.bundled ? "text-[15px]" : "text-[13px]"} ${it.family === value ? "text-fg" : "text-fg/90"}`} style={it.bundled ? { fontFamily: fontCss(it.family) } : undefined}>
                 {it.family}

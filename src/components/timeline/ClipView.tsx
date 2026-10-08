@@ -5,7 +5,8 @@ import { US, formatDuration } from "../../lib/time";
 import type { Asset, Clip, Filmstrip, Project, Track } from "../../lib/types";
 import { Waveform } from "./Waveform";
 
-export const EDGE = 7;
+/** Width of the trim handles, and of the zone at each end that trims instead of moving. */
+export const EDGE = 8;
 
 export function clipAsset(project: Project, clip: Clip): Asset | undefined {
   const c = clip.content;
@@ -121,9 +122,10 @@ export const ClipView = memo(function ClipView({
       tabIndex={ghost ? undefined : tabbable ? 0 : -1}
       onPointerDown={onPointerDown ? (e) => onPointerDown(e, clip, track) : undefined}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, clip) : undefined}
-      className={`group absolute top-1 bottom-1 overflow-hidden rounded-md ${bg} ${
-        ghost ? "z-30 opacity-85 shadow-xl shadow-black/60 ring-2 ring-accent" : selected ? "z-10 ring-2 ring-accent" : "ring-1 ring-black/40 hover:ring-muted/60"
-      } ${track.hidden ? "opacity-40" : ""} ${locked ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
+      // No blur or large shadow here: there is one of these per clip. Only the dragged copy casts a small shadow.
+      className={`group absolute top-1 bottom-1 overflow-hidden rounded-[7px] ${bg} ${ghost ? "z-30 opacity-85 shadow-[0_4px_12px_rgb(0_0_0/.5)]" : selected ? "z-10" : ""} ${
+        track.hidden ? "opacity-40" : ""
+      } ${locked ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
       style={{
         left,
         width,
@@ -135,28 +137,40 @@ export const ClipView = memo(function ClipView({
     >
       {strip && c.type === "media" && <FilmstripTiles strip={strip} sourceInUs={c.sourceInUs} speed={speed} zoom={zoom} width={width} height={innerH} visible={local} />}
       {sound && asset && c.type === "media" && (
-        <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} color="#5fd3a5" />
+        <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} color="#30d158" />
       )}
       {soundStrip && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5 bg-black/45">
-          <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} color="#8fe3c1" className="absolute inset-0 h-full" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5 bg-black/55">
+          <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} color="#7ee2a8" className="absolute inset-0 h-full" />
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-1 px-2.5 pt-1 text-[11px] text-fg">
-        <span className={`flex min-w-0 items-center gap-1 rounded-sm px-1 ${visual ? "bg-black/60" : ""}`}>
-          {/* Caption clips are short; the track header carries their icon, so the text gets the room. */}
+      {c.type === "text" ? (
+        // Text sits straight on its colour, centred; caption clips are short and the track header carries their icon, so the text gets the room.
+        <div className={`pointer-events-none absolute inset-0 flex items-center gap-1.5 px-2 text-[11px] text-fg ${isCaption ? "" : "font-medium"}`}>
           {!isCaption && <Icon size={11} className="shrink-0" />}
           <span className="truncate">{label}</span>
-          {width > 110 && <span className="tabular shrink-0 pl-1 text-fg/80">{formatDuration(durationUs)}</span>}
-        </span>
-        {speed !== 1 && width > 40 && (
-          <span className="tabular flex shrink-0 items-center gap-0.5 rounded-sm bg-black/60 px-1 font-medium">
-            <Gauge size={11} />
-            {Number(speed.toFixed(2))}x
+          {width > 110 && <span className="tabular shrink-0 font-normal text-fg/70">{formatDuration(durationUs)}</span>}
+        </div>
+      ) : (
+        // Over pictures and waveforms the name sits in a dark chip. A plain fill, not a blur: there is one per clip.
+        <div className="pointer-events-none absolute inset-x-0 top-1 flex items-center gap-1 px-2.5 text-[11px] font-medium text-fg">
+          <span className="flex h-[17px] min-w-0 items-center gap-1 rounded-[5px] bg-black/45 pl-[5px] pr-1.5">
+            <Icon size={11} className="shrink-0" />
+            <span className="truncate">{label}</span>
+            {width > 110 && <span className="tabular shrink-0 pl-0.5 font-normal text-fg/70">{formatDuration(durationUs)}</span>}
           </span>
-        )}
-      </div>
+          {speed !== 1 && width > 40 && (
+            <span className="tabular ml-auto flex h-[17px] shrink-0 items-center gap-0.5 rounded-[5px] bg-black/45 px-1 font-semibold">
+              <Gauge size={11} />
+              {Number(speed.toFixed(2))}x
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* The edge goes over the frames: a hairline, or the selection ring. */}
+      <span className={`pointer-events-none absolute inset-0 rounded-[7px] ${selected ? "inset-ring-2 inset-ring-accent" : "inset-ring inset-ring-white/10 group-hover:inset-ring-white/30"}`} />
 
       {clip.animIn && (
         <div
@@ -191,13 +205,17 @@ export const ClipView = memo(function ClipView({
         </div>
       )}
 
-      {/* Trim handles: visible on hover and selection so edges look grabbable. */}
-      {!locked && (
-        <>
-          <div className={`absolute inset-y-0 left-0 w-[7px] cursor-ew-resize rounded-l-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
-          <div className={`absolute inset-y-0 right-0 w-[7px] cursor-ew-resize rounded-r-md ${selected ? "bg-white/90" : "group-hover:bg-white/50"}`} />
-        </>
-      )}
+      {/* Trim handles: accent with a dark grip when selected, a faint hint on hover so edges look grabbable. The clip's rounding clips them. */}
+      {!locked &&
+        (["left-0", "right-0"] as const).map((side) => (
+          <div
+            key={side}
+            className={`absolute inset-y-0 ${side} flex cursor-ew-resize items-center justify-center ${selected ? "bg-accent" : "group-hover:bg-white/25"}`}
+            style={{ width: EDGE }}
+          >
+            {selected && <span className="h-3.5 w-0.5 rounded-full bg-black/55" />}
+          </div>
+        ))}
     </div>
   );
 });

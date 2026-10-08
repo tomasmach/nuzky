@@ -6,6 +6,7 @@ import { deleteSelection, duplicateSelection, editClips, findClip, isCaptionTrac
 import type { Adjust, Clip, EditCmd, Project, Track, Transform } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
 import { Button, IconButton, Section, Slider } from "../ui";
+import { InspectorHeader, QUIET } from "./Header";
 import { CleanVoiceRow } from "./MediaSections";
 import { FieldRow } from "./TextSection";
 
@@ -75,7 +76,7 @@ function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }
     <Section
       title="Transform"
       actions={
-        <IconButton label="Reset transform of all selected clips" className="h-7 w-7" onClick={reset}>
+        <IconButton label="Reset transform of all selected clips" className={QUIET} onClick={reset}>
           <RotateCcw size={14} />
         </IconButton>
       }
@@ -101,7 +102,7 @@ function AdjustRows({ found, coalesce }: { found: Found[]; coalesce: string }) {
     <Section
       title="Adjust"
       actions={
-        <IconButton label="Reset adjustments of all selected clips" className="h-7 w-7" disabled={untouched} onClick={() => editClips(ids, (c) => ({ type: "updateClip", clipId: c.id, adjust: NO_ADJUST }))}>
+        <IconButton label="Reset adjustments of all selected clips" className={QUIET} disabled={untouched} onClick={() => editClips(ids, (c) => ({ type: "updateClip", clipId: c.id, adjust: NO_ADJUST }))}>
           <RotateCcw size={14} />
         </IconButton>
       }
@@ -165,15 +166,9 @@ export function MultiInspector({ ids }: { ids: string[] }) {
   const coalesce = `multi:${ids.join(",")}`;
   return (
     <>
-      <div className="shrink-0 border-b border-line px-4 py-3">
-        <div className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
-          <Layers size={14} className="shrink-0 text-muted" />
-          <span className="truncate">{found.length} clips selected</span>
-        </div>
-        <div className="tabular mt-0.5 text-[12px] text-muted">{detail}</div>
-      </div>
+      <InspectorHeader icon={Layers} title={`${found.length} clips selected`} detail={detail} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="grid grid-cols-2 gap-2 border-b border-line px-4 py-3">
+        <div className="grid grid-cols-2 gap-2 border-b border-white/[.07] px-4 pb-4 pt-1">
           <Button onClick={duplicateSelection} title="Duplicate (Ctrl+D)">
             <Copy size={14} /> Duplicate
           </Button>

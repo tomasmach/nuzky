@@ -16,7 +16,7 @@ export function ProjectSection() {
   return (
     <>
       <Section title="Project">
-        <dl className="tabular grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-1 text-[12px]">
+        <dl className="tabular grid grid-cols-[78px_1fr] items-center gap-x-2 gap-y-1.5 text-[12px]">
           <dt className="text-muted">Format</dt>
           <dd>
             {/* Opens Ratio under the preview, which stays the one control for the format. */}
@@ -26,7 +26,7 @@ export function ProjectSection() {
               title="Change the canvas ratio"
               onClick={() => useEditor.setState({ ratioOpen: true })}
               {...lockedProps(lock)}
-              className="-mx-1.5 inline-flex h-6 items-center gap-1 rounded px-1.5 text-fg transition-colors duration-[120ms] ease-out hover:bg-raised aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent"
+              className="-mx-1.5 inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-fg transition-colors duration-[120ms] ease-out hover:bg-white/[.08] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent"
             >
               {formatLabel(canvas.width, canvas.height)} · {canvas.width}×{canvas.height}
               <ChevronDown size={13} className="text-muted" />

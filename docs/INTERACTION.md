@@ -4,9 +4,9 @@ How the editor behaves. Visual tokens live in [DESIGN.md](../DESIGN.md).
 
 ## Layout
 
-Top bar (projects, name, save state, background jobs, undo/redo, Export) · left panel (Media, Audio, Text, Captions, Transcript, Transitions, Filters) · preview with transport and Ratio · inspector · timeline across the bottom. The layout follows CapCut so its users find everything where they expect it. Each control exists once: the canvas format lives in Ratio under the preview, the timecode in the transport.
+Top bar (Projects, name and save state in the middle, AI run, background jobs, Connect agent, undo/redo, Export) · left panel (Media, Audio, Text, Captions, Transcript, Transitions, Filters) · preview with transport and Ratio · inspector · timeline across the bottom. The layout follows CapCut so its users find everything where they expect it. Each control exists once: the canvas format lives in Ratio under the preview, the timecode in the transport.
 
-Drag the line above the timeline to resize it; double-click resets it, ↑/↓ on the focused handle resize by 24 px. The height is remembered.
+Drag the gap above the timeline to resize it (a grip shows while the pointer is over it); double-click resets it, ↑/↓ on the focused handle resize by 24 px. The height is remembered.
 
 ## Response time
 

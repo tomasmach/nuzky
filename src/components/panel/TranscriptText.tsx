@@ -328,7 +328,7 @@ export function TranscriptText({
           if (i !== null) startEdit(i);
         }}
         onKeyDown={onKeyDown}
-        className="min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-3 focus-visible:-outline-offset-2"
+        className="min-h-0 flex-1 overflow-y-auto px-3.5 pt-3 pb-1 focus-visible:-outline-offset-2!"
       >
         {paras.map(([from, to]) => (
           <Paragraph
@@ -347,7 +347,7 @@ export function TranscriptText({
         ))}
       </div>
       {lo >= 0 && (
-        <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
+        <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-white/[.07] px-3.5 py-2" onKeyDown={onDeleteKey}>
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatDuration(lengthUs)}
           </span>

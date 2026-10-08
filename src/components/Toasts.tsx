@@ -5,6 +5,12 @@ import { useEditor, type Toast } from "../lib/store";
 /** How long a toast stays, in ms; errors, warnings and sticky notices stay until dismissed. */
 const lifetime = (t: Toast) => (t.kind === "error" || t.kind === "warning" || t.sticky ? null : t.action ? 7000 : 5000);
 
+/** The `overlay` shadow with the hairline in the toast's colour; a border would double the hairline. */
+const EDGE = {
+  error: "shadow-[inset_0_1px_0_rgb(255_255_255/.12),inset_0_0_0_1px_rgb(255_69_58/.55),0_18px_50px_rgb(0_0_0/.55)]",
+  warning: "shadow-[inset_0_1px_0_rgb(255_255_255/.12),inset_0_0_0_1px_rgb(255_159_10/.55),0_18px_50px_rgb(0_0_0/.55)]",
+} as const;
+
 /** One toast. Its time runs only while the stack is neither hovered nor focused. */
 function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolean; dismiss: (id: number) => void }) {
   const onDismiss = useCallback(() => dismiss(t.id), [dismiss, t.id]);
@@ -31,24 +37,24 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
       role={t.kind === "error" ? "alert" : undefined}
       // Only the keyboard (F8, Esc) focuses a toast, so it always shows the focus outline; a click on its text does not focus it.
       onMouseDown={(e) => !(e.target as Element).closest("button") && e.preventDefault()}
-      className={`pointer-events-auto flex max-w-full items-center gap-2 rounded-lg border bg-raised px-3 py-2 text-[13px] text-fg shadow-xl shadow-black/50 focus:outline-2 focus:outline-offset-1 focus:outline-accent ${
-        t.kind === "error" ? "border-danger/50" : t.kind === "warning" ? "border-warn/50" : "border-line"
+      className={`overlay pointer-events-auto flex min-h-12 max-w-full items-center gap-2.5 rounded-[14px] py-2 pr-2 pl-3.5 text-[13px] font-medium text-fg focus:outline-2 focus:outline-offset-1 focus:outline-accent ${
+        t.kind === "error" || t.kind === "warning" ? EDGE[t.kind] : ""
       }`}
     >
       {t.kind === "error" ? (
-        <AlertCircle size={16} className="shrink-0 text-danger" />
+        <AlertCircle size={18} className="shrink-0 text-danger" />
       ) : t.kind === "warning" ? (
-        <AlertTriangle size={16} className="shrink-0 text-warn" />
+        <AlertTriangle size={18} className="shrink-0 text-warn" />
       ) : t.kind === "success" ? (
-        <CheckCircle2 size={16} className="shrink-0 text-accent" />
+        <CheckCircle2 size={18} className="shrink-0 text-ok" />
       ) : (
-        <Info size={16} className="shrink-0 text-muted" />
+        <Info size={18} className="shrink-0 text-muted" />
       )}
-      <span className="min-w-0 break-words">{t.text}</span>
+      <span className="min-w-0 flex-1 break-words">{t.text}</span>
       {action && (
         <button
           type="button"
-          className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-accent/10"
+          className="shrink-0 rounded-md px-1.5 py-1 font-semibold text-accent transition-colors duration-[120ms] ease-out hover:bg-white/[.08]"
           onClick={() => {
             action.run();
             onDismiss();
@@ -57,7 +63,13 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
           {action.label}
         </button>
       )}
-      <button type="button" aria-label="Dismiss" title="Dismiss (Esc)" className="shrink-0 rounded text-muted hover:text-fg" onClick={onDismiss}>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        title="Dismiss (Esc)"
+        className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-muted transition-colors duration-[120ms] ease-out hover:bg-white/[.08] hover:text-fg"
+        onClick={onDismiss}
+      >
         <X size={14} />
       </button>
     </div>
@@ -65,7 +77,7 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
 }
 
 /**
- * Bottom-left above the timeline, over the media panel and no wider than it (340 px less 12 px on
+ * Bottom-left above the timeline, over the library and no wider than it (360 px less 12 px on
  * each side), so they never cover the video frame or the transport. The stack is a polite live
  * region; errors are alerts. F8 moves focus to the newest toast, Esc there dismisses it.
  */
@@ -118,7 +130,7 @@ export function Toasts({ bottom }: { bottom: number }) {
       onFocus={() => setFocused(true)}
       onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused(false)}
       onKeyDown={onKeyDown}
-      className="pointer-events-none fixed left-3 z-[90] flex w-[316px] flex-col items-start gap-2"
+      className="pointer-events-none fixed left-[18px] z-[90] flex w-[336px] flex-col items-start gap-2"
       style={{ bottom: bottom + lift }}
     >
       {toasts.map((t) => (

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { videoDir, join } from "@tauri-apps/api/path";
-import { AlertCircle, AlertTriangle, CheckCircle2, Download, FolderOpen, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, AudioLines, CheckCircle2, X } from "lucide-react";
 import { api, errorText, plainError } from "../lib/api";
 import { formatLabel } from "../lib/presets";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
@@ -184,68 +184,74 @@ export function ExportDialog() {
   const settingsLocked = running || job?.status === "done";
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="export-title" onKeyDown={trapTab} className="w-[460px] rounded-lg border border-line bg-panel shadow-2xl shadow-black">
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 id="export-title" className="text-[14px] font-semibold">
-            Export video
-          </h2>
-          <IconButton label={running ? "Hide (export keeps running)" : "Close"} onClick={close}>
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center scrim-in bg-black/45"
+      onPointerDown={(e) => e.target === e.currentTarget && close()}
+    >
+      <div
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-title"
+        onKeyDown={trapTab}
+        className="overlay w-[500px] rounded-[20px] p-6 dialog-in"
+      >
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <h2 id="export-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
+              Export video
+            </h2>
+            <p className="tabular text-[12px] text-muted">
+              MP4 · H.264 + AAC · {formatLabel(project.canvas.width, project.canvas.height)} · {formatTime(duration)}
+            </p>
+          </div>
+          <IconButton label={running ? "Hide (export keeps running)" : "Close"} round className="-mr-2 -mt-1" onClick={close}>
             <X size={16} />
           </IconButton>
         </div>
 
-        <div className="flex flex-col gap-4 p-4">
-          <fieldset disabled={settingsLocked} className="flex flex-col gap-4 disabled:opacity-50">
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[12px] text-muted">Preset</span>
+        <div className="flex flex-col gap-4">
+          <fieldset disabled={settingsLocked} className="min-w-0 disabled:opacity-50">
+            <div className="grid grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3">
+              <span className="text-right text-[13px] text-muted">Preset</span>
               <Segmented label="Preset" value={options.preset ?? "custom"} onChange={pickPreset} options={PRESETS} />
               {options.preset === "reels" &&
                 (reelsBlocked ? (
-                  <p className="flex items-start gap-1.5 text-[12px] text-fg" role="alert">
+                  <p className="col-start-2 -mt-1 flex items-start gap-1.5 text-[12px] text-fg" role="alert">
                     <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
                     {REELS_NEEDS_916}
                   </p>
                 ) : (
-                  <p className="tabular text-[12px] text-muted">Loudness −14 LUFS, applied to the file</p>
+                  <p className="tabular col-start-2 -mt-1 flex items-center gap-1.5 text-[12px] text-muted">
+                    <AudioLines size={14} className="shrink-0" />
+                    Loudness −14 LUFS, applied to the file
+                  </p>
                 ))}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[12px] text-muted">Resolution</span>
-                <span className="tabular text-[12px] text-fg">
+              <span className="text-right text-[13px] text-muted">Resolution</span>
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <Segmented label="Resolution" value={options.resolution} onChange={(resolution) => setOption({ resolution })} options={RESOLUTIONS} />
+                </div>
+                <span className="tabular shrink-0 text-[12px] text-muted">
                   {size.w}×{size.h}
                 </span>
               </div>
-              <Segmented label="Resolution" value={options.resolution} onChange={(resolution) => setOption({ resolution })} options={RESOLUTIONS} />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[12px] text-muted">Frame rate</span>
+              <span className="text-right text-[13px] text-muted">Frame rate</span>
               <Segmented
                 label="Frame rate"
                 value={options.fps}
                 onChange={(fps) => setOption({ fps })}
                 options={FRAME_RATES.map((f) => ({ id: f, label: `${f}`, title: f === project.canvas.fps ? "Project frame rate" : undefined }))}
               />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[12px] text-muted">Quality</span>
-                <span className="tabular text-[12px] text-fg" title="Estimate; scenes with a lot of motion come out larger">
-                  about {formatBytes(estimateBytes(size.w, size.h, options.fps, options.quality, duration))}
-                </span>
-              </div>
+              <span className="text-right text-[13px] text-muted">Quality</span>
               <Segmented label="Quality" value={options.quality} onChange={(quality) => setOption({ quality })} options={QUALITIES} />
             </div>
           </fieldset>
-          <p className="tabular text-[12px] text-muted">
-            MP4 · H.264 + AAC · {formatLabel(project.canvas.width, project.canvas.height)} · {formatTime(duration)}
-          </p>
 
           {job && running && (
             <div className="flex flex-col gap-2" role="status">
               <div className="flex justify-between text-[12px]">
-                <span className="text-fg">
+                <span className="tabular text-fg">
                   {job.phase ?? "Rendering"}… {Math.round(job.progress * 100)}%
                 </span>
                 <span className="tabular text-muted">{eta}</span>
@@ -255,19 +261,19 @@ export function ExportDialog() {
             </div>
           )}
           {job?.status === "done" && (
-            <div className="flex items-start gap-2 rounded-md bg-accent/10 p-3 text-[13px]" role="status">
-              <CheckCircle2 size={16} className="mt-px shrink-0 text-accent" />
+            <div className="flex items-start gap-2 rounded-xl bg-ok/10 p-3 text-[13px] text-fg" role="status">
+              <CheckCircle2 size={16} className="mt-px shrink-0 text-ok" />
               <span className="break-all">Saved to {job.output}</span>
             </div>
           )}
           {replacing && (
-            <div className="flex items-start gap-2 rounded-md bg-warn/10 p-3 text-[13px] text-fg" role="alert">
+            <div className="flex items-start gap-2 rounded-xl bg-warn/10 p-3 text-[13px] text-fg" role="alert">
               <AlertTriangle size={16} className="mt-px shrink-0 text-warn" />
               <span className="break-all">{fileName(replacing)} already exists. Replace it?</span>
             </div>
           )}
           {failed && (
-            <div className="flex items-start gap-2 rounded-md bg-danger/10 p-3 text-[13px] text-danger" role="alert">
+            <div className="flex items-start gap-2 rounded-xl bg-danger/10 p-3 text-[13px] text-danger" role="alert">
               <AlertCircle size={16} className="mt-px shrink-0" />
               <span>Export failed: {plainError(failed)}</span>
             </div>
@@ -275,46 +281,55 @@ export function ExportDialog() {
           {job?.status === "cancelled" && <p className="text-[12px] text-muted">Export cancelled. The partial file was removed.</p>}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
-          {running ? (
-            <>
-              <Button onClick={() => api.cancelJob(jobId!)}>Cancel export</Button>
-              <Button variant="primary" data-autofocus onClick={close}>
-                Keep editing
-              </Button>
-            </>
-          ) : job?.status === "done" ? (
-            <>
-              <Button onClick={() => job.output && revealItemInDir(job.output)}>
-                <FolderOpen size={15} /> Show in folder
-              </Button>
-              <Button variant="primary" data-autofocus onClick={close}>
-                Done
-              </Button>
-            </>
-          ) : replacing ? (
-            <>
-              <Button data-autofocus onClick={() => (setExists(null), pickAndRun())}>
-                Choose another name…
-              </Button>
-              <Button variant="danger" onClick={() => run(replacing, true)}>
-                Replace
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={close}>Close</Button>
-              {failed && last.current ? (
-                <Button variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={() => run(last.current!.path, last.current!.replace)}>
-                  <Download size={15} /> Retry
+        <div className="mt-6 flex items-center justify-between gap-3 border-t border-white/[.08] pt-4">
+          <span className={`tabular min-w-0 text-[13px] text-muted ${settingsLocked ? "opacity-50" : ""}`} title="Estimate; scenes with a lot of motion come out larger">
+            about <span className="font-semibold text-fg">{formatBytes(estimateBytes(size.w, size.h, options.fps, options.quality, duration))}</span>
+          </span>
+          <div className="flex shrink-0 gap-2.5">
+            {running ? (
+              <>
+                <Button pill onClick={() => api.cancelJob(jobId!)}>
+                  Cancel export
                 </Button>
-              ) : (
-                <Button variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={pickAndRun}>
-                  <Download size={15} /> Export…
+                <Button pill variant="primary" data-autofocus onClick={close}>
+                  Keep editing
                 </Button>
-              )}
-            </>
-          )}
+              </>
+            ) : job?.status === "done" ? (
+              <>
+                <Button pill onClick={() => job.output && revealItemInDir(job.output)}>
+                  Show in folder
+                </Button>
+                <Button pill variant="primary" data-autofocus onClick={close}>
+                  Done
+                </Button>
+              </>
+            ) : replacing ? (
+              <>
+                <Button pill data-autofocus onClick={() => (setExists(null), pickAndRun())}>
+                  Choose another name…
+                </Button>
+                <Button pill variant="danger" onClick={() => run(replacing, true)}>
+                  Replace
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button pill onClick={close}>
+                  Close
+                </Button>
+                {failed && last.current ? (
+                  <Button pill variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={() => run(last.current!.path, last.current!.replace)}>
+                    Retry
+                  </Button>
+                ) : (
+                  <Button pill variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={pickAndRun}>
+                    Export…
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

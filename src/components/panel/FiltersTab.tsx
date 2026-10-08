@@ -37,7 +37,7 @@ export function FiltersTab() {
   const { clipId, adjust, thumb } = useFilterTarget();
   const edit = useEditor((s) => s.edit);
   return (
-    <div className="flex flex-col gap-3 overflow-y-auto p-3">
+    <div className="flex flex-col gap-3 overflow-y-auto p-3.5">
       {!clipId && (
         <p className="flex items-center gap-1.5 text-[12px] text-muted">
           <Palette size={14} className="shrink-0" /> Select a video or image clip to apply a filter.

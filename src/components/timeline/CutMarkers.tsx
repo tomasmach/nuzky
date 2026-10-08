@@ -22,7 +22,7 @@ export const CutMarkers = memo(function CutMarkers({ project, zoom, locked }: { 
           <div key={cut.clipId}>
             {t && (
               <div
-                className={`pointer-events-none absolute inset-y-1 z-[15] rounded-sm bg-black/45 ${on ? "border-2 border-accent" : "border border-fg/70"}`}
+                className={`pointer-events-none absolute inset-y-1 z-[15] rounded-[7px] bg-black/45 ${on ? "border-2 border-accent" : "border border-white/40"}`}
                 style={{ left: x - ((t.durationUs / US) * zoom) / 2, width: (t.durationUs / US) * zoom }}
               />
             )}
@@ -38,16 +38,18 @@ export const CutMarkers = memo(function CutMarkers({ project, zoom, locked }: { 
                 if (!t && !(await edit({ type: "setTransition", clipId: cut.clipId, transition: { kind: "dissolve", durationUs: DEFAULT_TRANSITION_US } }))) return;
                 selectCut(cut.clipId);
               }}
-              className={`absolute top-1/2 z-20 flex h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[4px] border transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed ${
+              // Centred on the picture above the sound strip, clear of the keyframe diamonds along the bottom.
+              // A crisp dark edge instead of a soft shadow: there is one per cut.
+              className={`absolute top-[calc(50%-17px)] z-20 flex h-5 w-5 -translate-x-1/2 items-center justify-center rounded-[6px] border transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed ${
                 t
                   ? on
                     ? "border-accent bg-accent text-black"
                     : "border-black/40 bg-fg text-black hover:bg-white"
-                  : "border-fg/40 bg-panel/90 text-transparent hover:border-fg hover:bg-fg hover:text-black focus-visible:text-fg"
+                  : "border-white/[.22] bg-[rgb(20_20_24/.85)] text-transparent hover:border-white/50 hover:text-fg focus-visible:text-fg"
               }`}
               style={{ left: x }}
             >
-              <Icon size={12} strokeWidth={2.5} />
+              <Icon size={12} />
             </button>
           </div>
         );
