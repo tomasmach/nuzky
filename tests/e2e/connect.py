@@ -38,11 +38,14 @@ def connect(r):
             and 'Codex' in rows[1]['text'] and 'Not connected' in rows[1]['text'], rows)
     time.sleep(0.3)  # the dialog fades in over 200 ms
     r.shot('connect-dialog')
-    for name in ('Claude Code', 'Codex'):
+    focused = "const el = document.activeElement; return el && el.closest('[role=dialog]') ? el.textContent.trim() : null;"
+    for name, next_focus in (('Claude Code', 'Connect'), ('Codex', 'Done')):
         r.s.run("""const row = [...document.querySelectorAll('[role=dialog] [role=group]')]
-            .find((row) => row.textContent.includes(arguments[0])); row.querySelector('button').click();""", name)
+            .find((row) => row.textContent.includes(arguments[0])); row.querySelector('button').focus(); row.querySelector('button').click();""", name)
         r.check(f'{name} shows connected', wait(lambda: any(name in x['text'] and 'Connected' in x['text'] for x in r.s.run(ROWS)), 10),
                 r.s.run(ROWS))
+        # A connected row has no button, so keyboard focus moves on inside the dialog instead of getting lost.
+        r.check(f'after {name}, focus moves to {next_focus}', wait(lambda: r.s.run(focused) == next_focus, 3), r.s.run(focused))
     r.shot('connected')
 
     claude = (folder / '.claude.json').read_text()

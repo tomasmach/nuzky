@@ -191,12 +191,11 @@ select {
       inset 0 1px 0 rgb(255 255 255 / 0.2),
       0 1px 3px rgb(0 0 0 / 0.45);
   }
-  .btn-prominent:not([aria-disabled="true"]):not(:disabled):hover {
+  .btn-prominent:not([aria-disabled="true"]):hover {
     background: #0064c8;
   }
-  /* Disabled, it reads as a quiet grey capsule rather than a muddy blue one. */
-  .btn-prominent[aria-disabled="true"],
-  .btn-prominent:disabled {
+  /* Disabled (always `aria-disabled`, so it stays focusable), a quiet grey capsule rather than a muddy blue one. */
+  .btn-prominent[aria-disabled="true"] {
     background: rgb(255 255 255 / 0.08);
     color: rgb(242 242 245 / 0.4);
     box-shadow: none;

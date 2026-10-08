@@ -45,6 +45,14 @@ export function ConnectAgentDialog() {
     return () => opener?.focus();
   }, [ready]);
 
+  // A connected agent's button goes away, so focus moves on to the next Connect, else to Done.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+  }, [rows]);
+
   if (!open) return null;
 
   const connect = async (row: AgentConnection) => {
@@ -52,6 +60,7 @@ export function ConnectAgentDialog() {
     setError(null);
     try {
       const done = await api.connectAgent(row.agent);
+      refocus.current = !!dialog.current?.contains(document.activeElement);
       setRows((all) => all?.map((r) => (r.agent === done.agent ? done : r)) ?? null);
       useEditor.getState().toast({
         kind: "success",
