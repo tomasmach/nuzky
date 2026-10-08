@@ -176,6 +176,12 @@ impl Listener {
                         while !stop.load(Ordering::Acquire) {
                             match listener.accept() {
                                 Ok((mut stream, _)) => {
+                                    // macOS hands the listener's non-blocking mode to accepted streams, so the
+                                    // first read without data would end the connection.
+                                    if let Err(error) = stream.set_nonblocking(false) {
+                                        eprintln!("IPC_UNAVAILABLE: preparing connection: {error}");
+                                        continue;
+                                    }
                                     if connections.lock().unwrap().len() >= MAX_CONNECTIONS {
                                         let _ = stream.set_write_timeout(Some(ACCEPT_INTERVAL));
                                         let _ = send(
