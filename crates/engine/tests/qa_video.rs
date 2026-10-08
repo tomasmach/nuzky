@@ -488,78 +488,90 @@ fn mpeg_ts_seek_matches_ffmpeg_pts_and_pixels() {
 }
 
 #[test]
-fn hlg_and_pq_sources_are_tone_mapped_to_sdr() {
+fn hlg_and_pq_sources_are_tone_mapped_like_libplacebo() {
     if !available() {
         return;
     }
     let tools = |kind: &str| {
         String::from_utf8_lossy(&run(Command::new("ffmpeg").args(["-hide_banner", kind])).stdout).into_owned()
     };
-    if !tools("-encoders").contains("libx265") || !tools("-filters").contains("zscale") {
-        eprintln!("SKIP: ffmpeg without libx265 or zscale");
+    if !tools("-encoders").contains("libx265") || !tools("-filters").contains("libplacebo") {
+        eprintln!("SKIP: ffmpeg without libx265 or libplacebo");
         return;
     }
+    // HLG signal of a phone shot: greys from shadows to highlights, skin, a lit wall and a red that only
+    // looks saturated once converted from BT.2020. Phones put faces and walls around and above HDR
+    // reference white (75 %), which the old curve kept at full strength and clipped to white.
+    const PATCHES: [[f64; 3]; 8] = [
+        [0.25; 3],
+        [0.5; 3],
+        [0.75; 3],
+        [0.85; 3],
+        [0.95; 3],
+        [0.62, 0.55, 0.50],
+        [0.85, 0.83, 0.76],
+        [0.70, 0.30, 0.25],
+    ];
+    // The same light as PQ: HLG on its nominal 1000 nit display, then the PQ curve.
+    let hlg_to_pq = |e: [f64; 3]| -> [f64; 3] {
+        let scene =
+            e.map(|v| if v <= 0.5 { v * v / 3.0 } else { (((v - 0.55991073) / 0.17883277).exp() + 0.28466892) / 12.0 });
+        let luma = 0.2627 * scene[0] + 0.678 * scene[1] + 0.0593 * scene[2];
+        scene.map(|s| {
+            let y = (luma.powf(0.2) * s / 10.0).powf(0.1593017578125);
+            ((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y)).powf(78.84375)
+        })
+    };
     let d = dir("hdr");
-    let source = d.join("patches.png");
-    // Mid-grey and a saturated red, converted to BT.2020 HDR with HDR reference white at SDR white.
-    ff(
-        &[
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=0x808080:s=160x90",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=0xd02020:s=160x90",
-            "-filter_complex",
-            "[0][1]hstack,format=rgb24",
-            "-frames:v",
-            "1",
-        ],
-        &source,
-    );
     let mut renderer = Renderer::new().unwrap();
     for transfer in ["arib-std-b67", "smpte2084"] {
+        let pq = transfer == "smpte2084";
+        let source = d.join(format!("{transfer}.ppm"));
+        let mut ppm = b"P6\n640 80\n65535\n".to_vec();
+        for _ in 0..80 {
+            for x in 0..640 {
+                let patch = if pq { hlg_to_pq(PATCHES[x / 80]) } else { PATCHES[x / 80] };
+                ppm.extend(patch.iter().flat_map(|v| ((v * 65535.0).round() as u16).to_be_bytes()));
+            }
+        }
+        std::fs::write(&source, ppm).unwrap();
         let path = d.join(format!("{transfer}.mp4"));
-        let filter = format!(
-            "zscale=tin=bt709:min=bt709:pin=bt709:rin=full:t={transfer}:m=2020_ncl:p=2020:r=limited:npl=203,format=yuv420p10le"
+        // PQ declares a 1000 nit peak like phone HDR10, so libplacebo assumes the peak CapOpen does.
+        let metadata = if pq {
+            ":master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400"
+        } else {
+            ""
+        };
+        let x265 = format!(
+            "pools=1:frame-threads=1:log-level=error:crf=4:colorprim=bt2020:transfer={transfer}:colormatrix=bt2020nc:range=limited{metadata}"
         );
         let input = source.to_str().unwrap();
-        ff(
-            &[
-                "-i",
-                input,
-                "-vf",
-                &filter,
-                "-c:v",
-                "libx265",
-                "-x265-params",
-                "pools=1:frame-threads=1:log-level=error",
-                "-color_primaries",
-                "bt2020",
-                "-color_trc",
-                transfer,
-                "-colorspace",
-                "bt2020nc",
-                "-frames:v",
-                "1",
-            ],
-            &path,
-        );
-        let p = project(&path, 200_000);
-        let frame = renderer.render(&p, 0, 320, 90, Wait::Exact, false).unwrap();
-        let patch = |x0: usize| -> [f64; 3] {
-            let pixels: Vec<&[u8]> = (30..60)
-                .flat_map(|y| (x0 + 40..x0 + 120).map(move |x| (y * 320 + x) * 4))
-                .map(|i| &frame[i..i + 3])
+        let yuv = "scale=in_range=pc:out_color_matrix=bt2020nc:out_range=tv,format=yuv420p10le";
+        ff(&["-i", input, "-vf", yuv, "-c:v", "libx265", "-x265-params", &x265, "-frames:v", "1"], &path);
+        // libplacebo's default tone mapping without per-frame peak detection, which a static curve cannot follow.
+        let placebo = "libplacebo=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=pc:peak_detect=0:apply_dolbyvision=0:format=rgba";
+        let reference = raw(&path, &["-vf", placebo]);
+        let frame = renderer.render(&project(&path, 200_000), 0, 640, 80, Wait::Exact, false).unwrap();
+        let patch = |rgba: &[u8], i: usize| -> [f64; 3] {
+            let pixels: Vec<&[u8]> = (20..60)
+                .flat_map(|y| (i * 80 + 20..i * 80 + 60).map(move |x| (y * 640 + x) * 4))
+                .map(|p| &rgba[p..p + 3])
                 .collect();
             std::array::from_fn(|c| pixels.iter().map(|p| p[c] as f64).sum::<f64>() / pixels.len() as f64)
         };
-        let (grey, red) = (patch(0), patch(160));
-        eprintln!("QA HDR {transfer}: grey {grey:.0?}, red {red:.0?}");
-        // Untouched BT.2020 HDR used to show grey 105-112 and red as (123-147, 62-74, 40-55).
-        assert!(grey.iter().all(|v| (v - 128.0).abs() < 8.0), "{transfer}: grey {grey:?}");
-        assert!(red[0] > 175.0 && red[1] < 60.0 && red[2] < 60.0, "{transfer}: red {red:?}");
+        let ours: Vec<_> = (0..PATCHES.len()).map(|i| patch(&frame, i)).collect();
+        let theirs: Vec<_> = (0..PATCHES.len()).map(|i| patch(&reference, i)).collect();
+        eprintln!("QA HDR {transfer}: CapOpen {ours:.0?}\n  libplacebo {theirs:.0?}");
+        // The old curve showed the 75 % grey at 246 and the wall at (255, 235, 198) against libplacebo's
+        // 179 and (221, 203, 172). Saturated red is left out: libplacebo also remaps the gamut.
+        for i in 0..7 {
+            let off = (0..3).map(|c| (ours[i][c] - theirs[i][c]).abs()).fold(0.0, f64::max);
+            assert!(off <= 12.0, "{transfer} patch {i}: CapOpen {:?}, libplacebo {:?}", ours[i], theirs[i]);
+        }
+        // Highlights above reference white keep their steps instead of all clipping to white.
+        assert!(ours[4][1] - ours[3][1] > 20.0, "{transfer}: highlights {:?} {:?}", ours[3], ours[4]);
+        // Shown untouched, the red is (179, 77, 64).
+        let red = ours[7];
+        assert!(red[0] > 175.0 && red[1] < 60.0, "{transfer}: red {red:?}");
     }
 }
