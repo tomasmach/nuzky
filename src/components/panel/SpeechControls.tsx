@@ -1,20 +1,38 @@
-import { useEffect, useState } from "react";
-import { AlertCircle, Loader2, X } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
+import { useEffect, useState, type SelectHTMLAttributes } from "react";
+import { AlertCircle, ChevronDown, Loader2, X } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
 import { SPEECH_LANGUAGES, setSpeechLanguage, useSpeech } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import type { JobEvent, SpeechModel } from "../../lib/types";
 import { Button, Field, ProgressBar } from "../ui";
 
-export const selectClass = "h-8 rounded-md border border-line bg-raised px-2 text-[13px] text-fg disabled:cursor-not-allowed disabled:opacity-40";
+/** A native select drawn as a white 9 % field with a chevron, like the font picker. */
+function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <span className="relative flex has-[:disabled]:opacity-40">
+      <select
+        {...props}
+        className="h-8 min-w-0 flex-1 appearance-none rounded-lg bg-white/[.09] pr-8 pl-2.5 text-[13px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/.06),inset_0_1px_0_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out enabled:hover:bg-white/[.13] disabled:cursor-not-allowed"
+      />
+      <ChevronDown size={14} aria-hidden className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
+    </span>
+  );
+}
 
 const isSpeech = (j: JobEvent) => j.kind === "captions" || j.kind === "transcript";
 
-/** The running recognition job (captions and transcripts share one slot) and the last one of `kind`. */
+/**
+ * The running recognition job (captions and transcripts share one slot) and the last one of `kind`. Only
+ * these two, so the progress of an export or another job does not re-render the tab using them.
+ */
 export function useSpeechJobs(kind: JobEvent["kind"]) {
-  const jobs = useEditor((s) => s.jobs);
-  const all = Object.values(jobs);
-  return { running: all.find((j) => isSpeech(j) && j.status === "running"), last: all.filter((j) => j.kind === kind).pop() };
+  return useEditor(
+    useShallow((s) => {
+      const all = Object.values(s.jobs);
+      return { running: all.find((j) => isSpeech(j) && j.status === "running"), last: all.filter((j) => j.kind === kind).pop() };
+    }),
+  );
 }
 
 /** Spoken language and model, shared by Captions and Transcript. */
@@ -37,13 +55,13 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
   return (
     <>
       <Field label="Spoken language">
-        <select value={language} disabled={disabled} onChange={(e) => setSpeechLanguage(e.target.value)} className={selectClass}>
+        <Select value={language} disabled={disabled} onChange={(e) => setSpeechLanguage(e.target.value)}>
           {SPEECH_LANGUAGES.map(([id, name]) => (
             <option key={id} value={id}>
               {name}
             </option>
           ))}
-        </select>
+        </Select>
       </Field>
       <Field label="Accuracy">
         {modelsError && models.length === 0 ? (
@@ -52,13 +70,13 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
             Could not load the models: {modelsError}
           </span>
         ) : (
-          <select value={model} disabled={disabled} onChange={(e) => useSpeech.setState({ model: e.target.value })} className={selectClass}>
+          <Select value={model} disabled={disabled} onChange={(e) => useSpeech.setState({ model: e.target.value })}>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label} ({m.sizeMb} MB){m.downloaded ? "" : " · download"}
               </option>
             ))}
-          </select>
+          </Select>
         )}
       </Field>
     </>
@@ -69,7 +87,7 @@ export function SpeechFields({ disabled }: { disabled: boolean }) {
 export function SpeechJobCard({ job }: { job: JobEvent }) {
   // No fill, so the empty part of the progress track stays visible.
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-line py-2 pl-3 pr-1.5" role="status">
+    <div className="flex flex-col gap-2 rounded-[10px] border border-white/[.08] py-2 pr-1.5 pl-3" role="status">
       <div className="flex items-center gap-2 text-[12px]">
         <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
         <span className="min-w-0 flex-1 truncate text-fg">

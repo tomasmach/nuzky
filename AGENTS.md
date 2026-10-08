@@ -4,7 +4,7 @@ CapOpen je open-source desktopový střihač videa ve stylu CapCutu (GPL-3.0-or-
 
 Uživatel stříhá videa z telefonu a často k tomu pouští AI agenta, který stříhá za něj. Změna málokdy patří jen jednomu povrchu: UI, engine, MCP nástroje, CLI a export sdílejí stejný projekt.
 
-Tenhle soubor je pro vývoj. `skills/capopen-edit/` je návod pro agenta, který v CapOpen stříhá video.
+Tenhle soubor je pro vývoj. Jak appka vypadá, popisuje `DESIGN.md`, jak se chová, `docs/INTERACTION.md`. `skills/capopen-edit/` je návod pro agenta, který v CapOpen stříhá video.
 
 ## Co nikdy neobětujeme
 
@@ -73,6 +73,7 @@ Nejčastější vada je změna, která funguje jen na cestě, kterou jsi zkouše
 ## Vkus
 
 - `DESIGN.md` a `docs/INTERACTION.md` jsou zákon. Komponenty z `src/components/ui.tsx` rozšiřuj, nekopíruj.
+- Vzhled je rozložení CapCutu dotažené jako Apple pro appky: tmavé grafitové panely, video jako nejjasnější věc na obrazovce, barva jen tam, kde něco znamená, a sklo jen na plovoucích lištách a krátkých překryvech. Směr, materiály, tokeny, komponenty, výkonový rozpočet efektů a známé zvláštnosti WebKitGTK popisuje `DESIGN.md`. Před změnou obrazovky si přečti jeho část, které se změna týká, nové hodnoty tam zapiš ve stejném PR a výsledek ověř na screenshotu z `scripts/repro.py` v 1440 × 900 i v nejmenším okně 1024 × 640.
 - UI je anglicky. Copy říká obyčejnými slovy, co se stane. Chyba říká, co dělat dál, bez interních kódů.
 - Každá akce myší má i cestu z klávesnice.
 - Licence je GPL-3.0-or-later. Nepřidávej závislost ani build FFmpeg, který s ní nejde dohromady (`libfdk_aac`, varianty „nonfree“). Licence Rust závislostí hlídá `cargo deny`.

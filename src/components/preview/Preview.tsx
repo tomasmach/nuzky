@@ -56,7 +56,8 @@ function useFrameStream(url: string, canvas: React.RefObject<HTMLCanvasElement |
         el.width = w;
         el.height = h;
       }
-      el.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(buf, HEADER, w * h * 4), w, h), 0, 0);
+      // Opaque: frames have no transparency, and an opaque canvas needs no blending with what is behind it.
+      el.getContext("2d", { alpha: false })?.putImageData(new ImageData(new Uint8ClampedArray(buf, HEADER, w * h * 4), w, h), 0, 0);
       // A frame rendered just before a pause can arrive after it; the pause already set the time.
       if (playing && useEditor.getState().playing) useEditor.setState({ timeUs: t });
     };
@@ -91,9 +92,9 @@ function useFrameStream(url: string, canvas: React.RefObject<HTMLCanvasElement |
 function Timecode({ duration }: { duration: number }) {
   const timeUs = useEditor((s) => s.timeUs);
   return (
-    <span className="tabular text-[12px]">
-      <span className="text-fg">{formatTime(timeUs)}</span>
-      <span className="text-muted"> / {formatTime(duration)}</span>
+    <span className="tabular truncate text-[13px]">
+      <span className="font-medium text-fg">{formatTime(timeUs)}</span>
+      <span className="text-muted @max-[460px]:hidden"> / {formatTime(duration)}</span>
     </span>
   );
 }
@@ -141,12 +142,14 @@ export function Preview() {
   const empty = duration === 0;
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col bg-bg" aria-label="Preview">
+    <section className="@container flex min-w-0 flex-1 flex-col rounded-xl bg-stage shadow-[inset_0_0_0_1px_rgb(255_255_255/.05)]" aria-label="Preview">
       {/* Clips the selection box of a layer scaled or rotated past the frame to the preview area. */}
-      <div ref={boxRef} className="relative m-3 mb-0 min-h-0 flex-1 overflow-hidden">
+      <div ref={boxRef} className="relative mx-4 mt-3 min-h-0 flex-1 overflow-hidden">
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="relative" style={{ width: fit.w, height: fit.h }}>
-            <div className="absolute inset-0 overflow-hidden rounded-sm bg-black shadow-[0_0_0_1px_var(--color-line)]">
+            {/* Square corners and no blurred shadow: a rounded clip would cost a mask on every frame, and in
+                WebKitGTK a blurred shadow on this box left the canvas black. */}
+            <div className="absolute inset-0 overflow-hidden bg-black shadow-[0_0_0_1px_rgb(255_255_255/.07)]">
               <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
               {showSafe && area && canvas && <SafeZone area={area} width={canvas.width} height={canvas.height} />}
               {empty && !engineError && (
@@ -168,36 +171,39 @@ export function Preview() {
           </div>
         </div>
       </div>
-      <div className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3">
-        <Timecode duration={duration} />
-        <div className="flex items-center gap-2">
-          <IconButton label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
-            <SkipBack size={16} />
-          </IconButton>
-          <button
-            type="button"
-            aria-label={playing ? "Pause (Space)" : "Play (Space)"}
-            title={playing ? "Pause (Space)" : "Play (Space)"}
-            disabled={empty}
-            onClick={togglePlay}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-fg text-black transition-transform duration-[120ms] ease-out hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="translate-x-px" />}
-          </button>
-          <IconButton label="Go to end (End)" onClick={() => seek(duration)} disabled={empty}>
-            <SkipForward size={16} />
-          </IconButton>
-        </div>
-        <div className="flex items-center justify-end gap-1">
-          <IconButton
-            label={area ? (showSafe ? "Hide the Reels and TikTok safe zone" : "Show the Reels and TikTok safe zone") : "The safe zone applies to vertical videos"}
-            active={showSafe && !!area}
-            disabled={!area}
-            onClick={toggleSafe}
-          >
-            <Smartphone size={16} />
-          </IconButton>
-          {canvas && <RatioMenu />}
+      <div className="flex shrink-0 justify-center px-5 py-2.5 @max-[460px]:px-2">
+        <div className="bar grid h-11 w-full max-w-[620px] grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-full pl-[18px] pr-1.5">
+          <Timecode duration={duration} />
+          <div className="flex items-center gap-2.5">
+            <IconButton round label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
+              <SkipBack size={16} />
+            </IconButton>
+            <button
+              type="button"
+              aria-label={playing ? "Pause (Space)" : "Play (Space)"}
+              title={playing ? "Pause (Space)" : "Play (Space)"}
+              disabled={empty}
+              onClick={togglePlay}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-fg text-black shadow-[0_1px_3px_rgb(0_0_0/.4)] transition-transform duration-[120ms] ease-out active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="translate-x-px" />}
+            </button>
+            <IconButton round label="Go to end (End)" onClick={() => seek(duration)} disabled={empty}>
+              <SkipForward size={16} />
+            </IconButton>
+          </div>
+          <div className="flex items-center justify-end gap-1">
+            <IconButton
+              round
+              label={area ? (showSafe ? "Hide the Reels and TikTok safe zone" : "Show the Reels and TikTok safe zone") : "The safe zone applies to vertical videos"}
+              active={showSafe && !!area}
+              disabled={!area}
+              onClick={toggleSafe}
+            >
+              <Smartphone size={16} />
+            </IconButton>
+            {canvas && <RatioMenu />}
+          </div>
         </div>
       </div>
     </section>

@@ -4,7 +4,7 @@ import { US } from "../../lib/time";
 
 const PEAKS_PER_SECOND = 50;
 
-/** Peak bars for the source range a clip plays; `speed` stretches it like the renderer. */
+/** Peak bars, centred on the middle line, for the source range a clip plays; `speed` stretches it like the renderer. */
 export function Waveform({
   assetId,
   sourceInUs,
@@ -12,7 +12,7 @@ export function Waveform({
   speed,
   width,
   color,
-  className = "absolute inset-x-0 bottom-0 h-[60%]",
+  className = "absolute inset-x-0 top-px h-[calc(100%-2px)]",
 }: {
   assetId: string;
   sourceInUs: number;
@@ -36,6 +36,8 @@ export function Waveform({
     const ctx = el.getContext("2d")!;
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = color;
+    // Bars never overlap, so alpha here looks the same as CSS opacity and spares a transparency layer per canvas.
+    ctx.globalAlpha = 0.8;
     const first = (sourceInUs / US) * PEAKS_PER_SECOND;
     const span = ((durationUs * speed) / US) * PEAKS_PER_SECOND;
     for (let x = 0; x < w; x++) {
@@ -44,10 +46,10 @@ export function Waveform({
       let m = 0;
       for (let i = a; i < b && i < peaks.length; i++) m = Math.max(m, peaks[i]);
       // Square root keeps quiet audio visible, roughly like a dB scale.
-      const bar = Math.max(1, Math.sqrt(m / 255) * h);
-      ctx.fillRect(x, h - bar, 1, bar);
+      const bar = Math.max(1, Math.round(Math.sqrt(m / 255) * h));
+      ctx.fillRect(x, (h - bar) >> 1, 1, bar);
     }
   }, [peaks, sourceInUs, durationUs, speed, width, color]);
   if (!peaks) return null;
-  return <canvas ref={ref} className={`pointer-events-none w-full opacity-80 ${className}`} />;
+  return <canvas ref={ref} className={`pointer-events-none w-full ${className}`} />;
 }

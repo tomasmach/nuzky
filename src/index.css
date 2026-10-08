@@ -1,24 +1,40 @@
 @import "tailwindcss";
 
+/* The UI face. The same variable file the engine and the font picker use, so it ships with the app
+   and looks the same on Linux, Windows and macOS. */
+@font-face {
+  font-family: "Inter UI";
+  src: url("../assets/fonts/inter/Inter[opsz,wght].ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: block;
+}
+
 @theme {
-  --color-bg: #0d0e10;
-  --color-panel: #15171a;
-  --color-raised: #1d2024;
-  --color-line: #2a2e34;
-  --color-fg: #e9ebee;
-  --color-muted: #9aa1a9;
-  --color-subtle: #656c75;
-  --color-accent: #10b981;
-  --color-accent-strong: #059669;
-  --color-danger: #f05252;
-  --color-warn: #f5a524;
+  --color-bg: #0c0c0e;
+  --color-stage: #121214;
+  --color-panel: #1c1c1f;
+  --color-raised: #2c2c30;
+  --color-line: #36363b;
+  --color-fg: #f2f2f5;
+  --color-muted: #a1a1a9;
+  --color-subtle: #6e6e75;
+  --color-accent: #2997ff;
+  --color-accent-strong: #0071e3;
+  --color-danger: #ff453a;
+  --color-warn: #ff9f0a;
+  --color-ok: #30d158;
   /* "clip-text" would collide with Tailwind's bg-clip-text (background-clip: text). */
-  --color-clip-video: #25435a;
-  --color-clip-image: #3a3f63;
-  --color-clip-audio: #1f4a3a;
-  --color-clip-title: #5a4520;
-  --color-clip-captions: #4a3460;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Inter", "Noto Sans", sans-serif;
+  --color-clip-video: #20466d;
+  --color-clip-image: #3a3d72;
+  --color-clip-audio: #144a31;
+  --color-clip-title: #6a4314;
+  --color-clip-captions: #4a3478;
+  --font-sans: "Inter UI", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* The root stays at 16 px, so Tailwind's rem sizes are the px values in DESIGN.md; body text is 13 px. */
+html {
+  font-size: 16px;
 }
 
 html,
@@ -29,7 +45,14 @@ body,
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-sans);
+}
+
+body,
+#root {
   font-size: 13px;
+  line-height: 1.25;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
@@ -43,19 +66,141 @@ select {
   -webkit-user-select: text;
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
+/* In the base layer, so a `focus-visible:outline-*` utility on an element can adjust its ring. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
 
-/* On timeline clips the accent ring means selected, so keyboard focus is an `fg` outline just outside it. */
-[data-clip-id]:focus-visible {
-  outline-color: var(--color-fg);
-  outline-offset: 2px;
+  /* On timeline clips the accent ring means selected, so keyboard focus is an `fg` outline just outside it. */
+  [data-clip-id]:focus-visible {
+    outline-color: var(--color-fg);
+    outline-offset: 2px;
+  }
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Materials. Panes are solid. Floating bars (top bar groups, transport, timeline tools) look like
+ * glass but never blur: they float over still backgrounds, where a blur would look the same and
+ * cost a repaint. Only short-lived overlays (menus, dialogs, toasts) blur what is under them.
+ */
+@layer components {
+  /* The hairline is an inset outline: outlines paint after the content, so a child at the edge never covers it. */
+  .pane {
+    background: var(--color-panel);
+    border-radius: 12px;
+    outline: 1px solid rgb(255 255 255 / 0.06);
+    outline-offset: -1px;
+  }
+  .bar {
+    background: rgb(255 255 255 / 0.075);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.1),
+      inset 0 0 0 1px rgb(255 255 255 / 0.07),
+      0 4px 12px rgb(0 0 0 / 0.25);
+  }
+  .overlay {
+    background: rgb(38 38 43 / 0.88);
+    -webkit-backdrop-filter: blur(28px) saturate(1.8);
+    backdrop-filter: blur(28px) saturate(1.8);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.12),
+      inset 0 0 0 1px rgb(255 255 255 / 0.1),
+      0 18px 50px rgb(0 0 0 / 0.55);
+  }
+  /* While the video plays (App.tsx sets the attribute), the blur would be redone on every frame under it. */
+  [data-playing] .overlay {
+    background: rgb(42 42 47 / 0.97);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .overlay {
+      background: #2a2a2f;
+    }
+  }
+  @media (prefers-contrast: more) {
+    .overlay {
+      background: #2a2a2f;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    .bar,
+    .overlay {
+      box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.35);
+    }
+    .pane {
+      outline-color: rgb(255 255 255 / 0.35);
+    }
+  }
+
+  /* Segmented controls and tab tracks: a recessed track, the chosen segment lifted out of it. */
+  .seg-track {
+    background: rgb(255 255 255 / 0.045);
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.05);
+  }
+  .seg-on {
+    background: rgb(255 255 255 / 0.15);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.1),
+      0 1px 3px rgb(0 0 0 / 0.4);
+  }
+
+  /* Button and IconButton (ui.tsx) shapes. Here rather than as utilities, so a `className` such as
+     "h-6 px-2 text-[12px]" on a call site overrides them: Tailwind sorts same-property utilities by
+     value, and a smaller utility would otherwise lose to the base size. */
+  .btn {
+    display: inline-flex;
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    border-radius: 0.5rem;
+    padding-inline: 0.75rem;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .btn-pill {
+    border-radius: 9999px;
+    padding-inline: 0.875rem;
+  }
+  .icon-btn {
+    display: inline-flex;
+    height: 2rem;
+    width: 2rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.5rem;
+  }
+  .icon-btn-round {
+    border-radius: 9999px;
+  }
+
+  /* The one prominent action per view: Export, Generate, Apply in a dialog. */
+  .btn-prominent {
+    background: var(--color-accent-strong);
+    color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.2),
+      0 1px 3px rgb(0 0 0 / 0.45);
+  }
+  .btn-prominent:not([aria-disabled="true"]):hover {
+    background: #0064c8;
+  }
+  /* Disabled (always `aria-disabled`, so it stays focusable), a quiet grey capsule rather than a muddy blue one. */
+  .btn-prominent[aria-disabled="true"] {
+    background: rgb(255 255 255 / 0.08);
+    color: rgb(242 242 245 / 0.4);
+    box-shadow: none;
+    opacity: 1;
+  }
 }
 
 /* Thin, dark scrollbars that do not shift layout. */
@@ -63,13 +208,23 @@ select {
   width: 10px;
   height: 10px;
 }
+/* The thumb shows while the pointer is over the scroller, like overlay scrollbars on macOS. */
 ::-webkit-scrollbar-thumb {
-  background: #2f343a;
+  background: transparent;
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-track {
+:hover::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.16);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.28);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -77,7 +232,7 @@ input[type="range"] {
   accent-color: var(--color-accent);
 }
 
-/* RangeInput (ui.tsx): `line` track, accent fill between --fill-from and --fill-to, `fg` thumb. */
+/* RangeInput (ui.tsx): a thin track, accent fill between --fill-from and --fill-to, a white capsule thumb. */
 input[type="range"].range {
   -webkit-appearance: none;
   appearance: none;
@@ -94,24 +249,53 @@ input[type="range"].range:disabled {
   border-radius: 2px;
   background: linear-gradient(
     to right,
-    var(--color-line) var(--fill-from),
+    rgb(255 255 255 / 0.13) var(--fill-from),
     var(--color-accent) var(--fill-from),
     var(--color-accent) var(--fill-to),
-    var(--color-line) var(--fill-to)
+    rgb(255 255 255 / 0.13) var(--fill-to)
   );
 }
 .range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
+  width: 22px;
   height: 14px;
   margin-top: -5px;
-  border-radius: 50%;
-  background: var(--color-fg);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  border-radius: 7px;
+  background: #f7f7f9;
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 0.35),
+    0 1px 3px rgb(0 0 0 / 0.5);
 }
 .range:enabled:hover::-webkit-slider-thumb {
   background: #fff;
+}
+/* Disabled: a solid grey thumb on a dimmed track. Opacity on the input would let the 0 tick show through the thumb. */
+.range:disabled::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    rgb(255 255 255 / 0.06) var(--fill-from),
+    rgb(41 151 255 / 0.35) var(--fill-from),
+    rgb(41 151 255 / 0.35) var(--fill-to),
+    rgb(255 255 255 / 0.06) var(--fill-to)
+  );
+}
+.range:disabled::-webkit-slider-thumb {
+  background: #55555b;
+  box-shadow: none;
+}
+/* Locked while an AI agent edits: read-only rather than off, so the values it changes stay readable. */
+.range.range-locked:disabled::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    rgb(255 255 255 / 0.1) var(--fill-from),
+    rgb(41 151 255 / 0.6) var(--fill-from),
+    rgb(41 151 255 / 0.6) var(--fill-to),
+    rgb(255 255 255 / 0.1) var(--fill-to)
+  );
+}
+.range.range-locked:disabled::-webkit-slider-thumb {
+  background: #8e8e93;
 }
 
 @keyframes skeleton {
@@ -123,9 +307,29 @@ input[type="range"].range:disabled {
   }
 }
 .skeleton {
-  background: linear-gradient(90deg, #1d2024 0, #262a2f 50%, #1d2024 100%) no-repeat;
+  background: linear-gradient(90deg, #232326 0, #2e2e33 50%, #232326 100%) no-repeat;
   background-size: 400px 100%;
   animation: skeleton 1.4s linear infinite;
+}
+
+/* Dialogs: the scrim and the panel appear over 200 ms. Keyframes rather than @starting-style transitions,
+   which left the scrim transparent in WebKitGTK. */
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.scrim-in {
+  animation: scrim-in 200ms ease-out both;
+}
+.dialog-in {
+  animation: dialog-in 200ms ease-out both;
 }
 
 @keyframes indeterminate {

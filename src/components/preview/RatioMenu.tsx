@@ -58,17 +58,17 @@ export function RatioMenu() {
         title={locked ? AI_EDITING : "Canvas ratio"}
         disabled={locked}
         onClick={() => setOpen(!open)}
-        className={`flex h-8 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
-          open ? "border-muted bg-raised text-fg" : "border-line text-fg enabled:hover:bg-raised"
+        className={`flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+          open ? "bg-white/[.14] text-fg" : "bg-white/[.06] text-fg enabled:hover:bg-white/[.12]"
         }`}
       >
-        <RectangleHorizontal size={14} className="text-muted" />
-        <span className="text-muted">Ratio</span>
-        <span className="tabular font-medium">{formatLabel(canvas.width, canvas.height)}</span>
+        <RectangleHorizontal size={14} className="text-muted @max-[460px]:hidden" />
+        <span className="@max-[460px]:hidden">Ratio</span>
+        <span className="tabular font-normal text-muted">{formatLabel(canvas.width, canvas.height)}</span>
         <ChevronDown size={13} className="text-muted" />
       </button>
       {open && (
-        <div role="menu" aria-label="Canvas ratio" onKeyDown={onMenuKey} className="absolute bottom-10 right-0 z-50 w-60 rounded-lg border border-line bg-panel p-1 shadow-2xl shadow-black/60">
+        <div role="menu" aria-label="Canvas ratio" onKeyDown={onMenuKey} className="overlay absolute bottom-11 right-0 z-50 w-60 rounded-xl p-1">
           {FORMATS.map((f) => {
             const on = f.width === canvas.width && f.height === canvas.height;
             return (
@@ -81,7 +81,7 @@ export function RatioMenu() {
                   if (!on) edit({ type: "setCanvas", width: f.width, height: f.height });
                   closeToTrigger();
                 }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-raised"
+                className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left hover:bg-white/[.08]"
               >
                 <span className="tabular w-9 text-[13px] font-medium text-fg">{f.label}</span>
                 <span className="flex-1 text-[12px] text-muted">{f.hint}</span>

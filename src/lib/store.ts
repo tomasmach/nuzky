@@ -198,6 +198,24 @@ if (typeof window !== "undefined") {
   window.addEventListener("focusin", () => gesture++, true);
 }
 
+/**
+ * Media previews arrive as PNG data URLs of up to a few MB. As a blob URL the same image is a short string,
+ * so a `src` or background holding it costs nothing to compare when a clip or tile re-renders.
+ */
+function blobUrl(url: string): string {
+  const head = /^data:([^;,]+);base64,/.exec(url);
+  if (!head) return url;
+  const bin = atob(url.slice(head[0].length));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: head[1] }));
+}
+
+/** Frees the blob URLs of previews dropped from the caches. */
+function revokePreviews(thumbs: (string | null)[], strips: (Filmstrip | null)[]) {
+  for (const url of [...thumbs, ...strips.map((f) => f?.url ?? null)]) if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+}
+
 export const useEditor = create<EditorState>((set, get) => ({
   snap: null,
   previewUrl: "",
@@ -238,6 +256,11 @@ export const useEditor = create<EditorState>((set, get) => ({
     // An asset id that now names another file, e.g. media an agent replaced, gets new previews.
     const rebound = switched ? [] : prev.project.assets.filter((a) => snap.project.assets.some((b) => b.id === a.id && b.path !== a.path)).map((a) => a.id);
     const without = <T,>(cache: Record<string, T>) => Object.fromEntries(Object.entries(cache).filter(([id]) => !rebound.includes(id)));
+    const dropped = (id: string) => switched || rebound.includes(id);
+    revokePreviews(
+      Object.entries(get().thumbs).flatMap(([id, url]) => (dropped(id) ? [url] : [])),
+      Object.entries(get().filmstrips).flatMap(([id, strip]) => (dropped(id) ? [strip] : [])),
+    );
     set({
       snap,
       selection: snap.select.length > 0 ? snap.select : kept,
@@ -319,7 +342,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const keep = (url: string | null) => get().snap?.sessionEpoch === epoch && set({ thumbs: { ...get().thumbs, [assetId]: url } });
     api
       .thumbnail(assetId)
-      .then(keep, () => keep(null))
+      .then((url) => keep(url && blobUrl(url)), () => keep(null))
       .finally(() => pending.delete(key));
   },
 
@@ -331,7 +354,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const keep = (strip: Filmstrip | null) => get().snap?.sessionEpoch === epoch && set({ filmstrips: { ...get().filmstrips, [assetId]: strip } });
     api
       .filmstrip(assetId)
-      .then(keep, () => keep(null))
+      .then((strip) => keep(strip && { ...strip, url: blobUrl(strip.url) }), () => keep(null))
       .finally(() => pending.delete(key));
   },
 
@@ -364,24 +387,40 @@ useEditor.subscribe((s, prev) => {
 /** While an agent's run is open the editing controls are locked. */
 export const useAiLocked = () => useEditor((s) => s.aiRun !== null);
 
-export function allClips(project: Project): Clip[] {
-  return project.tracks.flatMap((t) => t.clips);
+/**
+ * The playhead for readouts that follow it, such as keyframed values in the inspector: in 0.1 s steps while
+ * playing, so they re-render ten times a second instead of every frame; exact when paused or scrubbing.
+ * Edits read the exact `timeUs`.
+ */
+export const readoutTime = (s: { playing: boolean; timeUs: number }) => (s.playing ? Math.floor(s.timeUs / 100_000) * 100_000 : s.timeUs);
+
+/**
+ * Caches a value derived from a project. Snapshots are never changed in place, so a new value means a new
+ * project object. Selectors run on every playback frame (the store holds the playhead), so what they derive
+ * from the whole project must not be rebuilt each time.
+ */
+function perProject<T>(derive: (project: Project) => T): (project: Project) => T {
+  const cache = new WeakMap<Project, T>();
+  return (project) => {
+    if (!cache.has(project)) cache.set(project, derive(project));
+    return cache.get(project) as T;
+  };
 }
+
+export const allClips: (project: Project) => Clip[] = perProject((project) => project.tracks.flatMap((t) => t.clips));
 
 /**
  * Where the video ends: at the last picture or text, or at the last sound when there is no
  * picture. Music running past the picture is cut, like the engine's `Project::duration_us`.
  */
-export function projectDuration(project: Project): number {
+export const projectDuration: (project: Project) => number = perProject((project) => {
   const end = (audio: boolean) =>
     project.tracks.filter((t) => (t.kind === "audio") === audio).reduce((m, t) => t.clips.reduce((n, c) => Math.max(n, c.startUs + c.durationUs), m), 0);
   return end(false) || end(true);
-}
+});
 
 /** The end of the last clip of any kind, so the timeline also shows music past the video's end. */
-export function contentEnd(project: Project): number {
-  return allClips(project).reduce((m, c) => Math.max(m, c.startUs + c.durationUs), 0);
-}
+export const contentEnd: (project: Project) => number = perProject((project) => allClips(project).reduce((m, c) => Math.max(m, c.startUs + c.durationUs), 0));
 
 export function findClip(project: Project, id: string): { clip: Clip; track: Track } | null {
   for (const track of project.tracks) {
@@ -409,11 +448,11 @@ export function mainClips(project: Project): Clip[] {
 }
 
 /** Cuts between main-track clips; each belongs to the clip after it. */
-export function mainCuts(project: Project): { clipId: string; atUs: number; transition: Transition | null }[] {
-  return mainClips(project)
+export const mainCuts: (project: Project) => { clipId: string; atUs: number; transition: Transition | null }[] = perProject((project) =>
+  mainClips(project)
     .slice(1)
-    .map((c) => ({ clipId: c.id, atUs: c.startUs, transition: c.transitionIn }));
-}
+    .map((c) => ({ clipId: c.id, atUs: c.startUs, transition: c.transitionIn })),
+);
 
 export type Cut = ReturnType<typeof mainCuts>[number];
 

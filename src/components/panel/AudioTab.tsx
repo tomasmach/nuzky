@@ -3,8 +3,11 @@ import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { Waveform } from "../timeline/Waveform";
-import { Button, ProgressBar, lockedProps, useLockReason } from "../ui";
-import { ImportPlaceholder, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
+import { ProgressBar, lockedProps, useLockReason } from "../ui";
+import { ImportPlaceholder, ImportTile, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
+
+/** Round row action. */
+const ACTION = "flex h-7 w-7 items-center justify-center rounded-full transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
 
 function AudioItem({ asset }: { asset: Asset }) {
   const job = useEditor((s) => s.jobs[`audio:${asset.id}`]);
@@ -13,10 +16,10 @@ function AudioItem({ asset }: { asset: Asset }) {
     <div
       onPointerDown={assetDragHandler(asset.id)}
       onDoubleClick={() => addAtPlayhead(asset.id)}
-      className="group relative flex cursor-grab items-center gap-2 rounded-md p-1.5 hover:bg-raised active:cursor-grabbing"
+      className="group relative flex cursor-grab items-center gap-2.5 rounded-xl p-1.5 hover:bg-raised active:cursor-grabbing"
       title={`${asset.name}\nDrag onto the timeline, or press + to add at the playhead`}
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-clip-audio text-fg">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-clip-audio text-fg">
         <AudioLines size={18} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -30,26 +33,29 @@ function AudioItem({ asset }: { asset: Asset }) {
         </div>
       </div>
       <span className="tabular shrink-0 text-[12px] text-muted">{formatDuration(asset.durationUs)}</span>
-      <button
-        type="button"
-        aria-label={`Remove ${asset.name}`}
-        title="Remove from project, with its clips"
-        onClick={() => removeAsset(asset)}
-        {...lockedProps(lock)}
-        className="aria-disabled:cursor-not-allowed flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-danger group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        <Trash2 size={14} />
-      </button>
-      <button
-        type="button"
-        aria-label={`Add ${asset.name} at playhead`}
-        title="Add at playhead"
-        onClick={() => addAtPlayhead(asset.id)}
-        {...lockedProps(lock)}
-        className="aria-disabled:cursor-not-allowed flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-opacity duration-[120ms] hover:bg-line hover:text-fg group-hover:opacity-100 group-focus-within:opacity-100"
-      >
-        <Plus size={16} />
-      </button>
+      {/* Shown on hover or focus. */}
+      <div className="flex shrink-0 items-center gap-1 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+        <button
+          type="button"
+          aria-label={`Remove ${asset.name}`}
+          title="Remove from project, with its clips"
+          onClick={() => removeAsset(asset)}
+          {...lockedProps(lock)}
+          className={`text-muted hover:bg-white/[.08] hover:text-danger aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted ${ACTION}`}
+        >
+          <Trash2 size={14} />
+        </button>
+        <button
+          type="button"
+          aria-label={`Add ${asset.name} at playhead`}
+          title="Add at playhead"
+          onClick={() => addAtPlayhead(asset.id)}
+          {...lockedProps(lock)}
+          className={`btn-prominent ${ACTION}`}
+        >
+          <Plus size={16} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -60,25 +66,21 @@ export function AudioTab() {
   // Filtered outside the selector: a new array on every read makes React re-render without end.
   const importing = useEditor((s) => s.importing).filter((i) => i.kind === "audio");
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="p-3">
-        <Button variant="primary" className="w-full" onClick={() => pickAndImport(true)}>
-          <Plus size={15} /> Add music or sound
-        </Button>
-      </div>
+    <div className="flex min-h-0 flex-1 flex-col gap-3.5 pt-3.5">
+      <ImportTile label="Add music or sound" onClick={() => pickAndImport(true)} className="mx-3.5" />
       {audio.length === 0 && importing.length === 0 ? (
-        <div className="m-3 mt-0 flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line p-6 text-center">
+        <div className="mx-3.5 mb-3.5 flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/[.1] p-6 text-center">
           <Music size={28} className="text-muted" />
           <p className="text-[13px] text-fg">No music yet</p>
           <p className="text-[12px] text-muted">MP3, WAV, M4A, FLAC or OGG files you add show up here.</p>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
+        <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
           {audio.map((a) => (
             <AudioItem key={a.id} asset={a} />
           ))}
           {importing.map((i) => (
-            <ImportPlaceholder key={i.key} name={i.name} kind="audio" compact />
+            <ImportPlaceholder key={i.key} name={i.name} compact />
           ))}
         </div>
       )}

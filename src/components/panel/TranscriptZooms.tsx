@@ -103,15 +103,15 @@ export function ZoomBar({ state, blocker }: { state: ZoomSuggestionState; blocke
   };
   const n = zooms.length;
   return (
-    <div ref={bar} role="region" aria-label="Suggested zooms" data-zoom-bar className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2" onKeyDown={onKeyDown}>
+    <div ref={bar} role="region" aria-label="Suggested zooms" data-zoom-bar className="flex shrink-0 items-center gap-2 border-b border-white/[.07] px-3.5 py-2" onKeyDown={onKeyDown}>
       <ZoomIn size={14} className="shrink-0 text-accent" aria-hidden />
       <span className="tabular flex-1 truncate text-[12px] text-muted">
         {n} sentence{n === 1 ? "" : "s"} marked
       </span>
-      <Button className="h-7 px-2" onClick={dismiss}>
+      <Button className="h-7 px-2 text-[12px]" onClick={dismiss}>
         Dismiss
       </Button>
-      <Button data-zoom-apply variant="primary" className="h-7 px-2" disabled={!!blocker || state.pending === "applying"} disabledReason={blocker ?? "Applying…"} onClick={apply}>
+      <Button data-zoom-apply variant="primary" className="h-7 px-2.5 text-[12px]" disabled={!!blocker || state.pending === "applying"} disabledReason={blocker ?? "Applying…"} onClick={apply}>
         Apply {n} zoom{n === 1 ? "" : "s"}
       </Button>
     </div>

@@ -45,6 +45,14 @@ export function ConnectAgentDialog() {
     return () => opener?.focus();
   }, [ready]);
 
+  // A connected agent's button goes away, so focus moves on to the next Connect, else to Done.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+  }, [rows]);
+
   if (!open) return null;
 
   const connect = async (row: AgentConnection) => {
@@ -52,6 +60,7 @@ export function ConnectAgentDialog() {
     setError(null);
     try {
       const done = await api.connectAgent(row.agent);
+      refocus.current = !!dialog.current?.contains(document.activeElement);
       setRows((all) => all?.map((r) => (r.agent === done.agent ? done : r)) ?? null);
       useEditor.getState().toast({
         kind: "success",
@@ -66,46 +75,54 @@ export function ConnectAgentDialog() {
 
   const first = rows?.find((r) => r.state !== "connected" && r.state !== "unreadable");
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby="connect-title" onKeyDown={trapTab} className="w-[460px] rounded-lg border border-line bg-panel shadow-2xl shadow-black">
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 id="connect-title" className="text-[14px] font-semibold">
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center scrim-in bg-black/45"
+      onPointerDown={(e) => e.target === e.currentTarget && close()}
+    >
+      <div
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-title"
+        onKeyDown={trapTab}
+        className="overlay w-[480px] rounded-[20px] p-6 dialog-in"
+      >
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <h2 id="connect-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
             Connect your agent
           </h2>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label="Close" round className="-mr-2 -mt-1" onClick={close}>
             <X size={16} />
           </IconButton>
         </div>
-        <div className="flex flex-col gap-3 p-4">
+        <div className="flex flex-col gap-3">
           {rows === null && !error && <p className="text-[12px] text-muted">Reading the agents' settings…</p>}
           {rows?.map((row) => (
-            <div key={row.agent} role="group" aria-label={row.name} className="flex items-center gap-3 rounded-md bg-raised px-3 py-2.5">
+            <div key={row.agent} role="group" aria-label={row.name} className="flex items-center gap-3 rounded-xl bg-white/[.055] px-3.5 py-3 shadow-[inset_0_0_0_1px_rgb(255_255_255/.06)]">
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="text-[13px] text-fg">{row.name}</span>
+                <span className="text-[13px] font-medium text-fg">{row.name}</span>
                 <span className="truncate text-[11px] text-muted" title={row.path}>
                   {row.path}
                 </span>
-                <span className={`flex items-center gap-1 text-[12px] ${row.state === "connected" ? "text-fg" : "text-muted"}`} title={row.problem ?? undefined}>
-                  {row.state === "connected" && <Check size={13} className="text-accent" />}
-                  {row.state === "unreadable" && <AlertTriangle size={13} className="text-warn" />}
+                <span className={`mt-0.5 flex items-center gap-1 text-[12px] ${row.state === "connected" ? "text-fg" : "text-muted"}`} title={row.problem ?? undefined}>
+                  {row.state === "connected" && <Check size={13} className="shrink-0 text-ok" />}
+                  {row.state === "unreadable" && <AlertTriangle size={13} className="shrink-0 text-warn" />}
                   {STATE_TEXT[row.state]}
                 </span>
               </div>
-              <Button
-                variant={row === first ? "primary" : undefined}
-                data-autofocus={row === first || undefined}
-                disabled={row.state === "connected" || row.state === "unreadable" || busy !== null}
-                disabledReason={
-                  row.state === "connected"
-                    ? `${row.name} already runs this CapOpen`
-                    : row.state === "unreadable"
-                      ? `Fix ${row.path} first; CapOpen does not change a file it cannot read`
-                      : "Connecting…"
-                }
-                onClick={() => void connect(row)}
-              >
-                {row.state === "other" ? "Reconnect" : "Connect"}
-              </Button>
+              {/* A connected agent needs nothing more here; "Connected" says so. */}
+              {row.state !== "connected" && (
+                <Button
+                  pill
+                  variant={row === first ? "primary" : undefined}
+                  data-autofocus={row === first || undefined}
+                  disabled={row.state === "unreadable" || busy !== null}
+                  disabledReason={row.state === "unreadable" ? `Fix ${row.path} first; CapOpen does not change a file it cannot read` : "Connecting…"}
+                  onClick={() => void connect(row)}
+                >
+                  {row.state === "other" ? "Reconnect" : "Connect"}
+                </Button>
+              )}
             </div>
           ))}
           {error && (
@@ -118,8 +135,8 @@ export function ConnectAgentDialog() {
             Only the capopen entry is added, after a backup of the file. The agent edits the project open here; start it once your project is open.
           </p>
         </div>
-        <div className="flex justify-end border-t border-line px-4 py-3">
-          <Button data-autofocus={!first || undefined} onClick={close}>
+        <div className="mt-6 flex justify-end">
+          <Button pill variant={rows && !first ? "primary" : undefined} data-autofocus={!first || undefined} onClick={close}>
             Done
           </Button>
         </div>

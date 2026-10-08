@@ -96,8 +96,9 @@ const Paragraph = memo(function Paragraph({
     const look = selected ? (playing ? "bg-accent text-black" : "bg-accent/30 text-fg") : playing ? "text-accent" : "";
     items.push(
       <Fragment key={i}>
-        {/* The space between two selected tokens is filled too, so the selection reads as one band. */}
-        {i > from && (spaceSelected || joined ? <span className={`${spaceSelected ? "bg-accent/30" : ""} ${joined ? MARK : ""}`}> </span> : " ")}
+        {/* The space between two selected tokens is filled too, so the selection reads as one band. Before a
+            pause it does not break, so a pause chip never starts a line on its own. */}
+        {i > from && (spaceSelected || joined ? <span className={`${spaceSelected ? "bg-accent/30" : ""} ${joined ? MARK : ""}`}>{t.kind === "word" ? " " : "\u00a0"}</span> : t.kind === "word" ? " " : "\u00a0")}
         {mark && !joined && (
           <span aria-hidden title={`Suggested zoom, ${zoomLabel(mark.scale)}`} className="tabular mr-1 inline-flex items-center gap-0.5 text-[11px] text-accent">
             <ZoomIn size={11} />
@@ -136,9 +137,10 @@ const Paragraph = memo(function Paragraph({
     );
   }
   return (
-    <p className="mb-3 text-[13px] leading-[22px] text-fg/90">
-      <span className="tabular mr-2 text-[11px] text-muted">{formatTime(tokens[from].startUs, false)}</span>
-      {items}
+    // The timecode has its own column, so wrapped lines start under the text rather than under the time.
+    <p className="mb-3 grid grid-cols-[40px_1fr] text-[13px] leading-[22px] text-fg/90">
+      <span className="tabular text-[11px] text-muted">{formatTime(tokens[from].startUs, false)}</span>
+      <span>{items}</span>
     </p>
   );
 });
@@ -328,7 +330,7 @@ export function TranscriptText({
           if (i !== null) startEdit(i);
         }}
         onKeyDown={onKeyDown}
-        className="min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-3 focus-visible:-outline-offset-2"
+        className="min-h-0 flex-1 overflow-y-auto px-3.5 pt-3 pb-1 focus-visible:-outline-offset-2!"
       >
         {paras.map(([from, to]) => (
           <Paragraph
@@ -347,7 +349,7 @@ export function TranscriptText({
         ))}
       </div>
       {lo >= 0 && (
-        <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-2" onKeyDown={onDeleteKey}>
+        <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-white/[.07] px-3.5 py-2" onKeyDown={onDeleteKey}>
           <span className="tabular flex-1 text-[12px] text-muted">
             {summary} · {formatDuration(lengthUs)}
           </span>

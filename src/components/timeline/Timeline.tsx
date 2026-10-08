@@ -11,8 +11,10 @@ import { CutMarkers } from "./CutMarkers";
 import { TrackHeader } from "./TrackHeader";
 import { dragResult, useTimelineGestures, type Drag } from "./useTimelineGestures";
 
-const HEADER_W = 132;
+const HEADER_W = 140;
 const RULER_H = 28;
+/** Space between lanes. It belongs to the rows, so the track header column runs unbroken. */
+const ROW_GAP = 4;
 const END_TIP = "The video ends here. Sound after this point is not exported.";
 
 function rowHeight(track: Track) {
@@ -115,6 +117,8 @@ function tickStep(zoom: number): number {
   return 1200;
 }
 
+const VISIBLE_STEP = 400;
+
 /** The playhead line, the one part of the timeline that follows playback frame by frame; it keeps itself in view while playing. */
 function Playhead({ zoom, scroller }: { zoom: number; scroller: RefObject<HTMLDivElement | null> }) {
   const timeUs = useEditor((s) => s.timeUs);
@@ -126,10 +130,12 @@ function Playhead({ zoom, scroller }: { zoom: number; scroller: RefObject<HTMLDi
     const lane = el.clientWidth - HEADER_W;
     if (x > el.scrollLeft + lane - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
   }, [timeUs, playing, zoom, scroller]);
+  // Above the ruler, below the track headers. The dark edges keep it visible on bright footage; no blur, it moves every frame.
+  // It moves by transform on its own layer, so playback never repaints the clips under it.
   return (
-    <div className="pointer-events-none absolute bottom-0 top-0 z-[45]" style={{ left: HEADER_W + (timeUs / US) * zoom }}>
-      <div className="absolute -left-[5px] top-0 h-3 w-[11px] rounded-b-sm bg-fg" />
-      <div className="absolute left-0 top-0 h-full w-px bg-fg" />
+    <div className="pointer-events-none absolute bottom-0 top-0 z-[45] will-change-transform" style={{ left: HEADER_W, transform: `translateX(${(timeUs / US) * zoom}px)` }}>
+      <div className="absolute -left-[0.75px] bottom-0 top-2 w-[1.5px] bg-white shadow-[0_0_0_0.5px_rgb(0_0_0/.4)]" />
+      <div className="absolute -left-1.5 top-0.5 h-3.5 w-3 rounded-[3px_3px_6px_6px] bg-white shadow-[0_0_0_0.5px_rgb(0_0_0/.45)]" />
     </div>
   );
 }
@@ -164,7 +170,10 @@ export function Timeline({ height }: { height: number }) {
   const fps = project?.canvas.fps ?? 30;
   const minUs = Math.ceil(US / fps);
   const laneWidth = Math.max(view.width - HEADER_W, (duration / US + 30) * zoom);
-  const visible = useMemo<[number, number]>(() => [view.left - 200, view.left + view.width + 200], [view.left, view.width]);
+  // Clips get the window they draw filmstrip tiles in. It moves in steps, with at least 200 px of margin on
+  // each side, so scrolling re-renders the clips once per step instead of on every scroll event.
+  const windowFrom = Math.floor(view.left / VISIBLE_STEP) * VISIBLE_STEP;
+  const visible = useMemo<[number, number]>(() => [windowFrom - 200, windowFrom + view.width + VISIBLE_STEP + 200], [windowFrom, view.width]);
 
   const timeAt = useCallback(
     (clientX: number) => {
@@ -265,7 +274,7 @@ export function Timeline({ height }: { height: number }) {
     setMenu({ clipId: clip.id, x: e.clientX, y: e.clientY });
   }, []);
 
-  if (!project) return <section className="shrink-0 border-t border-line bg-panel" style={{ height }} />;
+  if (!project) return <section className="pane shrink-0" style={{ height }} />;
 
   // The video ends at its last picture or text; music running past it is cut on export.
   const videoEnd = projectDuration(project);
@@ -364,41 +373,46 @@ export function Timeline({ height }: { height: number }) {
   const lockedLabel = (action: string) => `${action}: the AI is editing`;
 
   return (
-    <section className="flex shrink-0 flex-col border-t border-line bg-panel" style={{ height }} aria-label="Timeline">
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
-        <IconButton label={locked ? lockedLabel("Split") : canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={locked || !canSplit} onClick={splitAtPlayhead}>
-          <Scissors size={16} />
-        </IconButton>
-        <IconButton
-          label={locked ? lockedLabel("Delete left") : canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"}
-          disabled={locked || !canSplit}
-          onClick={() => deleteSide("left")}
-        >
-          <PanelLeftClose size={16} />
-        </IconButton>
-        <IconButton
-          label={locked ? lockedLabel("Delete right") : canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"}
-          disabled={locked || !canSplit}
-          onClick={() => deleteSide("right")}
-        >
-          <PanelRightClose size={16} />
-        </IconButton>
-        <IconButton label={locked ? lockedLabel("Delete") : deleteLabel} disabled={locked || (selection.length === 0 && !cut)} onClick={deleteSelection}>
-          <Trash2 size={16} />
-        </IconButton>
-        <IconButton
-          label={locked ? lockedLabel("Duplicate") : selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"}
-          disabled={locked || selection.length === 0}
-          onClick={duplicateSelection}
-        >
-          <Copy size={15} />
-        </IconButton>
-        <span className="mx-1 h-5 w-px bg-line" />
-        <IconButton label={snapping ? "Snapping on" : "Snapping off"} active={snapping} onClick={() => setSnapping(!snapping)}>
-          <Magnet size={16} />
-        </IconButton>
+    <section className="pane flex shrink-0 flex-col overflow-hidden" style={{ height }} aria-label="Timeline">
+      <div className="flex h-11 shrink-0 items-center gap-1.5 px-2.5">
+        <div className="bar flex items-center rounded-full">
+          <IconButton round label={locked ? lockedLabel("Split") : canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={locked || !canSplit} onClick={splitAtPlayhead}>
+            <Scissors size={16} />
+          </IconButton>
+          <IconButton
+            round
+            label={locked ? lockedLabel("Delete left") : canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"}
+            disabled={locked || !canSplit}
+            onClick={() => deleteSide("left")}
+          >
+            <PanelLeftClose size={16} />
+          </IconButton>
+          <IconButton
+            round
+            label={locked ? lockedLabel("Delete right") : canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"}
+            disabled={locked || !canSplit}
+            onClick={() => deleteSide("right")}
+          >
+            <PanelRightClose size={16} />
+          </IconButton>
+          <IconButton round label={locked ? lockedLabel("Delete") : deleteLabel} disabled={locked || (selection.length === 0 && !cut)} onClick={deleteSelection}>
+            <Trash2 size={16} />
+          </IconButton>
+          <IconButton
+            round
+            label={locked ? lockedLabel("Duplicate") : selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"}
+            disabled={locked || selection.length === 0}
+            onClick={duplicateSelection}
+          >
+            <Copy size={15} />
+          </IconButton>
+          <span aria-hidden className="mx-1 h-4 w-px bg-white/[.12]" />
+          <IconButton round label={snapping ? "Snapping on" : "Snapping off"} active={snapping} onClick={() => setSnapping(!snapping)}>
+            <Magnet size={16} />
+          </IconButton>
+        </div>
         <div className="flex-1" />
-        <IconButton label="Zoom out (-)" onClick={() => setZoom(zoom / 1.3)}>
+        <IconButton round label="Zoom out (-)" onClick={() => setZoom(zoom / 1.3)}>
           <ZoomOut size={16} />
         </IconButton>
         <RangeInput
@@ -409,12 +423,13 @@ export function Timeline({ height }: { height: number }) {
           value={Math.log(zoom)}
           valueText={`${Math.round(zoom)} pixels per second`}
           onChange={(v) => setZoom(Math.exp(v))}
-          className="w-28"
+          className="w-24"
         />
-        <IconButton label="Zoom in (+)" onClick={() => setZoom(zoom * 1.3)}>
+        <IconButton round label="Zoom in (+)" onClick={() => setZoom(zoom * 1.3)}>
           <ZoomIn size={16} />
         </IconButton>
         <IconButton
+          round
           label="Fit timeline to view"
           disabled={duration === 0}
           onClick={() => {
@@ -431,18 +446,29 @@ export function Timeline({ height }: { height: number }) {
         </IconButton>
       </div>
 
-      <div ref={scroller} className="relative min-h-0 flex-1 overflow-auto" onScroll={(e) => setView({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })}>
-        <div className="relative" style={{ width: HEADER_W + laneWidth, minHeight: "100%" }}>
+      {/* Inset by 1 px, so the pane's hairline stays visible beside the opaque track headers. */}
+      <div
+        ref={scroller}
+        className="relative mx-px mb-px min-h-0 flex-1 overflow-auto"
+        onScroll={(e) => setView({ left: e.currentTarget.scrollLeft, width: e.currentTarget.clientWidth })}
+      >
+        {/*
+          Layers, bottom to top: lanes and clips, the ruler (40), the playhead (45), the track header
+          column (47) and the corner above it (48). The corner is not part of the ruler: the ruler is
+          its own stacking context, and the playhead has to pass over the ruler but under the corner.
+        */}
+        <div className="relative flex flex-col" style={{ width: HEADER_W + laneWidth, minHeight: "100%" }}>
+          <div className="sticky left-0 top-0 z-[48] shrink-0 border-b border-r border-white/[.07] bg-panel" style={{ width: HEADER_W, height: RULER_H, marginBottom: -RULER_H }} />
           {/* Ruler */}
-          <div className="sticky top-0 z-40 flex" style={{ height: RULER_H }}>
-            <div className="sticky left-0 z-50 shrink-0 border-b border-r border-line bg-panel" style={{ width: HEADER_W }} />
-            <div className="relative flex-1 cursor-pointer border-b border-line bg-panel" onPointerDown={startScrub}>
+          <div className="sticky top-0 z-40 flex shrink-0" style={{ height: RULER_H }}>
+            <div className="shrink-0" style={{ width: HEADER_W }} />
+            <div className="relative flex-1 cursor-pointer border-b border-white/[.07] bg-panel" onPointerDown={startScrub}>
               {ticks.map((t) => (
                 <div key={t} className="absolute top-0 h-full" style={{ left: t * zoom }}>
-                  <div className="h-2.5 w-px bg-subtle" />
-                  <span className="tabular absolute left-1 top-2.5 text-[11px] text-muted">{formatTime(t * US, step < 1)}</span>
+                  <span className="tabular absolute left-1 top-[5px] text-[11px] leading-[13px] text-muted">{formatTime(t * US, step < 1)}</span>
+                  <div className="absolute bottom-0 h-2 w-px bg-subtle" />
                   {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="absolute top-0 h-1.5 w-px bg-line" style={{ left: (i * step * zoom) / 5 }} />
+                    <div key={i} className="absolute bottom-0 h-1 w-px bg-subtle/60" style={{ left: (i * step * zoom) / 5 }} />
                   ))}
                 </div>
               ))}
@@ -456,7 +482,7 @@ export function Timeline({ height }: { height: number }) {
 
           {/* Tracks */}
           <div
-            className="relative flex flex-col gap-1 py-1"
+            className="relative flex flex-1 flex-col"
             onKeyDown={onClipKey}
             onFocus={(e) => {
               const id = (e.target as HTMLElement).getAttribute?.("data-clip-id");
@@ -467,12 +493,12 @@ export function Timeline({ height }: { height: number }) {
             // A removed element fires no blur, so a deleted clip keeps its place for the effect below.
             onBlur={(e) => e.target.isConnected && (focusPlace.current = null)}
           >
-            {drag?.moved && drag.target === null && dragKind !== "audio" && <div className="ml-[132px] h-0.5 bg-accent" title="Drop to create a new track" />}
+            {drag?.moved && drag.target === null && dragKind !== "audio" && <div className="ml-[140px] h-0.5 rounded-full bg-accent" title="Drop to create a new track" />}
             {tracks.map((track) => {
               const h = rowHeight(track);
               const isMain = track.id === MAIN_TRACK;
               return (
-                <div key={track.id} className="flex" style={{ height: h }}>
+                <div key={track.id} className="flex shrink-0" style={{ height: h + ROW_GAP }}>
                   <TrackHeader track={track} width={HEADER_W} locked={locked} />
                   <div
                     ref={(el) => {
@@ -482,7 +508,8 @@ export function Timeline({ height }: { height: number }) {
                     role="listbox"
                     aria-label={`${track.name || track.kind} track`}
                     aria-multiselectable
-                    className={`relative flex-1 ${isMain ? "bg-white/[0.035]" : "bg-white/[0.015]"} ${assetDrag && dropTime !== null ? "outline-1 outline-dashed outline-line" : ""}`}
+                    className={`relative flex-1 ${isMain ? "bg-white/[0.035]" : "bg-white/[0.015]"} ${assetDrag && dropTime !== null ? "outline-1 outline-dashed outline-white/20" : ""}`}
+                    style={{ marginBlock: ROW_GAP / 2 }}
                     onPointerDown={(e) => {
                       if (e.target === e.currentTarget) {
                         select([]);
@@ -491,7 +518,7 @@ export function Timeline({ height }: { height: number }) {
                     }}
                   >
                     {isMain && emptyTimeline && (
-                      <div className="pointer-events-none absolute inset-1 flex items-center justify-center rounded-md border border-dashed border-line text-[12px] text-muted">
+                      <div className="pointer-events-none absolute inset-1 flex items-center justify-center rounded-[7px] border border-dashed border-white/15 text-[12px] text-muted">
                         Drag media here, or press + on a media item
                       </div>
                     )}
@@ -502,7 +529,7 @@ export function Timeline({ height }: { height: number }) {
                         return (
                           <div
                             key={clip.id}
-                            className="absolute top-1 bottom-1 rounded-md border border-dashed border-muted/50"
+                            className="absolute top-1 bottom-1 rounded-[7px] border border-dashed border-muted/50"
                             style={{ left: (clip.startUs / US) * zoom + 1, width: (clip.durationUs / US) * zoom - 2 }}
                           />
                         );
@@ -529,7 +556,7 @@ export function Timeline({ height }: { height: number }) {
                     {isMain && drag?.moved && layout?.slotUs != null && (
                       <>
                         <div
-                          className="pointer-events-none absolute top-1 bottom-1 rounded-md border border-dashed border-muted/50"
+                          className="pointer-events-none absolute top-1 bottom-1 rounded-[7px] border border-dashed border-muted/50"
                           style={{ left: (layout.slotUs / US) * zoom + 1, width: (drag.clip.durationUs / US) * zoom - 2 }}
                         />
                         <div className="pointer-events-none absolute -top-0.5 -bottom-0.5 z-20 w-0.5 -translate-x-1/2 rounded-full bg-accent" style={{ left: (layout.slotUs / US) * zoom }} />
@@ -543,7 +570,11 @@ export function Timeline({ height }: { height: number }) {
                 </div>
               );
             })}
-            {drag?.moved && drag.target === null && dragKind === "audio" && <div className="ml-[132px] h-0.5 bg-accent" />}
+            {drag?.moved && drag.target === null && dragKind === "audio" && <div className="ml-[140px] h-0.5 rounded-full bg-accent" />}
+            {/* The header column runs on below the last track, so nothing scrolled under it shows through. */}
+            <div className="flex flex-1">
+              <div className="sticky left-0 z-[47] shrink-0 border-r border-white/[.07] bg-panel" style={{ width: HEADER_W }} />
+            </div>
           </div>
 
           {/* Ghost for a drag onto a new track follows the pointer row-less. */}
@@ -584,7 +615,7 @@ export function Timeline({ height }: { height: number }) {
           {drag?.moved && ghostTiming && (
             // Pinned to the edge being dragged: the start for a move or left trim, the end for a right trim.
             <div
-              className={`tabular pointer-events-none absolute z-50 rounded bg-black/85 px-1.5 py-0.5 text-[11px] text-fg ${drag.mode === "trimR" ? "-translate-x-full" : ""}`}
+              className={`tabular pointer-events-none absolute z-50 rounded-md bg-black/80 px-1.5 py-0.5 text-[11px] font-medium text-fg ${drag.mode === "trimR" ? "-translate-x-full" : ""}`}
               style={{ left: HEADER_W + ((drag.mode === "trimR" ? ghostTiming.startUs + ghostTiming.durationUs : ghostTiming.startUs) / US) * zoom, top: 2 }}
             >
               {drag.mode === "move" ? formatTime(layout?.slotUs ?? ghostTiming.startUs) : formatDuration(ghostTiming.durationUs)}

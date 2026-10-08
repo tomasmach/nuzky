@@ -53,7 +53,7 @@ function DragChip() {
   const asset = useEditor((s) => s.snap?.project.assets.find((a) => a.id === s.assetDrag?.assetId));
   if (!drag || !asset) return null;
   return (
-    <div className="pointer-events-none fixed z-[120] rounded-md bg-accent px-2 py-1 text-[12px] font-medium text-black shadow-lg" style={{ left: drag.x + 12, top: drag.y + 10 }}>
+    <div className="pointer-events-none fixed z-[120] rounded-lg bg-raised px-2.5 py-1 text-[12px] font-medium text-fg shadow-lg shadow-black/50 ring-1 ring-white/10" style={{ left: drag.x + 12, top: drag.y + 10 }}>
       {asset.name}
     </div>
   );
@@ -262,13 +262,13 @@ function RecoveryDialog() {
     }
   };
   return (
-    <dialog ref={dialog} onCancel={(e) => e.preventDefault()} aria-labelledby="recovery-title" aria-describedby="recovery-description" className="fixed inset-0 m-auto w-[440px] rounded-lg border border-line bg-panel p-6 text-fg shadow-2xl backdrop:bg-black/60">
-      <h2 id="recovery-title" className="text-[16px] font-semibold">An AI edit didn't finish</h2>
+    <dialog ref={dialog} onCancel={(e) => e.preventDefault()} aria-labelledby="recovery-title" aria-describedby="recovery-description" className="overlay fixed inset-0 m-auto w-[440px] rounded-[20px] p-6 text-fg backdrop:bg-black/45">
+      <h2 id="recovery-title" className="text-[17px] font-semibold">An AI edit didn't finish</h2>
       <p id="recovery-description" className="mt-3 text-[13px] text-muted">Keep the changes it made, or go back to the version before it started?</p>
       {error && <p role="alert" className="mt-3 flex items-start gap-2 text-[13px] text-danger"><AlertCircle size={16} className="shrink-0" />{error}</p>}
       <div className="mt-6 flex justify-end gap-2">
-        <Button disabled={busy} onClick={() => void resolve("restore")}>Restore previous version</Button>
-        <Button variant="primary" data-autofocus disabled={busy} onClick={() => void resolve("keep")}>Keep changes</Button>
+        <Button pill disabled={busy} onClick={() => void resolve("restore")}>Restore previous version</Button>
+        <Button pill variant="primary" data-autofocus disabled={busy} onClick={() => void resolve("keep")}>Keep changes</Button>
       </div>
     </dialog>
   );
@@ -277,8 +277,8 @@ function RecoveryDialog() {
 const TIMELINE_KEY = "capopen.timelineHeight";
 const TIMELINE_DEFAULT = 300;
 const TIMELINE_MIN = 160;
-/** Space kept for the top bar and a usable preview above the timeline. */
-const ABOVE_MIN = 48 + 300;
+/** Space kept for the top bar, a usable preview and the gaps around the timeline. */
+const ABOVE_MIN = 48 + 300 + 12;
 
 const timelineMax = () => Math.max(TIMELINE_MIN, window.innerHeight - ABOVE_MIN);
 const clampTimeline = (h: number) => Math.round(Math.min(timelineMax(), Math.max(TIMELINE_MIN, h)));
@@ -332,12 +332,18 @@ function Divider({ height, max, onChange }: { height: number; max: number; onCha
           onChange(height + (e.key === "ArrowUp" ? 24 : -24));
         }
       }}
-      className="group relative z-30 -my-[3px] h-[7px] shrink-0 cursor-row-resize"
+      className="group relative z-30 -my-0.5 h-2.5 shrink-0 cursor-row-resize rounded-full"
     >
-      <div className={`absolute inset-x-0 top-[2px] h-[3px] transition-colors duration-[120ms] ${active ? "bg-accent" : "group-hover:bg-accent/60"}`} />
+      {/* The 6 px gap between the panes is the handle; a short grip shows on hover and while dragging. */}
+      <div className={`absolute left-1/2 top-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-[120ms] ${active ? "bg-accent" : "group-hover:bg-white/30"}`} />
     </div>
   );
 }
+
+// While the video plays, overlays drop their blur (index.css): a blur over moving pictures is redone every frame.
+useEditor.subscribe((s, prev) => {
+  if (s.playing !== prev.playing) document.documentElement.toggleAttribute("data-playing", s.playing);
+});
 
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api } });
@@ -389,23 +395,23 @@ function BootScreen() {
     <div className="flex h-full items-center justify-center p-6">
       <div className="flex w-[440px] flex-col gap-4">
         <div role="alert" className="flex flex-col gap-2">
-          <h1 className="text-[16px] font-semibold text-fg">CapOpen could not start</h1>
+          <h1 className="text-[17px] font-semibold text-fg">CapOpen could not start</h1>
           <p className="flex items-start gap-2 text-[13px] text-danger">
             <AlertCircle size={16} className="mt-px shrink-0" />
             {error}
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="primary" disabled={busy} onClick={() => void start()}>
+          <Button variant="primary" pill disabled={busy} onClick={() => void start()}>
             Try again
           </Button>
-          <Button disabled={busy} onClick={() => void start(() => api.newProject(1080, 1920))}>
+          <Button pill disabled={busy} onClick={() => void start(() => api.newProject(1080, 1920))}>
             New project
           </Button>
         </div>
         {projects.length > 0 && (
           <div className="flex flex-col gap-1">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Open another project</h2>
+            <h2 className="text-[12px] font-semibold text-muted">Open another project</h2>
             <div className="max-h-64 overflow-y-auto">
               {projects.map((p) => (
                 <button
@@ -413,7 +419,7 @@ function BootScreen() {
                   type="button"
                   disabled={busy}
                   onClick={() => void start(() => api.openProject(p.path))}
-                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left hover:bg-raised disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left hover:bg-white/[.08] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <span className="truncate text-[13px] text-fg">{p.name}</span>
                   <span className="tabular shrink-0 pl-2 text-[11px] text-muted">{formatDuration(p.durationUs)}</span>
@@ -440,16 +446,18 @@ export default function App() {
     <>
       <div className="flex h-full flex-col" inert={snap.recovery}>
         <TopBar />
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 gap-1.5 px-1.5">
           <LeftPanel />
           <Preview />
           <Inspector />
         </div>
         <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
-        <Timeline height={timelineH} />
+        <div className="shrink-0 px-1.5 pb-1.5">
+          <Timeline height={timelineH} />
+        </div>
         <ExportDialog />
         <ConnectAgentDialog />
-        <Toasts bottom={timelineH + 12} />
+        <Toasts bottom={timelineH + 18} />
         <DisabledHint />
         <DragChip />
       </div>

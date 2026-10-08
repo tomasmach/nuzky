@@ -9,7 +9,7 @@ import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch, useLockR
 export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="w-[76px] shrink-0 truncate text-[12px] text-muted">{label}</span>
+      <span className="w-[78px] shrink-0 truncate text-[12px] text-muted">{label}</span>
       {children}
     </div>
   );
@@ -35,7 +35,7 @@ function TextField({ clipId, text }: { clipId: string; text: string }) {
         edit({ type: "updateClip", clipId, text: e.target.value }, `${clipId}:text`);
       }}
       onBlur={() => setDraft(null)}
-      className="resize-y rounded-md border border-line bg-raised p-2 text-[13px] text-fg focus:border-accent disabled:opacity-40"
+      className="resize-y rounded-lg border border-white/[.08] bg-white/[.055] px-2.5 py-2 text-[13px] leading-[18px] text-fg outline-offset-0 focus:border-accent disabled:opacity-40"
     />
   );
 }
@@ -83,14 +83,18 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
         {style.strokeWidth > 0 && <ColorInput label="Outline color" value={style.strokeColor} onChange={(v) => setStyle({ strokeColor: v }, "strokeColor")} />}
         <Checkbox label="Background box" checked={style.background !== null} onChange={(v) => setStyle({ background: v ? "#000000b3" : null }, "bg")} />
         {style.background !== null && <ColorInput label="Box color" value={style.background} onChange={(v) => setStyle({ background: v }, "bgColor")} />}
-        {caption && <Checkbox label="Highlight spoken word" checked={!!style.highlight} onChange={(v) => setStyle({ highlight: v ? "#ffe14d" : null }, "highlight")} />}
-        {caption && style.highlight && (
-          <>
-            <ColorInput label="Highlight color" value={style.highlight} onChange={(v) => setStyle({ highlight: v }, "highlightColor")} />
-            {unlitReason(clip, text) && <p className="text-[12px] text-muted">{unlitReason(clip, text)}</p>}
-          </>
-        )}
       </Section>
+      {caption && (
+        <Section title="Karaoke">
+          <Checkbox label="Highlight spoken word" checked={!!style.highlight} onChange={(v) => setStyle({ highlight: v ? "#ffe14d" : null }, "highlight")} />
+          {style.highlight && (
+            <>
+              <ColorInput label="Highlight color" value={style.highlight} onChange={(v) => setStyle({ highlight: v }, "highlightColor")} />
+              {unlitReason(clip, text) && <p className="text-[12px] text-muted">{unlitReason(clip, text)}</p>}
+            </>
+          )}
+        </Section>
+      )}
     </>
   );
 }

@@ -26,9 +26,10 @@ export function LeftPanel() {
   const tab = useEditor((s) => s.panelTab);
   const setTab = (id: PanelTab) => useEditor.setState({ panelTab: id });
   return (
-    <aside className="flex w-[340px] shrink-0 flex-col border-r border-line bg-panel">
-      {/* Tabs size to their labels and share the leftover width, so "Captions" and "Transitions" never touch. */}
-      <div className="flex shrink-0 gap-1 border-b border-line px-1" role="tablist" aria-label="Library" onKeyDown={tabListKeys(TAB_IDS, tab, setTab)}>
+    <aside className="pane flex w-[360px] shrink-0 flex-col overflow-hidden">
+      {/* Tabs size to their labels and share the leftover width, so no two labels touch at 360 px, also where
+          WebKitGTK sets Inter a little wider than Chromium. */}
+      <div className="seg-track mx-1.5 mt-1.5 flex shrink-0 rounded-[13px] p-0.5" role="tablist" aria-label="Library" onKeyDown={tabListKeys(TAB_IDS, tab, setTab)}>
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -40,11 +41,11 @@ export function LeftPanel() {
             aria-controls={tab === t.id ? tabIds("library", t.id).panel : undefined}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
-            className={`flex flex-auto flex-col items-center gap-0.5 px-1 py-2 text-[11px] whitespace-nowrap transition-colors duration-[120ms] ${
-              tab === t.id ? "text-accent shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg"
+            className={`flex flex-auto flex-col items-center gap-[3px] rounded-[11px] px-0.5 pt-1.5 pb-[5px] text-[11px] leading-[13px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
+              tab === t.id ? "seg-on text-fg" : "text-muted hover:text-fg"
             }`}
           >
-            <t.icon size={17} />
+            <t.icon size={17} className={tab === t.id ? "text-accent" : undefined} />
             <span>{t.label}</span>
           </button>
         ))}

@@ -88,7 +88,7 @@ export function TranscriptTab() {
   if (!view && !error) return null;
   if (!view || view.words.length === 0)
     return (
-      <div className="flex flex-col gap-4 overflow-y-auto p-3">
+      <div className="flex flex-col gap-3.5 overflow-y-auto p-3.5">
         <p className="text-[12px] text-muted">Transcribe the timeline, then cut the video by deleting words.</p>
         <SpeechFields disabled={busy} />
         {running ? (
@@ -108,7 +108,7 @@ export function TranscriptTab() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-col gap-3 border-b border-line p-3">
+      <div className="flex shrink-0 flex-col gap-3 border-b border-white/[.07] p-3.5">
         <div className="flex items-center gap-2">
           <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} word{view.words.length === 1 ? "" : "s"}</span>
           <SuggestZoomsButton state={zooms} blocker={cutBlocker ?? (busy ? "Wait for speech recognition to finish" : null)} />
@@ -122,19 +122,19 @@ export function TranscriptTab() {
             <span className="flex-1">
               {missing} clip{missing === 1 ? "" : "s"} not transcribed
             </span>
-            <Button className="h-7 px-2" disabled={busy} disabledReason="Wait for speech recognition to finish" onClick={() => startSpeech(null)}>
+            <Button variant="primary" className="h-7 px-2.5" disabled={busy} disabledReason="Wait for speech recognition to finish" onClick={() => startSpeech(null)}>
               Transcribe
             </Button>
           </div>
         )}
         {running && <SpeechJobCard job={running} />}
         <div className="flex items-center gap-1.5">
-          <span className="text-[12px] text-muted">Pauses over</span>
+          <span className="whitespace-nowrap text-[12px] text-muted">Pauses over</span>
           <NumberInput label="Shortest pause to show" value={pauseUs / US} min={0.1} max={5} step={0.1} format={(v) => v.toFixed(1)} onChange={(v) => useSpeech.setState({ pauseUs: Math.round(v * US) })} className="w-11" />
           <span className="text-[12px] text-muted">s</span>
           <span className="flex-1" />
           <Button
-            className="h-7 px-2"
+            className="h-7 px-2 text-[12px]"
             disabled={pauses.length === 0 || !!cutBlocker}
             disabledReason={cutBlocker ?? `No pauses longer than ${formatDuration(pauseUs)}`}
             title={`Shorten every pause to ${formatDuration(pauseUs)}`}

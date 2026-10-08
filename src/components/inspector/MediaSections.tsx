@@ -5,6 +5,7 @@ import { detachAudio, detachBlocker, editClip, findClip, setCleanVoice, useEdito
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
 import { Button, Checkbox, IconButton, ProgressBar, Section, Segmented, Slider } from "../ui";
+import { QUIET } from "./Header";
 
 type Media = Extract<Clip["content"], { type: "media" }>;
 
@@ -18,7 +19,7 @@ export function AdjustSection({ clip, content }: { clip: Clip; content: Media })
     <Section
       title="Adjust"
       actions={
-        <IconButton label="Reset adjustments" className="h-7 w-7" disabled={sameAdjust(adjust, NO_ADJUST)} onClick={() => edit({ type: "updateClip", clipId: clip.id, adjust: NO_ADJUST })}>
+        <IconButton label="Reset adjustments" className={QUIET} disabled={sameAdjust(adjust, NO_ADJUST)} onClick={() => edit({ type: "updateClip", clipId: clip.id, adjust: NO_ADJUST })}>
           <RotateCcw size={14} />
         </IconButton>
       }
@@ -55,7 +56,7 @@ export function SpeedSection({ clip, content, asset }: { clip: Clip; content: Me
         parse={(s) => Math.log10(Number(s.replace(",", ".").replace(/[^\d.]/g, "")))}
         onChange={(v) => set(10 ** v)}
       />
-      <dl className="tabular grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[12px]">
+      <dl className="tabular grid grid-cols-[78px_1fr] gap-x-2 gap-y-1.5 text-[12px]">
         <dt className="text-muted">Duration</dt>
         <dd className="text-fg">{formatDuration(clip.durationUs)}</dd>
         <dt className="text-muted">Source used</dt>

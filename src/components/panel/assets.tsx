@@ -1,9 +1,10 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Film, Image as ImageIcon } from "lucide-react";
+import { AudioLines, Film, Image as ImageIcon, Plus } from "lucide-react";
 import { api, errorText } from "../../lib/api";
 import { followPointer } from "../../lib/drag";
 import { MAIN_TRACK, aiLocked, allClips, currentEpoch, findClip, undoAction, useEditor } from "../../lib/store";
 import type { Asset } from "../../lib/types";
+import { lockedProps, useLockReason } from "../ui";
 
 export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
@@ -64,22 +65,43 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
 }
 
 /** A file being imported: the name and a skeleton where its thumbnail will be. */
-export function ImportPlaceholder({ name, kind, compact }: { name: string; kind: Asset["kind"]; compact?: boolean }) {
+export function ImportPlaceholder({ name, compact }: { name: string; compact?: boolean }) {
   if (compact)
     return (
-      <div className="flex items-center gap-2 rounded-md p-1.5" role="status" aria-label={`Importing ${name}`}>
-        <div className="skeleton h-10 w-10 shrink-0 rounded" />
+      <div className="flex items-center gap-2 rounded-xl p-1.5" role="status" aria-label={`Importing ${name}`}>
+        <div className="skeleton h-10 w-10 shrink-0 rounded-md" />
         <span className="min-w-0 flex-1 truncate text-[13px] text-muted">{name}</span>
       </div>
     );
   return (
-    <div className="flex flex-col gap-1 rounded-md p-1" role="status" aria-label={`Importing ${name}`}>
-      <div className="skeleton aspect-video rounded" />
-      <div className="flex items-center gap-1 px-0.5 text-[12px] text-muted">
-        <KindIcon kind={kind} size={12} />
-        <span className="truncate">{name}</span>
-      </div>
+    <div className="flex min-w-0 flex-col gap-1.5" role="status" aria-label={`Importing ${name}`}>
+      <div className="skeleton aspect-square rounded-[10px]" />
+      <span className="truncate text-[11px] leading-[13px] text-muted">{name}</span>
     </div>
+  );
+}
+
+/** The calm full-width tile on top of Media and Audio that opens the file picker. */
+export function ImportTile({ label, hint, shortcut, onClick, className = "" }: { label: string; hint?: string; shortcut?: string; onClick: () => void; className?: string }) {
+  const lock = useLockReason();
+  return (
+    <button
+      type="button"
+      aria-keyshortcuts={shortcut}
+      onClick={onClick}
+      {...lockedProps(lock)}
+      className={`flex h-[46px] shrink-0 items-center justify-center gap-2.5 rounded-xl bg-white/[.055] text-[13px] font-semibold text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/.07)] transition-colors duration-[120ms] ease-out hover:bg-white/[.09] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-white/[.055] ${className}`}
+    >
+      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-strong text-white shadow-[inset_0_1px_0_rgb(255_255_255/.2)]">
+        <Plus size={16} />
+      </span>
+      {label}
+      {hint && (
+        <kbd aria-hidden className="ml-0.5 rounded-[5px] bg-white/[.055] px-[5px] py-0.5 font-sans text-[11px] leading-[13px] font-medium text-muted">
+          {hint}
+        </kbd>
+      )}
+    </button>
   );
 }
 

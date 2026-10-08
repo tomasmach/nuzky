@@ -18,11 +18,11 @@ function Item({ icon, label, shortcut, disabled, reason, onSelect }: { icon: Rea
       aria-disabled={disabled || undefined}
       title={disabled ? (reason ?? undefined) : undefined}
       onClick={disabled ? undefined : onSelect}
-      className="flex h-8 w-full items-center gap-2 rounded px-2 text-left text-[13px] text-fg hover:bg-raised focus-visible:bg-raised aria-disabled:cursor-not-allowed aria-disabled:text-subtle aria-disabled:hover:bg-transparent aria-disabled:focus-visible:bg-raised"
+      className="group flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg hover:bg-white/[.08] focus-visible:bg-white/[.08] aria-disabled:cursor-not-allowed aria-disabled:text-subtle aria-disabled:hover:bg-transparent aria-disabled:focus-visible:bg-white/[.08]"
     >
-      <span className="text-muted">{icon}</span>
+      <span className="text-muted group-aria-disabled:text-subtle">{icon}</span>
       <span className="flex-1">{label}</span>
-      {shortcut && <span className="text-[12px] text-muted">{shortcut}</span>}
+      {shortcut && <span className="text-[12px] text-muted group-aria-disabled:text-subtle">{shortcut}</span>}
     </button>
   );
 }
@@ -108,7 +108,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
       aria-label={n === 1 ? "Clip actions" : `Actions for ${n} clips`}
       onKeyDown={onKeyDown}
       onContextMenu={(e) => e.preventDefault()}
-      className="fixed z-[110] w-56 rounded-lg border border-line bg-panel p-1 shadow-2xl shadow-black/60"
+      className="overlay fixed z-[110] w-56 rounded-xl p-1"
       style={{ left: pos.x, top: pos.y }}
     >
       {/* Split takes the selected clips under the playhead, like S. */}
@@ -129,7 +129,7 @@ export function ClipMenu({ at, onClose }: { at: MenuAt; onClose: () => void }) {
         onSelect={run(() => detachAudio(detachable.map((c) => c.id)))}
       />
       <Item icon={<ListChecks size={14} />} label="Select all on track" onSelect={run(() => selectTrack(clip.id))} />
-      <div className="my-1 h-px bg-line" />
+      <div className="mx-2 my-1 h-px bg-white/[.08]" />
       <Item icon={<Trash2 size={14} />} label={many("Delete", "Delete")} shortcut="Del" disabled={locked} reason={AI_EDITING} onSelect={run(deleteSelection)} />
     </div>
   );

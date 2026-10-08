@@ -8,6 +8,7 @@ import type { Asset, Clip } from "../../lib/types";
 import { TransitionSettings } from "../panel/TransitionsTab";
 import { AiLock, TabBar, TabPanel } from "../ui";
 import { AnimationSection } from "./AnimationSection";
+import { InspectorHeader } from "./Header";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
 import { MultiInspector } from "./MultiInspector";
 import { ProjectSection } from "./ProjectSection";
@@ -37,18 +38,6 @@ function tabsFor(kind: Kind, hasSound: boolean): { id: TabId; label: string }[] 
 
 const KIND_ICON = { video: Film, image: ImageIcon, audio: AudioLines, text: Type, caption: Captions };
 
-function Header({ icon: Icon, title, detail }: { icon: typeof Film; title: string; detail: string }) {
-  return (
-    <div className="shrink-0 border-b border-line px-4 py-3">
-      <div className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
-        <Icon size={14} className="shrink-0 text-muted" />
-        <span className="truncate">{title}</span>
-      </div>
-      <div className="tabular mt-0.5 text-[12px] text-muted">{detail}</div>
-    </div>
-  );
-}
-
 type Chosen = Partial<Record<Kind, TabId>>;
 
 function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; kind: Kind; asset?: Asset; chosen: Chosen; onChoose: (c: Chosen) => void }) {
@@ -63,7 +52,7 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
 
   return (
     <>
-      <Header icon={KIND_ICON[kind]} title={title} detail={detail} />
+      <InspectorHeader icon={KIND_ICON[kind]} title={title} detail={detail} />
       <TabBar group="clip" label="Clip settings" tabs={tabs} value={tab} onChange={(id) => onChoose({ ...chosen, [kind]: id })} />
       <TabPanel group="clip" id={tab} className="min-h-0 flex-1 overflow-y-auto">
         <AiLock>
@@ -91,7 +80,7 @@ function CutInspector({ clipId }: { clipId: string }) {
   return (
     <>
       {/* The icon says what is selected, like for clips; a kind icon such as Slide left's arrow would read as "back". */}
-      <Header
+      <InspectorHeader
         icon={Blend}
         title={t ? (TRANSITIONS.find((k) => k.kind === t.kind)?.label ?? "Transition") : "Cut"}
         detail={`${t ? "Transition · " : ""}cut at ${formatTime(cut.atUs)}`}
@@ -137,7 +126,7 @@ export function Inspector() {
   }
 
   return (
-    <aside className="flex w-[300px] shrink-0 flex-col overflow-hidden border-l border-line bg-panel" aria-label="Inspector">
+    <aside className="pane flex w-[300px] shrink-0 flex-col overflow-hidden" aria-label="Inspector">
       {body}
     </aside>
   );
