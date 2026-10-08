@@ -4,13 +4,15 @@ import { fontCss } from "../lib/fonts";
 import { AI_EDITING, useAiLocked } from "../lib/store";
 import type { TextStyle } from "../lib/types";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "bar";
 
 const variants: Record<Variant, string> = {
-  primary: "bg-accent text-black hover:bg-accent-strong hover:text-white font-semibold",
-  secondary: "bg-raised text-fg hover:bg-line border border-line",
-  ghost: "text-muted hover:text-fg hover:bg-raised",
-  danger: "bg-danger/15 text-danger hover:bg-danger/25 border border-danger/40",
+  primary: "btn-prominent font-semibold",
+  secondary: "bg-white/[.09] text-fg shadow-[inset_0_1px_0_rgb(255_255_255/.07),inset_0_0_0_1px_rgb(255_255_255/.07)] hover:bg-white/[.14]",
+  ghost: "text-muted hover:bg-white/[.08] hover:text-fg",
+  danger: "bg-danger/15 text-danger shadow-[inset_0_0_0_1px_rgb(255_69_58/.4)] hover:bg-danger/25",
+  /** A floating toolbar capsule, e.g. in the top bar. */
+  bar: "bar text-fg hover:bg-white/[.13]",
 };
 
 /** Drops hover styles, so a disabled control does not react to the pointer. */
@@ -34,6 +36,7 @@ function disabledProps(disabled: boolean | undefined, onClick: ButtonHTMLAttribu
 
 export function Button({
   variant = "secondary",
+  pill = false,
   className = "",
   children,
   disabled,
@@ -41,7 +44,7 @@ export function Button({
   title,
   onClick,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; disabledReason?: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; disabledReason?: string; /** Capsule shape, for toolbars. */ pill?: boolean }) {
   const reasonId = useId();
   const lock = useLockReason();
   disabled = disabled || !!lock;
@@ -52,8 +55,8 @@ export function Button({
         type="button"
         title={disabled ? reason : title}
         {...disabledProps(disabled, onClick, reason ? reasonId : undefined)}
-        className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
-          disabled ? `cursor-not-allowed opacity-40 ${idle(variants[variant])}` : `active:translate-y-px disabled:active:translate-y-0 ${variants[variant]}`
+        className={`inline-flex h-8 items-center justify-center gap-1.5 ${pill ? "rounded-full px-3.5" : "rounded-lg px-3"} text-[13px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+          disabled ? `cursor-not-allowed opacity-40 ${idle(variants[variant])}` : `active:brightness-90 ${variants[variant]}`
         } ${className}`}
         {...rest}
       >
@@ -76,12 +79,13 @@ export function Button({
 export function IconButton({
   label,
   active,
+  round = false,
   className = "",
   children,
   disabled,
   onClick,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean; /** Round, for icons grouped in a toolbar capsule. */ round?: boolean }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
   return (
@@ -91,9 +95,9 @@ export function IconButton({
       title={lock ?? label}
       aria-pressed={active}
       {...disabledProps(disabled, onClick)}
-      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
-        disabled ? "cursor-not-allowed opacity-40" : "active:translate-y-px disabled:active:translate-y-0"
-      } ${active ? "bg-accent/20 text-accent" : disabled ? "text-muted" : "text-muted hover:bg-raised hover:text-fg"} ${className}`}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center ${round ? "rounded-full" : "rounded-lg"} transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+        disabled ? "cursor-not-allowed opacity-40" : "active:brightness-75"
+      } ${active ? "bg-accent/[.18] text-accent" : disabled ? "text-muted" : "text-muted hover:bg-white/[.08] hover:text-fg"} ${className}`}
       {...rest}
     >
       {children}
@@ -142,7 +146,7 @@ export function DisabledHint() {
   return (
     <div
       aria-hidden
-      className={`pointer-events-none fixed z-[130] max-w-[260px] -translate-x-1/2 rounded-md border border-line bg-raised px-2 py-1 text-[12px] text-fg shadow-lg shadow-black/50 ${hint.above ? "-translate-y-full" : ""}`}
+      className={`overlay pointer-events-none fixed z-[130] max-w-[260px] -translate-x-1/2 rounded-lg px-2.5 py-1.5 text-[12px] text-fg ${hint.above ? "-translate-y-full" : ""}`}
       style={{ left: hint.x, top: hint.y }}
     >
       {hint.text}
@@ -226,7 +230,7 @@ export function NumberInput({
       aria-label={label}
       inputMode="decimal"
       disabled={disabled}
-      className={`tabular h-6 rounded border border-line bg-raised px-1.5 text-right text-[12px] text-fg focus:border-accent disabled:opacity-40 ${className}`}
+      className={`tabular h-6 rounded-md border border-white/[.08] bg-white/[.055] px-1.5 text-right text-[12px] text-fg outline-offset-0 focus:border-accent disabled:opacity-40 ${className}`}
       value={draft ?? (mixed ? "—" : format(value))}
       onFocus={(e) => {
         setDraft(mixed ? "" : format(value));
@@ -244,7 +248,7 @@ export function NumberInput({
   );
 }
 
-const THUMB = 14;
+const THUMB = 22;
 
 /**
  * Range input with a filled track. One-sided ranges fill from the left; two-sided ones
@@ -280,7 +284,7 @@ export function RangeInput({
   const [lo, hi] = [Math.min(origin, frac(value)), Math.max(origin, frac(value))];
   return (
     <span className={`relative flex h-4 items-center ${className}`}>
-      {twoSided && <span aria-hidden className="pointer-events-none absolute top-0.5 h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted" style={{ left: at(origin) }} />}
+      {twoSided && <span aria-hidden className="pointer-events-none absolute top-1 h-2 w-0.5 -translate-x-1/2 rounded-full bg-white/30" style={{ left: at(origin) }} />}
       <input
         type="range"
         aria-label={label}
@@ -331,7 +335,7 @@ export function Slider({
   disabled = disabled || !!lock;
   return (
     <div className="flex items-center gap-2" title={lock ?? title}>
-      <span className={`w-[76px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
+      <span className={`w-[78px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
       <RangeInput
         label={label}
         value={value}
@@ -353,9 +357,9 @@ export function Slider({
 
 export function Section({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
   return (
-    <section className="flex flex-col gap-3 border-b border-line px-4 py-4 last:border-b-0">
+    <section className="flex flex-col gap-3 border-b border-white/[.07] px-4 py-4 last:border-b-0">
       <div className="flex min-h-6 items-center justify-between gap-2">
-        <h3 className="text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h3>
+        <h3 className="text-[13px] font-semibold text-fg">{title}</h3>
         {actions && <div className="flex items-center gap-0.5">{actions}</div>}
       </div>
       {children}
@@ -376,7 +380,7 @@ export function ColorInput({ label, value, onChange }: { label: string; value: s
           disabled={!!lock}
           value={value.slice(0, 7)}
           onChange={(e) => onChange(e.target.value + value.slice(7))}
-          className="h-7 w-9 cursor-pointer rounded border border-line bg-raised p-0.5 disabled:cursor-not-allowed"
+          className="h-6 w-9 cursor-pointer rounded-md border border-white/15 bg-white/[.06] p-0.5 disabled:cursor-not-allowed"
         />
       </span>
     </label>
@@ -418,8 +422,8 @@ export function Checkbox({
         />
         <span
           aria-hidden
-          className={`flex h-4 w-4 items-center justify-center rounded border transition-colors duration-[120ms] ease-out peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-accent ${
-            checked || mixed ? "border-accent bg-accent text-black" : "border-muted/60 bg-raised"
+          className={`flex h-4 w-4 items-center justify-center rounded-[4px] border transition-colors duration-[120ms] ease-out peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-accent ${
+            checked || mixed ? "border-accent-strong bg-accent-strong text-white" : "border-white/25 bg-white/[.07]"
           }`}
         >
           {mixed ? <Minus size={12} strokeWidth={3} /> : checked && <Check size={12} strokeWidth={3} />}
@@ -481,7 +485,7 @@ export function TabBar<T extends string>({
     onChange,
   );
   return (
-    <div role="tablist" aria-label={label} className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2" onKeyDown={onKeyDown}>
+    <div role="tablist" aria-label={label} className="seg-track mx-3 mb-1 flex shrink-0 gap-0.5 overflow-x-auto rounded-[9px] p-0.5" onKeyDown={onKeyDown}>
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -493,8 +497,8 @@ export function TabBar<T extends string>({
           aria-controls={t.id === value ? tabIds(group, t.id).panel : undefined}
           tabIndex={t.id === value ? 0 : -1}
           onClick={() => onChange(t.id)}
-          className={`h-10 shrink-0 px-2 text-[13px] transition-colors duration-[120ms] ease-out ${
-            t.id === value ? "font-medium text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg"
+          className={`h-7 flex-auto shrink-0 rounded-[7px] px-1.5 text-[12px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
+            t.id === value ? "seg-on text-fg" : "text-muted hover:text-fg"
           }`}
         >
           {t.label}
@@ -525,7 +529,7 @@ export function Segmented<T extends string | number>({
   disabled = disabled || !!lock;
   const reason = lock ?? (disabled ? disabledReason : undefined);
   return (
-    <div role="group" aria-label={label} className="flex gap-1 rounded-md bg-bg p-0.5">
+    <div role="group" aria-label={label} className="seg-track flex gap-0.5 rounded-[9px] p-0.5">
       {options.map((o) => (
         <button
           key={o.id}
@@ -533,8 +537,8 @@ export function Segmented<T extends string | number>({
           aria-pressed={o.id === value}
           title={disabled ? reason : o.title}
           {...disabledProps(disabled, () => onChange(o.id), reason ? reasonId : undefined)}
-          className={`tabular h-7 flex-1 rounded px-2 text-[12px] transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
-            o.id === value ? "bg-line font-medium text-fg" : `text-muted ${disabled ? "" : "enabled:hover:text-fg"}`
+          className={`tabular h-7 flex-1 rounded-[7px] px-2 text-[12px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
+            o.id === value ? "seg-on text-fg" : `text-muted ${disabled ? "" : "enabled:hover:text-fg"}`
           }`}
         >
           {o.label}
@@ -573,16 +577,16 @@ export function PresetTile({
       aria-pressed={selected}
       title={lock ?? title ?? label}
       {...disabledProps(disabled, onClick)}
-      className="group flex min-w-0 flex-col gap-1 rounded-md text-left disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      className="group flex min-w-0 flex-col gap-1.5 rounded-[10px] text-left disabled:cursor-not-allowed disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
     >
       <span
-        className={`relative block aspect-[4/3] w-full overflow-hidden rounded-md border bg-bg ${
-          selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : disabled ? "border-line" : "border-line group-enabled:group-hover:border-muted"
+        className={`relative block aspect-[4/3] w-full overflow-hidden rounded-[10px] border bg-bg ${
+          selected ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : disabled ? "border-white/[.08]" : "border-white/[.08] group-enabled:group-hover:border-white/30"
         }`}
       >
         {children}
         {selected && (
-          <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-black">
+          <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-accent-strong text-white shadow-[0_1px_2px_rgb(0_0_0/.5)]">
             <Check size={11} strokeWidth={3} />
           </span>
         )}
@@ -602,7 +606,7 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={known ? Math.round(value * 100) : undefined}
-      className={`h-1.5 overflow-hidden rounded-full bg-raised ${className}`}
+      className={`h-1.5 overflow-hidden rounded-full bg-white/10 ${className}`}
     >
       {known ? (
         <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${Math.max(2, value * 100)}%` }} />
