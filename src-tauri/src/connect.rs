@@ -213,7 +213,11 @@ fn entry(agent: Agent, text: Option<&str>) -> Result<Option<Command>> {
             let config: toml_edit::DocumentMut = text.parse().context("Not valid TOML")?;
             config.get("mcp_servers").and_then(|s| s.get(NAME)).map(|e| {
                 let value = |key| e.get(key).and_then(|i| i.as_value()).map(toml_to_json);
-                (value("command"), value("args"))
+                // Codex does not start a server turned off, so that entry runs nothing.
+                match e.get("enabled").and_then(|i| i.as_bool()) {
+                    Some(false) => (None, None),
+                    _ => (value("command"), value("args")),
+                }
             })
         }
     };
@@ -380,6 +384,12 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text.matches("[mcp_servers.capopen]").count(), 1);
         assert!(text.contains("/new/capopen-app") && !text.contains("/opt/CapOpen"));
+        // An entry turned off in Codex runs nothing, so it is turned back on by connecting again.
+        std::fs::write(&path, text.replace("[mcp_servers.capopen]\n", "[mcp_servers.capopen]\nenabled = false\n"))
+            .unwrap();
+        assert_eq!(status(Agent::Codex, &path, &moved).state, State::Other);
+        assert_eq!(connect(Agent::Codex, &path, &moved, 5).unwrap().state, State::Connected);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("enabled"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -72,10 +72,11 @@ impl Delivery {
         }
     }
 
-    /// Integrated loudness in LUFS and the highest true peak in dBTP of the file.
-    pub fn loudness(self) -> (f64, f64) {
+    /// Integrated loudness of the file in LUFS. Its true peak stays under -1 dBTP, which
+    /// `LIMITER_CEILING_DB` keeps for every preset.
+    pub fn loudness(self) -> f64 {
         match self {
-            Self::Reels => (-14.0, -1.0),
+            Self::Reels => -14.0,
         }
     }
 }
@@ -353,7 +354,7 @@ fn encode(
                     fraction: fraction * LOUDNESS_SHARE,
                 })
             };
-            let gain = plan_gain(project, cache_dir, total_samples, delivery.loudness().0, cancel, report)?;
+            let gain = plan_gain(project, cache_dir, total_samples, delivery.loudness(), cancel, report)?;
             Sound::Leveled(Box::new(Leveled::new(cache_dir, project, gain)))
         }
         None => Sound::Mix(Mixer::new(cache_dir.to_path_buf())),

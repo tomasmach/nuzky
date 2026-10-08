@@ -7,7 +7,7 @@ import { Button, IconButton, trapTab } from "./ui";
 
 const STATE_TEXT: Record<AgentConnection["state"], string> = {
   connected: "Connected",
-  other: "Set up for another copy of CapOpen",
+  other: "Set up for another copy of CapOpen or turned off",
   missing: "Not connected",
   unreadable: "Its settings file could not be read",
 };

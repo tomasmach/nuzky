@@ -106,14 +106,25 @@ fn remove_older_versions(path: &Path, asset: &Asset) {
 
 /// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
 /// same file (import, export and captions) wait for one extraction instead of racing.
-/// An error from `progress` stops the extraction; the next call starts it again.
-pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
+/// An error from `progress` stops the extraction, or the wait for another caller's; the next call
+/// starts it again.
+pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
     let path = pcm_path(cache_dir, asset);
     std::fs::create_dir_all(path.parent().unwrap())?;
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
-    lock.lock()?;
+    // Waiting for another caller still asks `progress`, so a cancelled job stops at once.
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                progress(0.0)?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
     if !path.exists() {
         extract_pcm(Path::new(&asset.path), &path, progress)?;
         remove_older_versions(&path, asset);
@@ -424,7 +435,8 @@ mod tests {
         let asset: Asset = serde_json::from_slice(&std::fs::read(dir.join("asset.json")).unwrap()).unwrap();
         let id = std::process::id();
         std::fs::write(dir.join(format!("ready-{id}")), b"").unwrap();
-        let path = ensure_pcm(&dir, &asset, |_| panic!("published cache must be reused")).unwrap();
+        // Waiting asks `progress`; the content shows the published cache was reused.
+        let path = ensure_pcm(&dir, &asset, |_| Ok(())).unwrap();
         assert_eq!(std::fs::read(path).unwrap(), vec![0; 8]);
         std::fs::write(dir.join(format!("done-{id}")), b"").unwrap();
     }
@@ -469,6 +481,26 @@ mod tests {
             assert!(child.wait().unwrap().success());
             assert!(dir.join(format!("done-{}", child.id())).exists());
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A job waiting for another one's extraction of the same file stops as soon as it is
+    /// cancelled, instead of when that extraction ends.
+    #[test]
+    fn a_cancelled_wait_for_the_pcm_cache_stops_at_once() {
+        use std::time::{Duration, Instant};
+        let dir = std::env::temp_dir().join(format!("pcm-wait-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(dir.join("pcm")).unwrap();
+        let source = dir.join("source.wav");
+        write_test_wav(&source, 8192, 4800);
+        let asset = crate::media::probe(&source, "waiting".into()).unwrap();
+        let lock_path = format!("{}.lock", pcm_path(&dir, &asset).display());
+        let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path).unwrap();
+        lock.lock().unwrap();
+        let started = Instant::now();
+        let error = ensure_pcm(&dir, &asset, |_| anyhow::bail!("CANCELLED: test")).unwrap_err();
+        assert!(error.to_string().starts_with("CANCELLED") && started.elapsed() < Duration::from_secs(1), "{error:#}");
+        drop(lock);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

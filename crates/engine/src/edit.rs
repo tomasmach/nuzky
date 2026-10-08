@@ -1107,14 +1107,18 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &
 }
 
 /// A caption corrected word for word keeps its timing: when its old text was its words and the new text
-/// has as many words (split at single spaces), each word takes its new text and keeps its times. Any
-/// other edit leaves the words as they were, so they no longer match and nothing is highlighted.
+/// has as many words (split at single spaces), each word takes its new text and keeps its times. A
+/// corrected word may hold a space ("na pivo"), so each takes as many as it had. Any other edit leaves
+/// the words as they were, so they no longer match and nothing is highlighted.
 fn retext_words(words: &mut [CaptionWord], old: &str, new: &str) {
-    let tokens: Vec<&str> = new.split(' ').collect();
-    if !words.is_empty() && tokens.len() == words.len() && words.iter().map(|w| w.text.as_str()).eq(old.split(' ')) {
-        for (word, token) in words.iter_mut().zip(tokens) {
-            word.text = token.to_string();
-        }
+    let joined = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+    if words.is_empty() || joined != old || new.split(' ').count() != old.split(' ').count() {
+        return;
+    }
+    let mut tokens = new.split(' ');
+    for word in words {
+        let size = word.text.split(' ').count();
+        word.text = tokens.by_ref().take(size).collect::<Vec<_>>().join(" ");
     }
 }
 
@@ -2312,6 +2316,13 @@ mod tests {
         // Back to the words they were: lit again.
         p.apply(retext("Dneska vám ukážu, jak")).unwrap();
         assert_eq!(spoken_at(&p, 2_600_000).as_deref(), Some("ukážu,"));
+        // A word corrected into two before captions were made stays one timed word, and fixing
+        // another word keeps the caption lit.
+        let timed = |text: &str, start_us: i64| CaptionWord { text: text.into(), start_us, end_us: start_us + 200_000 };
+        let mut words = vec![timed("na pivo", 0), timed("teď", 300_000)];
+        retext_words(&mut words, "na pivo teď", "na pivo hned");
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["na pivo", "hned"]);
+        assert_eq!(crate::model::spoken_word("na pivo hned", &words, 350_000), Some(8..12));
     }
 
     #[test]

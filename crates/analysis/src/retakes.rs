@@ -405,7 +405,15 @@ fn relate(earlier: &Sentence, later: &Sentence, words: &[TimelineWord]) -> Relat
     if !found.accepted() {
         return Relation::Unrelated;
     }
-    if found.meaning.is_empty() && found.swapped.is_empty() {
+    // Content words of the earlier attempt the later does not say: "klopový" said once is not a retake.
+    // A later attempt that stops two words or more before the earlier one ends is cut short, and the
+    // earlier one is kept.
+    let lost: &[usize] = match flipped {
+        false => &found.dropped,
+        true if long.words.len() - found.end >= 2 => &[],
+        true => &found.unsaid,
+    };
+    if found.meaning.is_empty() && found.swapped.is_empty() && lost.is_empty() {
         return Relation::Same;
     }
     let said = |sentence: &Sentence, k: Option<usize>| match k {
@@ -427,6 +435,7 @@ fn relate(earlier: &Sentence, later: &Sentence, words: &[TimelineWord]) -> Relat
             };
             format!("a word differs: the earlier says {e}, the later {l}")
         }))
+        .chain(lost.iter().map(|&k| format!("only the earlier says {}", said(earlier, Some(k)))))
         .collect();
     Relation::Differs(reasons.join("; "))
 }
@@ -446,6 +455,8 @@ struct Match {
     swapped: Vec<(usize, usize)>,
     /// Content words of the short sentence the long one does not say.
     dropped: Vec<usize>,
+    /// Content words of the long sentence the short one does not say, past its end too.
+    unsaid: Vec<usize>,
 }
 
 impl Match {
@@ -486,6 +497,7 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         meaning: Vec::new(),
         swapped: Vec::new(),
         dropped: Vec::new(),
+        unsaid: (end..m).filter(|&j| content(long[j])).collect(),
     };
     let (mut i, mut j) = (n, end);
     while i > 0 || j > 0 {
@@ -496,27 +508,35 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         } else if i > 0 && j > 0 && cost[i][j] == cost[i - 1][j - 1] + 1 {
             if let Some(what) = meaning((short[i - 1], i - 1), (long[j - 1], j - 1)) {
                 found.meaning.push((Some(i - 1), Some(j - 1), what));
-            } else if [short[i - 1], long[j - 1]].iter().all(|w| w.chars().count() >= CONTENT_LETTERS) {
+            } else if content(short[i - 1]) && content(long[j - 1]) {
                 found.swapped.push((i - 1, j - 1));
             }
             (i, j) = (i - 1, j - 1);
         } else if i > 0 && cost[i][j] == cost[i - 1][j] + 1 {
             if let Some(what) = lone_meaning(short[i - 1], i - 1) {
                 found.meaning.push((Some(i - 1), None, what));
-            } else if short[i - 1].chars().count() >= CONTENT_LETTERS {
+            } else if content(short[i - 1]) {
                 found.dropped.push(i - 1);
             }
             i -= 1;
         } else {
             if let Some(what) = lone_meaning(long[j - 1], j - 1) {
                 found.meaning.push((None, Some(j - 1), what));
+            } else if content(long[j - 1]) {
+                found.unsaid.push(j - 1);
             }
             j -= 1;
         }
     }
     found.meaning.reverse();
     found.swapped.reverse();
+    found.dropped.reverse();
+    found.unsaid.sort_unstable();
     found
+}
+
+fn content(token: &str) -> bool {
+    token.chars().count() >= CONTENT_LETTERS
 }
 
 /// Words at these positions that differ in what they say rather than in how they were recognised.
@@ -858,6 +878,17 @@ mod tests {
         // An attempt that stops inside its last word is still the start of the next one.
         let found = one(&[("Dneska vám ukážu, jak natoč", 900_000), ("Dneska vám ukážu, jak natočit video.", 900_000)]);
         assert_eq!((found.groups.len(), found.groups[0].keep), (1, 1), "{found:#?}");
+        // A word only the earlier complete attempt says, in its middle or as its last word.
+        for (earlier, later, word) in [
+            ("Použijte ten malý klopový mikrofon venku.", "Použijte ten malý mikrofon venku.", "klopový"),
+            ("Použijte ten malý klopový mikrofon.", "Použijte ten malý mikrofon na rozhovory.", "klopový"),
+            ("Použijte ten malý mikrofon venku.", "Použijte ten malý mikrofon.", "venku"),
+        ] {
+            let found = one(&[(earlier, 900_000), (later, 900_000)]);
+            assert!(found.groups.is_empty() && found.suggested_delete.is_empty(), "{found:#?}");
+            let reasons: Vec<&str> = found.review.iter().map(|r| r.reason.as_str()).collect();
+            assert_eq!(reasons, [format!("only the earlier says \"{word}\"")], "{found:#?}");
+        }
     }
 
     /// Recognition often puts no full stop between attempts said in one breath. Only an attempt
