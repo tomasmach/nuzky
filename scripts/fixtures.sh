@@ -101,12 +101,14 @@ noisy_talk() {
 }
 media voice.mp4 noisy_talk
 
+# Compares digests directly: macOS ships a BSD sha256sum without GNU's --check from stdin.
+sha256_is() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
 model() {
   local file=$models/$1 sha=$2 url=$3
-  if [ -f "$file" ] && echo "$sha  $file" | sha256sum --check --status; then return; fi
+  if [ -f "$file" ] && sha256_is "$file" "$sha"; then return; fi
   echo "> $file"
   curl --fail --location --silent --show-error --output "$file.part" "$url"
-  echo "$sha  $file.part" | sha256sum --check --quiet
+  sha256_is "$file.part" "$sha" || { echo "fixtures: $file.part does not match its SHA-256" >&2; exit 1; }
   mv "$file.part" "$file"
 }
 model ggml-small.bin 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b \

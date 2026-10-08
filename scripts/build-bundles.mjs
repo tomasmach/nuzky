@@ -70,6 +70,7 @@ const info = [
   output('ffmpeg', ['-version']),
   'FFmpeg redistribution/source checklist: docs/BUILDING.md',
 ];
-if (process.platform === 'darwin') info.push(output('brew', ['list', '--versions']));
+// Formulae only: the bundled libraries come from them, and a cask from an untrusted tap makes plain `brew list` fail.
+if (process.platform === 'darwin') info.push(output('brew', ['list', '--formula', '--versions']));
 if (process.platform === 'linux') info.push(output('dpkg-query', ['-W']));
 writeFileSync(path.join(bundle, `build-info-${process.platform}.txt`), info.join('\n') + '\n');

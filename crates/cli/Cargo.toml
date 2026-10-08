@@ -9,6 +9,7 @@ name = "capopen"
 path = "src/main.rs"
 
 [dependencies]
+capopen-analysis.workspace = true
 capopen-engine.workspace = true
 capopen-mcp.workspace = true
 capopen-session.workspace = true

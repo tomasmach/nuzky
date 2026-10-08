@@ -6,7 +6,8 @@ impl Fixture {
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("capopen-session-{}", new_id()));
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("project.capopen");
+        // The session resolves symlinks in the project path; macOS's temp dir sits under the /var symlink.
+        let path = fs::canonicalize(dir).unwrap().join("project.capopen");
         storage::save(&path, &Project::new("Original")).unwrap();
         Self(path)
     }

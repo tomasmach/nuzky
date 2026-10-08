@@ -57,7 +57,8 @@ fn prepared_endpoint_cannot_exfiltrate_a_symlinked_token() {
     let error = Remote::at(&f.socket, false).err().unwrap();
     assert!(error.to_string().starts_with("IPC_UNTRUSTED"));
     let (mut peer, _) = fake.accept().unwrap();
-    peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    // macOS refuses socket options once the client has hung up, which is the expected state here.
+    let _ = peer.set_read_timeout(Some(Duration::from_secs(1)));
     let mut sent = Vec::new();
     peer.read_to_end(&mut sent).unwrap();
     assert!(sent.is_empty(), "no hello or token may be sent");
