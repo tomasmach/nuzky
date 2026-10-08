@@ -2,6 +2,43 @@
 
 Dark only, like Final Cut Pro and CapCut: an editor for video, where the video is the brightest thing on screen. The layout follows CapCut; the finish follows Apple's pro apps. Solid graphite panes sit on a darker window with gaps between them, and the controls that float above them (top bar groups, transport, timeline tools) are glass capsules. Everything is drawn by CSS inside the webview, so it looks the same in WebKitGTK on Linux, WebView2 on Windows and WKWebView on macOS.
 
+This file is the law for how CapOpen looks; [docs/INTERACTION.md](docs/INTERACTION.md) is the law for how it behaves. A change to either goes into the same PR as the code.
+
+## What CapOpen should feel like
+
+Someone who edits in CapCut opens CapOpen and finds everything where they expect it. Then it feels calmer and more finished, as if Apple had made it: quiet graphite, crisp type, precise edges, nothing loud. Phone videos are the content, and the interface steps back around them.
+
+- **The video is the brightest, most colourful thing on screen.** The chrome is graphite and monochrome. Colour carries meaning only: blue for selection, focus, "on" and the prominent action, green for success and sound, orange for warnings, red for danger, and the muted clip colours on the timeline.
+- **CapCut's layout, unchanged.** Library with icon tabs on the left, preview in the middle with the transport under it, inspector on the right, timeline across the bottom, Export at the top right. Things do not move between versions; people and AI agents rely on where they are.
+- **Two layers, as in Apple's design.** Solid panes are the content layer. The controls that float above them (top bar groups, transport, timeline tools) and the short-lived overlays (menus, dialogs, toasts) are the functional layer. Glass belongs only to that layer.
+- **Restraint.** One prominent blue action per view, two at most. Hierarchy comes from size, weight and space, not from boxes, badges or colour. No helper text that repeats a label; a short line only where it prevents a mistake.
+- **Precision.** Edges line up (the top bar capsules line up with the panes below them), inner radii are concentric with their container, numbers are tabular, spacing follows the 4 px grid. Every control is finished in all its states: hover, pressed, focus, disabled, locked while the AI edits, empty, loading and error.
+- **Smooth on a weak PC.** Effects have a budget (see Materials). Nothing repaints on every frame unless it has to.
+- **The same on every platform.** Drawn in CSS inside the webview with the bundled Inter, never with native vibrancy or system fonts that differ per platform.
+
+Never: glow, gradients on the chrome, gradient text, emoji, walls of badges, uppercase eyebrows over sections, decorative illustrations, a light theme or a theme switch, animation on hover, blur on repeated items or over playing video.
+
+## Working on the UI
+
+- Before changing a screen, read the parts of this file it touches and the flow in docs/INTERACTION.md. Build from the shared components in `src/components/ui.tsx` and the materials in `src/index.css`; extend them, do not copy them.
+- Compute the contrast of every new colour from its hex values: 4.5:1 for text up to 17 px, 3:1 for icons and larger text.
+- Look at the change in the real app: screenshots from `scripts/repro.py` at 1440 × 900 and at the smallest window, 1024 × 640. Check the empty, disabled, locked (AI editing) and error states, not only the happy path.
+- When a change touches playback, the timeline, dragging or anything repeated per clip, measure before and after (frame times, renders per scroll, React time per playback frame) and give the numbers.
+- After a larger UI change, have an independent reviewer critique screenshots of the real app against this file.
+- For design reviews and questions of convention, Apple's Human Interface Guidelines are the reference; the `apple-design` agent skill carries them with a review checklist, where an agent has it. Read them as a desktop app in a webview: dark only is right for an app built around video (HIG Dark Mode, "immersive media viewing"); 13 px body text, 11 px minimum here (the HIG allows 10 px on macOS); controls 28 px or more, never under 20 px; every action also reachable from the keyboard; glass only on the floating functional layer.
+
+## Platform notes
+
+Found while building this design; keep them in mind before reaching for an effect.
+
+- WebKitGTK left the preview canvas black when its box had a blurred `box-shadow`. The frame keeps square corners and a 1 px hairline.
+- `@starting-style` transitions left the dialog scrim transparent in WebKitGTK. Entry animations use `@keyframes`.
+- Rounded `outline`s need WebKitGTK 2.40 or newer and Chromium 94 or newer; pane hairlines rely on them.
+- WebKitGTK draws `<input type="color">` like a switch, so the colour field draws its own swatch over a see-through input.
+- WebKitGTK sets Inter a little wider than Chromium. Leave slack in tight rows such as the library tabs.
+- `prefers-reduced-transparency` does not exist in WebKitGTK; `prefers-contrast: more` turns overlays opaque instead.
+- Tailwind 4 orders utilities of the same property by value, so `className="h-6"` cannot shrink a component whose base size is also a utility. The shared components keep their base shapes in `@layer components` classes (`.btn`, `.icon-btn`, `.pane`…), which any utility overrides.
+
 ## Materials
 
 Defined in `src/index.css` (`@layer components`, so utilities still override them).
@@ -10,7 +47,7 @@ Defined in `src/index.css` (`@layer components`, so utilities still override the
 |---|---|---|
 | `pane` | `panel`, 12 px radius, 1 px white 6 % hairline drawn as an inset outline, so content at the edge never covers it | Library, inspector, timeline. The preview pane is `stage` with the same shape |
 | `bar` | White 7.5 % fill, white 10 % top highlight and 7 % hairline, soft shadow | Floating capsules: top bar groups, transport, timeline tool groups. Never blurs: it floats over still backgrounds, where a blur would look the same and cost a repaint on every frame below it |
-| `overlay` | 82 % graphite, `backdrop-filter: blur(28px) saturate(1.8)`, highlight, deep shadow | Short-lived layers only: menus, popovers, dialogs, toasts, the disabled-reason hint. Falls back to solid `#2a2a2f` where backdrop-filter is missing and with `prefers-contrast: more` |
+| `overlay` | 88 % graphite, `backdrop-filter: blur(28px) saturate(1.8)`, highlight, deep shadow | Short-lived layers only: menus, popovers, dialogs, toasts, the disabled-reason hint. Falls back to solid `#2a2a2f` where backdrop-filter is missing and with `prefers-contrast: more` |
 | `seg-track` / `seg-on` | Recessed white 4.5 % track; the chosen segment white 15 % with a top highlight and a small shadow | Segmented controls, the inspector tabs and the library tabs |
 | `btn-prominent` | `accent-strong` fill, white label, top highlight; disabled, a quiet white 8 % capsule with 40 % text | The one or two prominent actions of a view: Export, Generate captions, the confirm button of a dialog |
 
