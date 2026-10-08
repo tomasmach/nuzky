@@ -99,7 +99,7 @@ export const useAgent = create<AgentState>(() => ({
 
 export const agentApi = {
   list: () => invoke<AgentInfo[]>("agent_list"),
-  send: (agent: AgentId, chat: string | null, text: string, context: PromptContext) => invoke<string>("agent_send", { agent, chat, text, context }),
+  send: (agent: AgentId, chat: string, text: string, context: PromptContext) => invoke<void>("agent_send", { agent, chat, text, context }),
   stop: (chat: string) => invoke<void>("agent_stop", { chat }),
 };
 
@@ -220,7 +220,10 @@ export async function send(text = useAgent.getState().draft.trim()) {
   if (!text || sendBlocked()) return;
   const context = promptContext();
   const fromDraft = text === s.draft.trim();
+  // The chat is named here, before sending, so even an agent that fails at once is heard.
+  const chat = s.chat ?? crypto.randomUUID();
   useAgent.setState({
+    chat,
     items: [...s.items, { kind: "user", text, context: describeContext(context) }],
     status: "working",
     draft: fromDraft ? "" : s.draft,
@@ -229,8 +232,7 @@ export async function send(text = useAgent.getState().draft.trim()) {
     frame: false,
   });
   try {
-    const chat = await agentApi.send(s.agent, s.chat, text, context);
-    useAgent.setState({ chat });
+    await agentApi.send(s.agent, chat, text, context);
   } catch (e) {
     const text = errorText(e);
     fail(text.startsWith("NOT_INSTALLED") ? "NOT_INSTALLED" : "AGENT_FAILED", plainError(text));

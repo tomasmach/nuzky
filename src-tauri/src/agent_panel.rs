@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// One conversation with an agent; a later message resumes its session.
@@ -22,11 +23,15 @@ pub struct AgentPanel {
     chats: Mutex<HashMap<String, Chat>>,
     /// The message the agent is working on, by chat.
     active: Mutex<Option<(String, Turn)>>,
+    /// Counts stops, so a message still starting when one comes is stopped as soon as it runs.
+    stops: AtomicU64,
 }
 
 impl AgentPanel {
-    /// Stops the panel's agent, e.g. for Stop and edit in the top bar or when another project opens.
+    /// Stops the panel's agent, e.g. for Stop and edit in the top bar or when another project opens,
+    /// also one whose message is still starting.
     pub fn stop(&self) {
+        self.stops.fetch_add(1, Ordering::AcqRel);
         if let Some((_, turn)) = self.active.lock().unwrap().as_ref() {
             turn.stop();
         }
@@ -97,26 +102,23 @@ pub async fn agent_list() -> CmdResult<Vec<AgentInfo>> {
         .map_err(err)
 }
 
-/// Sends a message; the answer arrives as `agent` events for the returned chat.
+/// Sends a message in the chat the UI named; the answer arrives as `agent` events for it. The UI
+/// names the chat before sending, so even an agent that fails at once reaches it.
 #[tauri::command]
 pub async fn agent_send(
     app: AppHandle,
     agent: AgentId,
-    chat: Option<String>,
+    chat: String,
     text: String,
     context: PromptContext,
-) -> CmdResult<String> {
+) -> CmdResult<()> {
     tauri::async_runtime::spawn_blocking(move || send(&app, agent, chat, &text, &context)).await.map_err(err)?
 }
 
-fn send(
-    app: &AppHandle,
-    agent: AgentId,
-    chat: Option<String>,
-    text: &str,
-    context: &PromptContext,
-) -> CmdResult<String> {
+fn send(app: &AppHandle, agent: AgentId, chat: String, text: &str, context: &PromptContext) -> CmdResult<()> {
     let panel = app.state::<AgentPanel>();
+    // Another project opening, or Stop, while this starts must stop it once it runs.
+    let stops = panel.stops.load(Ordering::Acquire);
     // The panel's lock and the session's are never held together, so Stop and edit cannot deadlock with this.
     let busy = || panel.active.lock().unwrap().as_ref().is_some_and(|(_, turn)| turn.running());
     if busy() {
@@ -140,7 +142,10 @@ fn send(
     let env = std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
 
     let mut chats = panel.chats.lock().unwrap();
-    let id = chat.filter(|id| chats.get(id).is_some_and(|c| c.agent == agent)).unwrap_or_else(new_id);
+    if chats.get(&chat).is_some_and(|c| c.agent != agent) {
+        chats.remove(&chat);
+    }
+    let id = chat;
     let chat = chats.entry(id.clone()).or_insert_with(|| Chat { agent, session: new_id(), resumable: false });
     let request = TurnRequest {
         agent,
@@ -170,8 +175,12 @@ fn send(
         }
     })
     .map_err(err)?;
-    *panel.active.lock().unwrap() = Some((id.clone(), turn));
-    Ok(id)
+    let mut active = panel.active.lock().unwrap();
+    if panel.stops.load(Ordering::Acquire) != stops {
+        turn.stop();
+    }
+    *active = Some((id, turn));
+    Ok(())
 }
 
 /// Stops the agent: CapOpen ends the run first, so the editor unlocks at once whatever the agent does.
@@ -180,17 +189,14 @@ pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, chat
     if !panel.active.lock().unwrap().as_ref().is_some_and(|(id, turn)| *id == chat && turn.running()) {
         return Ok(());
     }
-    {
-        let current = state.session.lock().unwrap();
-        // The agent may end its run itself at this very moment; then there is nothing left to stop.
-        if let Err(error) = current.host.stop_run()
-            && !error.to_string().starts_with("INVALID_RUN")
-        {
-            return Err(err(error));
-        }
-    }
+    let ended = state.session.lock().unwrap().host.stop_run();
+    // The agent stops even when ending the run failed, e.g. on a full disk.
     panel.stop();
-    Ok(())
+    match ended {
+        // The agent may end its run itself at this very moment; then there was nothing left to stop.
+        Err(error) if !error.to_string().starts_with("INVALID_RUN") => Err(err(error)),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]

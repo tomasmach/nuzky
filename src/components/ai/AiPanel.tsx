@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -298,8 +298,12 @@ function Options({ item }: { item: Extract<ChatItem, { kind: "options" }> }) {
 }
 
 function ChangeRow({ change }: { change: RunChange }) {
-  const present = useEditor((s) => change.clipIds.filter((id) => s.snap?.project.tracks.some((t) => t.clips.some((c) => c.id === id))).join(","));
-  const ids = present ? present.split(",") : [];
+  // Recomputed when the project changes, never with the playhead while playing.
+  const project = useEditor((s) => s.snap?.project);
+  const ids = useMemo(() => {
+    const all = new Set(project?.tracks.flatMap((t) => t.clips.map((c) => c.id)));
+    return change.clipIds.filter((id) => all.has(id));
+  }, [project, change]);
   const go = ids.length > 0 || change.atUs !== null;
   const show = () => {
     const s = useEditor.getState();
@@ -556,11 +560,17 @@ function Composer() {
   const agent = useAgent((s) => s.agent);
   const hasItems = useAgent((s) => s.items.length > 0);
   const selected = useEditor((s) => s.selection.length);
-  const range = useEditor((s) => {
-    const clips = s.snap?.project.tracks.flatMap((t) => t.clips).filter((c) => s.selection.includes(c.id)) ?? [];
+  // From the selection and the project only, so playing does not recompute it every frame.
+  const selection = useEditor((s) => s.selection);
+  const project = useEditor((s) => s.snap?.project);
+  const range = useMemo(() => {
+    const chosen = new Set(selection);
+    const clips = project?.tracks.flatMap((t) => t.clips).filter((c) => chosen.has(c.id)) ?? [];
     if (!clips.length) return null;
-    return `${formatTime(Math.min(...clips.map((c) => c.startUs)), false)}–${formatTime(Math.max(...clips.map((c) => c.startUs + c.durationUs)), false)}`;
-  });
+    const start = clips.reduce((m, c) => Math.min(m, c.startUs), Infinity);
+    const end = clips.reduce((m, c) => Math.max(m, c.startUs + c.durationUs), 0);
+    return `${formatTime(start, false)}–${formatTime(end, false)}`;
+  }, [selection, project]);
   // Whole seconds, so the chip does not redraw with every frame while playing.
   const playhead = useEditor((s) => formatTime(s.timeUs, false));
   const otherRun = useEditor((s) => (s.aiRun && status === "idle" ? s.aiRun : null));
