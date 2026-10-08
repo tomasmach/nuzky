@@ -326,7 +326,8 @@ fn restarts_within(sentence: &Sentence, words: &[TimelineWord]) -> (Vec<RetakeGr
         for m in 0..starts.len() - 2 {
             let (earlier, later) = (&tokens[starts[m]..starts[m + 1]], &tokens[starts[m + 1]..starts[m + 2]]);
             let found = prefix_match(earlier, later);
-            if found.accepted() && found.meaning.is_empty() && found.swapped.is_empty() {
+            // Nothing it said may be missing from the next one: "klopový" said once is not a restart.
+            if found.accepted() && found.meaning.is_empty() && found.swapped.is_empty() && found.dropped.is_empty() {
                 kept = m + 1;
                 continue;
             }
@@ -443,6 +444,8 @@ struct Match {
     /// Content words said differently, not misheard: positions in the short and long sentence.
     /// They count as edits, and they make the pair one to review rather than a restart.
     swapped: Vec<(usize, usize)>,
+    /// Content words of the short sentence the long one does not say.
+    dropped: Vec<usize>,
 }
 
 impl Match {
@@ -482,6 +485,7 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         matched_letters: 0,
         meaning: Vec::new(),
         swapped: Vec::new(),
+        dropped: Vec::new(),
     };
     let (mut i, mut j) = (n, end);
     while i > 0 || j > 0 {
@@ -499,6 +503,8 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         } else if i > 0 && cost[i][j] == cost[i - 1][j] + 1 {
             if let Some(what) = lone_meaning(short[i - 1], i - 1) {
                 found.meaning.push((Some(i - 1), None, what));
+            } else if short[i - 1].chars().count() >= CONTENT_LETTERS {
+                found.dropped.push(i - 1);
             }
             i -= 1;
         } else {
@@ -881,6 +887,10 @@ mod tests {
         assert_eq!(found.suggested_delete, [[0, 4], [14, 20]], "{found:#?}");
         let reviewed: Vec<Vec<&str>> =
             found.review.iter().map(|r| r.sentences.iter().map(|a| a.text.as_str()).collect()).collect();
+        // A word said only in the earlier attempt keeps it for review too.
+        let dropped = one(&[("Použijte ten malý klopový mikrofon, použijte ten malý mikrofon.", 900_000)]);
+        assert!(dropped.groups.is_empty() && dropped.suggested_delete.is_empty(), "{dropped:#?}");
+        assert_eq!(dropped.review.len(), 1, "{dropped:#?}");
         assert_eq!(
             reviewed,
             [

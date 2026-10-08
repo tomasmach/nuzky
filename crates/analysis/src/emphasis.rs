@@ -89,6 +89,13 @@ pub fn word_energy(
         let Some(asset) = project.asset(asset_id) else { continue };
         let ends: HashMap<(i64, &str), i64> =
             sources.get(asset_id).into_iter().flatten().map(|w| ((w.start_us, w.text.as_str()), w.end_us)).collect();
+        // Reading a word's level must never start decoding a whole file nobody can stop: the app
+        // prepares sound in the background and recognition leaves it ready.
+        anyhow::ensure!(
+            capopen_engine::audio::pcm_path(cache, asset).exists(),
+            "AUDIO_NOT_READY: the sound of {} is still being prepared; try again in a moment",
+            asset.name
+        );
         let pcm = crate::audio::open_pcm(asset, cache, &|| false)?;
         let samples = pcm.samples();
         let frames = samples.len() / CHANNELS;
@@ -305,6 +312,35 @@ mod tests {
         assert_eq!((zooms.len(), zooms[0].from), (1, 0), "{zooms:#?}");
         // No words, no zooms.
         assert!(select(&[], &[], 30_000_000).is_empty());
+    }
+
+    /// Without the file's sound cache there is nothing to measure, and nothing starts decoding the
+    /// whole file behind the caller's back: it says to try again once the sound is ready.
+    #[test]
+    fn words_of_a_file_whose_sound_is_not_ready_ask_to_wait() {
+        let (words, _) = timeline(&[("Tohle je důležité!", -20.0, 900_000)]);
+        let mut project = Project::new("emphasis");
+        project
+            .apply(capopen_engine::edit::EditCmd::AddAssets {
+                assets: vec![capopen_engine::model::Asset {
+                    id: words[0].asset_id.clone(),
+                    name: "take.mov".into(),
+                    path: "/nonexistent/take.mov".into(),
+                    kind: capopen_engine::model::AssetKind::Video,
+                    duration_us: 5_000_000,
+                    width: 2,
+                    height: 2,
+                    fps: 30.0,
+                    has_audio: true,
+                    rotation: 0,
+                    mirror: false,
+                }],
+            })
+            .unwrap();
+        let cache = std::env::temp_dir().join(format!("capopen-emphasis-{}", capopen_engine::edit::new_id()));
+        let error = word_energy(&project, &words, &HashMap::new(), &cache).unwrap_err().to_string();
+        assert!(error.starts_with("AUDIO_NOT_READY") && error.contains("take.mov"), "{error}");
+        assert!(!cache.exists(), "nothing was decoded");
     }
 
     #[test]

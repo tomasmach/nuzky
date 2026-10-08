@@ -83,6 +83,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   INVALID_PROJECT: (detail) => `That change would break the project (${detail}), so it was not made.`,
   SPEECH_CHANGED: "The speech on the timeline changed meanwhile. Select the words again and retry.",
   TRANSCRIPT_MISSING: "Transcribe the timeline first, then try again.",
+  AUDIO_NOT_READY: "The sound of the clips is still being prepared. Try again in a moment.",
   NO_WORDS: "Transcribe the timeline first, then try again.",
   OUTPUT_EXISTS: "A file with that name appeared while exporting. Export again to replace it or choose another name.",
   DESTINATION_EXISTS: "A file with that name already exists.",
