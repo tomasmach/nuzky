@@ -488,10 +488,12 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
     }
     // The cheapest end, then the one closest to the short sentence's length, then the earlier.
     let end = (0..=m).min_by_key(|&j| (cost[n][j], j.abs_diff(n), j)).unwrap_or(0);
-    // A content word said once, not stuttered as "ukážu ukážu", which repeats it right away.
-    let missing = |words: &[&str], k: usize| {
+    // A content word the other sentence does not say. A stutter, "ukážu ukážu" repeating it right away,
+    // loses nothing when the other sentence says it once.
+    let missing = |words: &[&str], k: usize, other: &[&str]| {
         let stuttered = |next: Option<&&str>| next.is_some_and(|w| alike(w, words[k]));
-        content(words[k]) && !stuttered(k.checked_sub(1).and_then(|p| words.get(p))) && !stuttered(words.get(k + 1))
+        let stutter = stuttered(k.checked_sub(1).and_then(|p| words.get(p))) || stuttered(words.get(k + 1));
+        content(words[k]) && !(stutter && other.iter().any(|w| alike(w, words[k])))
     };
     let mut found = Match {
         short: n,
@@ -502,7 +504,7 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         meaning: Vec::new(),
         swapped: Vec::new(),
         dropped: Vec::new(),
-        unsaid: (end..m).filter(|&j| missing(long, j)).collect(),
+        unsaid: (end..m).filter(|&j| missing(long, j, short)).collect(),
     };
     let (mut i, mut j) = (n, end);
     while i > 0 || j > 0 {
@@ -520,14 +522,14 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         } else if i > 0 && cost[i][j] == cost[i - 1][j] + 1 {
             if let Some(what) = lone_meaning(short[i - 1], i - 1) {
                 found.meaning.push((Some(i - 1), None, what));
-            } else if missing(short, i - 1) {
+            } else if missing(short, i - 1, long) {
                 found.dropped.push(i - 1);
             }
             i -= 1;
         } else {
             if let Some(what) = lone_meaning(long[j - 1], j - 1) {
                 found.meaning.push((None, Some(j - 1), what));
-            } else if missing(long, j - 1) {
+            } else if missing(long, j - 1, short) {
                 found.unsaid.push(j - 1);
             }
             j -= 1;
@@ -908,6 +910,13 @@ mod tests {
         ]);
         let reasons: Vec<&str> = found.review.iter().map(|r| r.reason.as_str()).collect();
         assert_eq!(reasons, ["only the earlier says \"malý\""], "{found:#?}");
+        // A stuttered word the later attempt leaves out altogether is lost too.
+        let found = one(&[
+            ("Tenhle malý mikrofon můžete používat venku venku i bez ochrany.", 900_000),
+            ("Tenhle malý mikrofon můžete používat i bez ochrany.", 900_000),
+        ]);
+        assert!(found.groups.is_empty() && found.review.len() == 1, "{found:#?}");
+        assert!(found.review[0].reason.contains("only the earlier says \"venku\""), "{found:#?}");
     }
 
     /// Recognition often puts no full stop between attempts said in one breath. Only an attempt
