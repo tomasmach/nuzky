@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView } from "./types";
+import type { AgentConnection, AgentKind, Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -26,6 +26,8 @@ export const api = {
   seek: (tUs: number) => invoke<void>("seek", { tUs: Math.round(tUs) }),
   setPreviewBox: (width: number, height: number) => invoke<void>("set_preview_box", { width, height }),
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
+  agentConnections: () => invoke<AgentConnection[]>("agent_connections"),
+  connectAgent: (agent: AgentKind) => invoke<AgentConnection>("connect_agent", { agent }),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
   /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */
@@ -46,7 +48,15 @@ export const api = {
   /** The view's pauses at `pauseUs`, by index, or all of them. */
   removePauses: (key: string, pauseUs: number, only: number[] | null, epoch: Epoch) =>
     invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only, expectedEpoch: epoch }),
+  /** Words by view index and the text they should read, with the captions that show them, as one undo step. */
+  correctWords: (key: string, corrections: { i: number; text: string }[], epoch: Epoch) =>
+    invoke<WordsCorrected>("correct_words", { key, corrections, expectedEpoch: epoch }),
   listFonts: () => invoke<FontFamilies>("list_fonts"),
+  /** Sentences of the timeline said with emphasis, for a punch-in. */
+  suggestZooms: () => invoke<ZoomSuggestions>("suggest_zooms"),
+  /** Punch-ins on inclusive word ranges of the view with `key`, as one undo step. */
+  applyZooms: (key: string, zooms: { from: number; to: number; scale: number }[], epoch: Epoch) =>
+    invoke<ZoomsApplied>("apply_zooms", { key, zooms, expectedEpoch: epoch }),
 };
 
 /** The error as the backend sent it, "CODE: detail" included; code checks use this. */
@@ -73,6 +83,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   INVALID_PROJECT: (detail) => `That change would break the project (${detail}), so it was not made.`,
   SPEECH_CHANGED: "The speech on the timeline changed meanwhile. Select the words again and retry.",
   TRANSCRIPT_MISSING: "Transcribe the timeline first, then try again.",
+  AUDIO_NOT_READY: "The sound of the clips is still being prepared. Try again in a moment.",
   NO_WORDS: "Transcribe the timeline first, then try again.",
   OUTPUT_EXISTS: "A file with that name appeared while exporting. Export again to replace it or choose another name.",
   DESTINATION_EXISTS: "A file with that name already exists.",

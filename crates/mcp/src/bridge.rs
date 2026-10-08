@@ -39,14 +39,23 @@ impl Target {
     }
 }
 
-pub fn run(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
+/// Why `--current` found nothing to attach to.
+const NOT_OPEN: &str =
+    "APP_NOT_RUNNING: no project is open in CapOpen. Open the project in CapOpen, then restart the agent's MCP server";
+
+/// `require_app`: attach to the open app or fail; never edit the project headless.
+pub fn run(project: &Path, allow_write: bool, cache: PathBuf, require_app: bool) -> Result<()> {
     #[cfg(unix)]
     let target = match crate::ipc::Remote::connect(project, allow_write)? {
         Some(remote) => Target::App(Arc::new(remote)),
+        None if require_app => bail!(NOT_OPEN),
         None => Target::Local(Arc::new(Backend::open(project, allow_write, cache)?)),
     };
     #[cfg(not(unix))]
-    let target = Target::Local(Arc::new(Backend::open(project, allow_write, cache)?));
+    let target = {
+        anyhow::ensure!(!require_app, "UNSUPPORTED: --current needs the app's local socket, not available here yet");
+        Target::Local(Arc::new(Backend::open(project, allow_write, cache)?))
+    };
     let target = Arc::new(target);
     let server = Server { target: target.clone(), tools: Arc::new(catalog()?) };
     let runtime =
@@ -69,6 +78,7 @@ pub fn run(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
 
 pub fn run_args(args: &[String], mut cache: PathBuf) -> Result<()> {
     let mut project = None;
+    let mut current = false;
     let mut allow_write = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -76,10 +86,21 @@ pub fn run_args(args: &[String], mut cache: PathBuf) -> Result<()> {
             "--project" => {
                 project = Some(PathBuf::from(args.next().context("INVALID_ARGUMENTS: --project requires a path")?))
             }
+            // The project open in the app, so one agent configuration serves every project.
+            "--current" => current = true,
             "--cache" => cache = PathBuf::from(args.next().context("INVALID_ARGUMENTS: --cache requires a directory")?),
             "--allow-write" => allow_write = true,
             _ => bail!("INVALID_ARGUMENTS: unknown MCP argument: {arg}"),
         }
     }
-    run(&project.context("INVALID_ARGUMENTS: mcp requires --project <path>")?, allow_write, cache)
+    let project = match (project, current) {
+        (Some(_), true) => bail!("INVALID_ARGUMENTS: use --project <path> or --current, not both"),
+        (Some(project), false) => project,
+        #[cfg(unix)]
+        (None, true) => crate::ipc::current_project()?.context(NOT_OPEN)?,
+        #[cfg(not(unix))]
+        (None, true) => bail!("UNSUPPORTED: --current needs the app's local socket, not available here yet"),
+        (None, false) => bail!("INVALID_ARGUMENTS: mcp requires --project <path> or --current"),
+    };
+    run(&project, allow_write, cache, current)
 }

@@ -12,8 +12,9 @@ use capopen_analysis::CaptionGrouping;
 use capopen_analysis::models_dir;
 use capopen_engine::audio::{ensure_pcm, has_audio};
 use capopen_engine::edit::new_id;
-use capopen_engine::export::{ExportOptions, Quality, export};
-use capopen_engine::model::{Asset, Project, TextStyle};
+use capopen_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
+use capopen_engine::model::{Asset, ClipContent, Project, TextStyle};
+use capopen_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use capopen_mcp::transcript;
 use capopen_session::{host::Host, transcripts::TranscriptStore};
 use serde::Serialize;
@@ -113,7 +114,7 @@ fn unregister(app: &AppHandle, id: &str) {
 }
 
 /// Decodes the audio of every asset once into the PCM cache used for playback,
-/// waveforms, export and captions.
+/// waveforms, export and captions, and cleans the voice of files whose clips ask for it.
 pub fn ensure_audio(state: &AppState, project: &Project) {
     let app = state.app.clone();
     // Missing media waits for relinking, and a source that failed is not retried on every edit.
@@ -153,6 +154,72 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
             }
         });
     }
+    ensure_voice(state, project);
+}
+
+/// Files a clip with Clean voice plays.
+fn voice_assets(project: &Project) -> HashSet<&str> {
+    project
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .filter_map(|c| match &c.content {
+            ClipContent::Media { asset_id, clean_voice: true, .. } => Some(asset_id.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Cleans the voice of every file a clip with Clean voice plays, once, as a job per file; playback
+/// switches to the cleaned sound when it is ready. Preparation that no clip needs any more (Clean
+/// voice turned off, the clip deleted, another project opened) stops.
+fn ensure_voice(state: &AppState, project: &Project) {
+    let app = state.app.clone();
+    let wanted = voice_assets(project);
+    for (id, cancel) in state.jobs.lock().unwrap().iter() {
+        if id.strip_prefix("voice:").is_some_and(|asset| !wanted.contains(asset)) {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    for asset in project.assets.iter().filter(|a| wanted.contains(a.id.as_str()) && has_audio(a)) {
+        if !Path::new(&asset.path).is_file() {
+            continue;
+        }
+        let path = voice_pcm_path(&state.cache_dir, asset);
+        if path.exists() || state.audio_failed.lock().unwrap().contains(&path) {
+            continue;
+        }
+        let id = format!("voice:{}", asset.id);
+        let Some(flag) = register(&app, &id) else { continue };
+        let (worker, job, asset, cache) = (app.clone(), id.clone(), asset.clone(), state.cache_dir.clone());
+        let spawned = std::thread::Builder::new().name("clean-voice".into()).spawn(move || {
+            let (app, id) = (worker, job);
+            let mut rep = Reporter::new(&app, &id, "audio", format!("Cleaning voice in {}", asset.name));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ensure_voice_pcm(&cache, &asset, |p| {
+                    check_cancelled(&flag)?;
+                    rep.progress(p, None);
+                    Ok(())
+                })
+            }))
+            .unwrap_or_else(|p| Err(anyhow::anyhow!("Cleaning the voice crashed: {}", panic_text(&p))));
+            let cancelled = flag.load(Ordering::Relaxed);
+            if result.is_err() && !cancelled {
+                app.state::<AppState>().audio_failed.lock().unwrap().insert(path);
+            }
+            rep.finish(result.map(|_| None), cancelled);
+            unregister(&app, &id);
+            // Turned off and on again while this ran, or another file under the same id: prepare
+            // what the open project needs now.
+            let state = app.state::<AppState>();
+            if let Ok(open) = state.project() {
+                ensure_voice(&state, &open);
+            }
+        });
+        if spawned.is_err() {
+            unregister(&app, &id);
+        }
+    }
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -163,6 +230,9 @@ pub struct ExportRequest {
     pub fps: u32,
     /// "high" | "recommended" | "small"
     pub quality: Quality,
+    /// "reels" fixes the format and levels the sound; resolution and fps are then its own.
+    #[serde(default)]
+    pub preset: Option<Delivery>,
 }
 
 impl ExportRequest {
@@ -172,6 +242,7 @@ impl ExportRequest {
             replace_existing,
             resolution: Some(self.resolution),
             fps: Some(self.fps),
+            delivery: self.preset,
             ..ExportOptions::default()
         }
     }
@@ -200,6 +271,7 @@ pub fn start_export(
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
+    check_options(&project, &request.options(replace_existing)).map_err(|e| e.to_string())?;
     let id = format!("export:{}", new_id());
     let cancel = register(app, &id).ok_or("An export is already running")?;
     let (app, cache, job_id) = (app.clone(), state.cache_dir.clone(), id.clone());
@@ -210,7 +282,7 @@ pub fn start_export(
             let mut rep = Reporter::new(&app, &job_id, "export", format!("Exporting {name}"));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 export(&project, &cache, &out, &request.options(replace_existing), &cancel, |p| {
-                    rep.progress(p.frame as f32 / p.total_frames.max(1) as f32, Some("Rendering"));
+                    rep.progress(p.fraction, Some(p.phase.label()));
                 })
             }))
             .unwrap_or_else(|p| Err(anyhow::anyhow!("Export crashed: {}", panic_text(&p))));
@@ -508,7 +580,13 @@ mod tests {
             assert_eq!(request.options(true).crf, crf);
             assert!(request.options(true).replace_existing);
             assert!(!request.options(false).replace_existing);
+            assert_eq!(request.options(true).delivery, None, "a request from before presets is a plain export");
         }
+        let reels: ExportRequest = serde_json::from_value(serde_json::json!({
+            "resolution": 1080, "fps": 30, "quality": "recommended", "preset": "reels"
+        }))
+        .unwrap();
+        assert_eq!(reels.options(false).delivery, Some(Delivery::Reels));
     }
 
     #[test]
@@ -544,6 +622,7 @@ mod tests {
                 stroke_color: "#000000".into(),
                 background: None,
                 max_width: None,
+                highlight: None,
             },
         }
     }

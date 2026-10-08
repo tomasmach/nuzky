@@ -43,7 +43,7 @@ export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = 
  */
 export const CAPTION_STYLES: { name: string; style: TextStyle }[] = captionStyles;
 
-/** Same look apart from the font. */
+/** Same look apart from the font; a karaoke highlight counts, so Karaoke is not Reel. */
 export function sameStyle(a: TextStyle, b: TextStyle) {
   return (
     a.fontSize === b.fontSize &&
@@ -51,7 +51,8 @@ export function sameStyle(a: TextStyle, b: TextStyle) {
     a.bold === b.bold &&
     a.strokeWidth === b.strokeWidth &&
     a.strokeColor.toLowerCase() === b.strokeColor.toLowerCase() &&
-    (a.background ?? "").toLowerCase() === (b.background ?? "").toLowerCase()
+    (a.background ?? "").toLowerCase() === (b.background ?? "").toLowerCase() &&
+    (a.highlight ?? "").toLowerCase() === (b.highlight ?? "").toLowerCase()
   );
 }
 

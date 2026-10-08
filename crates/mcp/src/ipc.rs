@@ -45,15 +45,47 @@ const MAX_HELLO_BYTES: usize = 4096;
 const MAX_CONNECTIONS: usize = 8;
 pub const APP_CLOSED: &str = "APP_CLOSED: CapOpen was closed; restart the agent's MCP server";
 
+/// Where the app's private endpoints live.
+fn endpoint_directory() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|v| !v.is_empty())
+        .map(|p| PathBuf::from(p).join("capopen"))
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("capopen-{}", uid())))
+}
+
 pub fn socket_path(project: &Path) -> Result<PathBuf> {
     let canonical = fs::canonicalize(project).context("PROJECT_MISSING: resolving IPC path")?;
     let mut hash = FNV_OFFSET;
     hash_bytes(&mut hash, canonical.as_os_str().as_bytes());
-    let directory = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .map(|p| PathBuf::from(p).join("capopen"))
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("capopen-{}", uid())));
-    Ok(directory.join(format!("{hash:016x}.sock")))
+    Ok(endpoint_directory().join(format!("{hash:016x}.sock")))
+}
+
+/// Names the project the app has open, next to its socket, so `mcp --current` needs no path: an
+/// agent configured once attaches to whatever project the user is editing.
+const CURRENT: &str = "current";
+const MAX_CURRENT_BYTES: u64 = 4096;
+
+/// The project open in the app on this computer, or None when no app has one open.
+pub fn current_project() -> Result<Option<PathBuf>> {
+    let directory = endpoint_directory();
+    if fs::symlink_metadata(&directory).is_err() {
+        return Ok(None);
+    }
+    security::directory(&directory)?;
+    let Some(text) = security::read_private(&directory.join(CURRENT), MAX_CURRENT_BYTES)? else { return Ok(None) };
+    let project = PathBuf::from(text);
+    Ok(project.is_file().then_some(project))
+}
+
+fn write_current(directory: &Path, project: &Path) -> Result<()> {
+    let part = directory.join(format!(".{CURRENT}-{}", new_id()));
+    let result = security::create_token(&part)
+        .and_then(|mut file| file.write_all(project.as_os_str().as_bytes()).context("IPC_UNAVAILABLE: naming project"))
+        .and_then(|()| fs::rename(&part, directory.join(CURRENT)).context("IPC_UNAVAILABLE: naming project"));
+    if result.is_err() {
+        let _ = fs::remove_file(&part);
+    }
+    result
 }
 
 fn private_directory(path: &Path) -> Result<()> {
@@ -94,6 +126,7 @@ struct Response {
 
 pub struct Listener {
     path: PathBuf,
+    project: PathBuf,
     stop: Arc<AtomicBool>,
     connections: Arc<Mutex<HashMap<String, UnixStream>>>,
     worker: Option<JoinHandle<()>>,
@@ -111,7 +144,13 @@ impl Listener {
         remove(&path)?;
         remove(&path.with_extension("token"))?;
         // Dropping the owner on any error below removes both endpoint files.
-        let mut owner = Self { path, stop: Arc::default(), connections: Arc::default(), worker: None };
+        let mut owner = Self {
+            path,
+            project: fs::canonicalize(&project).context("PROJECT_MISSING: resolving IPC path")?,
+            stop: Arc::default(),
+            connections: Arc::default(),
+            worker: None,
+        };
         let mut random = [0u8; 32];
         File::open("/dev/urandom")?.read_exact(&mut random)?;
         let token = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
@@ -120,6 +159,12 @@ impl Listener {
         token_file.write_all(token.as_bytes())?;
         let listener = UnixListener::bind(&owner.path).context("IPC_UNAVAILABLE: binding socket")?;
         fs::set_permissions(&owner.path, Permissions::from_mode(0o600))?;
+        if let Some(directory) = owner.path.parent() {
+            // Agents still attach by project path when the name cannot be written.
+            if let Err(error) = write_current(directory, &owner.project) {
+                eprintln!("{error:#}");
+            }
+        }
         listener.set_nonblocking(true)?;
         let stop = owner.stop.clone();
         let connections = owner.connections.clone();
@@ -189,6 +234,15 @@ impl Drop for Listener {
             if let Err(e) = remove(path) {
                 eprintln!("{e:#}");
             }
+        }
+        // Another window may have opened a project since; its name stays.
+        if let Some(current) = self.path.parent().map(|d| d.join(CURRENT))
+            && security::read_private(&current, MAX_CURRENT_BYTES)
+                .ok()
+                .flatten()
+                .is_some_and(|p| Path::new(&p) == self.project)
+        {
+            let _ = remove(&current);
         }
     }
 }

@@ -35,6 +35,7 @@ fn update_speed(id: &str, speed: f32) -> EditCmd {
         adjust: None,
         fade_in_us: None,
         fade_out_us: None,
+        clean_voice: None,
     }
 }
 fn invariants(p: &Project) -> Result<(), String> {
@@ -171,12 +172,13 @@ fn equal_start_captions_do_not_overlap() {
         stroke_color: "#000".into(),
         background: None,
         max_width: None,
+        highlight: None,
     };
     let _ = e.apply(
         EditCmd::AddCaptions {
             segments: vec![
-                CaptionSegment { start_us: 0, end_us: 1_000_000, text: "first".into() },
-                CaptionSegment { start_us: 0, end_us: 2_000_000, text: "second".into() },
+                CaptionSegment { start_us: 0, end_us: 1_000_000, text: "first".into(), words: Vec::new() },
+                CaptionSegment { start_us: 0, end_us: 2_000_000, text: "second".into(), words: Vec::new() },
             ],
             style,
         },

@@ -12,8 +12,20 @@ use crate::effects::transition_window;
 use crate::media::extract_pcm;
 use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
-/// Short fades at clip edges so cuts do not click.
+/// Short fades at clip edges with nothing to crossfade with, so they do not click.
 const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
+/// How far a cut's crossfade reaches on each side of it.
+const CUT_FADE_US: i64 = 10_000;
+/// Sound past a cut joins the crossfade only where it is quiet: below this level (-45 dBFS), or
+/// this far below (-20 dB) the loudest moment of the sound kept next to the cut. Otherwise it may
+/// be the start of a deleted word, which must not come back.
+const QUIET_RMS: f32 = 0.0056;
+const QUIET_BELOW_KEPT: f32 = 0.1;
+const KEPT_CONTEXT_US: i64 = 200_000;
+
+/// Where a cut is in the files on both sides: their caches, where each side stops or starts in its
+/// file and its speed.
+type CutKey = (PathBuf, i64, u32, PathBuf, i64, u32);
 
 pub fn us_to_samples(us: i64) -> i64 {
     (us as i128 * SAMPLE_RATE as i128 / 1_000_000) as i64
@@ -75,7 +87,7 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 
 /// Raised whenever extraction changes its output, so caches made before are extracted again.
 /// v4: gaps are filled by timestamp for long audio-only recordings too.
-const PCM_VERSION: &str = "v4";
+pub(crate) const PCM_VERSION: &str = "v4";
 
 /// Removes this asset's caches from older extraction versions, which nothing reads any more.
 /// Other revisions of the current version stay: a project may still play from them.
@@ -94,14 +106,25 @@ fn remove_older_versions(path: &Path, asset: &Asset) {
 
 /// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
 /// same file (import, export and captions) wait for one extraction instead of racing.
-/// An error from `progress` stops the extraction; the next call starts it again.
-pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
+/// An error from `progress` stops the extraction, or the wait for another caller's; the next call
+/// starts it again.
+pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
     let path = pcm_path(cache_dir, asset);
     std::fs::create_dir_all(path.parent().unwrap())?;
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
-    lock.lock()?;
+    // Waiting for another caller still asks `progress`, so a cancelled job stops at once.
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => {
+                progress(0.0)?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
     if !path.exists() {
         extract_pcm(Path::new(&asset.path), &path, progress)?;
         remove_older_versions(&path, asset);
@@ -114,23 +137,37 @@ pub struct Mixer {
     /// Keyed by cache file, which names the source revision, so media rebound under the same
     /// asset id plays its own sound.
     sources: HashMap<PathBuf, Option<Arc<Pcm>>>,
+    /// How far each cut's crossfade reads past its clips, measured once from the files.
+    cuts: HashMap<CutKey, (i64, i64)>,
 }
 
 impl Mixer {
     pub fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir, sources: HashMap::new() }
+        Self { cache_dir, sources: HashMap::new(), cuts: HashMap::new() }
     }
 
-    fn source(&mut self, asset: &Asset) -> Option<Arc<Pcm>> {
-        let path = pcm_path(&self.cache_dir, asset);
+    /// The sound `asset` plays with: its cleaned cache for a clip with Clean voice once that is
+    /// ready, otherwise the raw cache. Only cache files change hands here; no processing runs.
+    fn source(&mut self, asset: &Asset, clean_voice: bool) -> Option<Arc<Pcm>> {
+        let raw = pcm_path(&self.cache_dir, asset);
+        if clean_voice && let Some(pcm) = self.open(crate::voice::path_for(&self.cache_dir, &raw), asset) {
+            return Some(pcm);
+        }
+        self.open(raw, asset)
+    }
+
+    fn open(&mut self, path: PathBuf, asset: &Asset) -> Option<Arc<Pcm>> {
         if let Some(Some(pcm)) = self.sources.get(&path) {
             return Some(pcm.clone());
         }
-        // Missing caches are retried, since extraction may still be running. Another revision of
-        // this asset is no longer played.
+        // Missing caches are retried, since extraction or cleaning may still be running. Another
+        // revision of this asset's cache of the same kind (raw or cleaned) is no longer played.
         let pcm = Pcm::open(&path).ok().map(Arc::new);
         let prefix = format!("{}.", asset.id);
-        self.sources.retain(|other, _| !other.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix)));
+        self.sources.retain(|other, _| {
+            other.parent() != path.parent()
+                || !other.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
+        });
         self.sources.insert(path, pcm.clone());
         pcm
     }
@@ -152,13 +189,21 @@ impl Mixer {
                 };
                 let c0 = us_to_samples(clip.start_us);
                 let c1 = us_to_samples(clip.end_us());
-                let incoming =
-                    if track.id == crate::edit::MAIN_TRACK && index > 0 { transition_window(clip) } else { None };
-                let outgoing = if track.id == crate::edit::MAIN_TRACK {
-                    track.clips.get(index + 1).and_then(transition_window)
-                } else {
-                    None
-                };
+                let previous = index.checked_sub(1).map(|i| &track.clips[i]);
+                let next = track.clips.get(index + 1);
+                let transition =
+                    |clip: &Clip| if track.id == crate::edit::MAIN_TRACK { transition_window(clip) } else { None };
+                let transition_in = previous.and_then(|_| transition(clip));
+                let transition_out = next.and_then(transition);
+                // Cuts read the files, so only clips that can sound in this buffer look at theirs.
+                let reach = us_to_samples(CUT_FADE_US);
+                let earliest = transition_in.map_or(c0 - reach, |(a, _)| us_to_samples(a));
+                let latest = transition_out.map_or(c1 + reach, |(_, b)| us_to_samples(b));
+                if start.max(earliest) >= end.min(latest) || *volume <= 0.0 {
+                    continue;
+                }
+                let incoming = transition_in.or_else(|| previous.and_then(|p| self.cut_window(project, p, clip)));
+                let outgoing = transition_out.or_else(|| next.and_then(|n| self.cut_window(project, clip, n)));
                 let incoming = incoming.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let outgoing = outgoing.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let begin = incoming.map(|w| w.0).unwrap_or(c0);
@@ -171,7 +216,7 @@ impl Mixer {
                 if !has_audio(asset) {
                     continue;
                 }
-                let Some(pcm) = self.source(asset) else { continue };
+                let Some(pcm) = self.source(asset, cleans_voice(clip)) else { continue };
                 let samples = pcm.samples();
                 let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
@@ -218,8 +263,13 @@ fn fade_gain(i: i64, start: i64, end: i64, fade_in: i64, fade_out: i64) -> f32 {
     ramp(i - start, fade_in) * ramp(end - 1 - i, fade_out)
 }
 
+fn cleans_voice(clip: &Clip) -> bool {
+    matches!(clip.content, ClipContent::Media { clean_voice: true, .. })
+}
+
 /// Whether `next` starts where `clip` ends and plays on from the same source at the same
-/// level, as the two halves of a split do.
+/// level, as the two halves of a split do. Halves of which only one cleans the voice sound
+/// different, so they crossfade like a cut.
 fn continues(clip: &Clip, next: &Clip) -> bool {
     let (
         ClipContent::Media { asset_id: a, source_in_us: source_a, volume: volume_a, speed: speed_a, .. },
@@ -233,7 +283,87 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
         && clip.end_us() == next.start_us
         && speed_a == speed_b
         && volume_a == volume_b
+        && cleans_voice(clip) == cleans_voice(next)
         && (source_b - source_end).abs() <= samples_to_us(1)
+}
+
+impl Mixer {
+    /// Where two pieces of sound that do not play on from each other meet, they overlap and
+    /// crossfade over up to 10 ms on each side of the cut, so a cut neither clicks nor dips. Each
+    /// side reaches past its clip only into quiet sound its file has; a cut with nothing quiet to
+    /// spare on either side keeps the edge ramps.
+    fn cut_window(&mut self, project: &Project, before: &Clip, after: &Clip) -> Option<(i64, i64)> {
+        let (
+            ClipContent::Media { asset_id: id_before, source_in_us: source_before, speed: speed_before, .. },
+            ClipContent::Media { asset_id: id_after, source_in_us: source_after, speed: speed_after, .. },
+        ) = (&before.content, &after.content)
+        else {
+            return None;
+        };
+        if before.end_us() != after.start_us || continues(before, after) {
+            return None;
+        }
+        let (asset_before, asset_after) = (project.asset(id_before)?, project.asset(id_after)?);
+        let (source_after, speed_before, speed_after) = (*source_after, *speed_before as f64, *speed_after as f64);
+        let stop = source_before + (before.duration_us as f64 * speed_before).round() as i64;
+        let key = (
+            pcm_path(&self.cache_dir, asset_before),
+            stop,
+            (speed_before as f32).to_bits(),
+            pcm_path(&self.cache_dir, asset_after),
+            source_after,
+            (speed_after as f32).to_bits(),
+        );
+        let (early, late) = match self.cuts.get(&key) {
+            Some(&reach) => reach,
+            None => {
+                // How much of each file lies past the cut, in its own time.
+                let ahead = ((CUT_FADE_US as f64 * speed_after) as i64).min(source_after).max(0);
+                let behind = ((CUT_FADE_US as f64 * speed_before) as i64).min(asset_before.duration_us - stop).max(0);
+                let early = self.quiet(
+                    asset_after,
+                    (source_after - ahead, source_after),
+                    (source_after, source_after + KEPT_CONTEXT_US),
+                );
+                let late = self.quiet(asset_before, (stop, stop + behind), (stop - KEPT_CONTEXT_US, stop));
+                // A cache still being extracted is measured again once it is there.
+                let (Some(early), Some(late)) = (early, late) else { return None };
+                let reach = (
+                    if early && ahead > 0 { (ahead as f64 / speed_after) as i64 } else { 0 },
+                    if late && behind > 0 { (behind as f64 / speed_before) as i64 } else { 0 },
+                );
+                if self.cuts.len() >= 4096 {
+                    self.cuts.clear();
+                }
+                self.cuts.insert(key, reach);
+                reach
+            }
+        };
+        (early + late > 0).then_some((after.start_us - early, after.start_us + late))
+    }
+
+    /// Whether `range` of the file is quiet next to the sound kept in `kept` (both in the file's
+    /// own time); None while its cache is not there yet.
+    fn quiet(&mut self, asset: &Asset, range: (i64, i64), kept: (i64, i64)) -> Option<bool> {
+        if !has_audio(asset) {
+            return Some(false);
+        }
+        let pcm = self.source(asset, false)?;
+        let samples = pcm.samples();
+        let frame = |us: i64| (us_to_samples(us.max(0)) as usize).min(pcm.frames());
+        let rms = |a: usize, b: usize| {
+            let part = &samples[a * CHANNELS..b.max(a) * CHANNELS];
+            (part.iter().map(|s| s * s).sum::<f32>() / part.len().max(1) as f32).sqrt()
+        };
+        let level = rms(frame(range.0), frame(range.1));
+        if level <= QUIET_RMS {
+            return Some(true);
+        }
+        let (from, to) = (frame(kept.0), frame(kept.1));
+        let window = (SAMPLE_RATE / 100) as usize;
+        let loudest = (from..to).step_by(window).map(|a| rms(a, (a + window).min(to))).fold(0.0, f32::max);
+        Some(level <= loudest * QUIET_BELOW_KEPT)
+    }
 }
 
 /// `edges` are the de-click ramp lengths at the start and the end; 0 leaves that edge open.
@@ -305,7 +435,8 @@ mod tests {
         let asset: Asset = serde_json::from_slice(&std::fs::read(dir.join("asset.json")).unwrap()).unwrap();
         let id = std::process::id();
         std::fs::write(dir.join(format!("ready-{id}")), b"").unwrap();
-        let path = ensure_pcm(&dir, &asset, |_| panic!("published cache must be reused")).unwrap();
+        // Waiting asks `progress`; the content shows the published cache was reused.
+        let path = ensure_pcm(&dir, &asset, |_| Ok(())).unwrap();
         assert_eq!(std::fs::read(path).unwrap(), vec![0; 8]);
         std::fs::write(dir.join(format!("done-{id}")), b"").unwrap();
     }
@@ -353,6 +484,26 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A job waiting for another one's extraction of the same file stops as soon as it is
+    /// cancelled, instead of when that extraction ends.
+    #[test]
+    fn a_cancelled_wait_for_the_pcm_cache_stops_at_once() {
+        use std::time::{Duration, Instant};
+        let dir = std::env::temp_dir().join(format!("pcm-wait-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(dir.join("pcm")).unwrap();
+        let source = dir.join("source.wav");
+        write_test_wav(&source, 8192, 4800);
+        let asset = crate::media::probe(&source, "waiting".into()).unwrap();
+        let lock_path = format!("{}.lock", pcm_path(&dir, &asset).display());
+        let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path).unwrap();
+        lock.lock().unwrap();
+        let started = Instant::now();
+        let error = ensure_pcm(&dir, &asset, |_| anyhow::bail!("CANCELLED: test")).unwrap_err();
+        assert!(error.to_string().starts_with("CANCELLED") && started.elapsed() < Duration::from_secs(1), "{error:#}");
+        drop(lock);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A copied project can reuse an asset id for another file of the same size and time; it
     /// gets its own cache, and a mixer that played the first file plays the second.
     #[test]
@@ -382,7 +533,7 @@ mod tests {
         ensure_pcm(&cache, &first, |_| Ok(())).unwrap();
         ensure_pcm(&cache, &second, |_| Ok(())).unwrap();
         let mut mixer = Mixer::new(cache.clone());
-        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset).unwrap().samples()[1000];
+        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset, false).unwrap().samples()[1000];
         let quiet = level(&mut mixer, &first);
         let loud = level(&mut mixer, &second);
         assert!((loud - quiet * 3.0).abs() < 1e-3, "{quiet} then {loud}");
@@ -473,6 +624,7 @@ mod tests {
                     adjust: Default::default(),
                     fade_in_us: 0,
                     fade_out_us: 0,
+                    clean_voice: false,
                 },
             );
             if id == "b" {
@@ -533,6 +685,7 @@ mod tests {
                     adjust: Default::default(),
                     fade_in_us: 0,
                     fade_out_us: 0,
+                    clean_voice: false,
                 },
             );
             if id == "b" {
@@ -604,6 +757,90 @@ mod tests {
         // Without the edge ramps the cut would jump from 0.25 to 0.5 in one sample.
         assert!(max_step < 0.01, "sample step at the cut: {max_step}");
         assert!((cut[47_000] - 47_000.0 / 192_000.0).abs() < 1e-6 && (cut[49_000] - 97_000.0 / 192_000.0).abs() < 1e-6);
+    }
+
+    /// A take as one asset whose samples `level(t)` gives, and a project playing it whole.
+    fn take(cache: &Path, mut level: impl FnMut(f64) -> f32) -> Project {
+        use crate::edit::EditCmd;
+        let asset = Asset {
+            id: "take".into(),
+            name: "take".into(),
+            path: String::new(),
+            kind: AssetKind::Video,
+            duration_us: 2_000_000,
+            width: 2,
+            height: 2,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+        };
+        let samples: Vec<f32> = (0..96_000).flat_map(|n| [level(n as f64 / 48_000.0); CHANNELS]).collect();
+        std::fs::write(pcm_path(cache, &asset), bytemuck::cast_slice(&samples)).unwrap();
+        let mut project = Project::new("take");
+        project.apply(EditCmd::AddAssets { assets: vec![asset] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "take".into(), start_us: Some(0), track_id: None }).unwrap();
+        project
+    }
+
+    fn cut(project: &mut Project, start_us: i64, end_us: i64) {
+        let range = crate::edit::TimeRange { start_us, end_us };
+        project.apply(crate::edit::EditCmd::RippleDeleteRanges { ranges: vec![range], keep_track_ids: None }).unwrap();
+    }
+
+    /// Room tone cut out of a pause: the two sides crossfade over the cut, reading past their
+    /// clips, so the level neither drops to nothing nor jumps. Without sound to spare at the start
+    /// of the file, the edge ramps stay.
+    #[test]
+    fn a_cut_in_a_pause_crossfades_without_a_dip_and_edges_without_sound_to_spare_still_ramp() {
+        let cache = std::env::temp_dir().join(format!("capopen-audio-crossfade-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let mut state = 0x9e37_79b9_u32;
+        let mut noise = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as f32 / u32::MAX as f32 - 0.5
+        };
+        // Speech, a pause of quiet room tone around -53 dBFS, speech again.
+        let mut project = take(&cache, |t| if (0.5..1.5).contains(&t) { noise() * 0.008 } else { noise() * 0.4 });
+        cut(&mut project, 600_000, 1_400_000);
+        let mut mixer = Mixer::new(cache.clone());
+        let (a, b) = (project.tracks[0].clips[0].clone(), project.tracks[0].clips[1].clone());
+        assert_eq!(mixer.cut_window(&project, &a, &b), Some((590_000, 610_000)));
+        let mut out = vec![0.0; 57_600 * CHANNELS];
+        mixer.mix(&project, 0, &mut out);
+        let left: Vec<f32> = out.chunks_exact(CHANNELS).map(|f| f[0]).collect();
+        let rms = |from: usize| (left[from..from + 96].iter().map(|s| s * s).sum::<f32>() / 96.0).sqrt();
+        let steady = (26_400..27_360).step_by(96).map(rms).sum::<f32>() / 10.0;
+        // 2 ms windows across the 20 ms crossfade around the cut at 0.6 s (sample 28 800).
+        let lowest = (28_320..29_280).step_by(96).map(rms).fold(f32::MAX, f32::min);
+        // The start of the file has no sound before it: the first clip still fades in.
+        let first = left[..48].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        std::fs::remove_dir_all(cache).unwrap();
+        assert!(lowest > steady * 0.5, "level at the cut {lowest} against {steady}");
+        assert!(first < 0.1, "the first 1 ms rises from silence: {first}");
+    }
+
+    /// A word deleted from connected speech: the sound past the cut on both sides is that word,
+    /// so nothing of it is read into the crossfade; the cut keeps the edge ramps instead.
+    #[test]
+    fn a_crossfade_never_brings_back_a_deleted_word() {
+        let cache = std::env::temp_dir().join(format!("capopen-audio-deleted-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        // Kept speech is a 200 Hz tone; the deleted word, 1.0–1.3 s, a loud steady level.
+        let tone = |t: f64| 0.2 * (t * 2.0 * std::f64::consts::PI * 200.0).sin() as f32;
+        let mut project = take(&cache, |t| if (1.0..1.3).contains(&t) { 0.8 } else { tone(t) });
+        cut(&mut project, 1_000_000, 1_300_000);
+        let mut mixer = Mixer::new(cache.clone());
+        let (a, b) = (project.tracks[0].clips[0].clone(), project.tracks[0].clips[1].clone());
+        assert_eq!(mixer.cut_window(&project, &a, &b), None);
+        let mut out = vec![0.0; 960 * CHANNELS];
+        mixer.mix(&project, 47_520, &mut out);
+        // 20 ms around the cut: whole cycles of the tone, so any of the deleted level shows as an offset.
+        let mean = out.chunks_exact(CHANNELS).map(|f| f[0]).sum::<f32>() / 960.0;
+        std::fs::remove_dir_all(cache).unwrap();
+        assert!(mean.abs() < 0.02, "the deleted word sounds at the cut: offset {mean}");
     }
 
     #[test]

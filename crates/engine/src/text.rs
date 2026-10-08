@@ -1,10 +1,14 @@
 //! CPU text rasterisation with outline and background box, cached by text content, style and output size.
+//! Karaoke captions also keep their layout, so the spoken word changes colour without laying out again.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::sync::Arc;
 
-use cosmic_text::{Align, Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
+use cosmic_text::{
+    Align, Attrs, Buffer, CacheKey, Color, Family, FontSystem, LineIter, Metrics, Shaping, SwashCache, Weight,
+};
 
 use crate::gpu::Image;
 use crate::model::{TextStyle, max_stroke_width, parse_color};
@@ -15,6 +19,7 @@ const MAX_RASTER_SIDE: usize = 8192;
 const MAX_RASTER_PIXELS: usize = 16 * 1024 * 1024;
 const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_GLYPH_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_LAYOUT_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RASTER_SCALE: f32 = 8.0;
 const MIN_RASTER_SCALE: f32 = 0.01;
 /// Layout bounds in canvas pixels; tall text may also use up to MAX_TEXT_LINES lines.
@@ -83,6 +88,9 @@ pub struct TextRenderer {
     bold: HashMap<String, bool>,
     swash: SwashCache,
     cache: HashMap<u64, TextImage>,
+    /// Layouts of karaoke captions, by text, style, scale and wrap width.
+    layouts: HashMap<u64, Arc<Layout>>,
+    stats: TextStats,
 }
 
 impl Default for TextRenderer {
@@ -99,7 +107,15 @@ impl TextRenderer {
         }
         fonts.db_mut().set_sans_serif_family(DEFAULT_FAMILY);
         let families = fonts.db().faces().flat_map(|face| face.families.iter().map(|(name, _)| name.clone())).collect();
-        Self { fonts, families, bold: HashMap::new(), swash: SwashCache::new(), cache: HashMap::new() }
+        Self {
+            fonts,
+            families,
+            bold: HashMap::new(),
+            swash: SwashCache::new(),
+            cache: HashMap::new(),
+            layouts: HashMap::new(),
+            stats: TextStats::default(),
+        }
     }
 
     /// Bundled families first, then installed families, each group sorted and unique.
@@ -140,16 +156,55 @@ impl TextRenderer {
     /// Renders `text` with `style` scaled by `scale` (output pixels per canvas pixel).
     /// `max_width` is the wrap width in output pixels at the requested scale.
     pub fn render(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> TextImage {
+        self.render_spoken(text, style, scale, max_width, None)
+    }
+
+    /// Like `render`, with the word at byte range `spoken` of `text` filled in `style.highlight`.
+    /// Every variant uses the same layout, so the size and wrapping never change between words.
+    /// The layout is kept, so a new spoken word only repaints colours; shaping, glyph rasterising
+    /// and the outline happen once per text, never per frame.
+    pub fn render_spoken(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        scale: f32,
+        max_width: f32,
+        spoken: Option<Range<usize>>,
+    ) -> TextImage {
+        let karaoke = style.highlight.is_some();
+        let spoken = spoken.filter(|range| karaoke && range.start < range.end);
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
         format!("{style:?}").hash(&mut h);
         scale.to_bits().hash(&mut h);
         max_width.to_bits().hash(&mut h);
+        let layout_key = h.finish();
+        spoken.hash(&mut h);
         let key = h.finish();
         if let Some(img) = self.cache.get(&key) {
             return img.clone();
         }
-        let img = self.rasterize(text, style, scale, max_width);
+        let img = if karaoke {
+            let layout = match self.layouts.get(&layout_key) {
+                Some(layout) => layout.clone(),
+                None => {
+                    let layout = Arc::new(self.lay_out(text, style, scale, max_width));
+                    if self.layouts.len() >= 64
+                        || self.layouts.values().map(|l| l.bytes()).sum::<usize>() + layout.bytes()
+                            > MAX_LAYOUT_CACHE_BYTES
+                    {
+                        self.layouts.clear();
+                    }
+                    self.layouts.insert(layout_key, layout.clone());
+                    layout
+                }
+            };
+            let mask = spoken.map(|range| self.word_mask(&layout, range));
+            self.paint(&layout, style, mask.as_deref())
+        } else {
+            let layout = self.lay_out(text, style, scale, max_width);
+            self.paint(&layout, style, None)
+        };
         if self.cache.len() >= 512
             || self.cache.values().map(|text| text.image.data.len()).sum::<usize>() + img.image.data.len()
                 > MAX_TEXT_CACHE_BYTES
@@ -160,7 +215,24 @@ impl TextRenderer {
         img
     }
 
-    fn rasterize(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> TextImage {
+    /// How often text was laid out and painted since the renderer started, for benchmarks.
+    pub fn stats(&self) -> TextStats {
+        self.stats
+    }
+
+    /// Coverage of the glyphs whose characters start inside `range`, the spoken word.
+    fn word_mask(&mut self, layout: &Layout, range: Range<usize>) -> Vec<u8> {
+        let (w, h) = (layout.w, layout.h);
+        let mut mask = vec![0u8; w * h];
+        for glyph in layout.glyphs.iter().filter(|glyph| range.contains(&glyph.start)) {
+            stamp(&mut self.swash, &mut self.fonts, glyph, &mut mask, w, h);
+        }
+        mask
+    }
+
+    /// Shapes `text`, rasterises its glyphs into one coverage mask and dilates it for the outline.
+    fn lay_out(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> Layout {
+        self.stats.layouts += 1;
         // Layout stays in canvas pixels; only glyph rasterisation uses the output scale.
         let wanted = finite_clamp(scale, MIN_RASTER_SCALE, MAX_RASTER_SCALE);
         let size = finite_clamp(style.font_size, 1.0, MAX_GLYPH_PX / MIN_RASTER_SCALE);
@@ -210,38 +282,36 @@ impl TextRenderer {
         let h = h.clamp(1, MAX_RASTER_SIDE.min(MAX_RASTER_PIXELS / w));
 
         let mut fill = vec![0u8; w * h];
+        // Glyph positions name the byte of their line; lines start where cosmic-text split the text.
+        let line_starts: Vec<usize> = LineIter::new(text).map(|(range, _)| range.start).collect();
+        let mut glyphs = Vec::new();
         for run in buffer.layout_runs() {
+            let line_start = line_starts.get(run.line_i).copied().unwrap_or(usize::MAX / 2);
             for glyph in run.glyphs {
                 let offset = ((pad - x0) as f32 * scale, (run.line_y + pad as f32) * scale);
                 let physical = glyph.physical(offset, scale);
-                if self.swash.image_cache.values().flatten().map(|image| image.data.len()).sum::<usize>()
-                    > MAX_GLYPH_CACHE_BYTES
-                {
-                    self.swash.image_cache.clear();
-                }
-                self.swash.with_pixels(
-                    &mut self.fonts,
-                    physical.cache_key,
-                    Color::rgb(255, 255, 255),
-                    |x, y, color| {
-                        let (px, py) = (x + physical.x, y + physical.y);
-                        if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
-                            let i = py as usize * w + px as usize;
-                            fill[i] = fill[i].max(color.a());
-                        }
-                    },
-                );
+                let placed =
+                    Placed { start: line_start + glyph.start, key: physical.cache_key, x: physical.x, y: physical.y };
+                stamp(&mut self.swash, &mut self.fonts, &placed, &mut fill, w, h);
+                glyphs.push(placed);
             }
         }
 
         let outline = if stroke > 0.0 { Some(dilate(&fill, w, h, stroke * scale)) } else { None };
+        Layout { w, h, scale, radius: size * scale * 0.25, fill, outline, glyphs }
+    }
+
+    /// Colours a layout: box, outline, then the fill, with the spoken word's coverage in the highlight.
+    fn paint(&mut self, layout: &Layout, style: &TextStyle, spoken: Option<&[u8]>) -> TextImage {
+        self.stats.paints += 1;
+        let Layout { w, h, scale, radius, ref fill, ref outline, .. } = *layout;
         let fill_c = parse_color(&style.color);
         let stroke_c = parse_color(&style.stroke_color);
         let bg_c = style.background.as_deref().map(parse_color);
+        let highlight_c = style.highlight.as_deref().map(parse_color).unwrap_or(fill_c);
 
         // Premultiplied "over" compositing, converted back to straight alpha at the end.
         let mut out = vec![0u8; w * h * 4];
-        let radius = size * scale * 0.25;
         for y in 0..h {
             for x in 0..w {
                 let i = y * w + x;
@@ -256,10 +326,19 @@ impl TextRenderer {
                 if let Some(bg) = bg_c {
                     over(bg, rounded_rect_coverage(x as f32 + 0.5, y as f32 + 0.5, w as f32, h as f32, radius));
                 }
-                if let Some(o) = &outline {
+                if let Some(o) = outline {
                     over(stroke_c, o[i] as f32 / 255.0);
                 }
-                over(fill_c, fill[i] as f32 / 255.0);
+                // The spoken word's glyphs cover the same pixels as in the fill mask; where a neighbour's
+                // edge overlaps them, the colours mix by coverage.
+                match spoken.map(|mask| mask[i]).filter(|&lit| lit > 0 && fill[i] > 0) {
+                    Some(lit) => {
+                        let t = (lit as f32 / fill[i] as f32).min(1.0);
+                        let c = std::array::from_fn(|k| fill_c[k] + (highlight_c[k] - fill_c[k]) * t);
+                        over(c, fill[i] as f32 / 255.0);
+                    }
+                    None => over(fill_c, fill[i] as f32 / 255.0),
+                }
                 if acc[3] > 0.0 {
                     let o = &mut out[i * 4..i * 4 + 4];
                     for k in 0..3 {
@@ -271,6 +350,57 @@ impl TextRenderer {
         }
         TextImage { image: Image { width: w as u32, height: h as u32, data: Arc::new(out) }, scale }
     }
+}
+
+/// Text laid out at one output scale: what every colour variant of it shares.
+struct Layout {
+    w: usize,
+    h: usize,
+    scale: f32,
+    /// Corner radius of the background box in output pixels.
+    radius: f32,
+    /// Glyph coverage.
+    fill: Vec<u8>,
+    /// Glyph coverage dilated by the outline width.
+    outline: Option<Vec<u8>>,
+    glyphs: Vec<Placed>,
+}
+
+impl Layout {
+    fn bytes(&self) -> usize {
+        self.fill.len() * if self.outline.is_some() { 2 } else { 1 } + self.glyphs.len() * size_of::<Placed>()
+    }
+}
+
+/// A glyph in the raster, with the byte in the text where its characters start.
+struct Placed {
+    start: usize,
+    key: CacheKey,
+    x: i32,
+    y: i32,
+}
+
+/// Counts of the expensive steps, so a benchmark can show they do not happen per frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextStats {
+    /// Shaping, glyph rasterising and outline dilation of one text at one size.
+    pub layouts: u64,
+    /// Colouring a layout into an image: once per text, and once per spoken word of a karaoke caption.
+    pub paints: u64,
+}
+
+/// Draws one glyph's coverage into `mask`, keeping the higher value where glyphs overlap.
+fn stamp(swash: &mut SwashCache, fonts: &mut FontSystem, glyph: &Placed, mask: &mut [u8], w: usize, h: usize) {
+    if swash.image_cache.values().flatten().map(|image| image.data.len()).sum::<usize>() > MAX_GLYPH_CACHE_BYTES {
+        swash.image_cache.clear();
+    }
+    swash.with_pixels(fonts, glyph.key, Color::rgb(255, 255, 255), |x, y, color| {
+        let (px, py) = (x + glyph.x, y + glyph.y);
+        if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+            let i = py as usize * w + px as usize;
+            mask[i] = mask[i].max(color.a());
+        }
+    });
 }
 
 /// Approximates a round brush outline by stamping the glyph mask on three rings.
@@ -333,6 +463,7 @@ mod tests {
             stroke_color: "#000000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         }
     }
 
@@ -406,7 +537,15 @@ mod tests {
         db.set_sans_serif_family("Inter");
         let fonts = FontSystem::new_with_locale_and_db("cs-CZ".into(), db);
         let families = fonts.db().faces().flat_map(|face| face.families.iter().map(|(name, _)| name.clone())).collect();
-        TextRenderer { fonts, families, bold: HashMap::new(), swash: SwashCache::new(), cache: HashMap::new() }
+        TextRenderer {
+            fonts,
+            families,
+            bold: HashMap::new(),
+            swash: SwashCache::new(),
+            cache: HashMap::new(),
+            layouts: HashMap::new(),
+            stats: TextStats::default(),
+        }
     }
 
     #[test]

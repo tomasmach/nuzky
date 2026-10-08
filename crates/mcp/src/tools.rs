@@ -5,13 +5,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use capopen_analysis::{SceneParams, SilenceParams};
 use capopen_engine::{
     Project,
     edit::{EditCmd, new_id},
-    export::{ExportOptions, export},
+    export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
 };
 use capopen_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel};
@@ -31,7 +31,7 @@ struct PreparedImport {
 
 struct PreparedTranscriptEdit {
     arguments: Value,
-    edit: EditCmd,
+    edits: Vec<EditCmd>,
     expect: Expect,
     response: Value,
 }
@@ -201,11 +201,13 @@ impl Backend {
             "transcribe" => self.transcribe(parse(arguments)?, state),
             "get_transcript" => self.get_transcript(parse(arguments)?, state),
             "edit_transcript" => self.edit_transcript(parse(arguments)?, state),
+            "correct_words" => self.correct_words(parse(arguments)?, state),
             "job" => {
                 let a: Job = parse(arguments)?;
                 self.host.jobs.get_for(Some(&self.client.id), &a.job_id, matches!(a.action, JobAction::Cancel))
             }
             "build_captions" => self.captions(parse(arguments)?, state),
+            "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
         }
@@ -279,8 +281,34 @@ impl Backend {
     }
 
     fn analyze(&self, args: Analyze, state: &SessionState) -> Result<Value> {
-        let mut asset =
-            state.project.asset(&args.asset_id).with_context(|| format!("UNKNOWN_ASSET: {}", args.asset_id))?.clone();
+        if matches!(args.kind, AnalysisKind::Retakes) {
+            // Pure computation over stored words, so it answers at once instead of as a job.
+            ensure!(args.asset_id.is_none(), "INVALID_ARGUMENTS: retakes reads the whole timeline; omit asset_id");
+            let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+            ensure!(
+                derived.untranscribed.is_empty(),
+                "TRANSCRIPT_MISSING: transcribe every heard asset first, untranscribed: {}",
+                derived.untranscribed.join(", ")
+            );
+            let mut result = serde_json::to_value(capopen_analysis::retakes(&derived.words))?;
+            result["time_basis"] = json!("timeline");
+            result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
+            return Ok(result);
+        }
+        if matches!(args.kind, AnalysisKind::Emphasis) {
+            // Reads stored words and the prepared sound of their files, so it answers at once too.
+            ensure!(args.asset_id.is_none(), "INVALID_ARGUMENTS: emphasis reads the whole timeline; omit asset_id");
+            let project = self.media_project(&state.project);
+            let derived = transcript::derive(&project, &self.host.transcripts)?;
+            if derived.untranscribed.is_empty() {
+                self.prepare_sound(&project, &derived, state)?;
+            }
+            let zooms = crate::zooms::suggest(&project, &derived, &self.host.cache_dir)?;
+            return Ok(json!({"zooms": zooms, "time_basis": "timeline",
+                "transcript_key": transcript::word_key(&state.project, &derived.words)}));
+        }
+        let asset_id = args.asset_id.context("INVALID_ARGUMENTS: asset_id is required for this kind")?;
+        let mut asset = state.project.asset(&asset_id).with_context(|| format!("UNKNOWN_ASSET: {asset_id}"))?.clone();
         asset.path = self.resolve(&asset.path).to_string_lossy().into_owned();
         ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
         let window = matches!(args.kind, AnalysisKind::Loudness)
@@ -301,13 +329,53 @@ impl Backend {
             let p = args.params;
             let result = match args.kind {
                 AnalysisKind::Silences => json!({"ranges": capopen_analysis::silences_cancellable(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) }, || cancel.load(Ordering::Relaxed))?}),
-                AnalysisKind::Loudness => json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, || cancel.load(Ordering::Relaxed))?}),
+                AnalysisKind::Loudness => {
+                    let cancelled = || cancel.load(Ordering::Relaxed);
+                    let program = capopen_analysis::program_loudness_cancellable(&asset, &cache, cancelled)?;
+                    json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, cancelled)?,
+                        "integrated_lufs": program.integrated_lufs, "true_peak_dbtp": program.true_peak_dbtp})
+                }
                 AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
+                AnalysisKind::Retakes | AnalysisKind::Emphasis => anyhow::bail!("This kind is answered without a job"),
             };
             check_cancel(&cancel)?;
             Ok(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result}))
         })
+    }
+
+    /// Without the app nothing prepares the sound of files whose words were stored earlier, and
+    /// decoding a whole file inside a tool call could not be stopped, so it becomes a job.
+    fn prepare_sound(&self, project: &Project, derived: &transcript::Derived, state: &SessionState) -> Result<()> {
+        let cache = self.host.cache_dir.clone();
+        let missing: Vec<_> = project
+            .assets
+            .iter()
+            .filter(|a| derived.sources.contains_key(&a.id))
+            .filter(|a| capopen_engine::audio::has_audio(a) && !capopen_engine::audio::pcm_path(&cache, a).exists())
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let names = missing.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+        let job = self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "analysis",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                for (i, asset) in missing.iter().enumerate() {
+                    progress.set("preparing_audio", Some(i as f32 / missing.len() as f32));
+                    capopen_engine::audio::ensure_pcm(&cache, asset, |_| check_cancel(&cancel))?;
+                }
+                Ok(json!({"prepared": missing.iter().map(|a| &a.id).collect::<Vec<_>>()}))
+            },
+        )?;
+        anyhow::bail!(
+            "AUDIO_NOT_READY: preparing the sound of {names} as job {}; poll job until done, then analyze again",
+            job["job_id"].as_str().unwrap_or_default()
+        )
     }
 
     fn transcribe(&self, args: Transcribe, state: &SessionState) -> Result<Value> {
@@ -402,7 +470,7 @@ impl Backend {
         prepared: &PreparedTranscriptEdit,
     ) -> Result<Value> {
         let applied =
-            self.host.session.apply_edits(run_id, request_id, vec![prepared.edit.clone()], prepared.expect.clone())?;
+            self.host.session.apply_edits(run_id, request_id, prepared.edits.clone(), prepared.expect.clone())?;
         let mut response = prepared.response.clone();
         response["revision"] = json!(applied.stamp.revision);
         response["session_epoch"] = json!(applied.stamp.session_epoch);
@@ -433,8 +501,47 @@ impl Backend {
             response: json!({"duration_us":{"before":before,"after":after},
                 "removed_us":before-after,"ranges":cut.ranges,"preview_text":preview_text,
                 "transcript_key":transcript::word_key(&cut.preview, &cut.words),"revision":state.stamp.revision,"dry_run":args.dry_run}),
-            edit: cut.edit,
+            edits: vec![cut.edit],
         })
+    }
+
+    fn correct_words(&self, args: CorrectWords, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({"correct_words": args});
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        // A retry after a failed save applies what was planned then: the key no longer matches.
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(
+                prepared.arguments == arguments,
+                "REQUEST_CONFLICT: request_id was used with different transcript arguments"
+            );
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let project = self.media_project(&state.project);
+        let derived = transcript::derive(&project, &self.host.transcripts)?;
+        transcript::check_word_key(&state.project, &derived, &args.transcript_key)?;
+        let fixes: Vec<_> = args.corrections.iter().map(|c| (c.i, c.text.clone())).collect();
+        let plan = transcript::plan_correction(&state.project, &derived, &fixes)?;
+        let mut preview = project;
+        for edit in plan.edits.clone() {
+            preview.apply(edit).context("EDIT_REJECTED: preview failed")?;
+        }
+        capopen_session::validate(&preview)?;
+        let after = transcript::derive(&preview, &self.host.transcripts)?;
+        let words: Vec<_> =
+            plan.words.iter().map(|(i, from, to)| json!({"i": i, "before": from, "after": to})).collect();
+        let prepared = PreparedTranscriptEdit {
+            arguments,
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            response: json!({"words": words, "captions_changed": plan.captions,
+                "transcript_key": transcript::word_key(&preview, &after.words)}),
+            edits: plan.edits,
+        };
+        let prepared = requests.entry(key).or_insert(prepared);
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
     }
 
     fn captions(&self, args: Captions, state: &SessionState) -> Result<Value> {
@@ -442,7 +549,7 @@ impl Backend {
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before captions");
         let grouping = args.grouping();
-        let style = args.style.unwrap_or_else(reel_style);
+        let style = args.style()?;
         let (edit, _) = transcript::caption_edit(&derived.words, &state.project, style, grouping)?;
         let result = self.host.session.apply_edits(
             &args.run_id,
@@ -455,10 +562,48 @@ impl Backend {
         )
     }
 
+    /// Punch-ins on word ranges as one edit of the run. Splitting clips moves the speech layout and
+    /// so the transcript key; a retry with the same request_id applies the zoom planned the first
+    /// time instead of planning it again.
+    fn apply_zooms(&self, args: ApplyZooms, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({ "apply_zooms": &args });
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == arguments, "REQUEST_CONFLICT: request_id was used with different arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        transcript::check_key(&state.project, &derived, &args.transcript_key)?;
+        let ranges = crate::zooms::ranges(&state.project, &derived.words, &args.zooms)?;
+        let edit = EditCmd::ZoomRanges { ranges: ranges.clone() };
+        let mut preview = state.project.clone();
+        let outcome = preview.apply(edit.clone()).map_err(|e| anyhow!("EDIT_REJECTED: {e:#}"))?;
+        let words = capopen_engine::speech::map_words(&preview, &derived.sources);
+        let prepared = requests.entry(key).or_insert(PreparedTranscriptEdit {
+            arguments,
+            edits: vec![edit],
+            expect: Expect {
+                revision: Some(state.stamp.revision),
+                speech_layout_key: Some(state.speech_layout_key.clone()),
+            },
+            response: json!({"ranges": ranges, "skipped": outcome.skipped,
+                "transcript_key": transcript::word_key(&preview, &words)}),
+        });
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
+    }
+
     fn export(&self, args: Export, state: &SessionState) -> Result<Value> {
         ensure!(!state.read_only, "READ_ONLY: --allow-write is required to write an export");
         ensure!(
-            (2..=7680).contains(&args.resolution) && (1..=240).contains(&args.fps),
+            args.preset.is_some() || (args.resolution.is_some() && args.fps.is_some()),
+            "INVALID_ARGUMENTS: give resolution and fps, or preset \"reels\""
+        );
+        ensure!(
+            args.resolution.is_none_or(|r| (2..=7680).contains(&r)) && args.fps.is_none_or(|f| (1..=240).contains(&f)),
             "Invalid export resolution or fps"
         );
         let out = self.resolve(&args.path);
@@ -472,15 +617,17 @@ impl Backend {
             "Export cannot overwrite the project or its sidecars"
         );
         let project = self.media_project(&state.project);
-        media::check_media(&project)?;
-        let cache = self.host.cache_dir.clone();
         let options = ExportOptions {
-            resolution: Some(args.resolution),
-            fps: Some(args.fps),
-            crf: args.quality.crf(),
+            resolution: args.resolution,
+            fps: args.fps,
+            crf: args.quality.unwrap_or(Quality::Recommended).crf(),
             replace_existing: false,
+            delivery: args.preset,
             ..ExportOptions::default()
         };
+        check_options(&project, &options).map_err(|e| anyhow!("INVALID_ARGUMENTS: {e}"))?;
+        media::check_media(&project)?;
+        let cache = self.host.cache_dir.clone();
         let queue = self.export_queue.clone();
         self.host.start_job(
             &self.client.id,
@@ -492,9 +639,13 @@ impl Backend {
                 let _export = queue.lock().unwrap();
                 check_cancel(&cancel)?;
                 export(&project, &cache, &out, &options, &cancel, |p| {
-                    progress.set("exporting", Some(p.frame as f32 / p.total_frames.max(1) as f32))
+                    let phase = match p.phase {
+                        ExportPhase::Loudness => "measuring_loudness",
+                        ExportPhase::Rendering => "exporting",
+                    };
+                    progress.set(phase, Some(p.fraction))
                 })?;
-                Ok(json!({"path": out, "duration_us": project.duration_us()}))
+                Ok(json!({"path": out, "duration_us": project.duration_us(), "preset": options.delivery}))
             },
         )
     }
@@ -713,6 +864,37 @@ mod tests {
     }
 
     #[test]
+    fn export_video_takes_the_reels_preset_or_explicit_settings() {
+        let dir = std::env::temp_dir().join(format!("export-args-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.capopen");
+        let mut wide = Project::new("wide");
+        (wide.canvas.width, wide.canvas.height) = (1920, 1080);
+        std::fs::write(&path, serde_json::to_vec(&wide).unwrap()).unwrap();
+        let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
+        let error = |args: Value| format!("{:#}", backend.call("export_video", args).unwrap_err());
+        let missing = error(json!({"path": "out.mp4", "quality": "high"}));
+        assert!(missing.starts_with("INVALID_ARGUMENTS"), "{missing}");
+        let wrong_format = error(json!({"path": "out.mp4", "preset": "reels"}));
+        assert!(
+            wrong_format.starts_with("INVALID_ARGUMENTS: Reels & TikTok needs a 9:16 video and this one is 16:9"),
+            "{wrong_format}"
+        );
+        assert!(error(json!({"path": "out.mp4", "preset": "youtube"})).contains("unknown variant"));
+        drop(backend);
+        std::fs::write(&path, serde_json::to_vec(&Project::new("tall")).unwrap()).unwrap();
+        let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
+        let other = format!(
+            "{:#}",
+            backend.call("export_video", json!({"path": "out.mp4", "preset": "reels", "fps": 60})).unwrap_err()
+        );
+        assert!(other.starts_with("INVALID_ARGUMENTS: Reels & TikTok exports at fps 30"), "{other}");
+        assert!(!dir.join("out.mp4").exists());
+        drop(backend);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn loudness_windows_stay_bounded_for_long_media() {
         let hour = 3_600_000_000;
         assert_eq!(loudness_window(hour, None).unwrap(), 100_000);
@@ -737,6 +919,7 @@ mod tests {
             stroke_color: "#000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
         project
             .apply(EditCmd::AddText { start_us: 0, text: "A very long unrelated title".into(), style: style.clone() })
@@ -747,6 +930,7 @@ mod tests {
                     start_us: 0,
                     end_us: 1_000_000,
                     text: "Příliš žluťoučký".into(),
+                    words: Vec::new(),
                 }],
                 style,
             })
@@ -910,6 +1094,67 @@ mod transcript_tests {
         assert_eq!(applied["duration_us"], plan["duration_us"]);
         assert_ne!(backend.host.session.state().unwrap().project, before);
         drop((viewer, backend));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn correct_words_changes_captions_survives_rebuilding_retries_and_undoes() {
+        let (dir, backend, before) = fixture();
+        let run = backend.call("begin_run", json!({"label":"fix words"})).unwrap().structured_content.unwrap();
+        let run_id = run["run_id"].as_str().unwrap().to_owned();
+        let call = |name: &str, args: Value| backend.call(name, args).map(|r| r.structured_content.unwrap());
+        call("build_captions", json!({"run_id": run_id, "max_words": 3, "max_chars": 100})).unwrap();
+        let transcript = call("get_transcript", json!({})).unwrap();
+        let key = transcript["transcript_key"].clone();
+        let caption = |backend: &Backend| {
+            let project = backend.host.session.state().unwrap().project;
+            project
+                .tracks
+                .iter()
+                .filter(|t| t.is_captions())
+                .flat_map(|t| &t.clips)
+                .map(|c| match &c.content {
+                    capopen_engine::model::ClipContent::Text { text, .. } => text.clone(),
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+        assert!(caption(&backend).contains("word3"));
+        let args = json!({"run_id": run_id, "request_id": "fix-once", "transcript_key": key,
+            "corrections": [{"i": 3, "text": "fixed"}]});
+        // A failed save keeps the live edit; the retry finishes it without correcting twice.
+        std::fs::remove_file(&backend.project_path).unwrap();
+        std::fs::create_dir(&backend.project_path).unwrap();
+        let error = format!("{:#}", backend.call("correct_words", args.clone()).unwrap_err());
+        assert!(error.contains("SAVE_FAILED"), "{error}");
+        std::fs::remove_dir(&backend.project_path).unwrap();
+        let fixed = call("correct_words", args.clone()).unwrap();
+        assert_eq!(fixed["words"], json!([{"i": 3, "before": "word3", "after": "fixed"}]));
+        assert_eq!(fixed["captions_changed"].as_array().unwrap().len(), 1);
+        assert_eq!(call("correct_words", args.clone()).unwrap(), fixed);
+        let mut conflict = args.clone();
+        conflict["corrections"] = json!([{"i": 3, "text": "other"}]);
+        assert!(format!("{:#}", backend.call("correct_words", conflict).unwrap_err()).starts_with("REQUEST_CONFLICT"));
+        let disk: Project = serde_json::from_slice(&std::fs::read(&backend.project_path).unwrap()).unwrap();
+        assert_eq!(disk.word_corrections.len(), 1);
+        let shown = caption(&backend);
+        assert!(shown.contains("fixed") && !shown.contains("word3"), "{shown}");
+        let after = call("get_transcript", json!({})).unwrap();
+        assert_eq!(after["words"][3]["text"], "fixed");
+        assert_eq!(after["transcript_key"], fixed["transcript_key"]);
+        // The old key numbers words that read differently now.
+        let stale = json!({"run_id": run_id, "transcript_key": key, "corrections": [{"i": 4, "text": "x"}]});
+        assert!(format!("{:#}", backend.call("correct_words", stale).unwrap_err()).starts_with("SPEECH_CHANGED"));
+        // Rebuilding the captions keeps the correction, and retakes read it too.
+        call("build_captions", json!({"run_id": run_id, "max_words": 3, "max_chars": 100})).unwrap();
+        assert_eq!(caption(&backend), shown);
+        let retakes = call("analyze", json!({"kind": "retakes"})).unwrap();
+        assert_eq!(retakes["transcript_key"], fixed["transcript_key"]);
+        call("end_run", json!({"run_id": run_id, "action": "keep"})).unwrap();
+        call("undo_run", json!({"run_id": run_id})).unwrap();
+        assert_eq!(backend.host.session.state().unwrap().project, before);
+        drop(backend);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

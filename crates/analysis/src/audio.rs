@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail, ensure};
 use capopen_engine::{
     audio::{Pcm, ensure_pcm, has_audio, samples_to_us, us_to_samples},
+    loudness::Meter,
     model::{Asset, CHANNELS},
 };
 use serde::{Deserialize, Serialize};
@@ -92,12 +93,43 @@ fn levels(samples: &[f32], window_us: i64, cancelled: &dyn Fn() -> bool) -> Resu
 /// About ten seconds of audio between cancel checks.
 const CANCEL_CHECK_FRAMES: usize = 480_000;
 
-/// Ungated, unweighted approximation: -0.691 + 10 log10(sum of channel powers).
-/// This is NOT BS.1770/EBU R128 LUFS; no K-weighting or loudness gating is applied.
-/// Do not use it for delivery normalization. Silence is floored at -120.
-pub fn integrated_lufs(asset: &Asset, cache: &Path) -> Result<f32> {
-    let pcm = open_pcm(asset, cache, &|| false)?;
-    Ok((db(power(pcm.samples())? * CHANNELS as f64) - 0.691).max(FLOOR_DB))
+/// Integrated loudness and true peak of a whole file after ITU-R BS.1770-4 (EBU R128), read by
+/// the meter the Reels export levels with.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProgramLoudness {
+    /// LUFS; `None` when nothing is louder than -70 LUFS, as in silence.
+    pub integrated_lufs: Option<f32>,
+    /// dBTP of the 4x oversampled signal; digital silence is -120.
+    pub true_peak_dbtp: f32,
+}
+
+pub fn program_loudness(asset: &Asset, cache: &Path) -> Result<ProgramLoudness> {
+    program_loudness_cancellable(asset, cache, || false)
+}
+
+pub fn program_loudness_cancellable(
+    asset: &Asset,
+    cache: &Path,
+    cancelled: impl Fn() -> bool,
+) -> Result<ProgramLoudness> {
+    let pcm = open_pcm(asset, cache, &cancelled)?;
+    measure_program(pcm.samples(), &cancelled)
+}
+
+fn measure_program(samples: &[f32], cancelled: &dyn Fn() -> bool) -> Result<ProgramLoudness> {
+    let mut meter = Meter::new();
+    for chunk in samples.chunks(CANCEL_CHECK_FRAMES * CHANNELS) {
+        if cancelled() {
+            bail!("CANCELLED: analysis cancelled");
+        }
+        ensure!(chunk.iter().all(|s| s.is_finite()), "PCM contains a non-finite sample");
+        meter.push(chunk);
+    }
+    let loudness = meter.finish();
+    Ok(ProgramLoudness {
+        integrated_lufs: loudness.integrated.map(|lufs| lufs as f32),
+        true_peak_dbtp: loudness.true_peak_db().max(FLOOR_DB as f64) as f32,
+    })
 }
 
 /// Quiet ranges safe to propose for removal, after breath padding. This is an
@@ -176,6 +208,24 @@ mod tests {
         let error = levels(&vec![0.1; 60 * 48_000 * 2], 10_000, &stop).unwrap_err();
         assert!(error.to_string().starts_with("CANCELLED"), "{error}");
         assert_eq!(asked.get(), 2, "asked again after about ten seconds of audio");
+        Ok(())
+    }
+
+    #[test]
+    fn program_loudness_is_bs1770_and_stays_finite() -> Result<()> {
+        // A 1 kHz sine at -23 dBFS on both channels is -23 LUFS; its peak is -23 dBTP.
+        let amplitude = 10f32.powf(-23.0 / 20.0);
+        let tone: Vec<f32> = (0..20 * 48_000)
+            .flat_map(|i| [(i as f32 * std::f32::consts::TAU * 1000.0 / 48_000.0).sin() * amplitude; CHANNELS])
+            .collect();
+        let program = measure_program(&tone, &|| false)?;
+        assert!((program.integrated_lufs.unwrap() + 23.0).abs() < 0.1, "{program:?}");
+        assert!((program.true_peak_dbtp + 23.0).abs() < 0.1, "{program:?}");
+        let silence = measure_program(&[0.0; 96_000], &|| false)?;
+        assert_eq!(silence, ProgramLoudness { integrated_lufs: None, true_peak_dbtp: -120.0 });
+        assert!(measure_program(&[f32::NAN; 8], &|| false).is_err());
+        let error = measure_program(&tone, &|| true).unwrap_err();
+        assert!(error.to_string().starts_with("CANCELLED"), "{error}");
         Ok(())
     }
 

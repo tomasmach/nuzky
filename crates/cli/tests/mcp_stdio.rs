@@ -98,6 +98,12 @@ impl Client {
         assert_ne!(result["result"]["isError"], true, "{result}");
         result["result"]["structuredContent"].clone()
     }
+    /// The message of a call that must fail.
+    fn error(&mut self, tool: &str, args: Value) -> String {
+        let result = self.rpc("tools/call", json!({"name":tool,"arguments":args}));
+        assert_eq!(result["result"]["isError"], true, "{result}");
+        result["result"]["content"][0]["text"].as_str().unwrap().to_owned()
+    }
     fn finish(&mut self) {
         self.input.take();
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -124,12 +130,14 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 15);
+    assert_eq!(tools.len(), 17);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
     let captions = tools.iter().find(|t| t["name"] == "build_captions").unwrap();
     assert!(!captions["inputSchema"]["required"].as_array().unwrap().contains(&json!("style")));
+    assert!(captions["inputSchema"]["properties"]["style_preset"].is_object());
+    assert!(captions["description"].as_str().unwrap().contains("karaoke"));
     let recovery = tools.iter().find(|t| t["name"] == "resolve_recovery").unwrap();
     assert!(recovery["description"].as_str().unwrap().contains("Ask the user"));
     let before = c.call("get_state", json!({}));
@@ -172,6 +180,27 @@ fn readonly_resources_prompts_and_clear_errors() {
     assert!(guide["result"]["contents"][0]["text"].as_str().unwrap().contains("rippleDeleteRanges"));
     let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
     assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
+    // One prompt starts the whole rough cut; the user's wishes come with it.
+    let names: Vec<_> = c.rpc("prompts/list", json!({}))["result"]["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].clone())
+        .collect();
+    assert_eq!(names, [json!("edit_selected"), json!("rough_cut")]);
+    let rough = c.rpc("prompts/get", json!({"name":"rough_cut","arguments":{"wishes":"keep the call to action"}}));
+    let text = rough["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("analyze(kind: \"retakes\")")
+            && text.contains("preset \"reels\"")
+            && text.contains("keep the call to action")
+    );
+    assert!(
+        c.rpc("prompts/get", json!({"name":"rough_cut"}))["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("wishes, which win over the steps: none")
+    );
     let error = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0]}}));
     assert_eq!(error["result"]["isError"], true);
     c.finish();
@@ -246,6 +275,240 @@ fn recovery_tool_resolves_both_choices_over_stdio() {
 }
 
 #[test]
+fn retakes_answer_at_once_even_for_read_only_clients() {
+    let mut c = Client::with_style(None);
+    let tools = c.rpc("tools/list", json!({}));
+    let analyze = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "analyze").unwrap();
+    assert_eq!(analyze["inputSchema"]["required"], json!(["kind"]));
+    let retakes = c.call("analyze", json!({"kind":"retakes"}));
+    assert_eq!(retakes["time_basis"], "timeline");
+    assert_eq!(retakes["transcript_key"], c.call("get_transcript", json!({}))["transcript_key"]);
+    for list in ["groups", "fillers", "review", "suggested_delete"] {
+        assert_eq!(retakes[list], json!([]), "{retakes}");
+    }
+    // The other kinds still need an asset and start a job, which a read-only client cannot.
+    assert!(c.error("analyze", json!({"kind":"retakes","asset_id":"a"})).contains("omit asset_id"));
+    assert!(c.error("analyze", json!({"kind":"silences","asset_id":"a"})).contains("READ_ONLY"));
+    c.finish();
+    let mut writer = Client::start(true, None, Some(None));
+    assert!(writer.error("analyze", json!({"kind":"fillers"})).contains("asset_id is required"));
+    writer.finish();
+}
+
+// Only on Linux does XDG_DATA_HOME choose where CapOpen keeps transcripts.
+#[cfg(target_os = "linux")]
+#[test]
+fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
+    use capopen_engine::{model::Asset, model::AssetKind, speech::Word};
+    use capopen_session::transcripts::{Record, TranscriptStore, VERSION};
+    let mut c = Client::start(true, None, Some(None));
+    // Words come from the store, so the file is never decoded and any bytes do.
+    let path = c.dir.join("take.mov");
+    std::fs::write(&path, b"take").unwrap();
+    let asset = Asset {
+        id: "take".into(),
+        name: "take.mov".into(),
+        path: path.to_string_lossy().into(),
+        kind: AssetKind::Video,
+        duration_us: 4_000_000,
+        width: 1080,
+        height: 1920,
+        fps: 30.0,
+        has_audio: true,
+        rotation: 0,
+        mirror: false,
+    };
+    let said = ["Mikrofon", "vejte", "co", "nejblíž."];
+    let words = said
+        .iter()
+        .enumerate()
+        .map(|(i, text)| Word {
+            start_us: 200_000 + i as i64 * 800_000,
+            end_us: 700_000 + i as i64 * 800_000,
+            text: (*text).into(),
+            probability: 0.9,
+        })
+        .collect();
+    let store = TranscriptStore::at(c.dir.join("data/capopen/transcripts")).unwrap();
+    let record = Record {
+        version: VERSION,
+        fingerprint: store.fingerprint(&asset).unwrap(),
+        duration_us: asset.duration_us,
+        model: "fixture".into(),
+        language: "cs".into(),
+        words,
+        segments: vec![],
+    };
+    store.put(&asset, &record).unwrap();
+
+    let tools = c.rpc("tools/list", json!({}));
+    let tool = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "correct_words").unwrap();
+    assert_eq!(tool["inputSchema"]["required"], json!(["run_id", "transcript_key", "corrections"]));
+    let run = c.call("begin_run", json!({"label":"fix a word"}));
+    let edits = json!([{"type":"addAssets","assets":[asset]},{"type":"addClip","assetId":"take"}]);
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":edits}));
+    let captions = |c: &mut Client| {
+        let state = c.call("get_state", json!({}));
+        let track = state["tracks"].as_array().unwrap().iter().find(|t| t["name"] == "Captions").unwrap().clone();
+        track["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["content"]["text"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    c.call("build_captions", json!({"run_id":run["run_id"]}));
+    assert!(captions(&mut c).iter().any(|t| t.contains("vejte")));
+    let transcript = c.call("get_transcript", json!({}));
+    assert_eq!(transcript["words"][1]["text"], "vejte");
+    let args = json!({"run_id":run["run_id"],"request_id":"dejte","transcript_key":transcript["transcript_key"],
+        "corrections":[{"i":1,"text":"dejte"}]});
+    let fixed = c.call("correct_words", args.clone());
+    assert_eq!(fixed["words"], json!([{"i":1,"before":"vejte","after":"dejte"}]));
+    assert_eq!(fixed["captions_changed"].as_array().unwrap().len(), 1);
+    assert_eq!(c.call("correct_words", args), fixed, "a retry with the same request_id corrects once");
+    let shown = captions(&mut c);
+    assert!(shown.iter().any(|t| t.contains("dejte")) && !shown.iter().any(|t| t.contains("vejte")), "{shown:?}");
+    let now = c.call("get_transcript", json!({}));
+    assert_eq!(now["words"][1]["text"], "dejte");
+    assert_eq!(now["transcript_key"], fixed["transcript_key"]);
+    let stale = json!({"run_id":run["run_id"],"transcript_key":transcript["transcript_key"],"corrections":[{"i":2,"text":"to"}]});
+    assert!(c.error("correct_words", stale).contains("SPEECH_CHANGED"));
+    // Building the captions again reads the corrected word.
+    c.call("build_captions", json!({"run_id":run["run_id"]}));
+    assert_eq!(captions(&mut c), shown);
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    c.finish();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    assert_eq!(
+        disk["wordCorrections"],
+        json!([{"assetId":"take","sourceStartUs":1_000_000,"original":"vejte","text":"dejte"}])
+    );
+}
+
+/// A 12 s talk of three sentences of four 0.4 s tone "words", the middle sentence 12 dB louder,
+/// with its words stored as if recognised. Only on Linux does XDG_DATA_HOME choose the store.
+#[cfg(target_os = "linux")]
+#[test]
+fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
+    use capopen_session::transcripts::{Record, TranscriptStore, VERSION};
+    let mut c = Client::start(true, None, Some(None));
+    let mut samples = vec![0i16; 12 * 48_000];
+    let mut words = Vec::new();
+    for sentence in 0..3i64 {
+        for word in 0..4i64 {
+            let start = 1_000_000 + sentence * 4_000_000 + word * 500_000;
+            let level = if sentence == 1 { 0.4 } else { 0.1 };
+            let first = (start * 48 / 1000) as usize;
+            for (i, sample) in samples[first..first + 19_200].iter_mut().enumerate() {
+                *sample = (level * (i as f64 * 440.0 / 48_000.0 * std::f64::consts::TAU).sin() * 32_767.0) as i16;
+            }
+            let end = if word == 3 { "." } else { "" };
+            words.push(json!({"start_us": start, "end_us": start + 400_000, "text": format!(" w{sentence}{word}{end}"), "probability": 0.9}));
+        }
+    }
+    let wav = c.dir.join("speech.wav");
+    // 16-bit mono WAV: the RIFF header, the format chunk and the samples.
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&(36 + samples.len() as u32 * 2).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    for field in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
+        bytes.extend_from_slice(&field.to_le_bytes());
+    }
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(samples.len() as u32 * 2).to_le_bytes());
+    bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    std::fs::write(&wav, bytes).unwrap();
+    let video = c.dir.join("talk.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=360x640:r=30:d=12", "-i"])
+        .arg(&wav)
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
+        .arg(&video)
+        .status()
+        .expect("ffmpeg makes the test video");
+    assert!(status.success());
+
+    let run = c.call("begin_run", json!({"label":"place"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[video]}))["asset_ids"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
+    );
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    assert!(c.error("analyze", json!({"kind":"emphasis"})).contains("TRANSCRIPT_MISSING"));
+    let asset: capopen_engine::model::Asset =
+        serde_json::from_value(c.call("get_state", json!({}))["assets"][0].clone()).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/capopen/transcripts")).unwrap();
+    let record = Record {
+        version: VERSION,
+        fingerprint: store.fingerprint(&asset).unwrap(),
+        duration_us: asset.duration_us,
+        model: "fixture".into(),
+        language: "cs".into(),
+        words: serde_json::from_value(json!(words)).unwrap(),
+        segments: vec![],
+    };
+    store.put(&asset, &record).unwrap();
+
+    // Words stored earlier, no sound prepared and no app to prepare it: a job does, then it answers.
+    let waiting: Value = serde_json::from_str(&c.error("analyze", json!({"kind":"emphasis"}))).unwrap();
+    let waiting = waiting["error"].as_str().unwrap();
+    assert!(waiting.starts_with("AUDIO_NOT_READY") && waiting.contains("talk.mp4"), "{waiting}");
+    let job_id = waiting.split("as job ").nth(1).and_then(|rest| rest.split(';').next()).unwrap().to_owned();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while c.call("job", json!({"job_id":job_id,"action":"get"}))["status"] == "running" {
+        assert!(std::time::Instant::now() < deadline, "preparing the sound timed out");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(c.call("job", json!({"job_id":job_id,"action":"get"}))["status"], "done");
+    let found = c.call("analyze", json!({"kind":"emphasis"}));
+    assert_eq!(found, c.call("analyze", json!({"kind":"emphasis"})), "the same words and sound gave another result");
+    let key = c.call("get_transcript", json!({}))["transcript_key"].clone();
+    assert_eq!(found["transcript_key"], key);
+    // The loud sentence; the hook is less than 5 s before it, and 12 s allow one zoom.
+    let zooms = found["zooms"].as_array().unwrap();
+    assert_eq!(zooms.len(), 1, "{found}");
+    assert_eq!(
+        (zooms[0]["from"].clone(), zooms[0]["to"].clone(), zooms[0]["text"].clone()),
+        (json!(4), json!(7), json!("w10 w11 w12 w13."))
+    );
+    assert_eq!((zooms[0]["score"].clone(), zooms[0]["scale"].clone()), (json!(0.6), json!(1.24)));
+
+    let run = c.call("begin_run", json!({"label":"zoom"}));
+    let stale = json!({"run_id":run["run_id"],"transcript_key":"stale","zooms":[{"from":4,"to":7,"scale":1.24}]});
+    assert!(c.error("apply_zooms", stale).contains("SPEECH_CHANGED"));
+    let args = json!({"run_id":run["run_id"],"request_id":"zoom","transcript_key":key,"zooms":[{"from":4,"to":7,"scale":1.24}]});
+    let applied = c.call("apply_zooms", args.clone());
+    assert_eq!(applied["ranges"], json!([{"startUs": 4_850_000, "endUs": 7_050_000, "scale": 1.24}]));
+    assert_eq!(applied["skipped"], json!([]));
+    // A retry gives the same answer without zooming again; other zooms under the same id are refused.
+    assert_eq!(c.call("apply_zooms", args.clone()), applied);
+    let mut other = args;
+    other["zooms"][0]["scale"] = json!(1.3);
+    assert!(c.error("apply_zooms", other).contains("REQUEST_CONFLICT"));
+    let state = c.call("get_state", json!({}));
+    let main: Vec<(i64, f64)> = state["tracks"][0]["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|clip| (clip["startUs"].as_i64().unwrap(), clip["content"]["transform"]["scale"].as_f64().unwrap()))
+        .collect();
+    assert_eq!(main.iter().map(|m| m.0).collect::<Vec<_>>(), [0, 4_850_000, 7_050_000]);
+    assert!((main[1].1 - 1.24).abs() < 1e-6 && main[0].1 == 1.0 && main[2].1 == 1.0, "{main:?}");
+    assert_eq!(c.call("get_transcript", json!({}))["transcript_key"], applied["transcript_key"]);
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    // One undo takes the whole run back.
+    c.call("undo_run", json!({"run_id":run["run_id"]}));
+    assert_eq!(c.call("get_state", json!({}))["tracks"][0]["clips"].as_array().unwrap().len(), 1);
+    assert!(
+        c.error("apply_zooms", json!({"run_id":"none","transcript_key":key,"zooms":[{"from":4,"to":7,"scale":1.2}]}))
+            .contains("INVALID_RUN")
+    );
+    c.finish();
+}
+
+#[test]
 #[ignore = "Requires tmp-test/talk.mp4 and installed small + Silero models; run with XDG_DATA_HOME=tmp-test/xdg/data"]
 fn transcribe_edit_and_caption_real_media_over_stdio() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -284,6 +547,90 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     assert_eq!(preview["duration_us"], edited["duration_us"]);
     let captions = c.call("build_captions", json!({"run_id":run["run_id"]}));
     assert!(captions["caption_count"].as_u64().unwrap() > 0);
+    // Rebuilt as karaoke: each caption keeps its spoken words, which spell its text.
+    assert!(c.error("build_captions", json!({"run_id":run["run_id"],"style_preset":"neon"})).contains("karaoke"));
+    let karaoke = c.call("build_captions", json!({"run_id":run["run_id"],"style_preset":"karaoke"}));
+    assert_eq!(karaoke["caption_count"], captions["caption_count"]);
+    let state = c.call("get_state", json!({}));
+    let track = state["tracks"].as_array().unwrap().iter().find(|t| t["name"] == "Captions").unwrap();
+    for clip in track["clips"].as_array().unwrap() {
+        let content = &clip["content"];
+        assert_eq!(content["style"]["highlight"], "#ffe14d", "{content}");
+        let words: Vec<&str> =
+            content["words"].as_array().unwrap().iter().map(|w| w["text"].as_str().unwrap()).collect();
+        assert_eq!(words.join(" "), content["text"].as_str().unwrap());
+    }
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    c.finish();
+}
+
+#[test]
+#[ignore = "Requires tmp-test/reel-1..3.mp4 from scripts/fixtures.sh and large-v3-turbo-q5_0 + Silero in tmp-test/xdg/data/capopen/models"]
+fn retakes_of_three_czech_takes_over_stdio() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let model = root.join("tmp-test/xdg/data/capopen/models/ggml-large-v3-turbo-q5_0.bin");
+    let takes: Vec<PathBuf> = (1..=3).map(|n| root.join(format!("tmp-test/reel-{n}.mp4"))).collect();
+    // Its own data directory, so no transcript stored by an earlier run is found.
+    let mut c = Client::start(true, None, Some(None));
+    let run = c.call("begin_run", json!({"label":"takes"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":takes}))["asset_ids"].clone();
+    let place: Vec<Value> = ids.as_array().unwrap().iter().map(|id| json!({"type":"addClip","assetId":id})).collect();
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":place}));
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    assert!(c.error("analyze", json!({"kind":"retakes"})).contains("TRANSCRIPT_MISSING"));
+
+    let job = c.call("transcribe", json!({"language":"cs","model":model}));
+    let deadline = std::time::Instant::now() + Duration::from_secs(900);
+    loop {
+        let status = c.call("job", json!({"job_id":job["job_id"],"action":"get"}));
+        if status["status"] == "done" {
+            break;
+        }
+        assert_eq!(status["status"], "running", "{status}");
+        assert!(std::time::Instant::now() < deadline, "transcription timed out");
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    let transcript = c.call("get_transcript", json!({}));
+    let analysis = c.call("analyze", json!({"kind":"retakes"}));
+    eprintln!("{}", serde_json::to_string_pretty(&analysis).unwrap());
+    assert_eq!(analysis, c.call("analyze", json!({"kind":"retakes"})), "the same words gave another analysis");
+    assert_eq!(analysis["transcript_key"], transcript["transcript_key"]);
+    assert_eq!(analysis["time_basis"], "timeline");
+    let words: Vec<&str> =
+        transcript["words"].as_array().unwrap().iter().map(|w| w["text"].as_str().unwrap().trim()).collect();
+    let said =
+        |from: &Value, to: &Value| words[from.as_u64().unwrap() as usize..=to.as_u64().unwrap() as usize].join(" ");
+    let plain =
+        |text: &str| text.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect::<String>();
+
+    // Exactly two restarted sentences, each keeping its last attempt.
+    let groups = analysis["groups"].as_array().unwrap();
+    let attempts: Vec<Vec<String>> = groups
+        .iter()
+        .map(|g| g["sentences"].as_array().unwrap().iter().map(|s| plain(&said(&s["from"], &s["to"]))).collect())
+        .collect();
+    assert_eq!(attempts.iter().map(Vec::len).collect::<Vec<_>>(), [3, 2], "{attempts:?}");
+    // Recognition hears the first "Kamera musí stát" differently from run to run, e.g. "start".
+    assert!(attempts[0].iter().all(|a| a.starts_with("dneska vám ukážu")), "{attempts:?}");
+    assert!(attempts[1].iter().all(|a| a.starts_with("kamera musí st")), "{attempts:?}");
+    assert_eq!(groups.iter().map(|g| g["keep"].as_u64().unwrap()).collect::<Vec<_>>(), [2, 1]);
+    assert!(attempts[0][2].ends_with("za 10 minut"), "{attempts:?}");
+    assert_eq!(attempts[1][1], "kamera musí stát pevně na stativu");
+    // Only the filler words that start a sentence.
+    let fillers: Vec<String> =
+        analysis["fillers"].as_array().unwrap().iter().map(|f| plain(&said(&f["from"], &f["to"]))).collect();
+    assert_eq!(fillers, ["ehm", "jakoby", "prostě"]);
+    assert_eq!(analysis["review"], json!([]), "{analysis}");
+
+    // suggested_delete plans as is, leaving each kept sentence once and no filler.
+    let plan = c.call(
+        "edit_transcript",
+        json!({"transcript_key":transcript["transcript_key"],"delete":analysis["suggested_delete"],"dry_run":true}),
+    );
+    let text = plain(plan["preview_text"].as_str().unwrap());
+    assert!(text.starts_with("dneska vám ukážu jak natočit video za 10 minut nejd"), "{text}");
+    assert_eq!(text.matches("dneska").count(), 1, "{text}");
+    assert_eq!(text.matches("kamera musí stát").count(), 1, "{text}");
+    assert!(["ehm", "jakoby", "prostě"].iter().all(|f| !text.contains(f)), "{text}");
     c.finish();
 }

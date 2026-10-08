@@ -5,10 +5,13 @@ use anyhow::{Result, ensure};
 use capopen_engine::{
     Project,
     model::{
-        AssetKind, Clip, ClipContent, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TrackKind,
-        Transform, max_stroke_width,
+        AssetKind, Clip, ClipContent, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO,
+        PROJECT_VERSION, TrackKind, Transform, max_stroke_width,
     },
 };
+
+/// More words than any caption shows; bounds the per-frame search for the spoken word.
+const MAX_CAPTION_WORDS: usize = 1000;
 
 /// Structural validity; missing media is reported by media tools, not by editing.
 pub fn validate(project: &Project) -> Result<()> {
@@ -50,6 +53,39 @@ pub fn validate(project: &Project) -> Result<()> {
                 .checked_add(clip.duration_us)
                 .ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: clip time overflow"))?;
         }
+    }
+    word_corrections(project)
+}
+
+/// More than a long recording has words, so a project file cannot grow without bound.
+const MAX_WORD_CORRECTIONS: usize = 50_000;
+
+/// A corrected word is one line of text, like the recognised word it replaces. Corrections of
+/// media no longer in the project stay valid: they apply to nothing.
+fn word_corrections(project: &Project) -> Result<()> {
+    ensure!(
+        project.word_corrections.len() <= MAX_WORD_CORRECTIONS,
+        "INVALID_PROJECT: more than {MAX_WORD_CORRECTIONS} corrected words"
+    );
+    let mut seen = HashSet::new();
+    for correction in &project.word_corrections {
+        for text in [&correction.text, &correction.original] {
+            ensure!(
+                !text.trim().is_empty()
+                    && text.chars().count() <= MAX_CORRECTION_CHARS
+                    && !text.chars().any(char::is_control),
+                "INVALID_PROJECT: a corrected word must be one line of 1 to {MAX_CORRECTION_CHARS} characters, not {text:?}"
+            );
+        }
+        ensure!(
+            !correction.asset_id.is_empty() && correction.source_start_us >= 0,
+            "INVALID_PROJECT: corrected word without its media or start"
+        );
+        ensure!(
+            seen.insert((&correction.asset_id, correction.source_start_us, &correction.original)),
+            "INVALID_PROJECT: the word {:?} is corrected twice",
+            correction.original
+        );
     }
     Ok(())
 }
@@ -100,7 +136,17 @@ fn transform(value: &Transform) -> Result<()> {
 fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> {
     ensure!(clip.start_us >= 0 && clip.duration_us > 0, "INVALID_PROJECT: clip {} timing", clip.id);
     match &clip.content {
-        ClipContent::Media { asset_id, source_in_us, speed, volume, transform: t, fade_in_us, fade_out_us, adjust } => {
+        ClipContent::Media {
+            asset_id,
+            source_in_us,
+            speed,
+            volume,
+            transform: t,
+            fade_in_us,
+            fade_out_us,
+            adjust,
+            clean_voice,
+        } => {
             let asset =
                 project.asset(asset_id).ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
             ensure!(
@@ -124,6 +170,11 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             );
             ensure!(*fade_in_us >= 0 && *fade_out_us >= 0, "INVALID_PROJECT: negative fade");
             ensure!(
+                !clean_voice || capopen_engine::audio::has_audio(asset),
+                "INVALID_PROJECT: clip {} cleans the voice of media without sound",
+                clip.id
+            );
+            ensure!(
                 [
                     adjust.exposure,
                     adjust.tint,
@@ -142,7 +193,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             );
             transform(t)?;
         }
-        ClipContent::Text { style, transform: t, .. } => {
+        ClipContent::Text { style, transform: t, words, .. } => {
             ensure!(
                 style.font_size.is_finite()
                     && style.font_size > 0.0
@@ -160,6 +211,15 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             if let Some(background) = &style.background {
                 color(background, "text background")?;
             }
+            if let Some(highlight) = &style.highlight {
+                color(highlight, "highlight color")?;
+            }
+            // Words that no longer spell the text are kept but ignored, so only their times are checked.
+            ensure!(
+                words.len() <= MAX_CAPTION_WORDS && words.iter().all(|w| w.start_us <= w.end_us),
+                "INVALID_PROJECT: caption words of {} must be at most {MAX_CAPTION_WORDS}, each ending after it starts",
+                clip.id
+            );
             transform(t)?;
         }
     }
@@ -230,6 +290,27 @@ mod tests {
     }
 
     #[test]
+    fn caption_words_need_ordered_times_but_may_differ_from_the_text() {
+        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+            "fontSize":95.0,"color":"#ffffff","highlight":"#ffe14d"
+        }))
+        .unwrap();
+        let mut project = Project::new("words");
+        project.apply(EditCmd::AddText { start_us: 0, text: "Ahoj".into(), style }).unwrap();
+        let word = |start_us, end_us| capopen_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us };
+        for (words, valid) in [
+            (vec![word(0, 0), word(-500, 100)], true),
+            (vec![word(i64::MIN, i64::MAX)], true),
+            (vec![word(100, 99)], false),
+            (vec![word(0, 1); MAX_CAPTION_WORDS + 1], false),
+        ] {
+            let ClipContent::Text { words: stored, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+            *stored = words;
+            assert_eq!(validate(&project).is_ok(), valid, "{:?}", validate(&project));
+        }
+    }
+
+    #[test]
     fn asset_paths_must_be_absolute_and_local_but_may_be_missing() {
         let mut project = Project::new("paths");
         project.assets.push(Asset {
@@ -277,7 +358,7 @@ mod tests {
         let mut project = Project::new("colors");
         project.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         validate(&project).unwrap();
-        for field in 0..4 {
+        for field in 0..5 {
             for (value, valid) in [
                 ("#fff", true),
                 ("#FFAA00", true),
@@ -297,7 +378,8 @@ mod tests {
                     0 => candidate.canvas.background = value.into(),
                     1 => style.color = value.into(),
                     2 => style.stroke_color = value.into(),
-                    _ => style.background = Some(value.into()),
+                    3 => style.background = Some(value.into()),
+                    _ => style.highlight = Some(value.into()),
                 }
                 let result = validate(&candidate);
                 assert_eq!(result.is_ok(), valid, "field {field}: {value:?}");
@@ -312,6 +394,58 @@ mod tests {
         let error = editor.apply_batch_checked(vec![set], None, validate).unwrap_err();
         assert!(format!("{error:#}").contains("INVALID_COLOR"), "{error:#}");
         assert_eq!(editor.project, project);
+    }
+
+    #[test]
+    fn word_corrections_are_one_line_of_bounded_text_once_per_word() {
+        use capopen_engine::model::WordCorrection;
+        let fix = |original: &str, text: &str| WordCorrection {
+            asset_id: "clip".into(),
+            source_start_us: 500_000,
+            original: original.into(),
+            text: text.into(),
+        };
+        let mut project = Project::new("corrections");
+        project.word_corrections = vec![fix("oka", "okna"), fix("to", "tu")];
+        // Media removed later leaves its corrections valid: they apply to nothing.
+        validate(&project).unwrap();
+        let long = "ž".repeat(MAX_CORRECTION_CHARS + 1);
+        for bad in [
+            fix("oka", ""),
+            fix("oka", "  "),
+            fix("oka", "two\nlines"),
+            fix("oka", "a\u{7}"),
+            fix("oka", &long),
+            fix("", "okna"),
+            WordCorrection { source_start_us: -1, ..fix("x", "y") },
+            WordCorrection { asset_id: String::new(), ..fix("x", "y") },
+            fix("oka", "okno"),
+        ] {
+            let mut candidate = project.clone();
+            candidate.word_corrections.push(bad.clone());
+            let error = validate(&candidate).unwrap_err().to_string();
+            assert!(error.starts_with("INVALID_PROJECT:"), "{bad:?}: {error}");
+        }
+        project.assets.push(Asset {
+            id: "clip".into(),
+            name: "Clip".into(),
+            path: "/clip.mp4".into(),
+            kind: AssetKind::Video,
+            duration_us: 1_000_000,
+            width: 1080,
+            height: 1920,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+        });
+        let mut editor = capopen_engine::edit::Editor::new(project.clone());
+        let correct = |text: &str| vec![EditCmd::CorrectWords { corrections: vec![fix("word", text)] }];
+        let error = editor.apply_batch_checked(correct("two\nlines"), None, validate).unwrap_err().to_string();
+        assert!(error.contains("one line"), "{error}");
+        assert_eq!(editor.project, project);
+        editor.apply_batch_checked(correct("words"), None, validate).unwrap();
+        assert_eq!(editor.project.word_corrections.len(), 3);
     }
 
     #[test]
@@ -349,5 +483,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn clean_voice_needs_a_clip_with_sound() {
+        let mut project = Project::new("clean voice");
+        for (id, kind, sound) in [("photo", AssetKind::Image, false), ("take", AssetKind::Video, true)] {
+            project.assets.push(Asset {
+                id: id.into(),
+                name: id.into(),
+                path: format!("/{id}"),
+                kind,
+                duration_us: if sound { 2_000_000 } else { 0 },
+                width: 16,
+                height: 16,
+                fps: 30.0,
+                has_audio: sound,
+                rotation: 0,
+                mirror: false,
+            });
+            project.apply(EditCmd::AddClip { asset_id: id.into(), start_us: None, track_id: None }).unwrap();
+        }
+        let clean = |project: &mut Project, index: usize| {
+            let ClipContent::Media { clean_voice, .. } = &mut project.tracks[0].clips[index].content else { panic!() };
+            *clean_voice = true;
+        };
+        let mut sound = project.clone();
+        clean(&mut sound, 1);
+        validate(&sound).unwrap();
+        clean(&mut project, 0);
+        let error = validate(&project).unwrap_err().to_string();
+        assert!(error.starts_with("INVALID_PROJECT:") && error.contains("without sound"), "{error}");
     }
 }

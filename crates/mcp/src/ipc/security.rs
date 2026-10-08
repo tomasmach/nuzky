@@ -53,6 +53,24 @@ pub(super) fn token(path: &Path) -> Result<String> {
     String::from_utf8(bytes).context("IPC_UNTRUSTED: invalid token encoding")
 }
 
+/// A private 0600 regular file of this user, read without following symlinks; None when missing.
+pub(super) fn read_private(path: &Path, max: u64) -> Result<Option<String>> {
+    let file = match OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("IPC_UNTRUSTED: opening private file without following symlinks"),
+    };
+    let meta = file.metadata().context("IPC_UNTRUSTED: checking private file")?;
+    ensure!(
+        meta.is_file() && meta.uid() == uid() && meta.mode() & 0o7777 == 0o600 && meta.len() <= max,
+        "IPC_UNTRUSTED: {} must be a small private 0600 file of this user",
+        path.display()
+    );
+    let mut text = String::new();
+    file.take(max).read_to_string(&mut text).context("IPC_UNTRUSTED: reading private file")?;
+    Ok(Some(text))
+}
+
 pub(super) fn create_token(path: &Path) -> Result<File> {
     OpenOptions::new()
         .write(true)

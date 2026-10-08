@@ -8,6 +8,7 @@ mod params;
 mod rules;
 mod tools;
 pub mod transcript;
+pub mod zooms;
 
 use std::sync::Arc;
 
@@ -20,6 +21,9 @@ use bridge::Target;
 
 const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
 const STYLE_FIRST: &str = "This creator has their own editing style, capopen://style, measured from their recordings and finished cuts. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
+/// The whole way from raw takes to a reel, as the guide describes it, so one prompt starts it.
+const ROUGH_CUT: &str = "Make a rough cut of this whole project for Instagram Reels and TikTok, then export it, following the guide below.\n\n1. get_state. Transcribe whatever is untranscribed and poll job until done.\n2. get_transcript, read every sentence, then analyze(kind: \"retakes\"). Keep the last complete attempt of each restarted sentence and drop the fillers that start sentences; check every group against the text and decide each review pair yourself. Add other slips and false starts you find.\n3. Plan with edit_transcript dry_run, then in one run: edit_transcript with the deletions (long pauses shorten by default), build_captions with the Reel style, inspect_frames with safe_area around cuts and captions, end_run keep.\n4. export_video with preset \"reels\" to a new .mp4 in the user's Videos folder (an absolute path), named after the project, poll until done and report the path, the duration and anything you were unsure about.";
+
 const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at capopen://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
 
 /// The creator's EDIT.md, read anew each time so edits to it apply to the next request.
@@ -90,7 +94,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Analyze>(
             "analyze",
-            "Start local asset analysis. Poll job(get). Source microseconds. silences: threshold_db, min_silence_us (400000), pad_us (120000); loudness: window_us (100000, wider for media over ten hours; at most 360000 values), RMS dBFS; scenes: threshold (0.18), min_gap_us (300000); fillers: reads stored source words, transcribe first. Review filler suggestions in context.",
+            "Local analysis. retakes needs no asset_id and answers at once: it reads the stored words of the whole timeline, numbered exactly as get_transcript (same transcript_key), and fails with TRANSCRIPT_MISSING while a heard clip is untranscribed. It returns groups of attempts at one restarted sentence, also across clips: sentences {from,to,start_us,end_us,text,complete}, keep (index of the last complete attempt, the recommended one) and delete (the other attempts); fillers that start a sentence {from,to,text}, covering only the filler words; unfinished {from,to,text}: words that trail off (recognised with an ellipsis) before a new sentence starts; restarts inside one sentence without a full stop are groups too; review: consecutive near-repeats that differ in a negation, a number or a content word, with a reason, never deleted for you; suggested_delete: all group deletes, fillers and unfinished attempts, sorted and merged, INCLUSIVE word ranges ready for edit_transcript delete. Same words give the same result. Read the groups against the text before deleting. emphasis also needs no asset_id and answers at once, with the same word numbering and transcript_key: zooms {from,to,start_us,end_us,text,score,scale} are sentences for a punch-in, scored by how much louder they are than the median sentence (measured in the files' sound over the words), an exclamation and the opening hook; only sentences of 1.2-8 s with three words or more, at least 5 s apart and about one per 12 s of timeline; scale 1.15-1.3 by score. Same words and sound give the same result. AUDIO_NOT_READY names a job that prepares the sound of the files; poll it, then analyze again. Pass the chosen zooms to apply_zooms. The other kinds need asset_id, start a job (poll job(get)) and use source microseconds. silences: threshold_db, min_silence_us (400000), pad_us (120000); loudness: window_us (100000, wider for media over ten hours; at most 360000 values), RMS dBFS per window plus integrated_lufs (ITU-R BS.1770, null for silence) and true_peak_dbtp of the whole file; scenes: threshold (0.18), min_gap_us (300000); fillers: reads stored source words, transcribe first. Review filler suggestions in context.",
         )?,
         tool::<params::Transcribe>(
             "transcribe",
@@ -102,7 +106,11 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::EditTranscript>(
             "edit_transcript",
-            "Cut by INCLUSIVE zero-based word ranges [[from,to],...]. Requires the current get_transcript transcript_key (includes recognition contents) and run_id unless dry_run. Optional request_id: reuse it with identical arguments after a save failure to finish the original save without cutting again; omitted ids are generated. Supply delete OR keep; omit both to shorten pauses only. shorten_pauses_us defaults to 300000. Removed passages take surrounding silence, kept passages retain at most 80 ms before and 120 ms after a boundary word; internal long pauses lose their middle. No boundary lands inside a word. One ripple edit respects tracks kept in place. dry_run=true simulates without changing project/history and needs no open run, so plan before begin_run. Returns duration_us {before,after}, removed_us, ranges (engine startUs/endUs), preview_text (first 400 characters), predicted/new transcript_key, revision, dry_run. Apply using the ORIGINAL transcript_key after checking the dry run. SPEECH_CHANGED rejects stale speech; overlapping speech may be rejected.",
+            "Cut by INCLUSIVE zero-based word ranges [[from,to],...]. Requires the current get_transcript transcript_key (includes recognition contents) and run_id unless dry_run. Optional request_id: reuse it with identical arguments after a save failure to finish the original save without cutting again; omitted ids are generated. Supply delete OR keep; omit both to shorten pauses only. shorten_pauses_us defaults to 300000. Removed passages take surrounding silence, kept passages retain at most 80 ms before and 120 ms after a boundary word, counted from where the word is heard: recognition moves word boundaries into the silence between words, so cuts do not clip syllables, and every cut crossfades over 20 ms through quiet sound; internal long pauses lose their middle. No boundary lands inside a word. One ripple edit respects tracks kept in place. dry_run=true simulates without changing project/history and needs no open run, so plan before begin_run. Returns duration_us {before,after}, removed_us, ranges (engine startUs/endUs), preview_text (first 400 characters), predicted/new transcript_key, revision, dry_run. Apply using the ORIGINAL transcript_key after checking the dry run. SPEECH_CHANGED rejects stale speech; overlapping speech may be rejected.",
+        )?,
+        tool::<params::CorrectWords>(
+            "correct_words",
+            "Correct misrecognised words, e.g. \"oka\" written for a spoken \"okna\": corrections [{i, text}] with i from get_transcript and the text the word should read, punctuation included. Requires run_id and the current get_transcript transcript_key (SPEECH_CHANGED when stale). The correction belongs to the project and to that recognised word, so get_transcript, analyze retakes, build_captions and the app's transcript all read it, also after rebuilding captions; it changes no timing and cuts nothing. Caption clips on the Captions track that show the word get it replaced in the same step, keeping style and timing. A word heard in several clips is corrected everywhere. Text equal to the recognised word removes the correction. If the file is recognised again differently, the correction no longer applies. Optional request_id: reuse it with identical arguments after a save failure to finish the original save. Returns words {i, before, after} for every place a word is heard, captions_changed (clip ids) and the new transcript_key.",
         )?,
         tool::<params::Job>(
             "job",
@@ -110,11 +118,15 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Captions>(
             "build_captions",
-            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
+            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. style_preset picks a preset by name instead (reel, outline, yellow, box, clean, karaoke, green_box); karaoke is Reel with the word being spoken in yellow, green_box bold white on a dark box with the spoken word green. Karaoke captions store each word's time and highlight only while a word is spoken; updateClip text with as many words keeps that timing, adding or removing words turns the caption's highlight off. Give style or style_preset, not both. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
+        )?,
+        tool::<params::ApplyZooms>(
+            "apply_zooms",
+            "Punch in on INCLUSIVE word ranges as one edit of the run: zooms [{from,to,scale}] such as analyze(kind: \"emphasis\").zooms, with the current transcript_key (SPEECH_CHANGED when stale). Each zoom becomes a main-track timeline range from midway into the silence before its first word to midway into the silence after its last, at most 150 ms out, or on to the cut when only silence lies between; main-track clips are split there and the pieces inside get their scale multiplied by scale, keeping position and rotation. An edge that would leave a piece under 0.3 s, or cut a transition, animation or fade short, moves to the clip's edge. Sound plays on unchanged. Clips with keyframes are left alone and listed in skipped. Zooms must not overlap; scale 0.25-4. Requires run_id. Optional request_id: reuse it with identical arguments after a save failure to finish the original save without zooming twice. Returns ranges (startUs, endUs, scale), skipped clip ids, the new transcript_key and revision.",
         )?,
         tool::<params::Export>(
             "export_video",
-            "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. resolution is the SHORT side in pixels (1080 gives 1080x1920 on a portrait canvas), fps=1..240, quality high/recommended/small. path must be new; relative paths resolve beside the project. Requires --allow-write. Poll job(get) until done before reporting success.",
+            "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. For Instagram Reels or TikTok pass preset=\"reels\": 1080x1920, 30 fps, H.264 High, AAC 48 kHz stereo, sound levelled to -14 LUFS with true peak <= -1 dBTP in the file (the project and preview keep their levels); needs a 9:16 canvas, resolution/fps may be omitted or must be 1080/30. Without preset resolution (the SHORT side in pixels, 1080 gives 1080x1920 on a portrait canvas) and fps=1..240 are required. quality high/recommended/small, default recommended. path must be new; relative paths resolve beside the project. Requires --allow-write. Job phases: measuring_loudness (preset only), exporting. Poll job(get) until done before reporting success.",
         )?,
     ])
 }
@@ -188,11 +200,22 @@ impl ServerHandler for Server {
         _: Option<PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
-        Ok(ListPromptsResult::with_all_items(vec![Prompt::new(
-            "edit_selected",
-            Some("Edit the selected clips toward a goal"),
-            Some(vec![PromptArgument::new("goal").with_required(true)]),
-        )]))
+        Ok(ListPromptsResult::with_all_items(vec![
+            Prompt::new(
+                "edit_selected",
+                Some("Edit the selected clips toward a goal"),
+                Some(vec![PromptArgument::new("goal").with_required(true)]),
+            ),
+            Prompt::new(
+                "rough_cut",
+                Some("Rough-cut the whole project into a Reels and TikTok video with captions and export it"),
+                Some(vec![
+                    PromptArgument::new("wishes")
+                        .with_description("Anything to do differently, e.g. keep the closing call to action")
+                        .with_required(false),
+                ]),
+            ),
+        ]))
     }
 
     async fn get_prompt(
@@ -200,6 +223,15 @@ impl ServerHandler for Server {
         request: GetPromptRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
+        let argument = |name: &str| request.arguments.as_ref().and_then(|a| a.get(name)).and_then(Value::as_str);
+        if request.name == "rough_cut" {
+            let wishes = argument("wishes").filter(|w| !w.trim().is_empty()).unwrap_or("none");
+            return Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                Role::User,
+                format!("{ROUGH_CUT}\n\nThe user's wishes, which win over the steps: {wishes}\n\n{}", guide()),
+            )])
+            .into());
+        }
         if request.name != "edit_selected" {
             return Err(ErrorData::invalid_params("Unknown prompt", None));
         }

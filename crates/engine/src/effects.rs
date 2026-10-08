@@ -148,6 +148,7 @@ mod tests {
                 adjust: Default::default(),
                 fade_in_us: 0,
                 fade_out_us: 0,
+                clean_voice: false,
             },
         )
     }

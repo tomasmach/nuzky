@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition } from "./types";
+import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
 
 export interface Toast {
   id: number;
@@ -50,6 +50,7 @@ interface EditorState {
   /** Files being probed by an import, shown as placeholders until they arrive. */
   importing: { key: number; name: string; kind: Asset["kind"] }[];
   exportOpen: boolean;
+  connectOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
   ratioOpen: boolean;
@@ -218,6 +219,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   fileDrag: null,
   importing: [],
   exportOpen: false,
+  connectOpen: false,
   exportJobId: null,
   panelTab: "media",
   ratioOpen: false,
@@ -602,6 +604,19 @@ export async function detachAudio(clipIds: string[]) {
   if (snap) toast({ kind: "info", text, action: undoAction(snap) });
 }
 
+/** Turns Clean voice on or off for the media clips in `ids`, as one undo step. */
+export function setCleanVoice(ids: string[], on: boolean) {
+  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));
+}
+
+/** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */
+export function useVoicePreparation(assetIds: string[]) {
+  return useEditor((s) => {
+    const running = assetIds.map((id) => s.jobs[`voice:${id}`]).filter((j) => j?.status === "running");
+    return running.length > 0 ? Math.min(...running.map((j) => j.progress)) : null;
+  });
+}
+
 /** Restyles every caption clip at once, as one undo step, keeping each caption's wrap width (the safe area). */
 export function applyCaptionStyle(style: TextStyle) {
   return useEditor.getState().edit(
@@ -616,6 +631,27 @@ export function applyCaptionFont(fontFamily: string) {
     (project) =>
       project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...c.content.style, fontFamily } }] : [])) ?? null,
   );
+}
+
+/**
+ * Punches in on the suggested sentences after the edits queued before, as one undo step, and offers
+ * Undo. Clips with keyframes keep their motion and the toast says so. Resolves to whether it ran.
+ */
+export async function applyZooms(key: string, zooms: { from: number; to: number; scale: number }[]): Promise<boolean> {
+  if (aiLocked()) return false;
+  const out: { done?: ZoomsApplied } = {};
+  await enqueue(async (epoch) => (out.done = await api.applyZooms(key, zooms, epoch)).snapshot);
+  const done = out.done;
+  if (!done) return false;
+  const clips = (n: number) => `${n} clip${n === 1 ? "" : "s"} with keyframes`;
+  if (!done.changed) {
+    useEditor.getState().toast({ kind: "info", text: `Nothing zoomed: the sentences lie on ${clips(done.skipped)}, which keep their own motion.` });
+    return true;
+  }
+  const kept = done.skipped > 0 ? `; ${clips(done.skipped)} kept their own motion` : "";
+  const text = `Zoomed in on ${zooms.length} sentence${zooms.length === 1 ? "" : "s"}${kept}`;
+  useEditor.getState().toast({ kind: "info", text, action: undoAction(done.snapshot) });
+  return true;
 }
 
 export function openExport() {

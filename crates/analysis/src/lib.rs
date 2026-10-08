@@ -1,15 +1,24 @@
 //! Deterministic local editing analysis. Times are half-open microsecond ranges
 //! relative to the media/container origin, or to the supplied timeline audio.
 mod audio;
+mod boundaries;
 mod captions;
+mod emphasis;
 mod fillers;
+mod retakes;
 mod scenes;
 mod speech;
 pub mod style;
 
-pub use audio::{SilenceParams, integrated_lufs, loudness, loudness_cancellable, silences, silences_cancellable};
+pub use audio::{
+    ProgramLoudness, SilenceParams, loudness, loudness_cancellable, program_loudness, program_loudness_cancellable,
+    silences, silences_cancellable,
+};
+pub use boundaries::{align_to_sound, align_words};
 pub use captions::{CaptionGrouping, group_words};
+pub use emphasis::{Energy, Zoom, emphasis, word_energy};
 pub use fillers::filler_words;
+pub use retakes::{Attempt, Filler, RetakeGroup, Retakes, Review, retakes};
 pub use scenes::{SceneCut, SceneParams, scene_cuts, scene_cuts_cancellable};
 pub use speech::{AudioSource, Segment, Transcript, Word, transcribe_words, transcribe_words_cancellable};
 

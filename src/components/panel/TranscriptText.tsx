@@ -1,10 +1,23 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Trash2 } from "lucide-react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Trash2, ZoomIn } from "lucide-react";
 import { followPointer } from "../../lib/drag";
-import { paragraphs, tokenAt, type Token } from "../../lib/speech";
-import { useEditor } from "../../lib/store";
+import { MAX_WORD_CHARS, paragraphs, tokenAt, type Token } from "../../lib/speech";
+import { aiLocked, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
-import { Button } from "../ui";
+import { Button, useLockReason } from "../ui";
+import { zoomLabel } from "./TranscriptZooms";
+
+/** A suggested zoom: the time of its sentence and its scale. */
+export interface ZoomMark {
+  startUs: number;
+  endUs: number;
+  scale: number;
+}
+
+const NO_MARKS: ZoomMark[] = [];
+
+/** The quiet accent line under a suggested zoom, spaces included, so its sentence reads as one. */
+const MARK = "underline decoration-accent/60 decoration-2 underline-offset-4";
 
 interface Selection {
   anchor: number;
@@ -13,26 +26,96 @@ interface Selection {
 
 const optionId = (i: number) => `transcript-token-${i}`;
 
-/** One paragraph; re-renders only when the current word or the selection inside it changes. */
-const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: { tokens: Token[]; from: number; to: number; active: number; lo: number; hi: number }) {
+/** The word being corrected, in place: Enter or leaving the field saves, Esc cancels. */
+function WordField({ word, onDone }: { word: string; onDone: (text: string | null) => void }) {
+  const [value, setValue] = useState(word);
+  const done = useRef(false);
+  const finish = (text: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(text);
+  };
+  return (
+    <input
+      autoFocus
+      aria-label={`Correct “${word}”`}
+      value={value}
+      maxLength={MAX_WORD_CHARS}
+      spellCheck={false}
+      onChange={(e) => setValue(e.target.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        // The field keeps its keys: arrows, Delete and Space edit the text, not the transcript.
+        e.stopPropagation();
+        if (e.key === "Enter" || e.key === "Escape") {
+          e.preventDefault();
+          finish(e.key === "Enter" ? value : null);
+        }
+      }}
+      onBlur={() => finish(value)}
+      style={{ width: `${Math.max(value.length, 2) + 1}ch` }}
+      className="mx-0.5 rounded-sm bg-raised px-0.5 text-[13px] leading-[18px] text-fg"
+    />
+  );
+}
+
+/** One paragraph; re-renders only when the current word, the selection, the word being corrected or the zooms inside it change. */
+const Paragraph = memo(function Paragraph({
+  tokens,
+  from,
+  to,
+  active,
+  lo,
+  hi,
+  editing,
+  onEdited,
+  zoomOf,
+  marks,
+}: {
+  tokens: Token[];
+  from: number;
+  to: number;
+  active: number;
+  lo: number;
+  hi: number;
+  editing: number;
+  onEdited: (text: string | null) => void;
+  zoomOf: number[];
+  marks: ZoomMark[];
+}) {
   const items = [];
   for (let i = from; i < to; i++) {
     const t = tokens[i];
     const selected = i >= lo && i <= hi;
     const playing = i === active;
+    const mark = zoomOf[i] >= 0 ? marks[zoomOf[i]] : null;
+    // The token before belongs to the same suggested zoom.
+    const joined = !!mark && i > from && zoomOf[i - 1] === zoomOf[i];
+    const spaceSelected = i > lo && i <= hi;
     // Accent text on the accent selection is hard to read, so there the word playing is black on accent.
     const look = selected ? (playing ? "bg-accent text-black" : "bg-accent/30 text-fg") : playing ? "text-accent" : "";
     items.push(
       <Fragment key={i}>
         {/* The space between two selected tokens is filled too, so the selection reads as one band. */}
-        {i > from && (i > lo && i <= hi ? <span className="bg-accent/30"> </span> : " ")}
-        {t.kind === "word" ? (
+        {i > from && (spaceSelected || joined ? <span className={`${spaceSelected ? "bg-accent/30" : ""} ${joined ? MARK : ""}`}> </span> : " ")}
+        {mark && !joined && (
+          <span aria-hidden title={`Suggested zoom, ${zoomLabel(mark.scale)}`} className="tabular mr-1 inline-flex items-center gap-0.5 text-[11px] text-accent">
+            <ZoomIn size={11} />
+            {zoomLabel(mark.scale)}
+          </span>
+        )}
+        {t.kind === "word" && i === editing ? (
+          <WordField word={t.text} onDone={onEdited} />
+        ) : t.kind === "word" ? (
           <span
             id={optionId(i)}
             data-t={i}
+            data-zoom={mark ? zoomOf[i] : undefined}
             role="option"
             aria-selected={selected}
-            className={`cursor-pointer ${selected ? `${i === lo ? "rounded-l-sm" : ""} ${i === hi ? "rounded-r-sm" : ""}` : "rounded-sm hover:bg-raised"} ${look}`}
+            title={t.original ? `Recognised as “${t.original}”` : undefined}
+            aria-description={mark ? `Suggested zoom ${zoomLabel(mark.scale)}` : undefined}
+            className={`cursor-pointer ${selected ? `${i === lo ? "rounded-l-sm" : ""} ${i === hi ? "rounded-r-sm" : ""}` : "rounded-sm hover:bg-raised"} ${mark ? MARK : t.original ? "underline decoration-muted decoration-dotted underline-offset-3" : ""} ${look}`}
           >
             {t.text}
           </span>
@@ -60,27 +143,61 @@ const Paragraph = memo(function Paragraph({ tokens, from, to, active, lo, hi }: 
   );
 });
 
+/** Same words and pauses at the same places: only the text of a word changed, so indices still hold. */
+const sameShape = (a: Token[], b: Token[]) => a.length === b.length && a.every((t, n) => t.kind === b[n].kind && t.startUs === b[n].startUs);
+
 /**
  * The transcript as text. Click a word to jump there, drag or Shift-click to select a range,
  * Delete cuts it from the timeline unless `blocker` says why it cannot. ←/→ move word by word
- * (Shift extends), Esc clears.
+ * (Shift extends), Esc clears. Double-click a word, or F2 with one word selected, to correct it.
  */
-export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[]; blocker: string | null; onDelete: (lo: number, hi: number) => Promise<boolean> }) {
+export function TranscriptText({
+  tokens,
+  blocker,
+  onDelete,
+  onCorrect,
+  marks,
+}: {
+  tokens: Token[];
+  blocker: string | null;
+  onDelete: (lo: number, hi: number) => Promise<boolean>;
+  /** `i` is the word's index in the view. */
+  onCorrect: (i: number, text: string, shown: string) => Promise<boolean>;
+  marks?: ZoomMark[] | null;
+}) {
   const [sel, setSel] = useState<Selection | null>(null);
+  const [editing, setEditing] = useState<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const lock = useLockReason();
   // Re-renders when the word playing changes, not on every frame.
   const active = useEditor((s) => tokenAt(tokens, s.timeUs));
   const playing = useEditor((s) => s.playing);
   const paras = useMemo(() => paragraphs(tokens), [tokens]);
+  const zooms = marks ?? NO_MARKS;
+  // The suggested zoom each token lies in, or -1.
+  const zoomOf = useMemo(() => tokens.map((t) => zooms.findIndex((z) => t.startUs >= z.startUs && t.endUs <= z.endUs)), [tokens, zooms]);
   // Fewer tokens can arrive before the effect below clears the selection.
   const live = sel && sel.anchor < tokens.length && sel.focus < tokens.length ? sel : null;
   const lo = live ? Math.min(live.anchor, live.focus) : -1;
   const hi = live ? Math.max(live.anchor, live.focus) : -1;
 
-  // Indices change with the words or the pause length.
-  useEffect(() => setSel(null), [tokens]);
+  // Indices change with the words or the pause length; a corrected word keeps them, and so does a
+  // word being corrected.
+  const shown = useRef(tokens);
+  useEffect(() => {
+    if (!sameShape(shown.current, tokens)) {
+      setSel(null);
+      setEditing(null);
+    }
+    shown.current = tokens;
+  }, [tokens]);
+
+  // An AI run that starts meanwhile closes the field without saving.
+  useEffect(() => {
+    if (lock) setEditing(null);
+  }, [lock]);
 
   // Toasts move above the Delete bar while it shows, so an Undo toast never covers Delete.
   const barShown = lo >= 0;
@@ -100,8 +217,30 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
   };
   const seekTo = (i: number) => useEditor.getState().seek(tokens[i].startUs);
 
+  /** Opens the word for correcting, unless the AI is editing: then the notice says so. */
+  const startEdit = (i: number) => {
+    if (tokens[i]?.kind !== "word") return;
+    if (lock) {
+      aiLocked();
+      return;
+    }
+    setSel({ anchor: i, focus: i });
+    setEditing(i);
+  };
+
+  // Stable, so paragraphs without the field do not re-render with each word played.
+  const finish = useRef<(text: string | null) => void>(() => {});
+  finish.current = (text) => {
+    const t = editing === null ? null : tokens[editing];
+    setEditing(null);
+    box.current?.focus();
+    const typed = text?.trim();
+    if (t?.kind === "word" && typed && typed !== t.text) void onCorrect(t.i, typed, t.text);
+  };
+  const onEdited = useCallback((text: string | null) => finish.current(text), []);
+
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.target instanceof HTMLInputElement) return;
     box.current?.focus();
     const i = indexAt(e.target);
     if (i === null) return;
@@ -155,6 +294,10 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
       e.preventDefault();
       e.stopPropagation();
       useEditor.getState().togglePlay();
+    } else if (key === "F2" && live && lo === hi) {
+      e.preventDefault();
+      e.stopPropagation();
+      startEdit(lo);
     } else if (key === "Escape" && live) {
       e.stopPropagation();
       setSel(null);
@@ -176,10 +319,14 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
         role="listbox"
         aria-label="Transcript"
         aria-multiselectable
-        aria-activedescendant={live ? optionId(live.focus) : undefined}
+        aria-activedescendant={live && editing === null ? optionId(live.focus) : undefined}
         tabIndex={0}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
+        onDoubleClick={(e) => {
+          const i = indexAt(e.target);
+          if (i !== null) startEdit(i);
+        }}
         onKeyDown={onKeyDown}
         className="min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-3 focus-visible:-outline-offset-2"
       >
@@ -192,6 +339,10 @@ export function TranscriptText({ tokens, blocker, onDelete }: { tokens: Token[];
             active={active >= from && active < to ? active : -1}
             lo={hi >= from && lo < to ? lo : -1}
             hi={hi >= from && lo < to ? hi : -1}
+            editing={editing !== null && editing >= from && editing < to ? editing : -1}
+            onEdited={onEdited}
+            zoomOf={zoomOf}
+            marks={zooms}
           />
         ))}
       </div>

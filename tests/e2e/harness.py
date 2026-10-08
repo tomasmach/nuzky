@@ -13,7 +13,7 @@ FIXTURES = ROOT / 'tmp-test'
 MODELS = FIXTURES / 'xdg/data/capopen/models'
 OUT = ROOT / 'tmp-test/repro'
 TARGET = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target'))
-APP, CLI = TARGET / 'debug/capopen-app', TARGET / 'debug/capopen'
+APP, CLI, ANALYZE = TARGET / 'debug/capopen-app', TARGET / 'debug/capopen', TARGET / 'debug/capopen-analyze'
 WEBKIT_DRIVER = shutil.which('WebKitWebDriver') or '/usr/bin/WebKitWebDriver'
 AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
@@ -326,8 +326,10 @@ def close_window_and_confirm(r):
 class Bridge:
     """The agent's side: `capopen mcp` attached to the open app over its local socket."""
 
-    def __init__(self, r, project):
-        self.process = subprocess.Popen([str(CLI), 'mcp', '--project', str(project), '--allow-write'], env=r.env,
+    def __init__(self, r, project=None, command=None):
+        """`command`: what an agent's config runs instead, such as `capopen-app mcp --current`."""
+        command = command or [str(CLI), 'mcp', '--project', str(project), '--allow-write']
+        self.process = subprocess.Popen(command, env=r.env,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(r.work / 'bridge.log', 'w'),
                                         text=True, start_new_session=True)
         self.lines, self.id = queue.Queue(), 0
@@ -365,10 +367,10 @@ class Bridge:
             stop(self.process)
 
 
-def link_models(r):
+def link_models(r, names=('ggml-small.bin', 'ggml-silero-v5.1.2.bin')):
     models = r.work / 'data/capopen/models'
     models.mkdir(parents=True)
-    for name in ('ggml-small.bin', 'ggml-silero-v5.1.2.bin'):
+    for name in names:
         try:
             os.link(MODELS / name, models / name)
         except OSError:

@@ -6,11 +6,13 @@ pub mod edit;
 pub mod effects;
 pub mod export;
 pub mod gpu;
+pub mod loudness;
 pub mod media;
 pub mod model;
 pub mod render;
 pub mod speech;
 pub mod text;
+pub mod voice;
 pub mod worker;
 
 pub use model::Project;

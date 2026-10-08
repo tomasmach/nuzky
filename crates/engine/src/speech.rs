@@ -162,6 +162,7 @@ mod tests {
             adjust: None,
             fade_in_us: None,
             fade_out_us: None,
+            clean_voice: None,
         })
         .unwrap();
         let got = placed(&p, &words);
@@ -227,6 +228,7 @@ mod tests {
             stroke_color: "#000000".into(),
             background: None,
             max_width: None,
+            highlight: None,
         };
         p.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         let video = main_id(&p, 0);
@@ -241,6 +243,7 @@ mod tests {
             adjust: None,
             fade_in_us: None,
             fade_out_us: None,
+            clean_voice: None,
         })
         .unwrap();
         assert_eq!(speech_layout_key(&p), key);

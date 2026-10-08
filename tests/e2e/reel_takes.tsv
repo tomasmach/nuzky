@@ -1,0 +1,17 @@
+# The Czech talking head of the reel flow: three takes as a phone records them, with restarted sentences,
+# fillers at the start of a sentence, long pauses and a closing call to action. scripts/fixtures.sh speaks
+# each phrase with espeak-ng and follows it with the pause; tests/e2e/reel.py knows from the role what a
+# good rough cut keeps. Roles: keep; retake, an earlier attempt of a later sentence; filler-lead, a sentence
+# that starts with a filler, which ends at the first pause of the phrase (espeak pauses about 0.2 s at a comma).
+# take	pause_s	role	phrase
+1	0.9	retake	Dneska vám ukážu, jak natočit
+1	1.1	retake	Dneska vám ukážu, jak natočit video
+1	2.4	keep	Dneska vám ukážu, jak natočit video za deset minut.
+1	0.8	filler-lead	Ehm, nejdřív potřebujete dobrý mikrofon.
+2	2.2	keep	Mikrofon dejte co nejblíž k puse.
+2	0.9	filler-lead	Jakoby, potom řešíte světlo z okna.
+2	1.0	retake	Kamera musí stát
+2	0.8	keep	Kamera musí stát pevně na stativu.
+3	2.6	filler-lead	Prostě, hotové video nahrajte na Instagram a TikTok.
+3	1.2	keep	Celé to zabere deset minut.
+3	0.6	keep	Napište mi do komentáře, co chcete vidět příště.

@@ -36,7 +36,9 @@ def preflight(names):
             __import__(module)
         except ImportError:
             problems.append(f'Python package {package} is missing')
-    if not (FIXTURES / 'talk.mp4').exists() or ('captions' in names and not (MODELS / 'ggml-small.bin').exists()):
+    if (not (FIXTURES / 'talk.mp4').exists() or ('captions' in names and not (MODELS / 'ggml-small.bin').exists())
+            or ('reel' in names and not all((FIXTURES / f).exists() for f in (
+                'reel-1.mp4', 'reel-2.mp4', 'reel-3.mp4', 'xdg/data/capopen/models/ggml-large-v3-turbo-q5_0.bin')))):
         problems.append('test media or models are missing: run scripts/fixtures.sh')
     problems += [f'port {port} is in use by another session' for port in (1420, 4444) if port_busy(port)]
     return problems
@@ -76,7 +78,9 @@ def main(args):
     if problems:
         print('repro cannot run:\n  ' + '\n  '.join(problems), file=sys.stderr)
         return 1
-    subprocess.run(['cargo', 'build', '--locked', '-p', 'capopen-app', '-p', 'capopen-cli'], cwd=ROOT, check=True)
+    # capopen-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too.
+    subprocess.run(['cargo', 'build', '--locked', '-p', 'capopen-app', '-p', 'capopen-cli', '-p', 'capopen-analysis'], cwd=ROOT,
+                   check=True)
     for name in names:
         (OUT / name / 'result.json').unlink(missing_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)

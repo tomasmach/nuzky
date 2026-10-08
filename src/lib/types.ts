@@ -36,6 +36,15 @@ export interface TextStyle {
   background: string | null;
   /** Lines wrap at this width in canvas pixels; captions on vertical videos keep to the Reels/TikTok safe area. */
   maxWidth?: number | null;
+  /** Karaoke: `#rrggbb` fill of the word being spoken; null or missing draws every word in `color`. */
+  highlight?: string | null;
+}
+
+/** A spoken word of a caption; times are relative to the clip start. */
+export interface CaptionWord {
+  text: string;
+  startUs: number;
+  endUs: number;
 }
 
 /** All 0 = unchanged. -1..1, fade and vignette 0..1. */
@@ -64,8 +73,17 @@ export type ClipContent =
       adjust: Adjust;
       fadeInUs: number;
       fadeOutUs: number;
+      /** High-pass, gentle denoise and de-ess for speech; playback switches to it once prepared. */
+      cleanVoice: boolean;
     }
-  | { type: "text"; text: string; style: TextStyle; transform: Transform };
+  | {
+      type: "text";
+      text: string;
+      style: TextStyle;
+      transform: Transform;
+      /** Generated captions: the spoken words, which highlight only while `text` is them joined by single spaces. */
+      words?: CaptionWord[];
+    };
 
 export type AnimationKind = "fade" | "zoomIn" | "zoomOut" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "pop" | "typewriter";
 export interface Animation {
@@ -116,6 +134,8 @@ export interface ExportRequest {
   resolution: number;
   fps: number;
   quality: "high" | "recommended" | "small";
+  /** "reels": Instagram Reels and TikTok, 1080×1920 at 30 fps, sound levelled to −14 LUFS in the file. Needs a 9:16 canvas; resolution and fps must be 1080 and 30. */
+  preset?: "reels" | null;
 }
 
 export type TrackKind = "video" | "audio" | "text";
@@ -164,6 +184,16 @@ export interface Project {
   canvas: Canvas;
   assets: Asset[];
   tracks: Track[];
+  /** Recognised words the user corrected; absent when there are none. */
+  wordCorrections?: WordCorrection[];
+}
+
+/** A word as the user corrected it; applies while the file's transcript has `original` starting at `sourceStartUs`. */
+export interface WordCorrection {
+  assetId: string;
+  sourceStartUs: number;
+  original: string;
+  text: string;
 }
 
 export interface Snapshot {
@@ -235,6 +265,8 @@ export interface TranscriptWord {
   endUs: number;
   text: string;
   p: number;
+  /** What recognition wrote, when the user corrected the word. */
+  original?: string;
 }
 
 /** Silence in speech longer than the pause length; removing it cuts `startUs`–`endUs` out of the whole `gapUs`. */
@@ -254,11 +286,49 @@ export interface TranscriptView {
   untranscribed: string[];
 }
 
+export interface WordsCorrected {
+  snapshot: Snapshot;
+  /** Caption clips that now show the corrected words. */
+  captions: number;
+}
+
 export interface TranscriptCut {
   snapshot: Snapshot;
   /** Where the first cut starts, which is now where what followed it plays. */
   startUs: number;
   removedUs: number;
+}
+
+/** A sentence said with emphasis, proposed for a punch-in. `from`/`to` are inclusive word numbers of the transcript view. */
+export interface SuggestedZoom {
+  from: number;
+  to: number;
+  startUs: number;
+  endUs: number;
+  text: string;
+  score: number;
+  scale: number;
+}
+
+export interface ZoomSuggestions {
+  /** The transcript view's key the word numbers belong to; applying is refused once it changed. */
+  key: string;
+  zooms: SuggestedZoom[];
+}
+
+export interface ZoomsApplied {
+  snapshot: Snapshot;
+  /** False when every clip in reach has keyframes, so nothing changed. */
+  changed: boolean;
+  /** Clips with keyframes the zooms left alone. */
+  skipped: number;
+}
+
+/** A punch-in over the timeline range [startUs, endUs): the main track's picture scaled by `scale`. */
+export interface ZoomRange {
+  startUs: number;
+  endUs: number;
+  scale: number;
 }
 
 /** Timeline range [startUs, endUs). */
@@ -271,6 +341,8 @@ export interface CaptionSegment {
   startUs: number;
   endUs: number;
   text: string;
+  /** Timeline times, unlike the words a clip stores. */
+  words?: CaptionWord[];
 }
 
 export type EditCmd =
@@ -292,6 +364,7 @@ export type EditCmd =
       adjust?: Adjust | null;
       fadeInUs?: number | null;
       fadeOutUs?: number | null;
+      cleanVoice?: boolean | null;
     }
   | { type: "setAnimation"; clipId: string; slot: "in" | "out"; animation: Animation | null }
   | { type: "setTransition"; clipId: string; transition: Transition | null }
@@ -304,4 +377,22 @@ export type EditCmd =
   /** Without `keepTrackIds` the tracks kept in place stay. */
   | { type: "rippleDeleteRanges"; ranges: TimeRange[]; keepTrackIds?: string[] | null }
   | { type: "setCanvas"; width: number; height: number; background?: string | null; backgroundBlur?: number | null }
-  | { type: "renameProject"; name: string };
+  | { type: "renameProject"; name: string }
+  /** Text equal to `original` removes the correction. */
+  | { type: "correctWords"; corrections: WordCorrection[] }
+  /** Splits main-track clips at the range edges and multiplies the scale inside; clips with keyframes stay as they are. */
+  | { type: "zoomRanges"; ranges: ZoomRange[] };
+
+/** An agent CapOpen can be connected to, and the state of its `capopen` MCP entry. */
+export type AgentKind = "claudeCode" | "codex";
+export interface AgentConnection {
+  agent: AgentKind;
+  name: string;
+  /** Its config file. */
+  path: string;
+  /** connected: runs this app; other: a capopen entry that runs something else. */
+  state: "connected" | "other" | "missing" | "unreadable";
+  problem: string | null;
+  /** The copy made before the last change. */
+  backup: string | null;
+}

@@ -1,6 +1,6 @@
 # AI architecture
 
-CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and a planned in-app AI panel will run the user's installed agent under their subscription. The panel, `crates/agent` and Settings → Connect are not built yet. Research behind these decisions: [docs/research](research).
+CapOpen is built around AI the user brings: any MCP-capable agent can edit a project, live in the open app, and a planned in-app AI panel will run the user's installed agent under their subscription. The panel and `crates/agent` are not built yet; Connect agent covers Claude Code and Codex. Research behind these decisions: [docs/research](research).
 
 Decided on 6 Oct 2026 after two independent proposals and a cross-critique, and refined the same day after the headless MCP landed (two more proposals and a cross-critique).
 
@@ -43,8 +43,10 @@ A run groups one agent turn. There is one linear history: a run is one entry in 
 ## Transcripts
 
 - A transcript belongs to a media file, not to a timeline: words with times in the file's own (source) time, stored once in `<data dir>/capopen/transcripts/<fingerprint>.json`. The fingerprint hashes the file size, its first and last MiB, and 32 evenly spaced 64 KiB chunks. The same file in several projects is recognised once and a moved file keeps its transcript. Version 2 records also store duration_us; older records and duration differences over 1 ms are treated as missing.
+- Whisper's word times are estimates; next to a pause it often stretches a word over the silence into the next one (100–300 ms in Czech recordings). Right after recognition, `capopen_analysis::align_words` moves each boundary between two words into the quiet stretch of the sound nearest to it (a pause wins over a consonant's closure; without one, the quietest moment within 60 ms), and the record stores those times. Cut margins, pauses and captions all count from them.
 - What the timeline says is always derived: `engine::speech::map_words` maps the words of every heard clip (unmuted track, volume above 0, a video asset with sound, detached sound included) through its source range and speed. Cuts, slivers, speed, undo and redo are therefore always right, and a transcript never goes out of date; the only note left is "N clips not transcribed".
 - `get_transcript` and `edit_transcript` use `transcript_key`, which includes recognised words as well as their timeline layout. `get_state` exposes `speech_layout_key`; `apply_edits` accepts it as `expected_speech_layout_key`, a hash of exactly what `map_words` reads. The session rejects it with `SPEECH_CHANGED` when the speech moved in the meantime, and accepts it after unrelated edits such as a caption restyle.
+- Misrecognised words are corrected in the project, not in the shared store: `word_corrections` lists the media file, the word's start in it, the recognised text and the correction. Deriving applies them to the source words before `map_words`, so `get_transcript`, `analyze retakes`, captions built again and the app's transcript all read the corrected text. A correction applies only to the word with that start and recognised text: after the file is recognised again differently it does nothing and never lands on another word. `CorrectWords` sets them; the app and `correct_words` plan it once (`plan_correction` in `crates/mcp/src/transcript.rs`) together with the caption clips that show the word, as one undo step.
 - Tracks have `keep_in_place`; `RippleDeleteRanges` without `keep_track_ids` uses it, so agents cut the way the UI does and leave music alone.
 
 ## Tools
@@ -58,17 +60,19 @@ All times are integer microseconds on the timeline unless a field says `source`.
 | `apply_edits(run_id, request_id, edits[], expected_revision?)` | Atomic batch of `EditCmd` |
 | `import_media(run_id, paths[], request_id?)` | Probe local files and add them as assets; a repeated `request_id` never adds them twice |
 | `inspect_frames(times[], width?)` | Rendered frames as one image (contact sheet with timestamps); fails if media is missing |
-| `analyze(kind, asset_id, params)` | `silences`, `loudness`, `scenes`, `fillers` from `crates/analysis` |
+| `analyze(kind, asset_id?, params)` | `silences`, `loudness`, `scenes`, `fillers` of one asset as a job, from `crates/analysis`. `retakes` reads the stored words of the whole timeline and answers at once, also to read-only clients: groups of attempts at one restarted sentence with the last complete one to keep, also restarts inside one sentence, fillers that start a sentence, attempts that trail off before a new sentence, near-repeats that differ in a negation, a number or a content word for review, and `suggested_delete` word ranges for `edit_transcript`. It fails with `TRANSCRIPT_MISSING` while a heard clip lacks words. `emphasis` answers at once the same way: sentences for a punch-in, scored by how much louder they are than the median sentence (measured in each word's own file), an exclamation and the opening hook, 1.2–8 s long, at least 5 s apart and about one per 12 s, with a scale of 1.15–1.3. When a file's sound is not prepared yet, it starts a job that prepares it and answers `AUDIO_NOT_READY` with the job, since decoding inside the call could not be stopped |
 | `transcribe(asset_ids?)` | Job recognising the heard media that has no transcript yet |
 | `get_transcript(range?)` | Numbered timeline words and sentences, `transcript_key`, untranscribed clips |
 | `edit_transcript(run_id?, transcript_key, keep or delete word ranges, dry_run?)` | Cuts by word numbers with tight padding and shortened pauses; returns the new duration and text. A dry run needs no open run |
+| `correct_words(run_id, transcript_key, corrections[{i, text}], request_id?)` | Corrects misrecognised words by number; captions showing them change in the same step and captions built later keep it |
+| `apply_zooms(run_id, transcript_key, zooms, request_id?)` | Punch-ins on word ranges as one `ZoomRanges` edit: each range runs from midway into the silence before its first word to midway into the silence after its last (at most 150 ms out), or on to the cut when only silence lies between, so no piece of a take is left without words; `SPEECH_CHANGED` on a stale key, retry-safe by `request_id` |
 | `build_captions(run_id, style?, max_words?, max_chars?)` | Deterministic caption clips on one captions track, never across a cut; the Reel style by default |
-| `export_video(path, resolution, fps, quality)` | Job exporting a snapshot |
+| `export_video(path, preset? or resolution + fps, quality?)` | Job exporting a snapshot; `preset: "reels"` writes 1080x1920 at 30 fps with the sound levelled to -14 LUFS, true peak at most -1 dBTP |
 | `job(job_id, get | cancel)` | Progress, result, cancel |
 
-`RippleDeleteRanges { ranges, keep_track_ids? }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` never deletes other tracks.
+`RippleDeleteRanges { ranges, keep_track_ids? }` cuts the ranges out of every track except the kept ones and closes the gaps, so video, overlays, audio and captions stay in sync. `AddCaptions` never deletes other tracks. `ZoomRanges { ranges: [{startUs, endUs, scale}] }` splits main-track clips at the range edges and multiplies the scale of the pieces inside, keeping position and rotation; an edge that would leave a piece under 0.3 s, or cut a transition, animation or fade short, moves to the clip's edge, split halves play their sound on unchanged, and clips with keyframes are left alone and listed in the outcome's `skipped`.
 
-Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema) and, when the creator has one, `capopen://style` (their `EDIT.md`). Prompt: `edit_selected(goal)`.
+Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JSON schema) and, when the creator has one, `capopen://style` (their `EDIT.md`). Prompts: `edit_selected(goal)` and `rough_cut(wishes?)`, which runs the whole way from raw takes to an exported reel (in Claude Code: `/mcp__capopen__rough_cut`).
 
 ## Creator style
 
@@ -82,7 +86,9 @@ Resources: `capopen://guide` (the editing skill), `capopen://schema` (project JS
 ## Agent setup
 
 - The app ships `skills/capopen-edit/SKILL.md` and an `AGENTS.md` template: units, magnetic main track, ripple behaviour, analyse → edit → inspect frames → export, and never editing the JSON directly.
-- Planned: Settings → Connect your agent will show the exact config change for Claude Code (`.mcp.json`), Codex (`config.toml`), Gemini CLI, Cursor and Claude Desktop, write only the `capopen` entry after confirmation and keep a backup.
+- Connect agent (top bar) writes one `capopen` MCP server into Claude Code's user settings (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`, under `mcpServers`) and Codex's (`~/.codex/config.toml` or `$CODEX_HOME/config.toml`, as `[mcp_servers.capopen]`): this app's executable (the AppImage itself when it runs from one) with `mcp --current --allow-write`. The file is copied to `<file>.capopen-backup-<unix time>` first and replaced in one step; a symlinked config is written where the link points, every other key keeps its exact text (Codex comments included), an entry that already runs this app is left alone, and a file that does not parse is not touched. Code: `src-tauri/src/connect.rs`.
+- `--current` attaches to the project open in the app: each app listener writes the open project's path to `current` next to its socket (0600 in the 0700 endpoint directory) and removes it when the project closes. With no project open the bridge refuses to start (`APP_NOT_RUNNING`) instead of editing headless, so one configuration serves every project; the agent's MCP server is restarted after switching projects.
+- Planned: the same for Gemini CLI, Cursor and Claude Desktop.
 - Planned diagnostics will check, in order: executable found, config parsed, MCP handshake, project attached, `get_state` and one `inspect_frames` call.
 
 ## In-app AI panel (planned, not built)

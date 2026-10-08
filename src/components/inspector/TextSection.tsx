@@ -40,6 +40,17 @@ function TextField({ clipId, text }: { clipId: string; text: string }) {
   );
 }
 
+/**
+ * Why no word of a karaoke caption lights up, or null when they do: the engine highlights words only
+ * while the text is exactly them joined by single spaces.
+ */
+function unlitReason(clip: Clip, text: string) {
+  const words = clip.content.type === "text" ? (clip.content.words ?? []) : [];
+  if (words.length === 0) return "This caption has no word timing. Regenerate captions to add it.";
+  if (words.map((w) => w.text).join(" ") !== text) return "Words were added or removed, so none lights up. Regenerate captions to bring it back.";
+  return null;
+}
+
 /** Style tiles use the presets and names of the Text tab, or of the Captions tab for a caption. */
 export function TextSection({ clip, text, style, caption }: { clip: Clip; text: string; style: TextStyle; caption: boolean }) {
   const edit = useEditor((s) => s.edit);
@@ -72,6 +83,13 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
         {style.strokeWidth > 0 && <ColorInput label="Outline color" value={style.strokeColor} onChange={(v) => setStyle({ strokeColor: v }, "strokeColor")} />}
         <Checkbox label="Background box" checked={style.background !== null} onChange={(v) => setStyle({ background: v ? "#000000b3" : null }, "bg")} />
         {style.background !== null && <ColorInput label="Box color" value={style.background} onChange={(v) => setStyle({ background: v }, "bgColor")} />}
+        {caption && <Checkbox label="Highlight spoken word" checked={!!style.highlight} onChange={(v) => setStyle({ highlight: v ? "#ffe14d" : null }, "highlight")} />}
+        {caption && style.highlight && (
+          <>
+            <ColorInput label="Highlight color" value={style.highlight} onChange={(v) => setStyle({ highlight: v }, "highlightColor")} />
+            {unlitReason(clip, text) && <p className="text-[12px] text-muted">{unlitReason(clip, text)}</p>}
+          </>
+        )}
       </Section>
     </>
   );

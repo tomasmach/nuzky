@@ -1,4 +1,5 @@
 mod audio_out;
+mod connect;
 mod engine;
 mod jobs;
 mod model_download;
@@ -6,6 +7,7 @@ mod preview_server;
 mod store;
 mod thumbs;
 mod transcripts;
+mod zooms;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -531,6 +533,33 @@ fn list_projects() -> Vec<ProjectSummary> {
     store::list()
 }
 
+/// Claude Code's and Codex's link to CapOpen, read from their own configs.
+#[tauri::command]
+async fn agent_connections() -> CmdResult<Vec<connect::Connection>> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let command = connect::Command::this_app().map_err(err)?;
+        let home = dirs::home_dir().ok_or("No home folder")?;
+        Ok(connect::Agent::ALL
+            .map(|agent| connect::status(agent, &agent.config(&home), &command).shown_from(&home))
+            .to_vec())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Writes the `capopen` entry into the agent's config after a backup; nothing else changes.
+#[tauri::command]
+async fn connect_agent(agent: connect::Agent) -> CmdResult<connect::Connection> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let command = connect::Command::this_app().map_err(err)?;
+        let home = dirs::home_dir().ok_or("No home folder")?;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        connect::connect(agent, &agent.config(&home), &command, stamp).map(|c| c.shown_from(&home)).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
 #[derive(Serialize, Clone)]
 pub struct FontFamilies {
     bundled: Vec<String>,
@@ -762,6 +791,11 @@ pub fn run() {
             transcripts::transcript_view,
             transcripts::cut_words,
             transcripts::remove_pauses,
+            zooms::suggest_zooms,
+            zooms::apply_zooms,
+            agent_connections,
+            connect_agent,
+            transcripts::correct_words,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CapOpen")

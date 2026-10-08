@@ -15,8 +15,9 @@ An open-source desktop video editor in the spirit of CapCut, with a native Rust 
 - Text clips with outline, background box, size, colour, position, rotation and opacity
 - Auto captions with Whisper running on your computer, with voice detection so music and silence stay uncaptioned
 - Real-time preview with sound; the sound card clock keeps picture and audio in sync
-- MP4 export (H.264 + AAC) using the same renderer as the preview, so the export matches what you saw
+- MP4 export (H.264 + AAC) using the same renderer as the preview, so the export matches what you saw; the Reels & TikTok preset writes 1080x1920 at 30 fps with the sound levelled to -14 LUFS (ITU-R BS.1770), true peak at most -1 dBTP
 - Automatic saving after every edit
+- AI agents edit through MCP, live in the open app with one undo per run; Connect agent sets up Claude Code and Codex in one click
 - Learns how a creator edits from their recordings and finished cuts into an editable `EDIT.md` that AI agents follow, and scores any cut of a recording against the creator's own
 
 ## Architecture
@@ -66,6 +67,7 @@ cargo run -p capopen-cli -- probe clip.mov
 cargo run -p capopen-cli -- new project.capopen a.mp4 b.mov
 cargo run -p capopen-cli -- frame project.capopen 2.5 frame.png 540
 cargo run -p capopen-cli -- render project.capopen out.mp4
+cargo run -p capopen-cli -- render project.capopen reel.mp4 --preset reels
 cargo run -p capopen-cli -- style learn raw.mov reel.mp4 raw2.mov reel2.mp4
 cargo run -p capopen-cli -- style compare raw.mov reel.mp4 project.capopen
 ```
