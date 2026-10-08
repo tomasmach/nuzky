@@ -451,6 +451,17 @@ fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
     };
     store.put(&asset, &record).unwrap();
 
+    // Words stored earlier, no sound prepared and no app to prepare it: a job does, then it answers.
+    let waiting: Value = serde_json::from_str(&c.error("analyze", json!({"kind":"emphasis"}))).unwrap();
+    let waiting = waiting["error"].as_str().unwrap();
+    assert!(waiting.starts_with("AUDIO_NOT_READY") && waiting.contains("talk.mp4"), "{waiting}");
+    let job_id = waiting.split("as job ").nth(1).and_then(|rest| rest.split(';').next()).unwrap().to_owned();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while c.call("job", json!({"job_id":job_id,"action":"get"}))["status"] == "running" {
+        assert!(std::time::Instant::now() < deadline, "preparing the sound timed out");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(c.call("job", json!({"job_id":job_id,"action":"get"}))["status"], "done");
     let found = c.call("analyze", json!({"kind":"emphasis"}));
     assert_eq!(found, c.call("analyze", json!({"kind":"emphasis"})), "the same words and sound gave another result");
     let key = c.call("get_transcript", json!({}))["transcript_key"].clone();

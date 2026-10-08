@@ -300,6 +300,9 @@ impl Backend {
             ensure!(args.asset_id.is_none(), "INVALID_ARGUMENTS: emphasis reads the whole timeline; omit asset_id");
             let project = self.media_project(&state.project);
             let derived = transcript::derive(&project, &self.host.transcripts)?;
+            if derived.untranscribed.is_empty() {
+                self.prepare_sound(&project, &derived, state)?;
+            }
             let zooms = crate::zooms::suggest(&project, &derived, &self.host.cache_dir)?;
             return Ok(json!({"zooms": zooms, "time_basis": "timeline",
                 "transcript_key": transcript::word_key(&state.project, &derived.words)}));
@@ -339,6 +342,40 @@ impl Backend {
             check_cancel(&cancel)?;
             Ok(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result}))
         })
+    }
+
+    /// Without the app nothing prepares the sound of files whose words were stored earlier, and
+    /// decoding a whole file inside a tool call could not be stopped, so it becomes a job.
+    fn prepare_sound(&self, project: &Project, derived: &transcript::Derived, state: &SessionState) -> Result<()> {
+        let cache = self.host.cache_dir.clone();
+        let missing: Vec<_> = project
+            .assets
+            .iter()
+            .filter(|a| derived.sources.contains_key(&a.id))
+            .filter(|a| capopen_engine::audio::has_audio(a) && !capopen_engine::audio::pcm_path(&cache, a).exists())
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let names = missing.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+        let job = self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "analysis",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                for (i, asset) in missing.iter().enumerate() {
+                    progress.set("preparing_audio", Some(i as f32 / missing.len() as f32));
+                    capopen_engine::audio::ensure_pcm(&cache, asset, |_| check_cancel(&cancel))?;
+                }
+                Ok(json!({"prepared": missing.iter().map(|a| &a.id).collect::<Vec<_>>()}))
+            },
+        )?;
+        anyhow::bail!(
+            "AUDIO_NOT_READY: preparing the sound of {names} as job {}; poll job until done, then analyze again",
+            job["job_id"].as_str().unwrap_or_default()
+        )
     }
 
     fn transcribe(&self, args: Transcribe, state: &SessionState) -> Result<Value> {
