@@ -54,7 +54,7 @@ export function CaptionsTab() {
       </div>
       <div className="flex flex-col gap-1.5">
         <span className="text-[12px] text-muted">Style</span>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           {CAPTION_STYLES.map((s, i) => (
             <button
               key={s.name}
@@ -63,11 +63,11 @@ export function CaptionsTab() {
               aria-disabled={busy || !!lock || undefined}
               title={lock ?? (busy ? "Wait for speech recognition to finish" : hasCaptions ? `Apply ${s.name} to all captions` : `Use ${s.name} for new captions`)}
               onClick={busy || lock ? undefined : () => pickStyle(i)}
-              className={`relative flex h-12 min-w-0 items-center justify-center rounded-[10px] border bg-white/[.1] px-1 transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
+              className={`relative flex h-11 min-w-0 items-center justify-center rounded-[10px] border bg-white/[.1] px-1 transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${
                 i === current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : busy || lock ? "border-white/[.08]" : "border-white/[.08] hover:border-white/30"
               }`}
             >
-              <TextSwatch style={{ ...s.style, fontFamily: font }} label={s.name} />
+              <TextSwatch style={{ ...s.style, fontFamily: font }} label={s.name} size={12} />
               {i === current && (
                 <span aria-hidden className="absolute top-1 right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent-strong text-white shadow-[0_1px_2px_rgb(0_0_0/.5)]">
                   <Check size={10} strokeWidth={3} />

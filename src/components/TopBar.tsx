@@ -196,7 +196,7 @@ function AiRunBar() {
   if (!label) return null;
   return (
     <div className="bar flex h-8 min-w-0 max-w-[420px] items-center gap-2 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
-      <Sparkles size={14} className="shrink-0 animate-pulse text-accent" />
+      <Sparkles size={14} className="shrink-0 text-accent" />
       <span className="truncate">
         AI is editing <span className="font-normal text-muted">· {label}</span>
       </span>
@@ -213,12 +213,17 @@ export function TopBar() {
   const aiRun = useEditor((s) => s.aiRun);
   const empty = !snap || projectDuration(snap.project) === 0;
   return (
-    <header className="flex h-[52px] shrink-0 items-center gap-2 px-1.5">
+    <header className="flex h-12 shrink-0 items-center gap-2 px-1.5">
       <ProjectMenu />
-      {/* The name sits in the middle of the space the two sides leave, so a long AI label never covers it. */}
-      <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
-        <ProjectName />
-        <SaveStatus />
+      {/* The name sits in the middle of the space the two sides leave, so a long AI label never covers it.
+          The save state hangs off its right edge, so "Saving…" and "Saved" never move the name. */}
+      <div className="flex min-w-0 flex-1 justify-center">
+        <div className="relative flex min-w-0 items-center">
+          <ProjectName />
+          <div className="absolute left-full ml-2 whitespace-nowrap">
+            <SaveStatus />
+          </div>
+        </div>
       </div>
       <AiRunBar />
       <JobIndicator />

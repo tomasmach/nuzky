@@ -36,6 +36,7 @@ def connect(r):
     r.check('the dialog lists Claude Code and Codex, not yet connected',
             rows and [('Claude Code' in x['text'], 'Not connected' in x['text']) for x in rows][0] == (True, True)
             and 'Codex' in rows[1]['text'] and 'Not connected' in rows[1]['text'], rows)
+    time.sleep(0.3)  # the dialog fades in over 200 ms
     r.shot('connect-dialog')
     for name in ('Claude Code', 'Codex'):
         r.s.run("""const row = [...document.querySelectorAll('[role=dialog] [role=group]')]

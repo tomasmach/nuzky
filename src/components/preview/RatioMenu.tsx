@@ -62,8 +62,8 @@ export function RatioMenu() {
           open ? "bg-white/[.14] text-fg" : "bg-white/[.06] text-fg enabled:hover:bg-white/[.12]"
         }`}
       >
-        <RectangleHorizontal size={14} className="text-muted" />
-        <span>Ratio</span>
+        <RectangleHorizontal size={14} className="text-muted @max-[460px]:hidden" />
+        <span className="@max-[460px]:hidden">Ratio</span>
         <span className="tabular font-normal text-muted">{formatLabel(canvas.width, canvas.height)}</span>
         <ChevronDown size={13} className="text-muted" />
       </button>

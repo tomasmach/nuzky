@@ -108,10 +108,10 @@ export function ZoomBar({ state, blocker }: { state: ZoomSuggestionState; blocke
       <span className="tabular flex-1 truncate text-[12px] text-muted">
         {n} sentence{n === 1 ? "" : "s"} marked
       </span>
-      <Button className="h-7 px-2" onClick={dismiss}>
+      <Button className="h-7 px-2 text-[12px]" onClick={dismiss}>
         Dismiss
       </Button>
-      <Button data-zoom-apply variant="primary" className="h-7 px-2" disabled={!!blocker || state.pending === "applying"} disabledReason={blocker ?? "Applying…"} onClick={apply}>
+      <Button data-zoom-apply variant="primary" className="h-7 px-2.5 text-[12px]" disabled={!!blocker || state.pending === "applying"} disabledReason={blocker ?? "Applying…"} onClick={apply}>
         Apply {n} zoom{n === 1 ? "" : "s"}
       </Button>
     </div>

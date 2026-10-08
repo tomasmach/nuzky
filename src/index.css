@@ -32,6 +32,11 @@
   --font-sans: "Inter UI", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* The root stays at 16 px, so Tailwind's rem sizes are the px values in DESIGN.md; body text is 13 px. */
+html {
+  font-size: 16px;
+}
+
 html,
 body,
 #root {
@@ -40,6 +45,10 @@ body,
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-sans);
+}
+
+body,
+#root {
   font-size: 13px;
   line-height: 1.25;
   font-optical-sizing: auto;
@@ -96,7 +105,7 @@ select {
       0 4px 12px rgb(0 0 0 / 0.25);
   }
   .overlay {
-    background: rgb(38 38 43 / 0.82);
+    background: rgb(38 38 43 / 0.88);
     -webkit-backdrop-filter: blur(28px) saturate(1.8);
     backdrop-filter: blur(28px) saturate(1.8);
     box-shadow:
@@ -185,6 +194,14 @@ select {
   .btn-prominent:not([aria-disabled="true"]):not(:disabled):hover {
     background: #0064c8;
   }
+  /* Disabled, it reads as a quiet grey capsule rather than a muddy blue one. */
+  .btn-prominent[aria-disabled="true"],
+  .btn-prominent:disabled {
+    background: rgb(255 255 255 / 0.08);
+    color: rgb(242 242 245 / 0.4);
+    box-shadow: none;
+    opacity: 1;
+  }
 }
 
 /* Thin, dark scrollbars that do not shift layout. */
@@ -192,14 +209,19 @@ select {
   width: 10px;
   height: 10px;
 }
+/* The thumb shows while the pointer is over the scroller, like overlay scrollbars on macOS. */
 ::-webkit-scrollbar-thumb {
-  background: rgb(255 255 255 / 0.16);
+  background: transparent;
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
+:hover::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.16);
+  background-clip: padding-box;
+}
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(255 255 255 / 0.26);
+  background: rgb(255 255 255 / 0.28);
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-track,
@@ -262,6 +284,19 @@ input[type="range"].range:disabled {
 .range:disabled::-webkit-slider-thumb {
   background: #55555b;
   box-shadow: none;
+}
+/* Locked while an AI agent edits: read-only rather than off, so the values it changes stay readable. */
+.range.range-locked:disabled::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    rgb(255 255 255 / 0.1) var(--fill-from),
+    rgb(41 151 255 / 0.6) var(--fill-from),
+    rgb(41 151 255 / 0.6) var(--fill-to),
+    rgb(255 255 255 / 0.1) var(--fill-to)
+  );
+}
+.range.range-locked:disabled::-webkit-slider-thumb {
+  background: #8e8e93;
 }
 
 @keyframes skeleton {

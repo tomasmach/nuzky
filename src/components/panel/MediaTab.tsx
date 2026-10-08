@@ -44,7 +44,7 @@ function MediaItem({ asset }: { asset: Asset }) {
             <ProgressBar value={job.progress} label={job.label} />
           </div>
         )}
-        <span className="tabular absolute right-1.5 bottom-[5px] text-[11px] leading-[13px] font-semibold text-white [text-shadow:0_0_1px_rgb(0_0_0/.9),0_1px_3px_rgb(0_0_0/.75)] group-focus-within:opacity-0 group-hover:opacity-0">
+        <span className="tabular absolute right-1 bottom-1 rounded-[4px] bg-black/60 px-1 text-[11px] leading-[15px] font-semibold text-white group-focus-within:opacity-0 group-hover:opacity-0">
           {asset.kind === "image" ? "Image" : formatDuration(asset.durationUs)}
         </span>
         <div className="absolute inset-x-0 bottom-0 flex items-end gap-1.5 bg-linear-to-b from-transparent to-black/45 p-1.5 pt-6 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
@@ -80,22 +80,26 @@ export function MediaTab() {
   const importing = useEditor((s) => s.importing);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3.5 pt-3.5">
-      <ImportTile label="Import media" hint="Ctrl I" shortcut="Control+I" onClick={() => pickAndImport()} className="mx-3.5" />
       {assets.length === 0 && importing.length === 0 ? (
-        <div className="mx-3.5 mb-3.5 flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/[.1] p-6 text-center">
+        // Empty: one invitation in the middle, rather than an import tile above a second frame saying the same.
+        <div className="mx-3.5 mb-3.5 flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
           <Film size={28} className="text-muted" />
-          <p className="text-[13px] text-fg">No media yet</p>
-          <p className="text-[12px] text-muted">Import videos, music or images, or drop files anywhere on the window.</p>
+          <p className="text-[13px] font-medium text-fg">No media yet</p>
+          <p className="max-w-[240px] text-[12px] text-muted">Import videos, music or images, or drop files anywhere on the window.</p>
+          <ImportTile label="Import media" hint="Ctrl+I" shortcut="Control+I" onClick={() => pickAndImport()} className="mt-3 w-full max-w-[240px]" />
         </div>
       ) : (
-        <div className="grid min-h-0 grid-cols-3 content-start gap-x-2 gap-y-3 overflow-y-auto px-3.5 pb-3.5">
-          {assets.map((a) => (
-            <MediaItem key={a.id} asset={a} />
-          ))}
-          {importing.map((i) => (
-            <ImportPlaceholder key={i.key} name={i.name} />
-          ))}
-        </div>
+        <>
+          <ImportTile label="Import media" hint="Ctrl+I" shortcut="Control+I" onClick={() => pickAndImport()} className="mx-3.5" />
+          <div className="grid min-h-0 grid-cols-3 content-start gap-x-2 gap-y-3 overflow-y-auto px-3.5 pb-3.5">
+            {assets.map((a) => (
+              <MediaItem key={a.id} asset={a} />
+            ))}
+            {importing.map((i) => (
+              <ImportPlaceholder key={i.key} name={i.name} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

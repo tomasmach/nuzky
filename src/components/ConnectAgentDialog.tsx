@@ -101,22 +101,19 @@ export function ConnectAgentDialog() {
                   {STATE_TEXT[row.state]}
                 </span>
               </div>
-              <Button
-                pill
-                variant={row === first ? "primary" : undefined}
-                data-autofocus={row === first || undefined}
-                disabled={row.state === "connected" || row.state === "unreadable" || busy !== null}
-                disabledReason={
-                  row.state === "connected"
-                    ? `${row.name} already runs this CapOpen`
-                    : row.state === "unreadable"
-                      ? `Fix ${row.path} first; CapOpen does not change a file it cannot read`
-                      : "Connecting…"
-                }
-                onClick={() => void connect(row)}
-              >
-                {row.state === "other" ? "Reconnect" : "Connect"}
-              </Button>
+              {/* A connected agent needs nothing more here; "Connected" says so. */}
+              {row.state !== "connected" && (
+                <Button
+                  pill
+                  variant={row === first ? "primary" : undefined}
+                  data-autofocus={row === first || undefined}
+                  disabled={row.state === "unreadable" || busy !== null}
+                  disabledReason={row.state === "unreadable" ? `Fix ${row.path} first; CapOpen does not change a file it cannot read` : "Connecting…"}
+                  onClick={() => void connect(row)}
+                >
+                  {row.state === "other" ? "Reconnect" : "Connect"}
+                </Button>
+              )}
             </div>
           ))}
           {error && (
@@ -129,7 +126,7 @@ export function ConnectAgentDialog() {
             Only the capopen entry is added, after a backup of the file. The agent edits the project open here; start it once your project is open.
           </p>
         </div>
-        <div className="mt-6 flex justify-end border-t border-white/[.08] pt-4">
+        <div className="mt-6 flex justify-end">
           <Button pill variant={rows && !first ? "primary" : undefined} data-autofocus={!first || undefined} onClick={close}>
             Done
           </Button>

@@ -11,7 +11,7 @@ import { CutMarkers } from "./CutMarkers";
 import { TrackHeader } from "./TrackHeader";
 import { dragResult, useTimelineGestures, type Drag } from "./useTimelineGestures";
 
-const HEADER_W = 132;
+const HEADER_W = 140;
 const RULER_H = 28;
 /** Space between lanes. It belongs to the rows, so the track header column runs unbroken. */
 const ROW_GAP = 4;
@@ -406,8 +406,7 @@ export function Timeline({ height }: { height: number }) {
           >
             <Copy size={15} />
           </IconButton>
-        </div>
-        <div className="bar flex items-center rounded-full">
+          <span aria-hidden className="mx-1 h-4 w-px bg-white/[.12]" />
           <IconButton round label={snapping ? "Snapping on" : "Snapping off"} active={snapping} onClick={() => setSnapping(!snapping)}>
             <Magnet size={16} />
           </IconButton>
@@ -494,7 +493,7 @@ export function Timeline({ height }: { height: number }) {
             // A removed element fires no blur, so a deleted clip keeps its place for the effect below.
             onBlur={(e) => e.target.isConnected && (focusPlace.current = null)}
           >
-            {drag?.moved && drag.target === null && dragKind !== "audio" && <div className="ml-[132px] h-0.5 rounded-full bg-accent" title="Drop to create a new track" />}
+            {drag?.moved && drag.target === null && dragKind !== "audio" && <div className="ml-[140px] h-0.5 rounded-full bg-accent" title="Drop to create a new track" />}
             {tracks.map((track) => {
               const h = rowHeight(track);
               const isMain = track.id === MAIN_TRACK;
@@ -571,7 +570,7 @@ export function Timeline({ height }: { height: number }) {
                 </div>
               );
             })}
-            {drag?.moved && drag.target === null && dragKind === "audio" && <div className="ml-[132px] h-0.5 rounded-full bg-accent" />}
+            {drag?.moved && drag.target === null && dragKind === "audio" && <div className="ml-[140px] h-0.5 rounded-full bg-accent" />}
             {/* The header column runs on below the last track, so nothing scrolled under it shows through. */}
             <div className="flex flex-1">
               <div className="sticky left-0 z-[47] shrink-0 border-r border-white/[.07] bg-panel" style={{ width: HEADER_W }} />

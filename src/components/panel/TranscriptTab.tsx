@@ -129,12 +129,12 @@ export function TranscriptTab() {
         )}
         {running && <SpeechJobCard job={running} />}
         <div className="flex items-center gap-1.5">
-          <span className="text-[12px] text-muted">Pauses over</span>
+          <span className="whitespace-nowrap text-[12px] text-muted">Pauses over</span>
           <NumberInput label="Shortest pause to show" value={pauseUs / US} min={0.1} max={5} step={0.1} format={(v) => v.toFixed(1)} onChange={(v) => useSpeech.setState({ pauseUs: Math.round(v * US) })} className="w-11" />
           <span className="text-[12px] text-muted">s</span>
           <span className="flex-1" />
           <Button
-            className="h-7 px-2"
+            className="h-7 px-2 text-[12px]"
             disabled={pauses.length === 0 || !!cutBlocker}
             disabledReason={cutBlocker ?? `No pauses longer than ${formatDuration(pauseUs)}`}
             title={`Shorten every pause to ${formatDuration(pauseUs)}`}

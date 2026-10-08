@@ -278,7 +278,7 @@ const TIMELINE_KEY = "capopen.timelineHeight";
 const TIMELINE_DEFAULT = 300;
 const TIMELINE_MIN = 160;
 /** Space kept for the top bar, a usable preview and the gaps around the timeline. */
-const ABOVE_MIN = 52 + 300 + 12;
+const ABOVE_MIN = 48 + 300 + 12;
 
 const timelineMax = () => Math.max(TIMELINE_MIN, window.innerHeight - ABOVE_MIN);
 const clampTimeline = (h: number) => Math.round(Math.min(timelineMax(), Math.max(TIMELINE_MIN, h)));

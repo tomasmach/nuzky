@@ -27,8 +27,9 @@ export function LeftPanel() {
   const setTab = (id: PanelTab) => useEditor.setState({ panelTab: id });
   return (
     <aside className="pane flex w-[360px] shrink-0 flex-col overflow-hidden">
-      {/* Tabs size to their labels and share the leftover width; at 360 px Inter leaves about 9 px between labels. */}
-      <div className="seg-track mx-2 mt-2 flex shrink-0 rounded-[13px] p-[3px]" role="tablist" aria-label="Library" onKeyDown={tabListKeys(TAB_IDS, tab, setTab)}>
+      {/* Tabs size to their labels and share the leftover width, so no two labels touch at 360 px, also where
+          WebKitGTK sets Inter a little wider than Chromium. */}
+      <div className="seg-track mx-1.5 mt-1.5 flex shrink-0 rounded-[13px] p-0.5" role="tablist" aria-label="Library" onKeyDown={tabListKeys(TAB_IDS, tab, setTab)}>
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -40,7 +41,7 @@ export function LeftPanel() {
             aria-controls={tab === t.id ? tabIds("library", t.id).panel : undefined}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
-            className={`flex flex-auto flex-col items-center gap-[3px] rounded-[10px] px-1 pt-1.5 pb-[5px] text-[11px] leading-[13px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
+            className={`flex flex-auto flex-col items-center gap-[3px] rounded-[11px] px-0.5 pt-1.5 pb-[5px] text-[11px] leading-[13px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
               tab === t.id ? "seg-on text-fg" : "text-muted hover:text-fg"
             }`}
           >

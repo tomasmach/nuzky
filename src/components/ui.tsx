@@ -97,7 +97,7 @@ export function IconButton({
       {...disabledProps(disabled, onClick)}
       className={`icon-btn ${round ? "icon-btn-round" : ""} transition-colors duration-[120ms] ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
         disabled ? "cursor-not-allowed opacity-40" : "active:brightness-75"
-      } ${active ? "bg-accent/[.18] text-accent" : disabled ? "text-muted" : "text-muted hover:bg-white/[.08] hover:text-fg"} ${className}`}
+      } ${active ? "bg-accent/[.18] text-accent" : disabled ? "text-muted" : "text-fg/80 hover:bg-white/[.08] hover:text-fg"} ${className}`}
       {...rest}
     >
       {children}
@@ -230,7 +230,9 @@ export function NumberInput({
       aria-label={label}
       inputMode="decimal"
       disabled={disabled}
-      className={`tabular h-6 rounded-md border border-white/[.08] bg-white/[.055] px-1.5 text-right text-[12px] text-fg outline-offset-0 focus:border-accent disabled:opacity-40 ${className}`}
+      className={`tabular h-6 rounded-md border px-1.5 text-right text-[12px] outline-offset-0 focus:border-accent ${
+        lock ? "border-transparent bg-transparent text-fg/80" : "border-white/[.08] bg-white/[.055] text-fg disabled:opacity-40"
+      } ${className}`}
       value={draft ?? (mixed ? "—" : format(value))}
       onFocus={(e) => {
         setDraft(mixed ? "" : format(value));
@@ -276,7 +278,8 @@ export function RangeInput({
   valueText?: string;
   className?: string;
 }) {
-  disabled = disabled || !!useLockReason();
+  const lock = useLockReason();
+  disabled = disabled || !!lock;
   const frac = (v: number) => (max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0);
   const twoSided = min < 0 && max > 0;
   const origin = twoSided ? frac(0) : 0;
@@ -295,7 +298,7 @@ export function RangeInput({
         aria-valuetext={valueText}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="range relative w-full"
+        className={`range relative w-full ${lock ? "range-locked" : ""}`}
         style={{ "--fill-from": at(lo), "--fill-to": at(hi) } as CSSProperties}
       />
     </span>
@@ -335,7 +338,7 @@ export function Slider({
   disabled = disabled || !!lock;
   return (
     <div className="flex items-center gap-2" title={lock ?? title}>
-      <span className={`w-[78px] shrink-0 truncate text-[12px] ${disabled ? "text-subtle" : "text-muted"}`}>{label}</span>
+      <span className={`w-[78px] shrink-0 truncate text-[12px] ${disabled && !lock ? "text-subtle" : "text-muted"}`}>{label}</span>
       <RangeInput
         label={label}
         value={value}
@@ -374,14 +377,20 @@ export function ColorInput({ label, value, onChange }: { label: string; value: s
       <span className="text-[12px] text-muted">{label}</span>
       <span className="flex items-center gap-2">
         <span className="tabular text-[12px] text-muted">{value.slice(0, 7).toUpperCase()}</span>
-        <input
-          type="color"
-          aria-label={label}
-          disabled={!!lock}
-          value={value.slice(0, 7)}
-          onChange={(e) => onChange(e.target.value + value.slice(7))}
-          className="h-6 w-9 cursor-pointer rounded-md border border-white/15 bg-white/[.06] p-0.5 disabled:cursor-not-allowed"
-        />
+        {/* WebKitGTK draws the colour well like a switch, so a plain swatch sits over a see-through input. */}
+        <span
+          className="relative h-5 w-8 rounded-[5px] shadow-[inset_0_0_0_1px_rgb(255_255_255/.18)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent"
+          style={{ background: value.slice(0, 7) }}
+        >
+          <input
+            type="color"
+            aria-label={label}
+            disabled={!!lock}
+            value={value.slice(0, 7)}
+            onChange={(e) => onChange(e.target.value + value.slice(7))}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          />
+        </span>
       </span>
     </label>
   );
@@ -485,7 +494,7 @@ export function TabBar<T extends string>({
     onChange,
   );
   return (
-    <div role="tablist" aria-label={label} className="seg-track mx-3 mb-1 flex shrink-0 gap-0.5 overflow-x-auto rounded-[9px] p-0.5" onKeyDown={onKeyDown}>
+    <div role="tablist" aria-label={label} className="seg-track mx-3 mb-1 flex shrink-0 gap-0.5 overflow-hidden rounded-[9px] p-0.5" onKeyDown={onKeyDown}>
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -497,7 +506,7 @@ export function TabBar<T extends string>({
           aria-controls={t.id === value ? tabIds(group, t.id).panel : undefined}
           tabIndex={t.id === value ? 0 : -1}
           onClick={() => onChange(t.id)}
-          className={`h-7 flex-auto shrink-0 rounded-[7px] px-1.5 text-[12px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
+          className={`h-7 min-w-0 flex-auto truncate rounded-[7px] px-1 text-[12px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
             t.id === value ? "seg-on text-fg" : "text-muted hover:text-fg"
           }`}
         >
@@ -609,7 +618,7 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
       className={`h-1.5 overflow-hidden rounded-full bg-white/10 ${className}`}
     >
       {known ? (
-        <div className="h-full rounded-full bg-accent transition-[width] duration-200" style={{ width: `${Math.max(2, value * 100)}%` }} />
+        <div className="h-full origin-left rounded-full bg-accent transition-transform duration-200" style={{ transform: `scaleX(${Math.max(0.02, value)})` }} />
       ) : (
         <div className="indeterminate h-full w-1/3 rounded-full bg-accent" />
       )}
@@ -618,13 +627,14 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
 }
 
 /** A style preview in the font the engine draws it with. */
-export function TextSwatch({ style, label }: { style: TextStyle; label: string }) {
+export function TextSwatch({ style, label, size = 15 }: { style: TextStyle; label: string; /** Font size in px. */ size?: number }) {
   // Karaoke styles show the moment a word is spoken: the last word, or the end of a one-word label, lit.
   const split = label.lastIndexOf(" ") + 1 || Math.ceil(label.length / 2);
   return (
     <span
-      className="inline-block max-w-full truncate rounded px-1.5 text-[15px] leading-6"
+      className="inline-block max-w-full truncate rounded px-1 leading-6"
       style={{
+        fontSize: size,
         fontFamily: fontCss(style.fontFamily),
         color: style.color,
         fontWeight: style.bold ? 700 : 400,

@@ -153,15 +153,15 @@ export const ClipView = memo(function ClipView({
           {width > 110 && <span className="tabular shrink-0 font-normal text-fg/70">{formatDuration(durationUs)}</span>}
         </div>
       ) : (
-        // Over pictures and waveforms the name sits in a dark chip. A plain fill, not a blur: there is one per clip.
+        // Over pictures and waveforms the name sits in a dark chip, readable over bright footage. A plain fill, not a blur: there is one per clip.
         <div className="pointer-events-none absolute inset-x-0 top-1 flex items-center gap-1 px-2.5 text-[11px] font-medium text-fg">
-          <span className="flex h-[17px] min-w-0 items-center gap-1 rounded-[5px] bg-black/45 pl-[5px] pr-1.5">
+          <span className="flex h-[17px] min-w-0 items-center gap-1 rounded-[5px] bg-black/60 pl-[5px] pr-1.5">
             <Icon size={11} className="shrink-0" />
             <span className="truncate">{label}</span>
-            {width > 110 && <span className="tabular shrink-0 pl-0.5 font-normal text-fg/70">{formatDuration(durationUs)}</span>}
+            {width > 110 && <span className="tabular shrink-0 pl-0.5 font-normal text-fg/80">{formatDuration(durationUs)}</span>}
           </span>
           {speed !== 1 && width > 40 && (
-            <span className="tabular ml-auto flex h-[17px] shrink-0 items-center gap-0.5 rounded-[5px] bg-black/45 px-1 font-semibold">
+            <span className="tabular ml-auto flex h-[17px] shrink-0 items-center gap-0.5 rounded-[5px] bg-black/60 px-1 font-semibold">
               <Gauge size={11} />
               {Number(speed.toFixed(2))}x
             </span>
