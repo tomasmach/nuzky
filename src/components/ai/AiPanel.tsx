@@ -638,9 +638,13 @@ function Composer() {
     const id = window.setTimeout(() => setWhy(null), 3000);
     return () => window.clearTimeout(id);
   }, [why]);
+  // A new state makes an old reason wrong.
+  useEffect(() => setWhy(null), [status]);
+  // Fresh from the store: Enter can come before React has drawn the latest text.
   const submit = () => {
-    if (!draft.trim()) return;
-    if (blocked) setWhy(blocked);
+    if (!useAgent.getState().draft.trim()) return;
+    const reason = sendBlocked();
+    if (reason) setWhy(reason);
     else void send();
   };
 

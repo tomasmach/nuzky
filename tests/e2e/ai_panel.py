@@ -159,6 +159,8 @@ def ai_panel(r):
     r.check("a used-up plan says so, with the agent's reset time", wait(lambda: 'usage limit reached.' in panel(r)['text'] and 'resets 9pm' in panel(r)['text'], 10), panel(r)['text'])
     r.check('the earlier problem went away with the new message, so its Try again cannot send this one', "isn't signed in." not in panel(r)['text'], panel(r)['text'])
     r.s.run("window.__capopen.agent.setState({draft: ''})")
+    field = "return [window.__capopen.agent.getState().draft, document.querySelector('aside[aria-label=AI] textarea').value, document.querySelector('aside[aria-label=AI]').innerText.includes('Wait for the answer')]"
+    r.check('the field stays as the user left it, with no stale reason under it', wait(lambda: r.s.run(field) == ['', '', False], 3), r.s.run(field))
     r.check('no error toast along the way', not r.errors(), r.errors())
 
     # Its place: docked left, in the inspector's place, floating; resized; remembered; closed.

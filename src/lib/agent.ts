@@ -317,7 +317,8 @@ function onEvent(e: AgentEvent) {
     const turnStart = marked.map((it) => it.kind).lastIndexOf("user") + 1;
     const turn = marked.slice(turnStart);
     // What the turn changed comes last, after the agent's closing words.
-    const runs = turn.filter((it) => it.kind === "run");
+    // A run of a stopped turn was stopped, whether by the panel's Stop or Stop and edit in the top bar.
+    const runs = turn.filter((it) => it.kind === "run").map((it) => (e.stopped ? { ...it, stopped: true } : it));
     const ordered = [...marked.slice(0, turnStart), ...turn.filter((it) => it.kind !== "run"), ...runs];
     useAgent.setState({ items: e.stopped && !runs.length ? [...ordered, { kind: "stopped" }] : ordered, status: "idle" });
   }
