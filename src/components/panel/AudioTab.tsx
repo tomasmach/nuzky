@@ -57,7 +57,8 @@ function AudioItem({ asset }: { asset: Asset }) {
 export function AudioTab() {
   const assets = useEditor((s) => s.snap?.project.assets);
   const audio = (assets ?? []).filter((a) => a.kind === "audio");
-  const importing = useEditor((s) => s.importing.filter((i) => i.kind === "audio"));
+  // Filtered outside the selector: a new array on every read makes React re-render without end.
+  const importing = useEditor((s) => s.importing).filter((i) => i.kind === "audio");
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="p-3">
