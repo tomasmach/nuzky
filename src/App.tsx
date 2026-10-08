@@ -18,7 +18,7 @@ import { MEDIA_EXTENSIONS, dropResolver, importPaths, pickAndImport } from "./co
 import { Preview } from "./components/preview/Preview";
 import { Timeline } from "./components/timeline/Timeline";
 import { Toasts } from "./components/Toasts";
-import { DockDragLayer, DockedAiPanel, FloatingAiPanel, InspectorAiPanel } from "./components/ai/AiDock";
+import { DockDragLayer, DockedAiPanel, FloatingAiPanel } from "./components/ai/AiDock";
 import { listenAgentEvents, panelRunEnded, useAgent } from "./lib/agent";
 import { togglePanel, useDock, useDockLayout } from "./lib/dock";
 import { TopBar } from "./components/TopBar";
@@ -465,14 +465,14 @@ export default function App() {
             <div className="flex min-h-0 flex-1 gap-1.5 px-1.5">
               <LeftPanel />
               <Preview />
-              {dock.open && dock.mode === "inspector" ? <InspectorAiPanel /> : <Inspector />}
+              {!(dock.open && dock.mode === "inspector") && <Inspector />}
             </div>
             <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
             <div className="shrink-0 px-1.5 pb-1.5">
               <Timeline height={timelineH} />
             </div>
           </div>
-          {dock.open && dock.mode === "right" && <DockedAiPanel side="right" width={dock.width} />}
+          {dock.open && (dock.mode === "right" || dock.mode === "inspector") && <DockedAiPanel side="right" width={dock.width} inspector={dock.mode === "inspector"} />}
         </div>
         {dock.open && dock.mode === "float" && <FloatingAiPanel rect={dock.float} />}
         <DockDragLayer />

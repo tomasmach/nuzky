@@ -78,6 +78,10 @@ def ai_panel(r):
     r.check('the field takes focus', wait(lambda: r.s.run('return document.activeElement?.tagName') == 'TEXTAREA', 3))
     agents = wait(lambda: r.s.run('return window.__capopen.agent.getState().agents'), 10) or []
     r.check('Claude Code is found and Codex is not installed', [(a['name'], bool(a['path'])) for a in agents] == [('Claude Code', True), ('Codex', False)], agents)
+    click(r, 'Add captions')
+    r.check('a starting point goes into the field to send or change, not straight to the agent',
+            wait(lambda: agent(r)['draft'] == 'Add captions', 3) and not runs(r), agent(r))
+    r.s.run("window.__capopen.agent.setState({draft: ''})")
     clip = r.track()[0]
     r.s.run('window.__capopen.store.getState().select([arguments[0]])', clip['id'])
     r.check('the selection shows as a chip that goes with the message', wait(lambda: '1 clip' in panel(r)['text'], 5), panel(r)['text'])
@@ -107,8 +111,8 @@ def ai_panel(r):
     r.check('a line of the card selects the clips it is about', wait(lambda: len(r.s.run('return window.__capopen.store.getState().selection')) == 2, 5))
     click(r, 'Undo')
     r.check('Undo on the card takes back the whole run', wait(lambda: len(r.track()) == len(before) and not any(t['name'] == 'Captions' for t in r.state()['tracks']), 10), r.state()['tracks'])
-    undo = "return [...document.querySelectorAll('aside[aria-label=AI] button')].find((b) => b.textContent.trim() === 'Undo')?.getAttribute('aria-disabled')"
-    r.check('then the card no longer offers Undo, and says why', wait(lambda: r.s.run(undo) == 'true', 5))
+    undo = "return [...document.querySelectorAll('aside[aria-label=AI] button')].some((b) => b.textContent.trim() === 'Undo')"
+    r.check('then the card says the run was undone and offers no Undo', wait(lambda: 'Undone: Tighten the start' in panel(r)['text'] and not r.s.run(undo), 5), panel(r)['text'])
 
     # Choices: the next message continues the conversation; a picked option is the next message.
     send(r, 'What options do I have?')
@@ -128,13 +132,18 @@ def ai_panel(r):
         send(r, 'slow edit please')
         r.check(f'a slow edit locks the editor ({where})', wait(lambda: r.state()['aiRun'] and 'Pracuju' in panel(r)['text'], 15))
         pid = runs(r)[-1]['pid']
+        if where == 'Stop':
+            send(r, 'one more thing')
+            r.check('Enter while it works says why nothing was sent', wait(lambda: 'Wait for the answer, or stop it' in panel(r)['text'], 3)
+                    and runs(r)[-1]['pid'] == pid and agent(r)['draft'] == 'one more thing', panel(r)['text'])
+            r.s.run("window.__capopen.agent.setState({draft: ''})")
         started = time.time()
         click(r, where, 'aside[aria-label=AI]' if where == 'Stop' else 'header')
         gone = wait(lambda: not alive(pid), 5, 0.05)
         took = round(time.time() - started, 2)
         r.check(f'{where} ends the agent within seconds and unlocks the editor', gone and wait(lambda: not r.state()['aiRun'], 3), {'seconds': took})
         r.check(f'what it did so far stays, and the stopped card says what ({where})',
-                wait(lambda: idle(r) and 'Stopped: Slow edit' in panel(r)['text'] and 'Split talk.mp4 at 00:02' in panel(r)['text'], 5), panel(r)['text'])
+                wait(lambda: idle(r) and 'Stopped: Slow edit' in panel(r)['text'] and 'Split talk.mp4\n00:02' in panel(r)['text'], 5), panel(r)['text'])
         if where == 'Stop':
             r.shot('stopped')
         r.s.run('window.__capopen.store.getState().undo()')
@@ -148,6 +157,7 @@ def ai_panel(r):
     r.s.run("window.__capopen.agent.setState({draft: ''})")
     send(r, 'limit please')
     r.check("a used-up plan says so, with the agent's reset time", wait(lambda: 'usage limit reached.' in panel(r)['text'] and 'resets 9pm' in panel(r)['text'], 10), panel(r)['text'])
+    r.check('the earlier problem went away with the new message, so its Try again cannot send this one', "isn't signed in." not in panel(r)['text'], panel(r)['text'])
     r.s.run("window.__capopen.agent.setState({draft: ''})")
     r.check('no error toast along the way', not r.errors(), r.errors())
 
@@ -166,7 +176,8 @@ def ai_panel(r):
     r.check('after a restart it opens where it was, as wide as it was', wait(lambda: (panel(r) or {}).get('left') == 6 and panel(r)['width'] == 384, 10), panel(r))
     inspector = r.s.run("const b = document.querySelector('aside[aria-label=Inspector]').getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]")
     r.s.run(DRAG, inspector[0], inspector[1], True)
-    r.check("dropped on the inspector it takes the inspector's place", wait(lambda: panel(r)['slot'] == 'inspector' and not panel(r)['inspector'], 3), panel(r))
+    r.check("dropped on the inspector it takes the inspector's place, running down beside the timeline",
+            wait(lambda: panel(r)['slot'] == 'inspector' and not panel(r)['inspector'] and panel(r)['width'] == 300 and panel(r)['bottom'] == 6, 3), panel(r))
     r.shot('in-inspector-place')
     r.s.run("document.querySelector('aside[aria-label=AI] button[aria-label=\"Move panel\"]').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))")
     r.check('the grip also opens the places as a menu', wait(lambda: click(r, 'Floating') is not None, 3))

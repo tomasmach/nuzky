@@ -79,7 +79,7 @@ export function useDockLayout() {
   const { w, h } = useWindowSize();
   const sideFits = dockMax(w) !== null;
   const shown: DockMode = (mode === "left" || mode === "right") && !sideFits ? "inspector" : mode;
-  return { open, mode: shown, chosen: mode, width: shown === "inspector" ? 300 : clampWidth(width, w), float: clampFloat(float, w, h), sideFits };
+  return { open, mode: shown, width: shown === "inspector" ? 300 : clampWidth(width, w), float: clampFloat(float, w, h), sideFits };
 }
 
 export const DOCK_LABELS: Record<DockMode, string> = {

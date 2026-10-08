@@ -26,11 +26,6 @@ fn line(text: String, clips: &[&Clip]) -> RunChange {
     }
 }
 
-fn timecode(us: i64) -> String {
-    let s = us.max(0) / 1_000_000;
-    format!("{:02}:{:02}", s / 60, s % 60)
-}
-
 fn secs(us: i64) -> String {
     format!("{:.1} s", us as f64 / 1e6)
 }
@@ -336,7 +331,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             .collect();
         for piece in pieces.iter().take(3) {
             let name = asset_name(source(piece).map_or("", |s| s.0));
-            out.push(line(format!("Split {name} at {}", timecode(piece.start_us)), &[*piece]));
+            out.push(line(format!("Split {name}"), &[*piece]));
         }
         if pieces.len() > 3 {
             out.push(line(format!("Split clips in {} more places", pieces.len() - 3), &pieces[3..]));
@@ -512,7 +507,7 @@ mod tests {
         let take = e.project.tracks[0].clips[0].id.clone();
         apply(&mut e, json!({"type": "splitClip", "clipId": take, "atUs": 5_000_000}));
         let changes = summarize(&before, &e.project);
-        assert_eq!(texts(&changes), ["Split take-1.mp4 at 00:05"]);
+        assert_eq!(texts(&changes), ["Split take-1.mp4"]);
         assert_eq!(changes[0].at_us, Some(5_000_000));
     }
 

@@ -30,6 +30,7 @@ import {
   READY,
   choose,
   chooseAgent,
+  markUndone,
   loadAgents,
   newChat,
   send,
@@ -128,7 +129,7 @@ function MenuItem({ checked, disabled, reason, onClick, children }: { checked?: 
 
 /** The grip: drag it (or the header) to move the panel, click it to pick a place; arrows move a floating panel. */
 function PlaceMenu({ panel }: { panel: React.RefObject<HTMLElement | null> }) {
-  const { mode, chosen, sideFits } = useDockLayout();
+  const { mode, sideFits } = useDockLayout();
   return (
     <Menu
       label="Panel place"
@@ -163,7 +164,7 @@ function PlaceMenu({ panel }: { panel: React.RefObject<HTMLElement | null> }) {
         (["right", "left", "inspector", "float"] as DockMode[]).map((m) => (
           <MenuItem
             key={m}
-            checked={chosen === m}
+            checked={mode === m}
             disabled={(m === "left" || m === "right") && !sideFits}
             reason={TOO_NARROW}
             onClick={() => {
@@ -247,7 +248,7 @@ function Steps({ steps, collapsed }: { steps: Step[]; collapsed: boolean }) {
   useEffect(() => setOpen(!collapsed), [collapsed]);
   if (!open)
     return (
-      <button type="button" onClick={() => setOpen(true)} className="flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-[12px] text-muted hover:bg-white/[.06] hover:text-fg">
+      <button type="button" onClick={() => setOpen(true)} className="-ml-1 flex items-center gap-1 self-start rounded-md px-1 py-0.5 text-[12px] text-muted hover:bg-white/[.06] hover:text-fg">
         <ChevronRight size={14} />
         {steps.length === 1 ? "1 step" : `${steps.length} steps`}
       </button>
@@ -255,10 +256,12 @@ function Steps({ steps, collapsed }: { steps: Step[]; collapsed: boolean }) {
   return (
     <ol className="flex flex-col border-y border-white/[.06] py-1.5" aria-label="Steps">
       {steps.map((s) => (
-        <li key={s.id} className="grid min-h-[26px] grid-cols-[18px_1fr_auto] items-center gap-x-1.5 text-[12px]">
+        <li key={s.id} className="grid min-h-[26px] grid-cols-[18px_auto_minmax(0,1fr)] items-center gap-x-1.5 text-[12px]">
           {STEP_ICON[s.status]}
           <span className={s.status === "running" ? "text-fg" : "text-fg/80"}>{s.title}</span>
-          <span className="tabular truncate text-muted">{s.status === "stopped" ? "Stopped" : s.detail}</span>
+          <span className="tabular truncate text-right text-muted" title={s.detail ?? undefined}>
+            {s.status === "stopped" ? "Stopped" : s.detail}
+          </span>
         </li>
       ))}
     </ol>
@@ -297,14 +300,14 @@ function Options({ item }: { item: Extract<ChatItem, { kind: "options" }> }) {
   );
 }
 
-function ChangeRow({ change }: { change: RunChange }) {
+function ChangeRow({ change, undone }: { change: RunChange; undone: boolean }) {
   // Recomputed when the project changes, never with the playhead while playing.
   const project = useEditor((s) => s.snap?.project);
   const ids = useMemo(() => {
     const all = new Set(project?.tracks.flatMap((t) => t.clips.map((c) => c.id)));
     return change.clipIds.filter((id) => all.has(id));
   }, [project, change]);
-  const go = ids.length > 0 || change.atUs !== null;
+  const go = !undone && (ids.length > 0 || change.atUs !== null);
   const show = () => {
     const s = useEditor.getState();
     if (ids.length) s.select(ids);
@@ -317,9 +320,8 @@ function ChangeRow({ change }: { change: RunChange }) {
         disabled={!go}
         onClick={show}
         title={go ? "Show it on the timeline" : undefined}
-        className="flex w-full items-start gap-2 rounded-md px-1.5 py-1 text-left text-[12px] leading-[17px] text-fg/90 enabled:hover:bg-white/[.06] disabled:cursor-default"
+        className={`flex w-full items-start gap-2 rounded-md py-1 pl-[30px] pr-1.5 text-left text-[12px] leading-[17px] enabled:hover:bg-white/[.06] disabled:cursor-default ${undone ? "text-fg/45" : "text-fg/90"}`}
       >
-        <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-muted" />
         <span className="flex-1">{change.text}</span>
         {change.atUs !== null && <span className="tabular shrink-0 text-muted">{formatTime(change.atUs, false)}</span>}
       </button>
@@ -327,23 +329,35 @@ function ChangeRow({ change }: { change: RunChange }) {
   );
 }
 
-function RunCard({ item }: { item: Extract<ChatItem, { kind: "run" }> }) {
+function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; index: number }) {
   // Undo is checked each render, so it turns off once later changes are on top of the run.
   useEditor((s) => `${s.snap?.sessionEpoch}:${s.snap?.revision}`);
-  const undo = item.snap ? undoAction(item.snap) : null;
+  const undo = item.snap && !item.undone ? undoAction(item.snap) : null;
   const valid = !!undo && (undo.valid?.() ?? true);
+  const label = item.undone ? `Undone: ${item.label}` : item.stopped ? `Stopped: ${item.label}` : item.label;
   return (
     <div className="flex flex-col gap-1.5 rounded-[10px] bg-raised p-3">
       <div className="flex items-center gap-2">
-        {item.stopped ? <CircleStop size={16} className="shrink-0 text-muted" /> : <CheckCircle2 size={16} className="shrink-0 text-ok" />}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-fg">{item.stopped ? `Stopped: ${item.label}` : item.label}</span>
+        {item.undone ? (
+          <Undo2 size={16} className="shrink-0 text-muted" />
+        ) : item.stopped ? (
+          <CircleStop size={16} className="shrink-0 text-muted" />
+        ) : (
+          <CheckCircle2 size={16} className="shrink-0 text-ok" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-fg" title={label}>
+          {label}
+        </span>
         {undo && (
           <Button
             className="h-7 shrink-0 px-2.5 text-[12px]"
             disabled={!valid}
             disabledReason="Later changes are on top of this run. Undo them first."
             title="Undo everything this run did"
-            onClick={() => undo.run()}
+            onClick={() => {
+              undo.run();
+              markUndone(index);
+            }}
           >
             <Undo2 size={13} /> Undo
           </Button>
@@ -352,7 +366,7 @@ function RunCard({ item }: { item: Extract<ChatItem, { kind: "run" }> }) {
       {item.changes && item.changes.length > 0 ? (
         <ul className="-mx-1.5 flex flex-col" aria-label="What changed">
           {item.changes.map((c, i) => (
-            <ChangeRow key={i} change={c} />
+            <ChangeRow key={i} change={c} undone={!!item.undone} />
           ))}
         </ul>
       ) : (
@@ -392,16 +406,37 @@ function ErrorNotice({ code, message }: { code: AgentErrorCode; message: string 
                 Install <ExternalLink size={12} />
               </Button>,
             ]
-          : [<AlertCircle size={16} className="text-danger" />, `${name} stopped with an error.`, <>{message}</>, retry];
+          : [<AlertCircle size={16} className="text-danger" />, `${name} stopped with an error.`, <Failure message={message} cmd={cmd} />, retry];
   return (
     <div role="alert" className="grid grid-cols-[20px_1fr] gap-2 rounded-[10px] bg-raised p-3 text-[12px] leading-[18px] text-fg/85">
       <span className="pt-px">{icon}</span>
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="text-[13px] font-semibold text-fg">{title}</span>
-        <span className="break-words">{body}</span>
+        <span className="flex flex-col items-start break-words">
+          <span>{body}</span>
+        </span>
         {buttons && <div className="mt-2 flex flex-wrap gap-1.5">{buttons}</div>}
       </div>
     </div>
+  );
+}
+
+/** The first line of what went wrong and what to do; the agent's own lines behind Details. */
+function Failure({ message, cmd }: { message: string; cmd: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [first, ...rest] = message.trim().split("\n");
+  return (
+    <>
+      <span className="line-clamp-2">{first}</span> Try again; if it keeps failing, run {cmd} in a terminal to see why.
+      {rest.length > 0 &&
+        (open ? (
+          <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-white/[.06] px-2 py-1.5 text-[11px] leading-[16px] text-muted">{rest.join("\n")}</pre>
+        ) : (
+          <button type="button" onClick={() => setOpen(true)} className="mt-1 self-start text-[12px] text-accent hover:underline">
+            Details
+          </button>
+        ))}
+    </>
   );
 }
 
@@ -443,8 +478,15 @@ function Empty() {
           key={text}
           type="button"
           aria-disabled={blocked || undefined}
-          title={blocked ? "Another agent is editing" : undefined}
-          onClick={blocked ? undefined : () => void send(text)}
+          title={blocked ? "Another agent is editing" : "Put this in the field, to send or change"}
+          onClick={
+            blocked
+              ? undefined
+              : () => {
+                  useAgent.setState({ draft: text });
+                  document.querySelector<HTMLTextAreaElement>("aside[aria-label=AI] textarea")?.focus();
+                }
+          }
           className="flex h-8 items-center gap-2.5 rounded-md px-2 text-left text-[13px] text-fg hover:bg-white/[.08] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent [&>svg]:text-muted"
         >
           {icon}
@@ -455,7 +497,7 @@ function Empty() {
   );
 }
 
-function Item({ item, collapsed }: { item: ChatItem; collapsed: boolean }) {
+function Item({ item, index, collapsed }: { item: ChatItem; index: number; collapsed: boolean }) {
   switch (item.kind) {
     case "user":
       return (
@@ -475,7 +517,7 @@ function Item({ item, collapsed }: { item: ChatItem; collapsed: boolean }) {
     case "options":
       return <Options item={item} />;
     case "run":
-      return <RunCard item={item} />;
+      return <RunCard item={item} index={index} />;
     case "stopped":
       return (
         <div className="flex items-center gap-2 rounded-[10px] bg-raised p-3 text-[12px]">
@@ -512,7 +554,7 @@ function Conversation() {
       {items.length === 0 ? <Empty /> : <div className="mt-auto" />}
       {items.map((item, i) => (
         // Steps fold away once the agent has answered after them.
-        <Item key={i} item={item} collapsed={item.kind === "steps" && (i < lastUser || (!working && items.slice(i + 1).some((x) => x.kind === "agent")))} />
+        <Item key={i} item={item} index={i} collapsed={item.kind === "steps" && (i < lastUser || (!working && items.slice(i + 1).some((x) => x.kind === "agent")))} />
       ))}
     </div>
   );
@@ -540,7 +582,8 @@ function Chip({ icon, children, onRemove, label }: { icon: ReactNode; children: 
 }
 
 function Elapsed() {
-  const [start] = useState(Date.now);
+  // The start lives in the store, so moving the panel during a run does not restart the count.
+  const start = useAgent((s) => s.startedAt) ?? Date.now();
   const [, tick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => tick((n) => n + 1), 1000);
@@ -588,8 +631,17 @@ function Composer() {
   // The field takes focus when the panel opens, so typing can start at once.
   useEffect(() => field.current?.focus(), []);
 
+  // Enter that cannot send says why for a moment, instead of doing nothing.
+  const [why, setWhy] = useState<string | null>(null);
+  useEffect(() => {
+    if (!why) return;
+    const id = window.setTimeout(() => setWhy(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [why]);
   const submit = () => {
-    if (!blocked && draft.trim()) void send();
+    if (!draft.trim()) return;
+    if (blocked) setWhy(blocked);
+    else void send();
   };
 
   return (
@@ -603,7 +655,7 @@ function Composer() {
           </div>
         </div>
       )}
-      <div onClick={() => field.current?.focus()} className="rounded-xl border border-white/[.08] bg-white/[.055] px-2.5 pb-1.5 pt-2 transition-colors duration-[120ms] focus-within:border-accent">
+      <div onClick={() => field.current?.focus()} className="rounded-xl border border-white/[.08] bg-white/[.055] px-2.5 pb-1.5 pt-2 transition-colors duration-[120ms] has-[textarea:focus]:border-accent">
         {!working && ((selected > 0 && !dropSelection) || !dropPlayhead) && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {selected > 0 && !dropSelection && (
@@ -645,11 +697,18 @@ function Composer() {
             <ImagePlus size={15} />
           </IconButton>
           <span className="flex-1" />
+          {!working && why && (
+            <span className="min-w-0 truncate text-[12px] text-fg/85" role="status">
+              {why}
+            </span>
+          )}
           {working ? (
             <>
-              <span className="tabular flex items-center gap-1.5 text-[12px] text-muted" role="status">
-                <Loader2 size={13} className="animate-spin text-accent" />
-                {status === "stopping" ? (
+              <span className="tabular flex min-w-0 items-center gap-1.5 text-[12px] text-muted" role="status">
+                <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
+                {why ? (
+                  <span className="truncate text-fg/85">{why}</span>
+                ) : status === "stopping" ? (
                   "Stopping…"
                 ) : (
                   <>
@@ -704,7 +763,12 @@ export function AiPanel({ panelRef, className = "", style }: { panelRef: React.R
         <PlaceMenu panel={panelRef} />
         <AgentMenu />
         <span className="flex-1 self-stretch" onPointerDown={move} />
-        <IconButton label={busy ? "New chat: wait for the answer, or stop it" : "New chat"} disabled={busy || empty} onClick={newChat} className="h-7 w-7">
+        <IconButton
+          label={busy ? "New chat: wait for the answer, or stop it" : empty ? "New chat: there is nothing to clear yet" : "New chat"}
+          disabled={busy || empty}
+          onClick={newChat}
+          className="h-7 w-7"
+        >
           <SquarePen size={15} />
         </IconButton>
         <IconButton label="Close AI (Ctrl+J)" onClick={() => useDock.setState({ open: false })} className="h-7 w-7">

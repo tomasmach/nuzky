@@ -128,21 +128,18 @@ function ColumnResizer({ side, width }: { side: "left" | "right"; width: number 
   );
 }
 
-/** A full-height column at the left or right edge, beside the whole editor. */
-export function DockedAiPanel({ side, width }: { side: "left" | "right"; width: number }) {
+/**
+ * A full-height column at the left or right edge, beside the whole editor. In the inspector's place
+ * it is the right column as wide as the inspector, which it replaces, and keeps that width.
+ */
+export function DockedAiPanel({ side, width, inspector = false }: { side: "left" | "right"; width: number; inspector?: boolean }) {
   const panel = useRef<HTMLElement>(null);
   return (
     <div className={`relative flex shrink-0 flex-col pb-1.5 ${side === "right" ? "pr-1.5" : "pl-1.5"}`} style={{ width: width + GAP }}>
       <AiPanel panelRef={panel} className="min-h-0 flex-1" />
-      <ColumnResizer side={side} width={width} />
+      {!inspector && <ColumnResizer side={side} width={width} />}
     </div>
   );
-}
-
-/** In the inspector's place, as wide as the inspector. */
-export function InspectorAiPanel() {
-  const panel = useRef<HTMLElement>(null);
-  return <AiPanel panelRef={panel} className="w-[300px] shrink-0" />;
 }
 
 type Edges = { l?: true; r?: true; t?: true; b?: true };

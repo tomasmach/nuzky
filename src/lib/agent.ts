@@ -52,7 +52,7 @@ export type ChatItem =
   | { kind: "agent"; text: string }
   | { kind: "steps"; steps: Step[] }
   | { kind: "options"; id: string; question: string | null; options: Choice[]; chosen: string | null }
-  | { kind: "run"; label: string; snap: Snapshot | null; stopped: boolean; changes: RunChange[] | null }
+  | { kind: "run"; label: string; snap: Snapshot | null; stopped: boolean; changes: RunChange[] | null; undone?: boolean }
   | { kind: "stopped" }
   | { kind: "error"; code: AgentErrorCode; message: string };
 
@@ -70,6 +70,8 @@ interface AgentState {
   chat: string | null;
   items: ChatItem[];
   status: "idle" | "working" | "stopping";
+  /** When the current answer started, in ms; it survives moving the panel. */
+  startedAt: number | null;
   draft: string;
   /** Context chips the user removed from the next message. */
   dropSelection: boolean;
@@ -91,6 +93,7 @@ export const useAgent = create<AgentState>(() => ({
   chat: null,
   items: [],
   status: "idle",
+  startedAt: null,
   draft: "",
   dropSelection: false,
   dropPlayhead: false,
@@ -224,8 +227,10 @@ export async function send(text = useAgent.getState().draft.trim()) {
   const chat = s.chat ?? crypto.randomUUID();
   useAgent.setState({
     chat,
-    items: [...s.items, { kind: "user", text, context: describeContext(context) }],
+    // Earlier problems are over once a new message goes; their Try again would send this one.
+    items: [...s.items.filter((i) => i.kind !== "error"), { kind: "user", text, context: describeContext(context) }],
     status: "working",
+    startedAt: Date.now(),
     draft: fromDraft ? "" : s.draft,
     dropSelection: false,
     dropPlayhead: false,
@@ -237,6 +242,11 @@ export async function send(text = useAgent.getState().draft.trim()) {
     const text = errorText(e);
     fail(text.startsWith("NOT_INSTALLED") ? "NOT_INSTALLED" : "AGENT_FAILED", plainError(text));
   }
+}
+
+/** The run card's own Undo ran: it says so instead of offering Undo again. */
+export function markUndone(index: number) {
+  useAgent.setState((s) => ({ items: s.items.map((it, i) => (i === index && it.kind === "run" ? { ...it, undone: true } : it)) }));
 }
 
 /** Answers the agent's question with the option picked. */
