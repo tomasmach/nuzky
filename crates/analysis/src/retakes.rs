@@ -488,6 +488,8 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
     }
     // The cheapest end, then the one closest to the short sentence's length, then the earlier.
     let end = (0..=m).min_by_key(|&j| (cost[n][j], j.abs_diff(n), j)).unwrap_or(0);
+    // A content word the other sentence never says; a stuttered "ukážu ukážu" says it once more.
+    let missing = |word: &str, other: &[&str]| content(word) && !other.iter().any(|w| alike(w, word));
     let mut found = Match {
         short: n,
         end,
@@ -497,7 +499,7 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         meaning: Vec::new(),
         swapped: Vec::new(),
         dropped: Vec::new(),
-        unsaid: (end..m).filter(|&j| content(long[j])).collect(),
+        unsaid: (end..m).filter(|&j| missing(long[j], short)).collect(),
     };
     let (mut i, mut j) = (n, end);
     while i > 0 || j > 0 {
@@ -515,14 +517,14 @@ fn prefix_match(short: &[&str], long: &[&str]) -> Match {
         } else if i > 0 && cost[i][j] == cost[i - 1][j] + 1 {
             if let Some(what) = lone_meaning(short[i - 1], i - 1) {
                 found.meaning.push((Some(i - 1), None, what));
-            } else if content(short[i - 1]) {
+            } else if missing(short[i - 1], long) {
                 found.dropped.push(i - 1);
             }
             i -= 1;
         } else {
             if let Some(what) = lone_meaning(long[j - 1], j - 1) {
                 found.meaning.push((None, Some(j - 1), what));
-            } else if content(long[j - 1]) {
+            } else if missing(long[j - 1], short) {
                 found.unsaid.push(j - 1);
             }
             j -= 1;
@@ -889,6 +891,13 @@ mod tests {
             let reasons: Vec<&str> = found.review.iter().map(|r| r.reason.as_str()).collect();
             assert_eq!(reasons, [format!("only the earlier says \"{word}\"")], "{found:#?}");
         }
+        // A word stuttered twice is said by the later attempt too: still a retake.
+        let found = one(&[
+            ("Dneska vám ukážu ukážu jak natočit video.", 900_000),
+            ("Dneska vám ukážu jak natočit video.", 900_000),
+        ]);
+        assert!(found.review.is_empty(), "{found:#?}");
+        assert_eq!((found.groups.len(), found.groups[0].keep), (1, 1), "{found:#?}");
     }
 
     /// Recognition often puts no full stop between attempts said in one breath. Only an attempt
