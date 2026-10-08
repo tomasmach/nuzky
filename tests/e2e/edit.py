@@ -3,7 +3,7 @@ import json, time
 from e2e.harness import FIXTURES, flow, preview_brightness, wait
 
 
-@flow('edit', 'Import two clips, split one with S, delete a piece with Delete, undo, and find the result saved')
+@flow('edit', 'Import two clips, split one with S, delete a piece with Delete, undo, find the result saved, and see imported music in the Audio tab')
 def edit(r):
     r.import_media(FIXTURES / 'talk.mp4', FIXTURES / 'wide.mp4')
     for name in ('talk.mp4', 'wide.mp4'):
@@ -32,4 +32,9 @@ def edit(r):
     r.check('the preview shows the restored piece under the playhead', top > 40, round(top, 1))
     saved = lambda: len(json.loads(r.saved_project().read_text())['tracks'][0]['clips'])
     r.check('the project file on disk has the same three clips', wait(lambda: saved() == 3, 10), saved())
+    # Opening the Audio tab once blanked the whole window: its store selector built a new list on every read.
+    r.import_media(FIXTURES / 'music.mp3')
+    r.s.run("[...document.querySelectorAll('[role=tab]')].find((t) => t.textContent.trim() === 'Audio').click()")
+    listed = wait(lambda: r.s.run("return document.body.innerText.includes('music.mp3')"), 5)
+    r.check('the Audio tab opens and lists the imported music', listed)
     r.check('no error toast', not r.errors(), r.errors())
