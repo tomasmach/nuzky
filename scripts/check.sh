@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Local gate before every merge to main and every release. GitHub runs no tests on pull requests.
+# A pull request that changes only the website in site/ and no dependencies skips it (AGENTS.md).
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
 set -uo pipefail
 cd "$(dirname "$0")/.."

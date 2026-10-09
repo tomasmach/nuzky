@@ -57,14 +57,14 @@ Nejčastější vada je změna, která funguje jen na cestě, kterou jsi zkouše
 - Do PR dej screenshot z `tmp-test/repro/<flow>/` a příkaz s revizí z `result.json`.
 - Engine ověřuj na skutečných souborech proti referenci z FFmpeg. `crates/engine/tests/qa_*.rs` si média generují přes `ffmpeg`.
 - Rust testy spouštěj cíleně: `cargo test -p <crate> <název>`. Testy s `#[ignore]` potřebují média a modely. Připrav je přes `scripts/fixtures.sh` a spusť `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test -p <crate> -- --ignored`. Při změně řeči, analýzy, miniatur nebo dekódování je spusť vždy.
-- Plnou bránu `scripts/check.sh` spusť před merge do `main` a před vydáním. Obsahuje fmt, clippy, typy, build, všechny testy včetně ignorovaných, audity závislostí a všechny repro toky. Trvá desítky minut, pusť ji na pozadí.
+- Plnou bránu `scripts/check.sh` spusť před merge do `main` (výjimku pro web popisuje sekce Pull requesty) a před vydáním. Obsahuje fmt, clippy, typy, build, všechny testy včetně ignorovaných, audity závislostí a všechny repro toky. Trvá desítky minut, pusť ji na pozadí.
 - Frontend před pushem: `npm run build` (typy a Vite build).
 - Výkon: nejdřív změř, pak měň, a uveď čísla před a po.
 
 ## Pull requesty a release
 
 - Base je `main`. Větev založ z čerstvého `origin/main` a před otevřením PR ji rebasni.
-- Před merge do `main` projde `scripts/check.sh` na přesném commitu, který mergeuješ. GitHub na PR testy nespouští, jen hledá tajné hodnoty.
+- Před merge do `main` projde `scripts/check.sh` na přesném commitu, který mergeuješ. Výjimkou je PR, které mění jen web v `site/` a nemění závislosti (`package.json`, `package-lock.json`). Brána web nekontroluje, takže ji nespouštěj. Stačí `tsc --noEmit` a `next build` v `site/` a proklikání dotčených stránek. GitHub na PR testy nespouští, jen hledá tajné hodnoty.
 - Pre-push hook (`.githooks/pre-push`, zapne ho `git config core.hooksPath .githooks`) hledá tajné hodnoty a blokuje video a audio soubory. Neobcházej ho přes `--no-verify`. Testovací média se generují a do gitu nepatří, protože to můžou být něčí soukromá videa.
 - Release: stejná verze v `src-tauri/tauri.conf.json`, `Cargo.toml` a `package.json`, pak tag `v<verze>`. Tag spustí build a testy na Linuxu, macOS a Windows a připraví draft release. Publikuje jen člověk po ověření na každém systému podle `docs/BUILDING.md`.
 - Komentáře botů ověř proti kódu: reálný nález oprav, falešný zamítni s důvodem.
