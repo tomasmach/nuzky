@@ -4,13 +4,12 @@ import pkg from "../../package.json";
 export const version: string = pkg.version;
 
 export const repo = "https://github.com/tomasmach/nuzky";
-export const releases = `${repo}/releases/latest`;
 export const releaseNotes = `${repo}/releases`;
 export const buildFromSource = `${repo}/blob/main/docs/BUILDING.md`;
 export const license = `${repo}/blob/main/LICENSE`;
 
 export const platforms = [
-  { id: "macos", name: "macOS", detail: "Apple Silicon · .dmg", href: releases },
-  { id: "windows", name: "Windows", detail: "x64 · Installer", href: releases },
-  { id: "linux", name: "Linux", detail: "AppImage · .deb", href: releases },
+  { id: "macos", name: "macOS", detail: "Apple Silicon · .dmg" },
+  { id: "windows", name: "Windows", detail: "x64 · Installer" },
+  { id: "linux", name: "Linux", detail: "AppImage · .deb" },
 ] as const;

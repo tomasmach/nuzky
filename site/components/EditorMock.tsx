@@ -148,7 +148,7 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 rounded-xl bg-stage p-3.5 ring-1 ring-inset ring-white/[0.06]">
           <div className="relative h-[340px] w-[191px] ring-1 ring-white/[0.12]">
             <Image src="/media/reel-hike.jpg" alt="" fill sizes={fitSizes(191, 1200)} className="object-cover" />
-            <div className={`absolute inset-x-0 bottom-16 flex justify-center ${focus === "captions" ? "" : ""}`}>
+            <div className="absolute inset-x-0 bottom-16 flex justify-center">
               <span
                 className={`flex gap-[5px] rounded-md bg-black/70 px-2 py-1 text-[15px] font-extrabold transition-shadow duration-300 ${focus === "captions" ? "ring-2 ring-accent" : ""}`}
               >
