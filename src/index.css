@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* The website lives in the same repo; its classes do not belong in the app's stylesheet. */
+@source not "../site";
 
 /* The UI face. The same variable file the engine and the font picker use, so it ships with the app
    and looks the same on Linux, Windows and macOS. */

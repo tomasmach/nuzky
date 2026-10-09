@@ -2,6 +2,11 @@
 /target-*
 /node_modules
 /dist
+/site/.next
+/site/.vercel
+/site/next-env.d.ts
+*.tsbuildinfo
+.DS_Store
 /.cargo/config.toml
 /src-tauri/gen/schemas
 *.local
