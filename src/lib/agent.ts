@@ -129,6 +129,7 @@ const TITLES: Record<string, string> = {
   apply_zooms: "Adding zooms",
   build_captions: "Adding captions",
   inspect_frames: "Checking frames",
+  activity: "Scanning picture and sound",
   import_media: "Importing media",
   export_video: "Exporting",
   undo_run: "Undoing its changes",
@@ -156,7 +157,7 @@ function stepTitle(raw: string, input?: unknown): string {
 function stepDetail(raw: string, input?: unknown): string | null {
   const args = obj(input);
   const name = toolName(raw);
-  if (name === "inspect_frames" && Array.isArray(args.times)) return args.times.slice(0, 4).map((t) => formatTime(Number(t), false)).join(" · ") + (args.times.length > 4 ? " …" : "");
+  if (name === "inspect_frames" && Array.isArray(args.times_us)) return args.times_us.slice(0, 4).map((t) => formatTime(Number(t), false)).join(" · ") + (args.times_us.length > 4 ? " …" : "");
   if (name === "export_video" && typeof args.path === "string") return args.path.split(/[\\/]/).pop() ?? null;
   if (name === "apply_edits" && Array.isArray(args.edits)) return args.edits.length === 1 ? "1 change" : `${args.edits.length} changes`;
   if (name === "import_media" && Array.isArray(args.paths)) return args.paths.length === 1 ? String(args.paths[0]).split(/[\\/]/).pop()! : `${args.paths.length} files`;

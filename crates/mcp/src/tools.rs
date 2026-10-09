@@ -19,9 +19,11 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::{media, params::*, transcript};
+use crate::{activity, media, params::*, transcript};
 
 const PREVIEW_CHARS: usize = 400;
+/// How long activity waits for its job before handing it over to poll.
+const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 struct PreparedImport {
     paths: Vec<String>,
@@ -141,10 +143,7 @@ impl Backend {
         }
         state.read_only |= self.client.access == Access::ReadOnly;
         if name == "inspect_frames" {
-            let args: Inspect = parse(arguments)?;
-            let bytes =
-                media::contact_sheet(&self.media_project(&state.project), &args.times_us, args.width, args.safe_area)?;
-            return Ok(CallToolResult::success(vec![ContentBlock::text(json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch, "times_us": args.times_us, "labels": "seconds.microseconds"}).to_string()), ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png")]));
+            return self.inspect(parse(arguments)?, &state);
         }
         let mut value = self.dispatch(name, arguments, &state)?;
         if name == "begin_run"
@@ -219,6 +218,7 @@ impl Backend {
                 )
             }
             "import_media" => self.import(parse(arguments)?, state),
+            "activity" => self.activity(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "transcribe" => self.transcribe(parse(arguments)?, state),
             "get_transcript" => self.get_transcript(parse(arguments)?, state),
@@ -232,6 +232,111 @@ impl Backend {
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
+        }
+    }
+
+    fn inspect(&self, args: Inspect, state: &SessionState) -> Result<CallToolResult> {
+        let project = self.media_project(&state.project);
+        let mut info = json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
+            "labels": "seconds.microseconds"});
+        let times = match args.sample {
+            None => {
+                ensure!(
+                    args.range_us.is_none()
+                        && args.cursor.is_none()
+                        && args.max_frames.is_none()
+                        && args.min_change.is_none(),
+                    "INVALID_ARGUMENTS: range_us, cursor, max_frames and min_change go with sample \"changes\""
+                );
+                args.times_us.context("INVALID_ARGUMENTS: give times_us, or sample \"changes\"")?
+            }
+            Some(Sample::Changes) => {
+                ensure!(args.times_us.is_none(), "INVALID_ARGUMENTS: give times_us or sample, not both");
+                let max = args.max_frames.unwrap_or(media::MAX_FRAMES);
+                ensure!((1..=media::MAX_FRAMES).contains(&max), "INVALID_ARGUMENTS: max_frames must be 1..=16");
+                let cursor = match args.cursor {
+                    Some(cursor) => {
+                        ensure!(
+                            args.range_us.is_none() && args.min_change.is_none(),
+                            "INVALID_ARGUMENTS: the cursor carries range_us and min_change; leave them out"
+                        );
+                        activity::Cursor::decode(&cursor, state.stamp.revision)?
+                    }
+                    None => {
+                        let min_change = args.min_change.unwrap_or(activity::DEFAULT_MIN_CHANGE);
+                        ensure!(min_change < 64, "INVALID_ARGUMENTS: min_change must be 0..=63");
+                        let range = activity::timeline_range(&project, args.range_us)?;
+                        activity::Cursor::new(state.stamp.revision, range, min_change)
+                    }
+                };
+                media::check_media(&project)?;
+                let (range, every) = (cursor.range(), cursor.every());
+                let found = activity::changes(&project, cursor, max, &|| self.closed.load(Ordering::Acquire))?;
+                info["sample"] = json!("changes");
+                info["range_us"] = json!([range.0, range.1]);
+                info["candidate_every_us"] = json!(every);
+                info["skipped"] = json!(found.skipped);
+                info["next"] = json!(found.next);
+                if found.times.is_empty() {
+                    info["times_us"] = json!([]);
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(info.to_string())]));
+                }
+                found.times
+            }
+        };
+        let bytes = media::contact_sheet(&project, &times, args.width, args.safe_area)?;
+        info["times_us"] = json!(times);
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(info.to_string()),
+            ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png"),
+        ]))
+    }
+
+    /// Renders and mixes the range as a job, so a long range reports progress and can be cancelled,
+    /// and answers in this call when the job finishes within a few seconds.
+    fn activity(&self, args: Activity, state: &SessionState) -> Result<Value> {
+        let points = args.points.unwrap_or(60);
+        ensure!((8..=200).contains(&points), "INVALID_ARGUMENTS: points must be 8..=200");
+        let project = self.media_project(&state.project);
+        let range = activity::timeline_range(&project, args.range_us)?;
+        media::check_media(&project)?;
+        let cache = self.host.cache_dir.clone();
+        let heard = transcript::heard_assets(&project);
+        let unprepared: Vec<_> = project
+            .assets
+            .iter()
+            .filter(|a| heard.contains(&a.id) && nuzky_engine::audio::has_audio(a))
+            .filter(|a| !nuzky_engine::audio::pcm_path(&cache, a).exists())
+            .cloned()
+            .collect();
+        let job = self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "activity",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                for (i, asset) in unprepared.iter().enumerate() {
+                    progress.set("preparing_audio", Some(i as f32 / unprepared.len() as f32));
+                    nuzky_engine::audio::ensure_pcm(&cache, asset, |_| check_cancel(&cancel))?;
+                }
+                let cancelled = || cancel.load(Ordering::Relaxed);
+                activity::activity(&project, &cache, range, points, &cancelled, &|done| {
+                    progress.set("looking", Some(done))
+                })
+            },
+        )?;
+        let id = job["job_id"].as_str().context("Job has no id")?.to_owned();
+        let deadline = std::time::Instant::now() + ANSWER_WAIT;
+        loop {
+            let job = self.host.jobs.get(&id, false)?;
+            match job["status"].as_str() {
+                Some("done") => return Ok(job["result"].clone()),
+                Some("failed") => anyhow::bail!("{}", job["error"].as_str().unwrap_or("JOB_FAILED")),
+                Some("running") if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                _ => return Ok(job),
+            }
         }
     }
 

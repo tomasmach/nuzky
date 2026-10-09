@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use nuzky_engine::{Project, Renderer, Wait, model::ClipContent};
 
 const DEFAULT_WIDTH: u32 = 320;
-const MAX_FRAMES: usize = 16;
+pub const MAX_FRAMES: usize = 16;
 const LABEL_HEIGHT: u32 = 24;
 use crate::limits::MAX_SHEET_PIXELS;
 

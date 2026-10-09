@@ -130,7 +130,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 19);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -653,5 +653,103 @@ fn retakes_of_three_czech_takes_over_stdio() {
     assert_eq!(text.matches("dneska").count(), 1, "{text}");
     assert_eq!(text.matches("kamera musí stát").count(), 1, "{text}");
     assert!(["ehm", "jakoby", "prostě"].iter().all(|f| !text.contains(f)), "{text}");
+    c.finish();
+}
+
+/// 14 s of known pictures: three still patterns cut at 4 s and 8 s, moving footage from 12 s, and
+/// silence with a loud tone from 6 s to 7 s.
+#[test]
+fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() {
+    let mut c = Client::new(true);
+    let video = c.dir.join("scenes.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y"])
+        .args(["-f", "lavfi", "-i", "smptebars=s=360x640:r=30:d=4"])
+        .args(["-f", "lavfi", "-i", "rgbtestsrc=s=360x640:r=30:d=4"])
+        .args(["-f", "lavfi", "-i", "colorchart=r=30:d=4"])
+        .args(["-f", "lavfi", "-i", "testsrc2=s=360x640:r=30:d=2"])
+        .args(["-f", "lavfi", "-i", "aevalsrc=if(between(t\\,6\\,7)\\,0.5*sin(2*PI*1000*t)\\,0):s=48000:d=14"])
+        .args(["-filter_complex", "[0:v]setsar=1[a];[1:v]setsar=1[b];[2:v]scale=360:640,setsar=1[c];[3:v]setsar=1[d];[a][b][c][d]concat=n=4,format=yuv420p[v]"])
+        .args(["-map", "[v]", "-map", "4:a", "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-c:a", "aac"])
+        .arg(&video)
+        .status()
+        .expect("ffmpeg makes the test video");
+    assert!(status.success());
+    let run = c.call("begin_run", json!({"label":"place"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[video]}))["asset_ids"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
+    );
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+
+    // One point per 0.25 s, so every cut lands on a point.
+    let activity = c.call("activity", json!({"points": 56}));
+    assert_eq!((activity["points"].clone(), activity["step_us"].clone()), (json!(56), json!(250_000)), "{activity}");
+    let peaks = |signal: &str| -> Vec<(i64, f64)> {
+        activity["peaks"][signal]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["t_us"].as_i64().unwrap(), p["value"].as_f64().unwrap()))
+            .collect()
+    };
+    let mut cuts = peaks("change");
+    cuts.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut strongest: Vec<i64> = cuts.iter().take(3).map(|p| p.0).collect();
+    strongest.sort();
+    assert_eq!(strongest, [4_000_000, 8_000_000, 12_000_000], "{activity}");
+    assert!(cuts[2].1 >= 18.0, "a cut scores like a scene cut: {activity}");
+    let change = activity["change"].as_array().unwrap();
+    assert!(
+        change[1..16].iter().chain(&change[17..32]).all(|v| v.as_f64().unwrap() < 1.0),
+        "stills do not change: {activity}"
+    );
+    let moving = peaks("motion");
+    assert!(!moving.is_empty() && moving.iter().all(|p| p.0 >= 12_000_000), "{activity}");
+    let loud = peaks("loudness_db");
+    assert!(!loud.is_empty() && loud.iter().all(|p| (6_000_000..7_000_000).contains(&p.0)), "{activity}");
+    assert!(activity["loudness_db"][4].as_f64().unwrap() < -60.0, "{activity}");
+
+    // A frame per still and one after each cut; the rest looks the same and is skipped.
+    let frames = |c: &mut Client, args: Value| {
+        let result = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":args}));
+        assert_ne!(result["result"]["isError"], true, "{result}");
+        let content = result["result"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "one sheet with the frames: {result}");
+        assert_eq!(content[1]["mimeType"], "image/png");
+        serde_json::from_str::<Value>(content[0]["text"].as_str().unwrap()).unwrap()
+    };
+    let stills = frames(&mut c, json!({"sample":"changes","range_us":[0, 12_000_000],"width":96}));
+    assert_eq!(stills["times_us"], json!([0, 4_000_000, 8_000_000]), "{stills}");
+    assert_eq!((stills["skipped"].clone(), stills["next"].clone()), (json!(45), Value::Null), "{stills}");
+    // One frame a page: the cursor carries the kept frames, so no page repeats the one before.
+    let mut pages =
+        vec![frames(&mut c, json!({"sample":"changes","range_us":[0, 12_000_000],"max_frames":1,"width":96}))];
+    while let Some(next) = pages.last().unwrap()["next"].as_str().map(str::to_owned) {
+        assert!(pages.len() < 5, "{pages:?}");
+        pages.push(frames(&mut c, json!({"sample":"changes","cursor":next,"max_frames":1,"width":96})));
+    }
+    let paged: Vec<Value> = pages.iter().flat_map(|p| p["times_us"].as_array().unwrap().clone()).collect();
+    assert_eq!(json!(paged), stills["times_us"]);
+    assert_eq!(pages.iter().map(|p| p["skipped"].as_u64().unwrap()).sum::<u64>(), 45);
+    // Given times still render exactly those frames.
+    let given = frames(&mut c, json!({"times_us":[0, 4_500_000],"width":96}));
+    assert_eq!(given["times_us"], json!([0, 4_500_000]));
+    assert!(given.get("next").is_none() && given.get("skipped").is_none());
+
+    let cursor = pages[0]["next"].as_str().unwrap().to_owned();
+    let mixed = c.error("inspect_frames", json!({"sample":"changes","cursor":cursor,"range_us":[0, 1_000_000]}));
+    assert!(mixed.contains("INVALID_ARGUMENTS"), "{mixed}");
+    assert!(c.error("inspect_frames", json!({"times_us":[0],"range_us":[0, 1_000_000]})).contains("INVALID_ARGUMENTS"));
+    assert!(c.error("activity", json!({"range_us":[20_000_000, 30_000_000]})).contains("INVALID_RANGE"));
+    let run = c.call("begin_run", json!({"label":"rename"}));
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"rename","edits":[{"type":"renameProject","name":"Renamed"}]}),
+    );
+    let stale = c.error("inspect_frames", json!({"sample":"changes","cursor":cursor}));
+    assert!(stale.contains("STALE_REVISION"), "{stale}");
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     c.finish();
 }

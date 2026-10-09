@@ -4,7 +4,7 @@
 It takes the same arguments, refuses to run unless Nuzky passed every flag that keeps the agent to
 Nuzky's tools, and answers in Claude Code's stream-json lines. It is a real MCP client of the bridge
 from --mcp-config, so its edits go through Nuzky like a real agent's. The message picks what it does:
-  "cut"      reads the project, cuts 1-3 s out, adds two captions and answers
+  "cut"      reads the project and its activity, cuts 1-3 s out, adds two captions and answers
   "options"  offers two takes with suggest_options
   "slow"     opens a run, splits the clip and keeps working until stopped
   "signin"   is not signed in;  "limit" has hit its usage limit
@@ -138,6 +138,7 @@ if 'limit' in message:
 
 if 'cut' in message:
     state = call('get_state', {})
+    call('activity', {})
     say('Vystřihnu pauzu na začátku a přidám titulky.')
     run = call('begin_run', {'label': 'Tighten the start'})['run_id']
     time.sleep(1.5)
