@@ -3,7 +3,7 @@ the background, and heard in the export as less room noise between the words and
 voice keeps its level."""
 import array, json, math, statistics, subprocess, time
 
-from e2e.harness import FIXTURES, flow, wait
+from e2e.harness import FIXTURES, export, flow, wait
 
 SOURCE = FIXTURES / 'voice.mp4'
 RATE = 48_000
@@ -32,17 +32,6 @@ def press(key):
         xtest.fake_input(d, kind, code)
     d.sync()
     d.close()
-
-
-def export(r, name):
-    target = r.work / name
-    started = r.s.call('window.__nuzky.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])',
-                       str(target), {'resolution': 720, 'fps': 30, 'quality': 'small'}, r.state()['epoch'], True)
-    if not started['ok']:
-        raise RuntimeError(f'export {name} did not start: {started}')
-    job = wait(lambda: (j := r.s.run(JOB, started['value'])) and j['status'] != 'running' and j, 180)
-    r.check(f'the export {name} finishes', job and job['status'] == 'done', job)
-    return target
 
 
 def decode(path, high_pass=False):

@@ -315,6 +315,7 @@ fn media_clip() -> Clip {
             fade_out_us: 0,
             clean_voice: false,
             shape: None,
+            duck_db: 0.0,
         },
     )
 }

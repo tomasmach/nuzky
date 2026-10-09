@@ -155,6 +155,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             adjust,
             clean_voice,
             shape,
+            duck_db,
         } => {
             let asset =
                 project.asset(asset_id).ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
@@ -178,6 +179,11 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                 clip.id
             );
             ensure!(*fade_in_us >= 0 && *fade_out_us >= 0, "INVALID_PROJECT: negative fade");
+            ensure!(
+                (0.0..=nuzky_engine::edit::MAX_DUCK_DB).contains(duck_db),
+                "INVALID_PROJECT: clip {} ducking",
+                clip.id
+            );
             ensure!(
                 !clean_voice || nuzky_engine::audio::has_audio(asset),
                 "INVALID_PROJECT: clip {} cleans the voice of media without sound",

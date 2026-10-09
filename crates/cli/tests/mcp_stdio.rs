@@ -213,7 +213,11 @@ fn readonly_resources_prompts_and_clear_errors() {
     let resources = c.rpc("resources/list", json!({}));
     assert_eq!(resources["result"]["resources"].as_array().unwrap().len(), 2);
     let guide = c.rpc("resources/read", json!({"uri":"nuzky://guide"}));
-    assert!(guide["result"]["contents"][0]["text"].as_str().unwrap().contains("rippleDeleteRanges"));
+    let guide = guide["result"]["contents"][0]["text"].as_str().unwrap();
+    assert!(guide.contains("rippleDeleteRanges") && guide.contains(r#""duckDb":12"#));
+    // Ducking is a field an agent finds in the schema and sets with updateClip.
+    let schema = c.rpc("resources/read", json!({"uri":"nuzky://schema"}));
+    assert!(schema["result"]["contents"][0]["text"].as_str().unwrap().contains("\"duckDb\""));
     let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
     assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
     // One prompt starts the whole rough cut; the user's wishes come with it.

@@ -268,6 +268,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 fade_out_us: fo1,
                 clean_voice: cv1,
                 shape: sh1,
+                duck_db: d1,
                 ..
             },
             ClipContent::Media {
@@ -278,6 +279,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 fade_out_us: fo2,
                 clean_voice: cv2,
                 shape: sh2,
+                duck_db: d2,
                 ..
             },
         ) = (&o.content, &clip.content)
@@ -308,6 +310,13 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 push("Turned on Clean voice for");
             } else if *cv1 && !cv2 {
                 push("Turned off Clean voice for");
+            }
+            if d1 != d2 {
+                push(match (*d1 > 0.0, *d2 > 0.0) {
+                    (false, true) => "Turned on Lower under speech for",
+                    (true, false) => "Turned off Lower under speech for",
+                    _ => "Changed how much speech lowers",
+                });
             }
         }
         if clip.keyframes != o.keyframes {
@@ -507,8 +516,11 @@ mod tests {
 
         let changes = summarize(&before, &e.project);
         assert_eq!(texts(&changes), ["Added lofi.mp3 on an audio track", "Turned on Clean voice for 1 clip"]);
-        assert_eq!(changes[0].clip_ids, [music]);
+        assert_eq!(changes[0].clip_ids, [music.as_str()]);
         assert_eq!(changes[1].clip_ids, [take]);
+        let before = e.project.clone();
+        apply(&mut e, json!({"type": "updateClip", "clipId": music, "duckDb": 12}));
+        assert_eq!(texts(&summarize(&before, &e.project)), ["Turned on Lower under speech for 1 clip"]);
     }
 
     #[test]

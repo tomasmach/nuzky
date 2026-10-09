@@ -206,6 +206,11 @@ export type ClipContent = {
    * Rounded corners, a border and a shadow around the picture, as for a picture in picture.
    */
   shape?: Shape | null,
+  /**
+   * Ducking, for music under speech: how many dB the clip goes down while someone speaks in
+   * a video's own sound, coming back in the pauses. 0 turns it off.
+   */
+  duckDb?: number,
 } | {
   "type": "text",
   text: string,
@@ -313,6 +318,11 @@ export type EditCmd = {
    * Video and image clips: corners, border and shadow. The default shape removes them.
    */
   shape?: Shape | null,
+  /**
+   * Ducking: how many dB the clip goes down while a video's own sound has speech, up to 40;
+   * 0 turns it off. 12 suits music under speech.
+   */
+  duckDb?: number | null,
 } | {
   "type": "setAnimation",
   clipId: string,
@@ -487,6 +497,7 @@ export type Limits = {
    * Vertical offset of generated captions from the canvas centre, as a fraction of its height.
    */
   captionY: number,
+  maxDuckDb: number,
 };
 
 export type Project = {

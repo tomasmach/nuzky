@@ -10,8 +10,10 @@ use anyhow::Result;
 use memmap2::Mmap;
 
 use crate::effects::transition_window;
+use crate::loudness::db_to_gain;
 use crate::media::extract_pcm_with_peaks;
-use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
+use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, Track, TrackKind};
+use crate::speech::is_heard;
 
 /// Short fades at clip edges with nothing to crossfade with, so they do not click.
 const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
@@ -23,6 +25,14 @@ const CUT_FADE_US: i64 = 10_000;
 const QUIET_RMS: f32 = 0.0056;
 const QUIET_BELOW_KEPT: f32 = 0.1;
 const KEPT_CONTEXT_US: i64 = 200_000;
+/// Ducking listens to speech in 10 ms blocks of the files: a block louder than -40 dBFS is speech.
+const SPEECH_BLOCK: i64 = (SAMPLE_RATE / 100) as i64;
+const SPEECH_RMS: f32 = 0.01;
+/// A ducked clip starts going down this long before speech, so the first word is clear, stays down
+/// through gaps between words up to the hold and comes back over the release.
+const DUCK_ATTACK: i64 = SAMPLE_RATE as i64 * 150 / 1000;
+const DUCK_HOLD: i64 = SAMPLE_RATE as i64 * 250 / 1000;
+const DUCK_RELEASE: i64 = SAMPLE_RATE as i64 * 400 / 1000;
 
 /// Where a cut is in the files on both sides: their caches, where each side stops or starts in its
 /// file and its speed.
@@ -152,11 +162,14 @@ pub struct Mixer {
     sources: HashMap<PathBuf, Option<Arc<Pcm>>>,
     /// How far each cut's crossfade reads past its clips, measured once from the files.
     cuts: HashMap<CutKey, (i64, i64)>,
+    /// Which 10 ms blocks of each raw cache are speech, measured once when ducking first asks:
+    /// 0 not yet, 1 quiet, 2 speech.
+    speech: HashMap<PathBuf, Vec<u8>>,
 }
 
 impl Mixer {
     pub fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir, sources: HashMap::new(), cuts: HashMap::new() }
+        Self { cache_dir, sources: HashMap::new(), cuts: HashMap::new(), speech: HashMap::new() }
     }
 
     /// The sound `asset` plays with: its cleaned cache for a clip with Clean voice once that is
@@ -190,13 +203,15 @@ impl Mixer {
         out.fill(0.0);
         let frames = (out.len() / CHANNELS) as i64;
         let end = start + frames;
+        let mut ducking: Option<Vec<f32>> = None;
         for track in &project.tracks {
             if track.muted || track.kind == TrackKind::Text {
                 continue;
             }
             for (index, clip) in track.clips.iter().enumerate() {
-                let ClipContent::Media { asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, .. } =
-                    &clip.content
+                let ClipContent::Media {
+                    asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, duck_db, ..
+                } = &clip.content
                 else {
                     continue;
                 };
@@ -204,10 +219,8 @@ impl Mixer {
                 let c1 = us_to_samples(clip.end_us());
                 let previous = index.checked_sub(1).map(|i| &track.clips[i]);
                 let next = track.clips.get(index + 1);
-                let transition =
-                    |clip: &Clip| if track.id == crate::edit::MAIN_TRACK { transition_window(clip) } else { None };
-                let transition_in = previous.and_then(|_| transition(clip));
-                let transition_out = next.and_then(transition);
+                let transition_in = previous.and_then(|_| transition_into(track, clip));
+                let transition_out = next.and_then(|next| transition_into(track, next));
                 // Cuts read the files, so only clips that can sound in this buffer look at theirs.
                 let reach = us_to_samples(CUT_FADE_US);
                 let earliest = transition_in.map_or(c0 - reach, |(a, _)| us_to_samples(a));
@@ -242,11 +255,15 @@ impl Mixer {
                 let joined_before = begin == c0 && index > 0 && continues(&track.clips[index - 1], clip);
                 let joined_after = finish == c1 && track.clips.get(index + 1).is_some_and(|next| continues(clip, next));
                 let edges = (if joined_before { 0 } else { EDGE_FADE }, if joined_after { 0 } else { EDGE_FADE });
+                let duck = (*duck_db > 0.0).then(|| &*ducking.get_or_insert_with(|| self.ducking(project, start, end)));
                 for i in from.max(begin)..to.min(finish) {
                     let src = src0 + (i as f64 - origin) * *speed as f64;
-                    let gain = volume
+                    let mut gain = volume
                         * gain_at(i, begin, finish, edges, incoming, outgoing)
                         * fade_gain(i, c0, c1, us_to_samples(*fade_in_us), us_to_samples(*fade_out_us));
+                    if let Some(duck) = duck {
+                        gain *= db_to_gain(-(*duck_db * duck[(i - start) as usize]) as f64);
+                    }
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
                         out[o + ch] += sample_at(samples, src, ch) * gain;
@@ -258,6 +275,11 @@ impl Mixer {
             *s = s.clamp(-1.0, 1.0);
         }
     }
+}
+
+/// Where a transition into `clip` plays; only the main track has them.
+fn transition_into(track: &Track, clip: &Clip) -> Option<(i64, i64)> {
+    if track.id == crate::edit::MAIN_TRACK { transition_window(clip) } else { None }
 }
 
 fn sample_at(samples: &[f32], position: f64, channel: usize) -> f32 {
@@ -281,12 +303,26 @@ fn cleans_voice(clip: &Clip) -> bool {
 }
 
 /// Whether `next` starts where `clip` ends and plays on from the same source at the same
-/// level, as the two halves of a split do. Halves of which only one cleans the voice sound
-/// different, so they crossfade like a cut.
+/// level, as the two halves of a split do. Halves of which only one cleans the voice, or that
+/// duck differently, sound different, so they crossfade like a cut.
 fn continues(clip: &Clip, next: &Clip) -> bool {
     let (
-        ClipContent::Media { asset_id: a, source_in_us: source_a, volume: volume_a, speed: speed_a, .. },
-        ClipContent::Media { asset_id: b, source_in_us: source_b, volume: volume_b, speed: speed_b, .. },
+        ClipContent::Media {
+            asset_id: a,
+            source_in_us: source_a,
+            volume: volume_a,
+            speed: speed_a,
+            duck_db: duck_a,
+            ..
+        },
+        ClipContent::Media {
+            asset_id: b,
+            source_in_us: source_b,
+            volume: volume_b,
+            speed: speed_b,
+            duck_db: duck_b,
+            ..
+        },
     ) = (&clip.content, &next.content)
     else {
         return false;
@@ -296,6 +332,7 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
         && clip.end_us() == next.start_us
         && speed_a == speed_b
         && volume_a == volume_b
+        && duck_a == duck_b
         && cleans_voice(clip) == cleans_voice(next)
         && (source_b - source_end).abs() <= samples_to_us(1)
 }
@@ -376,6 +413,87 @@ impl Mixer {
         let window = (SAMPLE_RATE / 100) as usize;
         let loudest = (from..to).step_by(window).map(|a| rms(a, (a + window).min(to))).fold(0.0, f32::max);
         Some(level <= loudest * QUIET_BELOW_KEPT)
+    }
+
+    /// How far ducked clips are down at each frame of `start..end`: 0 at full level, 1 down by their
+    /// whole `duck_db`. Speech is heard clips that do not duck themselves; the result depends only on
+    /// the timeline, never on where a buffer starts, so playback and export agree.
+    fn ducking(&mut self, project: &Project, start: i64, end: i64) -> Vec<f32> {
+        // Speech this far around the buffer still moves it; nothing further can.
+        let first = (start - DUCK_HOLD - DUCK_RELEASE).div_euclid(SPEECH_BLOCK);
+        let last = (end + DUCK_ATTACK).div_euclid(SPEECH_BLOCK) + 1;
+        let mut speech = vec![false; (last - first) as usize];
+        for track in &project.tracks {
+            for (index, clip) in track.clips.iter().enumerate() {
+                // A clip that lowers itself is never speech.
+                let ClipContent::Media { asset_id, source_in_us, speed, duck_db: 0.0, .. } = &clip.content else {
+                    continue;
+                };
+                if !is_heard(project, track, clip) {
+                    continue;
+                }
+                // Across a transition its sound starts early or plays on, as the mix has it.
+                let begin = (index > 0).then(|| transition_into(track, clip)).flatten().map_or(clip.start_us, |w| w.0);
+                let finish = track.clips.get(index + 1).and_then(|next| transition_into(track, next));
+                let (c0, c1) = (us_to_samples(begin), us_to_samples(finish.map_or(clip.end_us(), |w| w.1)));
+                let blocks = c0.div_euclid(SPEECH_BLOCK).max(first)..(c1.div_euclid(SPEECH_BLOCK) + 1).min(last);
+                if blocks.is_empty() {
+                    continue;
+                }
+                let Some(asset) = project.asset(asset_id) else { continue };
+                let path = pcm_path(&self.cache_dir, asset);
+                let Some(pcm) = self.open(path.clone(), asset) else { continue };
+                let samples = pcm.samples();
+                let file =
+                    self.speech.entry(path).or_insert_with(|| vec![0; pcm.frames().div_ceil(SPEECH_BLOCK as usize)]);
+                let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
+                let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
+                let src = |t: i64| src0 + (t as f64 - origin) * *speed as f64;
+                for block in blocks {
+                    // The part of the timeline block the clip sounds in, and every block of the file it plays.
+                    let (a, b) = ((block * SPEECH_BLOCK).max(c0), ((block + 1) * SPEECH_BLOCK).min(c1));
+                    if a >= b || src(b - 1) < 0.0 {
+                        continue;
+                    }
+                    let (from, to) = (src(a).max(0.0) as i64 / SPEECH_BLOCK, src(b - 1) as i64 / SPEECH_BLOCK);
+                    for i in from as usize..=to as usize {
+                        let Some(level) = file.get_mut(i) else { break };
+                        if *level == 0 {
+                            let size = SPEECH_BLOCK as usize * CHANNELS;
+                            let part = &samples[i * size..((i + 1) * size).min(samples.len())];
+                            let rms = (part.iter().map(|s| s * s).sum::<f32>() / part.len().max(1) as f32).sqrt();
+                            *level = if rms > SPEECH_RMS { 2 } else { 1 };
+                        }
+                        speech[(block - first) as usize] |= *level == 2;
+                    }
+                }
+            }
+        }
+        if self.speech.len() > 256 {
+            self.speech.clear();
+        }
+        // Where the latest speech before each block ended and the next one after it starts.
+        let at = |index: usize| (first + index as i64) * SPEECH_BLOCK;
+        let mut ended = vec![None; speech.len()];
+        let mut starts = vec![None; speech.len()];
+        for index in 1..speech.len() {
+            ended[index] = if speech[index - 1] { Some(at(index)) } else { ended[index - 1] };
+        }
+        for index in (0..speech.len().saturating_sub(1)).rev() {
+            starts[index] = if speech[index + 1] { Some(at(index + 1)) } else { starts[index + 1] };
+        }
+        (start..end)
+            .map(|i| {
+                let index = (i.div_euclid(SPEECH_BLOCK) - first) as usize;
+                if speech[index] {
+                    return 1.0;
+                }
+                let release =
+                    ended[index].map_or(0.0, |e| 1.0 - (i - e - DUCK_HOLD).max(0) as f32 / DUCK_RELEASE as f32);
+                let attack = starts[index].map_or(0.0, |s| 1.0 - (s - i) as f32 / DUCK_ATTACK as f32);
+                release.max(attack).clamp(0.0, 1.0)
+            })
+            .collect()
     }
 }
 
@@ -766,6 +884,7 @@ mod tests {
                     fade_out_us: 0,
                     clean_voice: false,
                     shape: None,
+                    duck_db: 0.0,
                 },
             );
             if id == "b" {
@@ -830,6 +949,7 @@ mod tests {
                     fade_out_us: 0,
                     clean_voice: false,
                     shape: None,
+                    duck_db: 0.0,
                 },
             );
             if id == "b" {
@@ -985,6 +1105,42 @@ mod tests {
         let mean = out.as_chunks::<CHANNELS>().0.iter().map(|f| f[0]).sum::<f32>() / 960.0;
         std::fs::remove_dir_all(cache).unwrap();
         assert!(mean.abs() < 0.02, "the deleted word sounds at the cut: offset {mean}");
+    }
+
+    /// Ducking hears speech wherever the mix plays it: in every block of a sped-up clip, and before a clip's
+    /// start or past its end where a transition plays its sound.
+    #[test]
+    fn ducking_hears_speech_sped_up_and_across_a_transition() {
+        use crate::edit::EditCmd;
+        let cache = std::env::temp_dir().join(format!("nuzky-audio-ducking-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let heard = |project: &Project, from: f64, to: f64| {
+            let (from, to) = ((from * 48_000.0) as i64, (to * 48_000.0) as i64);
+            Mixer::new(cache.clone()).ducking(project, from, to).into_iter().fold(0.0f32, f32::max)
+        };
+        let edit = |project: &mut Project, cmd: serde_json::Value| {
+            project.apply(serde_json::from_value::<EditCmd>(cmd).unwrap()).unwrap();
+        };
+        // A 10 ms sound at 0.92 s of the file played at 2x, at 0.46 s: in a block a reading at the middle of each
+        // timeline block would skip.
+        let mut fast = take(&cache, |t| if (0.92..0.93).contains(&t) { 0.5 } else { 0.0 });
+        let id = fast.tracks[0].clips[0].id.clone();
+        edit(&mut fast, serde_json::json!({"type": "updateClip", "clipId": id, "speed": 2.0}));
+        let fast_word = heard(&fast, 0.45, 0.47);
+        // Speech at 0.8–0.95 s of the file, cut out at 0.6–1.0 s: a 0.6 s dissolve plays it anyway, the first
+        // clip's sound going on to 0.9 s and the second's starting at 0.3 s, both silent where the clips are.
+        let mut cut = take(&cache, |t| if (0.8..0.95).contains(&t) { 0.5 } else { 0.0 });
+        self::cut(&mut cut, 600_000, 1_000_000);
+        let id = cut.tracks[0].clips[1].id.clone();
+        edit(
+            &mut cut,
+            serde_json::json!({"type": "setTransition", "clipId": id, "transition": {"kind": "dissolve", "durationUs": 600_000}}),
+        );
+        assert_eq!(transition_window(&cut.tracks[0].clips[1]), Some((300_000, 900_000)));
+        let (early, late) = (heard(&cut, 0.42, 0.53), heard(&cut, 0.81, 0.89));
+        std::fs::remove_dir_all(cache).unwrap();
+        assert_eq!(fast_word, 1.0, "speech played at 2x goes unheard");
+        assert_eq!((early, late), (1.0, 1.0), "speech in a transition goes unheard");
     }
 
     #[test]

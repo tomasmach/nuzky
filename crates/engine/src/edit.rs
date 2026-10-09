@@ -16,6 +16,7 @@ const UNDO_LIMIT: usize = 200;
 pub const MIN_SPEED: f32 = 0.1;
 pub const MAX_SPEED: f32 = 10.0;
 pub const MAX_TRANSITION_US: i64 = 2_000_000;
+pub const MAX_DUCK_DB: f32 = 40.0;
 pub const CAPTION_Y: f32 = 0.15;
 
 #[derive(Deserialize)]
@@ -47,10 +48,16 @@ pub struct Limits {
     pub max_transition_us: i64,
     /// Vertical offset of generated captions from the canvas centre, as a fraction of its height.
     pub caption_y: f32,
+    pub max_duck_db: f32,
 }
 
-pub const LIMITS: Limits =
-    Limits { min_speed: MIN_SPEED, max_speed: MAX_SPEED, max_transition_us: MAX_TRANSITION_US, caption_y: CAPTION_Y };
+pub const LIMITS: Limits = Limits {
+    min_speed: MIN_SPEED,
+    max_speed: MAX_SPEED,
+    max_transition_us: MAX_TRANSITION_US,
+    caption_y: CAPTION_Y,
+    max_duck_db: MAX_DUCK_DB,
+};
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -131,6 +138,9 @@ pub enum EditCmd {
         clean_voice: Option<bool>,
         /// Video and image clips: corners, border and shadow. The default shape removes them.
         shape: Option<Shape>,
+        /// Ducking: how many dB the clip goes down while a video's own sound has speech, up to 40;
+        /// 0 turns it off. 12 suits music under speech.
+        duck_db: Option<f32>,
     },
     SetAnimation {
         clip_id: String,
@@ -283,6 +293,7 @@ fn media(asset_id: String, transform: Transform, shape: Option<Shape>) -> ClipCo
         fade_out_us: 0,
         clean_voice: false,
         shape,
+        duck_db: 0.0,
     }
 }
 
@@ -773,6 +784,7 @@ impl Project {
                 fade_out_us,
                 clean_voice,
                 shape,
+                duck_db,
             } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let changes_length = speed.is_some();
@@ -803,6 +815,7 @@ impl Project {
                         fade_out_us: fo,
                         clean_voice: cv,
                         shape: sh,
+                        duck_db: duck,
                         ..
                     } => {
                         if let Some(x) = transform {
@@ -825,6 +838,9 @@ impl Project {
                         }
                         if let Some(x) = clean_voice {
                             *cv = x;
+                        }
+                        if let Some(x) = duck_db {
+                            *duck = x.clamp(0.0, MAX_DUCK_DB);
                         }
                         if let Some(x) = speed {
                             let x = x.clamp(MIN_SPEED, MAX_SPEED);
@@ -1747,6 +1763,7 @@ mod tests {
             fade_out_us: None,
             clean_voice: None,
             shape: None,
+            duck_db: None,
         }
     }
 
@@ -1772,6 +1789,7 @@ mod tests {
             fade_out_us,
             clean_voice: None,
             shape: None,
+            duck_db: None,
         })
         .unwrap();
         assert_eq!(main_layout(&p), vec![(0, 2500)]);
@@ -1811,6 +1829,7 @@ mod tests {
             fade_out_us,
             clean_voice: None,
             shape: None,
+            duck_db: None,
         };
         assert!(e.apply(slower, None).is_err());
         assert_eq!(e.project, before);
@@ -1838,6 +1857,7 @@ mod tests {
             fade_out_us,
             clean_voice: None,
             shape: None,
+            duck_db: None,
         })
         .unwrap();
         p.apply(EditCmd::TrimClip { clip_id: id, start_us: 0, duration_us: 33_334, source_in_us: Some(4_966_666) })
@@ -2011,6 +2031,7 @@ mod tests {
                     fade_out_us: None,
                     clean_voice: None,
                     shape: None,
+                    duck_db: None,
                 },
                 "split_left" => EditCmd::SplitClip { clip_id, at_us: 5_500_000 },
                 "split_right" => EditCmd::SplitClip { clip_id, at_us: 9_500_000 },
@@ -2076,6 +2097,7 @@ mod tests {
                 fade_out_us: None,
                 clean_voice: None,
                 shape: None,
+                duck_db: None,
             };
             e.apply(cmd, Some("vol".into())).unwrap();
         }
