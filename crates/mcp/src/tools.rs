@@ -300,13 +300,13 @@ impl Backend {
         let range = activity::timeline_range(&project, args.range_us)?;
         media::check_media(&project)?;
         let cache = self.host.cache_dir.clone();
-        // Everything the mix plays in the range, music included; the mix leaves out unprepared files.
+        // Everything the mix can play, music included, also sound that a transition carries over
+        // the range's edge; the mix leaves out files whose sound is not prepared.
         let heard: HashSet<&str> = project
             .tracks
             .iter()
             .filter(|track| !track.muted && track.kind != nuzky_engine::model::TrackKind::Text)
             .flat_map(|track| &track.clips)
-            .filter(|clip| clip.start_us < range.1 && clip.end_us() > range.0)
             .filter_map(|clip| match &clip.content {
                 nuzky_engine::model::ClipContent::Media { asset_id, volume, .. } if *volume > 0.0 => {
                     Some(asset_id.as_str())

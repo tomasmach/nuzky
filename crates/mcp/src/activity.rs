@@ -255,7 +255,7 @@ impl Cursor {
 
 /// Candidates 0.25 s apart, further apart when a range would hold more than `MAX_CANDIDATES`.
 fn candidate_every(start: i64, end: i64) -> i64 {
-    LOOK_EVERY_US.max((end - start + MAX_CANDIDATES - 1) / MAX_CANDIDATES)
+    LOOK_EVERY_US.max((end - start - 1) / MAX_CANDIDATES + 1)
 }
 
 pub struct Changes {
@@ -344,6 +344,8 @@ mod tests {
             assert!(Cursor::decode(bad, "e1", 7).unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"), "{bad}");
         }
         assert!(Cursor::decode("e1.7.0.10000000.250000.40.12", "e1", 7).is_ok());
+        // A huge end decodes without overflowing; changes then refuses it as past the timeline.
+        assert!(Cursor::decode("e1.7.0.9223372036854775807.76861433640456466.0.12", "e1", 7).is_ok());
     }
 
     #[test]
