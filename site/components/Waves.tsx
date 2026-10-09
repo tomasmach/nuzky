@@ -141,9 +141,11 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
-        gl.viewport(0, 0, w, h);
-        gl.uniform2f(uRes, w, h);
       }
+      // Always, not only on a resize: a remount (React runs effects twice in development) reuses the
+      // sized canvas with a new program whose resolution would otherwise stay 0 and pin the light to the left edge.
+      gl.viewport(0, 0, w, h);
+      gl.uniform2f(uRes, w, h);
       if (swellAt) {
         const rect = canvas.getBoundingClientRect();
         gl.uniform1f(uBase, anchorY(anchors[0], rect, h * height));
