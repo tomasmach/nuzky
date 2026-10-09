@@ -3,6 +3,7 @@ import { buildFromSource, license, releaseNotes, repo } from "@/lib/site";
 
 export function Footer() {
   const links = [
+    ["Nuzky vs CapCut", "/capcut-alternative"],
     ["GitHub", repo],
     ["Releases", releaseNotes],
     ["Building from source", buildFromSource],
