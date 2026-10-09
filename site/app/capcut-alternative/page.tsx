@@ -21,7 +21,7 @@ const shareImage = (src: string) => ({
   url: src,
   width: 2400,
   height: 1260,
-  alt: "Nuzky: Make the reel. Skip the subscription. A free, open source video editor with AI built in.",
+  alt: "Nuzky: You just wanted to edit. Now you can. A free, open source video editor that writes your captions and cuts out the ums, the pauses and the retakes.",
 });
 
 export const metadata: Metadata = {
@@ -82,7 +82,7 @@ export default function CapcutAlternative() {
               <span className="text-subtle">CapCut alternative.</span>
             </h1>
             <p className="mt-7 max-w-[720px] text-[17px] text-muted sm:text-[20px]">
-              Nuzky is an open source video editor for Reels, TikTok and Shorts. Captions, 4K export and every effect cost nothing, so export never asks you to
+              Nuzky is an open source video editor for TikTok, Reels, Shorts and YouTube. Captions, 4K export and every effect cost nothing, so export never asks you to
               upgrade.
             </p>
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3">

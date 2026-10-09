@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { ArrowRight, Check, Equal, FileText, HardDrive, MoveHorizontal, Scale, Scissors, Sparkles, Type } from "lucide-react";
+import { ArrowRight, Check, Equal, HardDrive, MoveHorizontal, Scale, Scissors, Sparkles, Type } from "lucide-react";
 import { Fit } from "./Fit";
 import { GitHubLogo } from "./Logos";
 import { SectionHeading } from "./SectionHeading";
@@ -112,41 +112,36 @@ function SameRender() {
   );
 }
 
-function EditFile() {
-  const lines = ["Hook in the first 1.5 s", "Cut pauses over 0.4 s", "Captions: Bold, 3 words a line", "Zoom in on the product"];
+// The caption model picker: the visitor's language is the point, so the caption is in Czech.
+function Language() {
+  const languages = ["English", "Čeština", "Español"];
   return (
-    <div className="w-[290px] overflow-hidden rounded-[14px] bg-panel ring-1 ring-inset ring-white/[0.08]">
-      <div className="flex h-8 items-center gap-[7px] border-b border-white/[0.06] px-3 text-[12px] text-muted">
-        <FileText className="size-[13px]" />
-        EDIT.md
-      </div>
-      <div className="flex flex-col gap-[7px] px-3.5 pb-3.5 pt-3 font-mono text-[11.5px]">
-        <span className="font-semibold"># How Mia edits</span>
-        {lines.map((l, i) => (
-          <span key={l} className={i === 3 ? "text-fg/50" : "text-fg/85"}>
-            <span className="text-accent">- </span>
+    <>
+      <div className="flex w-[250px] flex-col gap-0.5 rounded-[12px] bg-panel p-1 ring-1 ring-inset ring-white/[0.07]">
+        {languages.map((l) => (
+          <span key={l} className={`flex h-8 items-center justify-between rounded-lg px-2.5 text-[12px] ${l === "Čeština" ? "bg-white/[0.08]" : "text-muted"}`}>
             {l}
+            {l === "Čeština" && <Check className="size-3.5 text-accent" />}
           </span>
         ))}
       </div>
-    </div>
+      <span lang="cs" className="rounded-md bg-black/70 px-2.5 py-1 text-[15px] font-extrabold ring-1 ring-white/10">
+        a pak jsme vylezli až <span className="text-caption-yellow">nahoru</span>
+      </span>
+    </>
   );
 }
 
 function Loudness() {
   return (
     <>
-      <div className="flex items-end gap-1.5">
-        <span className="text-[64px] font-semibold leading-none tracking-[-0.04em]">−14</span>
-        <span className="pb-2 text-[16px] font-medium text-muted">LUFS</span>
-      </div>
-      <div className="flex h-9 items-end gap-[3px]" aria-hidden>
+      <div className="flex h-14 items-end gap-[3px]" aria-hidden>
         {Array.from({ length: 30 }, (_, k) => (
           <span
             key={k}
             className="w-[5px] rounded-[1.5px]"
             style={{
-              height: 8 + Math.round(26 * Math.abs(Math.sin(k * 0.5 + 0.4)) * (k < 26 ? 1 : 0.4)),
+              height: 12 + Math.round(40 * Math.abs(Math.sin(k * 0.5 + 0.4)) * (k < 26 ? 1 : 0.4)),
               background: k < 22 ? "var(--color-ok)" : k < 26 ? "var(--color-warn)" : "rgb(255 255 255 / 0.15)",
             }}
           />
@@ -156,6 +151,7 @@ function Loudness() {
         <Chip>Reels</Chip>
         <Chip>TikTok</Chip>
         <Chip>Shorts</Chip>
+        <Chip>YouTube</Chip>
       </div>
     </>
   );
@@ -233,25 +229,25 @@ export function Features() {
     <section id="features" className="mx-auto w-full max-w-[1240px] scroll-mt-10 px-5 pt-32 sm:pt-[180px]">
       <SectionHeading center first="Built like a pro tool." second="Without the price of one." />
       <div className="mt-12 grid gap-4 md:grid-cols-3">
-        <Tile wide tall title="Frame accurate" text="Every cut lands on the exact frame, even in variable frame rate video from a phone.">
+        <Tile wide tall title="Frame accurate" text="Every cut lands on the exact frame you picked, even in iPhone and Android video.">
           <FrameAccurate />
         </Tile>
-        <Tile tall title="Opens the right way up" text="Nuzky reads rotation and front camera mirroring from the file and applies them to the preview, thumbnails and export.">
+        <Tile tall title="Opens the right way up" text="Selfies and sideways phone videos open the way you shot them, in the preview and in the export.">
           <Upright />
         </Tile>
-        <Tile title="What you see is what you export" text="Preview and export share one renderer.">
+        <Tile title="What you see is what you export" text="The file you post looks exactly like the preview.">
           <SameRender />
         </Tile>
-        <Tile title="Learns how you edit" text="Nuzky studies your finished cuts and writes an EDIT.md that agents follow.">
-          <EditFile />
+        <Tile title="Captions in your language" text="Pick your language and the model that knows it best, and tell it the names you use. It runs on your computer, with no limit.">
+          <Language />
         </Tile>
-        <Tile title="Ready to post" text="1080 × 1920 at 30 fps, with the sound levelled to −14 LUFS.">
+        <Tile title="As loud as the feed" text="Export levels your sound the way social apps expect, so nobody has to turn you up.">
           <Loudness />
         </Tile>
         <Tile tall title="Saves every edit" text="A crash or a closed window never costs you a cut.">
           <History />
         </Tile>
-        <Tile wide tall title="Free, for good" text="No subscription and no watermark, ever. Your videos stay on your computer while you edit, caption and export." backdrop={<Waves height={0.3} intensity={0.5} />}>
+        <Tile wide tall title="Free, for good" text="The code is public, so it stays free. Your videos stay on your computer while you edit, caption and export." backdrop={<Waves height={0.3} intensity={0.5} />}>
           <Free />
         </Tile>
       </div>

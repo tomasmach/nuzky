@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { Agent } from "@/components/Agent";
 import { Download } from "@/components/Download";
+import { EditStyle } from "@/components/EditStyle";
 import { Faq } from "@/components/Faq";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
 import { Hero } from "@/components/Hero";
 import { JsonLd } from "@/components/JsonLd";
+import { Maker } from "@/components/Maker";
 import { Nav } from "@/components/Nav";
 import { Showcase } from "@/components/Showcase";
 import { Steps } from "@/components/Steps";
@@ -59,8 +61,10 @@ export default function Home() {
           <Hero />
           <Showcase />
         </div>
+        <Maker />
         <Steps />
         <Agent />
+        <EditStyle />
         <Features />
         <Faq />
         <Download />

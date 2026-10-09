@@ -50,10 +50,10 @@ const tabs: Tab[] = [
     id: "export",
     label: "Export",
     icon: Upload,
-    summary: "Export for Reels and TikTok in one click. The file looks exactly like the preview.",
+    summary: "Export for Reels, TikTok or YouTube in one click. The file looks exactly like the preview.",
     spots: [
       { x: 380, y: 300, title: "Same renderer", text: "The same renderer draws the preview and the export.", side: "left" },
-      { x: 820, y: 360, title: "Made for Reels and TikTok", text: "1080 × 1920 at 30 fps, with the sound levelled to −14 LUFS.", side: "right" },
+      { x: 820, y: 360, title: "Made for Reels and TikTok", text: "1080 × 1920 at 30 fps, with the sound as loud as the rest of the feed.", side: "right" },
     ],
   },
 ];

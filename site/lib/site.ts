@@ -5,7 +5,7 @@ export const version: string = pkg.version;
 
 export const url = "https://nuzky.app";
 export const description =
-  "A free video editor for Reels, TikTok and Shorts. Free auto captions with no limit, no watermark, no subscription, and AI that can do the cutting for you.";
+  "A free video editor for TikTok, Reels, Shorts and YouTube. AI writes the captions in your language and cuts the ums, pauses and retakes. No subscription, no watermark.";
 
 export const repo = "https://github.com/tomasmach/nuzky";
 export const releaseNotes = `${repo}/releases`;

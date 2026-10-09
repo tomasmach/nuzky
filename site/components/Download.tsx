@@ -1,7 +1,9 @@
 import Image from "next/image";
 import { ArrowDownToLine } from "lucide-react";
 import { platformLogo } from "./Logos";
+import { NotifyForm } from "./NotifyForm";
 import { Waves } from "./Waves";
+import { notifyNote } from "@/lib/content";
 import { buildFromSource, license, platforms, releaseNotes, version } from "@/lib/site";
 
 export function Download() {
@@ -12,6 +14,13 @@ export function Download() {
         <div className="flex flex-col items-center gap-5">
           <Image src="/media/icon.png" alt="Nuzky app icon" width={140} height={140} />
           <h2 className="text-center text-[44px] font-semibold leading-none tracking-[-0.04em] sm:text-[56px]">Download Nuzky.</h2>
+        </div>
+
+        <div className="flex w-full max-w-[400px] flex-col items-center gap-3 text-center">
+          <NotifyForm noteId="download-notify-note" />
+          <p id="download-notify-note" className="text-[14px] leading-[1.5] text-muted">
+            {notifyNote}
+          </p>
         </div>
 
         <div className="flex flex-col items-center gap-[22px]">

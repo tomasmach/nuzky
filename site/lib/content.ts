@@ -1,18 +1,31 @@
 // Copy that the pages, the structured data for search engines and the Markdown for AI agents all share,
-// so a fact changes in one place. It is written for creators who edit reels, not for developers.
+// so a fact changes in one place. It is written for creators who edit their videos, not for developers.
 
 import { releaseNotes } from "./site";
 
 export type Faq = { q: string; a: string; link?: { label: string; href: string } };
 
+export const maker = { name: "Tomáš Mach", photo: "/media/tomas.jpg", role: "Makes videos, builds Nuzky" };
+
+// Why Nuzky exists, in Tomáš's words. Every line is his own experience, so keep it first person and true.
+export const makerNote = [
+  "I make talking-head videos for Instagram and TikTok. Talking is the fun part. Then come two or three hours of writing captions and cutting out every um, every pause and every retake.",
+  "CapCut's cheapest paid plan costs 700 CZK a month here in Czechia, about $30. And its Czech captions were so bad that I retyped most of them anyway.",
+  "So I'm building the editor I wanted. AI on your computer writes the captions, with the model that knows your language best and the names you actually say. The ChatGPT or Claude you already pay for makes the rough cut. It doesn't make videos for you. It does the boring part.",
+  "Nuzky is free, and it stays free. There's no paid plan coming. The code is public, so nobody can take the free version away. Not even me.",
+];
+
+// Under every email field. The field collects one thing for one email, and the copy has to keep that promise.
+export const notifyNote = "One email when the first version is out. No newsletter, and I won't sell or share your address.";
+
 export const faq: Faq[] = [
   {
     q: "Is Nuzky really free?",
-    a: "Yes. No subscription, no watermark on your videos and no sign-up. Nuzky is open source, so it stays free. If you let AI do the editing, it runs on your own Claude or ChatGPT plan.",
+    a: "Yes. No subscription, no watermark on your videos, no sign-up and no paid plan coming. The code is public, so it stays free. If you let AI do the cutting, it runs on the ChatGPT or Claude plan you already have.",
   },
   {
     q: "When can I download it?",
-    a: "Soon. The first version for Mac, Windows and Linux is on its way. If you have a GitHub account, watch Nuzky's releases and you'll get an email when it's out.",
+    a: "Soon. The first version for Mac, Windows and Linux is on its way. Leave your email below and you'll get one email when it's out. If you're on GitHub, you can also watch the releases.",
     link: { label: "Nuzky releases on GitHub", href: releaseNotes },
   },
   {
@@ -22,7 +35,7 @@ export const faq: Faq[] = [
   },
   {
     q: "Are the auto captions free?",
-    a: "Yes, with no limit. Nuzky writes captions from what you say, right on your computer. Pick a style, make the spoken word light up and fix any word it got wrong.",
+    a: "Yes, with no limit. AI on your computer writes them from what you say. Pick the model that's best for your language, give it the names and words you use, and fix anything it still gets wrong. Then pick a style and make the spoken word light up.",
   },
   {
     q: "Are my videos private?",
@@ -30,15 +43,23 @@ export const faq: Faq[] = [
   },
   {
     q: "Can AI edit the video for me?",
-    a: "Yes. Type what you want, like “cut the ums and pauses and add captions”, and watch it edit in the app. Stop it any time, and one undo takes it all back. It runs on your own Claude or ChatGPT plan, and doesn't work on Windows yet.",
+    a: "Yes. Type what you want, like “cut the ums and pauses and add captions”, and watch it edit in the app. Stop it any time, and one undo takes it all back. It runs on the ChatGPT or Claude plan you already pay for, and Nuzky walks you through setting it up. It doesn't work on Windows yet.",
+  },
+  {
+    q: "Do I need ChatGPT or Claude?",
+    a: "Only if you want AI to make the rough cut. Editing, captions and export work without them. AI cutting doesn't work on Windows yet.",
   },
   {
     q: "Will videos from my phone work?",
     a: "Yes. iPhone and Android videos open the right way up, selfies included, and every cut lands on the exact frame you picked.",
   },
   {
-    q: "Is it ready for TikTok, Reels and Shorts?",
-    a: "Yes. Pick the Reels & TikTok export and you get a vertical 1080 × 1920 video with the volume levelled for social apps.",
+    q: "Is it ready for TikTok, Reels, Shorts and YouTube?",
+    a: "Yes. Pick the Reels & TikTok export and you get a vertical 1080 × 1920 video with the volume levelled for social apps. For YouTube, export widescreen at any size up to 4K.",
+  },
+  {
+    q: "Who makes Nuzky?",
+    a: "Tomáš Mach, a creator from Czechia who got tired of spending hours on captions and rough cuts. The name comes from nůžky, Czech for scissors.",
   },
 ];
 
@@ -51,7 +72,7 @@ export const features = [
   "Edit by text: delete words in the transcript and the video cuts with them",
   "Keyframes, speed, entry and exit animations, transitions and filter presets",
   "Text with outline, background box, colour, position, rotation and opacity",
-  "Auto captions on your computer with no limit, seven caption styles and a highlight on the spoken word",
+  "Auto captions on your computer with no limit, a choice of models for your language, a list of the names and words you use, seven caption styles and a highlight on the spoken word",
   "Clean voice for speech recorded with room noise or hum",
   "Real-time preview with sound",
   "MP4 export from 720p to 4K with no watermark, drawn by the same renderer as the preview",
