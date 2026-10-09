@@ -412,10 +412,8 @@ fn music_ducks_under_speech_and_comes_back_in_the_pause() {
         .args(["-v", "error", "-i"])
         .arg(&out)
         .args(["-vn", "-f", "f32le", "-ac", "2", "-ar", "48000", "-"]))
-    .stdout
-    .chunks_exact(4)
-    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-    .collect::<Vec<f32>>();
+    .stdout;
+    let decoded: Vec<f32> = decoded.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect();
     let speech = [1.4, 5.9].map(|t| tone_db(&decoded, 5000.0, t, 0.2));
     let pause = tone_db(&decoded, 5000.0, 3.7, 0.2);
     eprintln!("QA ducking export: music {speech:.2?} dBFS under speech, {pause:.2} dBFS in the pause");
