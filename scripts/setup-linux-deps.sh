@@ -18,21 +18,40 @@ if ! ls "$DEPS"/rpms/libavcodec-free-devel-*.x86_64.rpm >/dev/null 2>&1; then
     libavdevice-free-devel alsa-lib-devel
 fi
 
-rm -rf "$ROOT" && mkdir -p "$ROOT"
-(cd "$ROOT" && for r in "$DEPS"/rpms/*.x86_64.rpm; do rpm2cpio "$r" | cpio -idm --quiet; done)
+# Point the unversioned .so symlinks at the installed runtime libraries. Each link changes in one rename,
+# because other checkouts may be linking against this tree right now.
+link_runtime() {
+  for link in "$1"/usr/lib64/*.so; do
+    name="$(basename "$link")"
+    soname="$(ls /usr/lib64/"$name".* 2>/dev/null | sort | head -1 || true)"
+    if [ -n "$soname" ] && [ "$(readlink "$link")" != "$soname" ]; then
+      ln -sfn "$soname" "$link.new" && mv -T "$link.new" "$link"
+    fi
+  done
+}
 
-# Point the unversioned .so symlinks at the installed runtime libraries.
-for link in "$ROOT"/usr/lib64/*.so; do
-  name="$(basename "$link")"
-  soname="$(ls /usr/lib64/"$name".* 2>/dev/null | sort | head -1 || true)"
-  [ -n "$soname" ] && ln -sf "$soname" "$link"
-done
-
-# Rewrite pkg-config paths to the extracted tree.
-for pc in "$ROOT"/usr/lib64/pkgconfig/*.pc; do
-  sed -i -e "s|^libdir=/usr/lib64|libdir=$ROOT/usr/lib64|" \
-         -e "s|^includedir=/usr/include|includedir=$ROOT/usr/include|" "$pc"
-done
+# One setup at a time. The tree is extracted once, aside, and swapped in with a single rename, so a checkout
+# that builds meanwhile always finds a whole tree.
+exec 7>"$DEPS/.setup.lock"
+flock 7
+if [ ! -f "$ROOT/.complete" ]; then
+  fresh="$(mktemp -d "$DEPS/root.XXXXXX")"
+  trap 'rm -rf "$fresh"' EXIT
+  (cd "$fresh" && for r in "$DEPS"/rpms/*.x86_64.rpm; do rpm2cpio "$r" | cpio -idm --quiet; done)
+  # Rewrite pkg-config paths to where the tree will live.
+  for pc in "$fresh"/usr/lib64/pkgconfig/*.pc; do
+    sed -i -e "s|^libdir=/usr/lib64|libdir=$ROOT/usr/lib64|" \
+           -e "s|^includedir=/usr/include|includedir=$ROOT/usr/include|" "$pc"
+  done
+  link_runtime "$fresh"
+  touch "$fresh/.complete"
+  # Afterwards $fresh holds the tree an older setup left, or nothing.
+  if [ -e "$ROOT" ]; then mv --exchange -T "$fresh" "$ROOT"; else mv -T "$fresh" "$ROOT"; fi
+  rm -rf "$fresh"
+  trap - EXIT
+fi
+link_runtime "$ROOT"
+exec 7>&-
 
 SDK="${VULKAN_SDK:-}"
 if [ -n "$SDK" ]; then
