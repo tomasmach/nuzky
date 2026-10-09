@@ -719,14 +719,25 @@ impl PcmSink {
         if let Some(start_us) = start_us {
             self.place(start_us, video_end_us)?;
         }
-        let mut f = f.clone();
-        f.set_channel_layout(layout);
+        // A reference to the decoded samples, with the layout the resampler was made for in both of FFmpeg's
+        // fields. ffmpeg-next's clone allocated from the old field, which FFmpeg 6 leaves empty for a mono
+        // WAV, so the copy had no samples and libswresample crashed reading them.
+        let mut frame = frame::Audio::empty();
+        if unsafe { ff::ffi::av_frame_ref(frame.as_mut_ptr(), f.as_ptr()) } < 0 {
+            bail!("Cannot read the decoded audio");
+        }
+        frame.set_channel_layout(layout);
+        unsafe {
+            let ch_layout = &mut (*frame.as_mut_ptr()).ch_layout;
+            ff::ffi::av_channel_layout_uninit(ch_layout);
+            ff::ffi::av_channel_layout_from_mask(ch_layout, layout.bits());
+        }
         let (ctx, _) = self.resampler.as_mut().unwrap();
         // ffmpeg-next sizes the output like the input, which drops samples when upsampling
         // (22.05 or 44.1 kHz to 48 kHz). Allocate for the converted length instead.
         let capacity = f.samples() * SAMPLE_RATE as usize / f.rate().max(1) as usize + 256;
         let mut out = frame::Audio::new(PCM_FORMAT, capacity, ctx.output().channel_layout);
-        ctx.run(&f, &mut out)?;
+        ctx.run(&frame, &mut out)?;
         self.write_out(&out)
     }
 }
