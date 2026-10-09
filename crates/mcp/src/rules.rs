@@ -34,6 +34,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("undo_run", Never, true, false, false),
     rules("import_media", Never, false, false, false),
     rules("inspect_frames", Always, false, true, false),
+    // Only renders and mixes the timeline; preparing missing sound runs as a job.
+    rules("activity", Always, false, true, true),
     // Retakes and emphasis only read stored words and sound and answer at once.
     rules("analyze", When(|args| args["kind"] == "retakes" || args["kind"] == "emphasis"), false, false, true),
     rules("transcribe", Never, false, false, true),
@@ -41,7 +43,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("edit_transcript", When(|args| args["dry_run"] == true), true, false, false),
     // Changes how words read, never what is heard; the recognised text stays in the project.
     rules("correct_words", Never, false, false, false),
-    rules("job", When(|args| args["action"] == "get"), false, false, false),
+    // Cancelling touches only the caller's own job, so a read-only client can stop what it started.
+    rules("job", When(|args| args["action"] == "get" || args["action"] == "cancel"), false, false, false),
     rules("build_captions", Never, true, false, false),
     rules("apply_zooms", Never, true, false, false),
     rules("export_video", Never, false, false, true),
@@ -80,7 +83,7 @@ mod tests {
         let set = |names: &[&'static str]| names.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(
             names(|r| matches!(r.reads, Always)),
-            set(&["get_state", "get_transcript", "inspect_frames", "suggest_options"])
+            set(&["get_state", "get_transcript", "inspect_frames", "activity", "suggest_options"])
         );
         assert_eq!(
             names(|r| r.destructive),
@@ -96,11 +99,11 @@ mod tests {
         );
         assert_eq!(
             names(|r| r.idempotent),
-            set(&["get_state", "get_transcript", "inspect_frames", "apply_edits", "suggest_options"])
+            set(&["get_state", "get_transcript", "inspect_frames", "activity", "apply_edits", "suggest_options"])
         );
-        assert_eq!(names(|r| r.run_job), set(&["analyze", "transcribe", "export_video"]));
+        assert_eq!(names(|r| r.run_job), set(&["analyze", "activity", "transcribe", "export_video"]));
         let job = find("job").unwrap();
-        assert!(job.reads(&json!({"action":"get"})) && !job.reads(&json!({"action":"cancel"})));
+        assert!(job.reads(&json!({"action":"get"})) && job.reads(&json!({"action":"cancel"})));
         let edit = find("edit_transcript").unwrap();
         assert!(edit.reads(&json!({"dry_run":true})) && !edit.reads(&json!({})));
         let analyze = find("analyze").unwrap();

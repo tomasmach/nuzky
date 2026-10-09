@@ -1,4 +1,5 @@
 //! Stdio MCP catalog with local and app-connected backends.
+mod activity;
 pub mod bridge;
 #[cfg(unix)]
 pub mod ipc;
@@ -91,7 +92,11 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Inspect>(
             "inspect_frames",
-            "Render 1–16 timeline times_us as ONE PNG contact sheet with timestamp labels and revision. width is per-frame pixels (96–1280; default 320). safe_area=true overlays translucent unsafe margins on vertical canvases to check captions and faces. Missing media or times outside the timeline are errors.",
+            "Render 1–16 timeline times_us as ONE PNG contact sheet with timestamp labels and revision. Or, instead of times_us, sample: \"changes\" picks the frames itself: in range_us=[start,end) (whole timeline by default) it looks at a candidate every 0.25 s (at most 120, further apart in a longer range; candidate_every_us), compares their perceptual hashes and keeps a frame only if it differs from each of the last four kept by more than min_change of 64 bits (default 16; gestures within one shot mostly stay below it, a cut to other footage is 30 or more), at most max_frames (1-16, default 16) per page. It returns times_us of the kept frames, skipped (candidates that looked like a kept frame) and next: pass it as cursor, with sample and without range_us or min_change, for the next page without repeats; null when the range is done. A static talking head gives one frame per shot. width is per-frame pixels (96–1280; default 320). safe_area=true overlays translucent unsafe margins on vertical canvases to check captions and faces. Missing media or times outside the timeline are errors.",
+        )?,
+        tool::<params::Activity>(
+            "activity",
+            "Read, as text and cheaply, where the picture and sound change, before looking at frames. range_us=[start,end) (whole timeline by default) is split into points steps (8-200, default 60) of step_us; point i covers [start + i*step_us, start + (i+1)*step_us). change: the biggest jump between consecutive looks at the picture within the step (a look every look_every_us at a tiny render of the timeline as exported); motion: how much the picture moves within 0.1 s, averaged over the step; both are the mean colour difference in percent, the measure of analyze scenes, where 18 or more is a hard cut. loudness_db: RMS dBFS of the timeline mix over the step, -120 is silence. peaks lists the strongest local maxima of each curve, {t_us, value} in time order; a change peak's t_us is the look where the new picture showed. A longer range is looked at more sparsely rather than for longer, so a fast pan can score like a cut and a very short insert can fall between looks: confirm with inspect_frames before cutting. AUDIO_NOT_READY names a job that prepares the sound of the files; poll it, then call again. Missing media is an error.",
         )?,
         tool::<params::Analyze>(
             "analyze",

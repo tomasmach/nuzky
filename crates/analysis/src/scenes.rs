@@ -48,7 +48,7 @@ pub fn scene_cuts_cancellable(
     );
     ensure!(params.min_gap_us >= 0, "Scene gap must be nonnegative");
     let mut decoder = VideoDecoder::open(Path::new(&asset.path)).context("Opening scene video")?;
-    let mut previous = None;
+    let mut previous: Option<std::sync::Arc<Vec<u8>>> = None;
     let mut cuts: Vec<SceneCut> = Vec::new();
     let mut motion = 0.0f32;
     let mut last_time = None;
@@ -56,7 +56,7 @@ pub fn scene_cuts_cancellable(
         ensure!(!cancelled(), "CANCELLED: scene analysis cancelled");
         let rgba = decoder.convert(&frame, time_us, 64, 36).context("Downscaling scene frame")?;
         if let Some(ref old) = previous {
-            let score = difference(old, &rgba.data);
+            let score = picture_difference(old.as_slice(), &rgba.data);
             let increasing = last_time.is_none_or(|last| time_us > last);
             let separated = cuts.last().is_none_or(|cut| time_us.saturating_sub(cut.time_us) >= params.min_gap_us);
             let abrupt = score >= params.threshold.max(motion * 3.0 + 0.02);
@@ -74,13 +74,15 @@ pub fn scene_cuts_cancellable(
     Ok(cuts)
 }
 
-fn difference(a: &std::sync::Arc<Vec<u8>>, b: &[u8]) -> f32 {
+/// Mean absolute RGB difference of two RGBA pictures of one size, 0..=1: the measure a scene cut
+/// crosses at `SceneParams::threshold`.
+pub fn picture_difference(a: &[u8], b: &[u8]) -> f32 {
     let sum: u64 = a
         .chunks_exact(4)
         .zip(b.chunks_exact(4))
         .map(|(a, b)| (0..3).map(|ch| a[ch].abs_diff(b[ch]) as u64).sum::<u64>())
         .sum();
-    sum as f32 / (64.0 * 36.0 * 3.0 * 255.0)
+    sum as f32 / ((a.len().min(b.len()) / 4).max(1) as f32 * 3.0 * 255.0)
 }
 
 #[cfg(test)]

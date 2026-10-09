@@ -19,9 +19,11 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::{media, params::*, transcript};
+use crate::{activity, media, params::*, transcript};
 
 const PREVIEW_CHARS: usize = 400;
+/// How long activity waits for its job before handing it over to poll.
+const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 struct PreparedImport {
     paths: Vec<String>,
@@ -123,28 +125,24 @@ impl Backend {
         };
         owned?;
         let mut state = self.host.session.state()?;
-        if rules.is_some_and(|rules| rules.run_job)
-            && state.open_run.as_ref().is_some_and(|run| !runs.as_ref().is_some_and(|runs| runs.contains(&run.run_id)))
-        {
+        // Reads hold no run lock, so they look up whose run it is for the moment of this check.
+        let mine = |run: &str| match &runs {
+            Some(runs) => runs.contains(run),
+            None => self.runs.lock().unwrap().contains(run),
+        };
+        if rules.is_some_and(|rules| rules.run_job) && state.open_run.as_ref().is_some_and(|run| !mine(&run.run_id)) {
             state.open_run = None;
         }
         ensure!(read || self.client.access == Access::Write, "READ_ONLY: this client cannot mutate");
         if let Some(run) = arguments.get("run_id").and_then(Value::as_str) {
-            let mine = match &runs {
-                Some(runs) => runs.contains(run),
-                None => self.runs.lock().unwrap().contains(run),
-            };
-            ensure!(mine, "INVALID_RUN: run belongs to another client");
+            ensure!(mine(run), "INVALID_RUN: run belongs to another client");
             if name != "undo_run" {
                 self.host.session.check_run(run)?;
             }
         }
         state.read_only |= self.client.access == Access::ReadOnly;
         if name == "inspect_frames" {
-            let args: Inspect = parse(arguments)?;
-            let bytes =
-                media::contact_sheet(&self.media_project(&state.project), &args.times_us, args.width, args.safe_area)?;
-            return Ok(CallToolResult::success(vec![ContentBlock::text(json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch, "times_us": args.times_us, "labels": "seconds.microseconds"}).to_string()), ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png")]));
+            return self.inspect(parse(arguments)?, &state);
         }
         let mut value = self.dispatch(name, arguments, &state)?;
         if name == "begin_run"
@@ -219,6 +217,7 @@ impl Backend {
                 )
             }
             "import_media" => self.import(parse(arguments)?, state),
+            "activity" => self.activity(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "transcribe" => self.transcribe(parse(arguments)?, state),
             "get_transcript" => self.get_transcript(parse(arguments)?, state),
@@ -232,6 +231,124 @@ impl Backend {
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
+        }
+    }
+
+    fn inspect(&self, args: Inspect, state: &SessionState) -> Result<CallToolResult> {
+        let project = self.media_project(&state.project);
+        let mut info = json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
+            "labels": "seconds.microseconds"});
+        let times = match args.sample {
+            None => {
+                ensure!(
+                    args.range_us.is_none()
+                        && args.cursor.is_none()
+                        && args.max_frames.is_none()
+                        && args.min_change.is_none(),
+                    "INVALID_ARGUMENTS: range_us, cursor, max_frames and min_change go with sample \"changes\""
+                );
+                args.times_us.context("INVALID_ARGUMENTS: give times_us, or sample \"changes\"")?
+            }
+            Some(Sample::Changes) => {
+                ensure!(args.times_us.is_none(), "INVALID_ARGUMENTS: give times_us or sample, not both");
+                let max = args.max_frames.unwrap_or(media::MAX_FRAMES);
+                ensure!((1..=media::MAX_FRAMES).contains(&max), "INVALID_ARGUMENTS: max_frames must be 1..=16");
+                let cursor = match args.cursor {
+                    Some(cursor) => {
+                        ensure!(
+                            args.range_us.is_none() && args.min_change.is_none(),
+                            "INVALID_ARGUMENTS: the cursor carries range_us and min_change; leave them out"
+                        );
+                        activity::Cursor::decode(&cursor, &state.stamp.session_epoch, state.stamp.revision)?
+                    }
+                    None => {
+                        let min_change = args.min_change.unwrap_or(activity::DEFAULT_MIN_CHANGE);
+                        ensure!(min_change < 64, "INVALID_ARGUMENTS: min_change must be 0..=63");
+                        let range = activity::timeline_range(&project, args.range_us)?;
+                        activity::Cursor::new(&state.stamp.session_epoch, state.stamp.revision, range, min_change)
+                    }
+                };
+                media::check_media(&project)?;
+                let (range, every) = (cursor.range(), cursor.every());
+                let found = activity::changes(&project, cursor, max, &|| self.closed.load(Ordering::Acquire))?;
+                info["sample"] = json!("changes");
+                info["range_us"] = json!([range.0, range.1]);
+                info["candidate_every_us"] = json!(every);
+                info["skipped"] = json!(found.skipped);
+                info["next"] = json!(found.next);
+                if found.times.is_empty() {
+                    info["times_us"] = json!([]);
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(info.to_string())]));
+                }
+                found.times
+            }
+        };
+        let bytes = media::contact_sheet(&project, &times, args.width, args.safe_area)?;
+        info["times_us"] = json!(times);
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(info.to_string()),
+            ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png"),
+        ]))
+    }
+
+    /// Renders and mixes the range as a job, so a long range reports progress and can be cancelled,
+    /// and answers in this call when the job finishes within a few seconds.
+    fn activity(&self, args: Activity, state: &SessionState) -> Result<Value> {
+        let points = args.points.unwrap_or(60);
+        ensure!((8..=200).contains(&points), "INVALID_ARGUMENTS: points must be 8..=200");
+        let project = self.media_project(&state.project);
+        let range = activity::timeline_range(&project, args.range_us)?;
+        media::check_media(&project)?;
+        let cache = self.host.cache_dir.clone();
+        // Everything the mix can play, music included, also sound that a transition carries over
+        // the range's edge; the mix leaves out files whose sound is not prepared.
+        let heard: HashSet<&str> = project
+            .tracks
+            .iter()
+            .filter(|track| !track.muted && track.kind != nuzky_engine::model::TrackKind::Text)
+            .flat_map(|track| &track.clips)
+            .filter_map(|clip| match &clip.content {
+                nuzky_engine::model::ClipContent::Media { asset_id, volume, .. } if *volume > 0.0 => {
+                    Some(asset_id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        let unprepared: Vec<_> = project
+            .assets
+            .iter()
+            .filter(|a| heard.contains(a.id.as_str()) && nuzky_engine::audio::has_audio(a))
+            .filter(|a| !nuzky_engine::audio::pcm_path(&cache, a).exists())
+            .cloned()
+            .collect();
+        let job = self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "activity",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                for (i, asset) in unprepared.iter().enumerate() {
+                    progress.set("preparing_audio", Some(i as f32 / unprepared.len() as f32));
+                    nuzky_engine::audio::ensure_pcm(&cache, asset, |_| check_cancel(&cancel))?;
+                }
+                let cancelled = || cancel.load(Ordering::Relaxed);
+                activity::activity(&project, &cache, range, points, &cancelled, &|done| {
+                    progress.set("looking", Some(done))
+                })
+            },
+        )?;
+        let id = job["job_id"].as_str().context("Job has no id")?.to_owned();
+        let deadline = std::time::Instant::now() + ANSWER_WAIT;
+        loop {
+            let job = self.host.jobs.get(&id, false)?;
+            match job["status"].as_str() {
+                Some("done") => return Ok(job["result"].clone()),
+                Some("failed") => anyhow::bail!("{}", job["error"].as_str().unwrap_or("JOB_FAILED")),
+                Some("running") if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                _ => return Ok(job),
+            }
         }
     }
 
@@ -860,6 +977,38 @@ mod tests {
         }
         assert!(host.session.state().unwrap().open_run.is_some());
         drop((agent, viewer));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn read_only_clients_cancel_their_own_jobs_only() {
+        let dir = std::env::temp_dir().join(format!("job-owners-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.nuzky");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("jobs")).unwrap()).unwrap();
+        let session = ProjectSession::open(&path, Mode::Write, None).unwrap();
+        let host = Arc::new(Host::new(session, dir.join("cache")).unwrap());
+        let client = |access| Backend::shared(host.clone(), &path, Client { id: new_id(), access }).unwrap();
+        let (writer, reader) = (client(Access::Write), client(Access::ReadOnly));
+        let stamp = host.session.stamp();
+        let job = |owner: &Backend| {
+            let started = host.start_job(&owner.client.id, None, "analysis", stamp.clone(), |cancel, _| {
+                while !cancel.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                anyhow::bail!("CANCELLED: test")
+            });
+            started.unwrap()["job_id"].as_str().unwrap().to_owned()
+        };
+        let (theirs, mine) = (job(&writer), job(&reader));
+        let refused = format!("{:#}", reader.call("job", json!({"job_id": theirs, "action": "cancel"})).unwrap_err());
+        assert!(refused.starts_with("UNAUTHORIZED"), "{refused}");
+        let cancel =
+            reader.call("job", json!({"job_id": mine, "action": "cancel"})).unwrap().structured_content.unwrap();
+        assert_eq!(cancel["cancel_requested"], true);
+        host.jobs.get(&theirs, true).unwrap();
+        drop((writer, reader));
+        host.jobs.shutdown();
         std::fs::remove_dir_all(dir).unwrap();
     }
 

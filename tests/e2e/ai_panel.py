@@ -98,6 +98,9 @@ def ai_panel(r):
     r.check('a card lists exactly what changed, from the project itself',
             'Shortened the video from' in text and 'Cut out 1 passage, 2.0 s in total' in text and 'Added 2 captions' in text, text)
     r.check("the agent's answer streams in", 'Hotovo.' in text, text)
+    r.s.run("[...document.querySelectorAll('aside[aria-label=AI] button')].filter((b) => /^\\d+ steps?$/.test(b.textContent.trim())).forEach((b) => b.click())")
+    r.check('unfolded steps name the scan and the frames it checked',
+            wait(lambda: 'Scanning picture and sound' in panel(r)['text'] and 'Checking frames' in panel(r)['text'] and '00:00 · 00:01' in panel(r)['text'], 5), panel(r)['text'])
     r.check('the card takes the place of the "AI edit done" toast', not any('AI edit done' in t['text'] for t in r.state()['toasts']), r.state()['toasts'])
     saved = json.loads(r.saved_project().read_text())
     captions = [t for t in saved['tracks'] if t['name'] == 'Captions']

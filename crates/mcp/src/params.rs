@@ -83,10 +83,36 @@ pub struct Choice {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Inspect {
-    pub times_us: Vec<i64>,
+    /// 1 to 16 timeline times. Leave out with sample "changes".
+    pub times_us: Option<Vec<i64>>,
     pub width: Option<u32>,
     #[serde(default)]
     pub safe_area: bool,
+    /// "changes": pick the frames that look different within range_us instead of given times.
+    pub sample: Option<Sample>,
+    /// With sample "changes": half-open timeline range, the whole timeline when left out.
+    pub range_us: Option<[i64; 2]>,
+    /// With sample "changes": the next value of the previous page; it carries the range.
+    pub cursor: Option<String>,
+    /// With sample "changes": frames per page, 1 to 16, default 16.
+    pub max_frames: Option<usize>,
+    /// With sample "changes": how many of 64 hash bits a frame must differ in from each of the
+    /// last four kept frames, default 16. Gestures within one shot mostly stay below it, a cut to
+    /// other footage differs in 30 or more.
+    pub min_change: Option<u32>,
+}
+#[derive(Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Sample {
+    Changes,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Activity {
+    /// Half-open timeline range, the whole timeline when left out.
+    pub range_us: Option<[i64; 2]>,
+    /// Points of each curve, 8 to 200, default 60.
+    pub points: Option<usize>,
 }
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
