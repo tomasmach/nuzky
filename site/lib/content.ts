@@ -14,7 +14,7 @@ export const faq: Faq[] = [
   },
   {
     q: "How is Nuzky different from CapCut?",
-    a: "Nuzky runs on your computer, including Linux, and it's free with no account. It has a timeline, auto captions, caption styles and an export made for Reels and TikTok. It doesn't have CapCut's library of templates and effects, and there is no phone app.",
+    a: "Nuzky is open source, free with no account, and runs on Linux too. It has a timeline, auto captions, caption styles and an export made for Reels and TikTok. It doesn't have CapCut's library of templates and effects, and there is no phone app.",
     link: { label: "Compare Nuzky and CapCut", href: "/capcut-alternative" },
   },
   {
