@@ -196,11 +196,11 @@ function Free() {
       </div>
       <div className="flex flex-col gap-4">
         <p className="text-[30px] font-semibold leading-[1.15] tracking-[-0.03em] sm:text-[38px]">
-          <span className="text-fg/70">No account.</span>
+          <span className="text-fg/70">No account,</span>
           <br />
-          <span className="text-fg/70">No watermark.</span>
+          <span className="text-fg/70">no watermark,</span>
           <br />
-          No subscription.
+          no subscription.
         </p>
         <div className="flex flex-wrap gap-2">
           {[
@@ -235,16 +235,16 @@ export function Features() {
         <Tile wide tall title="Frame accurate" text="Every cut lands on the exact frame, even in variable frame rate video from a phone.">
           <FrameAccurate />
         </Tile>
-        <Tile tall title="Opens the right way up" text="Rotation and front camera mirroring come from the file, in the preview, thumbnails and export.">
+        <Tile tall title="Opens the right way up" text="Nuzky reads rotation and front camera mirroring from the file and applies them to the preview, thumbnails and export.">
           <Upright />
         </Tile>
-        <Tile title="What you see is what you export" text="Preview and export are drawn by the same renderer.">
+        <Tile title="What you see is what you export" text="Preview and export share one renderer.">
           <SameRender />
         </Tile>
         <Tile title="Learns how you edit" text="Nuzky studies your finished cuts and writes an EDIT.md that agents follow.">
           <EditFile />
         </Tile>
-        <Tile title="Ready for every platform" text="1080 × 1920 at 30 fps, with the sound levelled to −14 LUFS.">
+        <Tile title="Ready to post" text="1080 × 1920 at 30 fps, with the sound levelled to −14 LUFS.">
           <Loudness />
         </Tile>
         <Tile tall title="Saves every edit" text="A crash or a closed window never costs you a cut.">

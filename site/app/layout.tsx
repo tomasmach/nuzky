@@ -9,7 +9,7 @@ const description = "A free, open source video editor with AI built in. Edit ree
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://nuzky.app"),
-  title: "Nuzky — Make the reel. Skip the subscription.",
+  title: "Nuzky: Make the reel. Skip the subscription.",
   description,
   openGraph: { title: "Nuzky", description, url: "https://nuzky.app", siteName: "Nuzky", type: "website" },
   twitter: { card: "summary_large_image", title: "Nuzky", description },
