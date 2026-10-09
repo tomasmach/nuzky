@@ -71,6 +71,7 @@ crates/engine   project model, edits + undo, FFmpeg decoding, wgpu compositor,
                 text rendering, audio mixing, MP4 export
 crates/analysis local speech recognition, caption grouping, silence and scene analysis,
                 learning a creator's style from their finished cuts
+crates/vision   local face and subject models: frames worth a cover, where the person is
 crates/session  editing authority, undo runs, autosave, crash recovery and transcripts
 crates/mcp      agent tools, stdio bridge and live-app IPC
 crates/agent    runs the user's own Claude Code for the in-app AI panel
@@ -79,7 +80,7 @@ src-tauri       desktop shell: preview thread, audio output, background jobs, se
 src             React + TypeScript UI
 ```
 
-Dependencies point one way. `engine` uses no other Nuzky crate, `analysis` and `session` build on it, `mcp` builds on those three, and the CLI and the desktop app sit on top. `agent` stands alone; only the desktop app uses it.
+Dependencies point one way. `engine` uses no other Nuzky crate, `analysis`, `vision` and `session` build on it, `mcp` builds on those four, and the CLI and the desktop app sit on top. `agent` stands alone; only the desktop app uses it.
 
 - The engine renders every frame offscreen with wgpu. The preview streams those frames to the webview over a loopback WebSocket that only accepts the app's own origin and a per-launch secret. Export reuses the same renderer at full resolution.
 - Each video clip decodes on its own thread with exact seeking on real timestamps, so cuts and variable frame rates stay frame accurate.
