@@ -88,7 +88,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::ListHistory>(
             "list_history",
-            "List the kept versions of the project, newest first: index (stays with the version), hash (first 12 hex digits of the SHA-256 of the project's compact JSON), label, at_ms (Unix time in ms) and run_id for a version an agent's run made (none for the user's own steps). A version is the project after each kept run, each of the user's steps, each undo, redo and restore, and as it was opened; current_hash is the project now, so the version with that hash is the current one, and older counts versions kept but not listed. Versions outlive restarts, up to the newest 200. Read-only; works while a run is open, but an open run becomes a version only when it ends.",
+            "List the kept versions of the project, newest first: index (stays with the version), hash (first 12 hex digits of the SHA-256 of the project's compact JSON), label, at_ms (Unix time in ms) and run_id for a version an agent's run made (none for the user's own steps). A version is the project after each kept run, each of the user's steps, each undo, redo and restore, and as it was opened. The user's step still in progress (a drag) leads the list under the index it will keep. current_hash is the project now, so the version with that hash is the current one, and older counts versions kept but not listed. Versions outlive restarts, up to the newest 200. Read-only; works while a run is open, but an open run becomes a version only when it ends.",
         )?,
         tool::<params::UndoTo>(
             "undo_to",

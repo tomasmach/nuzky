@@ -325,7 +325,11 @@ impl Library {
     fn remove_pristine(&self, path: &Path) -> bool {
         let Ok(lock) = nuzky_session::lock_project(path, true) else { return false };
         // Read again under the lock: it may have changed since it was listed.
-        if !store::load(path).is_ok_and(|p| pristine(&p)) || sidecar(path, ".checkpoint.json").exists() {
+        // Its versions may hold what it had before it was emptied.
+        if !store::load(path).is_ok_and(|p| pristine(&p))
+            || sidecar(path, ".checkpoint.json").exists()
+            || nuzky_session::distinct_versions(path) > 1
+        {
             return false;
         }
         if let Err(error) = std::fs::remove_file(path) {
@@ -884,6 +888,28 @@ mod tests {
         assert_eq!(fold("SUNSET!"), "sunset");
         assert_eq!(fold("—"), "");
         assert_eq!(fold("Ščřž"), "scrz");
+    }
+
+    /// An untitled project emptied after it had clips still has them in its versions, so it stays.
+    #[test]
+    fn an_emptied_project_with_earlier_versions_is_not_cleared_away() {
+        let dir = std::env::temp_dir().join(format!("library-pristine-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (fresh, emptied) = (dir.join("fresh.nuzky"), dir.join("emptied.nuzky"));
+        for path in [&fresh, &emptied] {
+            store::create(path, &Project::new(UNTITLED)).unwrap();
+            drop(store::open(path, None).unwrap());
+        }
+        let session = store::open(&emptied, None).unwrap();
+        session.edit(vec![EditCmd::RenameProject { name: "Holiday".into() }], None, Default::default()).unwrap();
+        session.edit(vec![EditCmd::RenameProject { name: UNTITLED.into() }], None, Default::default()).unwrap();
+        drop(session);
+        let library = Library::default();
+        assert!(library.remove_pristine(&fresh), "a project that never had anything goes");
+        assert!(!fresh.exists() && !sidecar(&fresh, nuzky_session::HISTORY_SUFFIX).exists());
+        assert!(!library.remove_pristine(&emptied));
+        assert!(emptied.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

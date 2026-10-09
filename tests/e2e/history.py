@@ -37,7 +37,6 @@ def close_menu(r):
 @flow('history', 'Three AI runs and an edit by hand are versions; Restore brings back the first run, Undo takes it back, and they outlive a restart',
       before=agent_project)
 def history(r):
-    clip = r.track()[0]
     after = {}
     bridge = Bridge(r, r.saved_project())
     try:

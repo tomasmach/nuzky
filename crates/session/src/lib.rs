@@ -14,7 +14,7 @@ mod types;
 mod validate;
 mod writer;
 
-pub use history::{HISTORY_SUFFIX, HistoryList, MAX_VERSIONS, Restored, Target, VersionInfo};
+pub use history::{HISTORY_SUFFIX, HistoryList, MAX_VERSIONS, Restored, Target, VersionInfo, distinct_versions};
 pub use storage::{json_temp_path, lock_project, save as write_json_atomic};
 pub use types::*;
 pub use validate::{local_media_path, validate};
@@ -291,7 +291,7 @@ impl Inner {
             self.record();
         }
         let tip = match &origin {
-            Origin::Run { run_id, label } => Tip { label: label.clone(), run_id: Some(run_id.clone()) },
+            Origin::Run { run_id, label } => Tip::new(label.clone(), Some(run_id.clone())),
             _ => Tip::user(history::label(&cmds)),
         };
         let before = self.editor.project.clone();
@@ -304,8 +304,9 @@ impl Inner {
         let (changed, clips) = changes(&before, &self.editor.project, &outcome);
         if self.editor.project != before {
             self.changed(origin);
-            if !continues || self.history.tip.is_none() {
-                self.history.tip = Some(tip);
+            match &mut self.history.tip {
+                Some(open) if continues => open.at_ms = tip.at_ms,
+                slot => *slot = Some(tip),
             }
             // Without a key the step cannot grow, so it is a version at once.
             if !keyed {

@@ -92,12 +92,22 @@ impl Version {
 pub(crate) struct Tip {
     pub label: String,
     pub run_id: Option<String>,
+    /// When it last changed the project.
+    pub at_ms: u64,
 }
 
 impl Tip {
-    pub(crate) fn user(label: impl Into<String>) -> Self {
-        Self { label: label.into(), run_id: None }
+    pub(crate) fn new(label: impl Into<String>, run_id: Option<String>) -> Self {
+        Self { label: label.into(), run_id, at_ms: now_ms() }
     }
+
+    pub(crate) fn user(label: impl Into<String>) -> Self {
+        Self::new(label, None)
+    }
+}
+
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 pub(crate) enum Write {
@@ -197,8 +207,10 @@ impl History {
     /// What the file holds. Lines that cannot be read are left out, and the next write replaces them.
     pub(crate) fn load(path: &Path) -> Self {
         let mut history = Self::default();
-        let text = match fs::metadata(path) {
+        // A link could point at another project's versions or outside the project; the first write replaces it.
+        let text = match fs::symlink_metadata(path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return history,
+            Ok(meta) if !meta.is_file() => Err(anyhow::anyhow!("not a plain file")),
             Ok(meta) if meta.len() > READ_LIMIT => Err(anyhow::anyhow!("{} bytes", meta.len())),
             _ => fs::read_to_string(path).context("Reading"),
         };
@@ -218,6 +230,8 @@ impl History {
                 line.hash.len() == 64 && line.hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
             });
             let json = line.as_ref().and_then(|line| match line.project {
+                // A project changed in the file no longer matches its hash, and nothing may reuse it.
+                Some(raw) if sha256(raw.get().as_bytes()) != line.hash => None,
                 Some(raw) => {
                     let json: Arc<str> = Arc::from(raw.get());
                     projects.insert(line.hash.clone(), json.clone());
@@ -256,9 +270,8 @@ impl History {
             return None;
         }
         let json = self.versions.iter().find(|v| v.hash == hash).map_or_else(|| Arc::from(json), |v| v.json.clone());
-        let at_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
         let label = tip.label.chars().take(200).collect();
-        self.versions.push(Version { index: self.next, hash, label, at_ms, run_id: tip.run_id, json });
+        self.versions.push(Version { index: self.next, hash, label, at_ms: tip.at_ms, run_id: tip.run_id, json });
         self.next += 1;
         self.evict();
         let version = self.versions.last().expect("just pushed");
@@ -290,12 +303,28 @@ impl History {
         }
     }
 
-    pub(crate) fn list(&self, project: &Project, limit: usize) -> HistoryList {
-        let current = serde_json::to_string(project).map(|json| sha256(json.as_bytes())).unwrap_or_default();
+    /// With `tip`, the user's step that is not a version yet (a drag may still go on) leads the list
+    /// under the index it will get, so reading never splits one step into several versions.
+    pub(crate) fn list(&self, project: &Project, limit: usize, tip: Option<&Tip>) -> HistoryList {
+        let current: String = serde_json::to_string(project)
+            .map(|json| sha256(json.as_bytes()))
+            .unwrap_or_default()
+            .chars()
+            .take(SHORT)
+            .collect();
+        let tip =
+            tip.filter(|_| self.versions.last().is_none_or(|v| !v.hash.starts_with(&current))).map(|tip| VersionInfo {
+                index: self.next,
+                hash: current.clone(),
+                label: tip.label.clone(),
+                at_ms: tip.at_ms,
+                run_id: tip.run_id.clone(),
+            });
+        let versions: Vec<_> = tip.into_iter().chain(self.versions.iter().rev().map(Version::info)).collect();
         HistoryList {
-            current_hash: current.chars().take(SHORT).collect(),
-            versions: self.versions.iter().rev().take(limit).map(Version::info).collect(),
-            older: self.versions.len().saturating_sub(limit),
+            current_hash: current,
+            older: versions.len().saturating_sub(limit),
+            versions: versions.into_iter().take(limit).collect(),
         }
     }
 
@@ -328,19 +357,25 @@ impl History {
     }
 }
 
+/// How many different projects the versions beside `project` hold. More than one means its
+/// history has something to lose, even when the project itself is empty now.
+pub fn distinct_versions(project: &Path) -> usize {
+    let history = History::load(&storage::sidecar(project, HISTORY_SUFFIX));
+    history.versions.iter().map(|v| &v.hash).collect::<HashSet<_>>().len()
+}
+
 impl ProjectSession {
-    /// The newest `limit` versions. The user's last step becomes a version first; an agent's open
-    /// run becomes one only when it ends.
+    /// The newest `limit` versions, with the user's last step first; an agent's open run becomes a
+    /// version only when it ends.
     pub fn list_history(&self, limit: usize) -> Result<HistoryList> {
         let mut inner = self.inner.lock().unwrap();
         if inner.mode == Mode::ReadOnly {
             inner.refresh()?;
-            return Ok(History::load(&storage::sidecar(&inner.path, HISTORY_SUFFIX)).list(&inner.editor.project, limit));
+            let history = History::load(&storage::sidecar(&inner.path, HISTORY_SUFFIX));
+            return Ok(history.list(&inner.editor.project, limit, None));
         }
-        if inner.run.is_none() {
-            inner.record();
-        }
-        Ok(inner.history.list(&inner.editor.project, limit))
+        let tip = inner.history.tip.as_ref().filter(|_| inner.run.is_none());
+        Ok(inner.history.list(&inner.editor.project, limit, tip))
     }
 
     /// Restores a kept version as a new undo step. The project as it was stays a version too.
@@ -349,11 +384,6 @@ impl ProjectSession {
         inner.user_editable()?;
         inner.record();
         let version = inner.history.find(&target)?.clone();
-        ensure!(
-            sha256(version.json.as_bytes()) == version.hash,
-            "HISTORY_CORRUPT: version {} does not match its hash, so it was not restored",
-            version.index
-        );
         let project: Project = serde_json::from_str(&version.json)
             .with_context(|| format!("HISTORY_CORRUPT: version {} cannot be read", version.index))?;
         let revision = inner.editor.revision;

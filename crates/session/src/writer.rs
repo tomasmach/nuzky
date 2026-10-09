@@ -74,6 +74,9 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, broken: Arc<A
     // is unchanged would only move its modification time, which the home screen reads as when the
     // project was last opened: a project closed after another one opened would look newer than it.
     let mut saved = None;
+    // Why the versions could not be written, shown as the save state until a write succeeds.
+    let mut versions_error: Option<String> = None;
+    let mut latest = 0;
     loop {
         let message = if pending.is_some() {
             // A steady stream of edits must not postpone the save past the maximum wait.
@@ -84,7 +87,7 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, broken: Arc<A
                 Err(RecvTimeoutError::Timeout) => {
                     if let Some(snapshot) = pending.take() {
                         let revision = snapshot.revision;
-                        if save(&path, &events, snapshot).is_ok() {
+                        if save(&path, &events, snapshot, &versions_error).is_ok() {
                             saved = on_disk(&path).map(|file| (revision, file));
                         }
                     }
@@ -97,6 +100,7 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, broken: Arc<A
         };
         match message {
             Some(Message::Schedule(snapshot)) => {
+                latest = snapshot.revision;
                 if pending.is_none() {
                     oldest = Instant::now();
                 }
@@ -105,12 +109,13 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, broken: Arc<A
             Some(Message::Flush(snapshot, reply)) => {
                 pending = None;
                 let revision = snapshot.revision;
+                latest = revision;
                 if saved.is_some_and(|(at, file)| at == revision && on_disk(&path) == Some(file)) {
-                    notify(&events, revision, None);
+                    notify(&events, revision, versions_error.clone());
                     let _ = reply.send(Ok(()));
                     continue;
                 }
-                let result = save(&path, &events, snapshot);
+                let result = save(&path, &events, snapshot, &versions_error);
                 if result.is_ok() {
                     saved = on_disk(&path).map(|file| (revision, file));
                 }
@@ -127,14 +132,16 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, broken: Arc<A
                     Write::Append(line) => append(&file, &line),
                     Write::Replace(text) => storage::save_bytes(&file, text.as_bytes()),
                 };
-                if let Err(error) = result {
-                    eprintln!("Cannot save the project's versions: {error:#}");
+                versions_error = result.err().map(|error| format!("SAVE_FAILED: saving versions: {error:#}"));
+                if let Some(error) = &versions_error {
+                    eprintln!("{error}");
                     broken.store(true, Ordering::Relaxed);
+                    notify(&events, latest, Some(error.clone()));
                 }
             }
             Some(Message::Stop) | None => {
                 if let Some(snapshot) = pending {
-                    let _ = save(&path, &events, snapshot);
+                    let _ = save(&path, &events, snapshot, &versions_error);
                 }
                 break;
             }
@@ -142,9 +149,16 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, broken: Arc<A
     }
 }
 
-fn save(path: &std::path::Path, events: &Option<Sender<SessionEvent>>, snapshot: Snapshot) -> Result<()> {
+/// The save state it reports also says when the versions could not be written.
+fn save(
+    path: &std::path::Path,
+    events: &Option<Sender<SessionEvent>>,
+    snapshot: Snapshot,
+    versions_error: &Option<String>,
+) -> Result<()> {
     let result = storage::save(path, &snapshot.project).context("SAVE_FAILED: saving project");
-    notify(events, snapshot.revision, result.as_ref().err().map(|error| format!("{error:#}")));
+    let error = result.as_ref().err().map(|error| format!("{error:#}")).or_else(|| versions_error.clone());
+    notify(events, snapshot.revision, error);
     result
 }
 
@@ -154,7 +168,13 @@ fn notify(events: &Option<Sender<SessionEvent>>, revision: u64, error: Option<St
     }
 }
 
+/// Never through a link: it could lead to another project's versions or out of the project's folder.
 fn append(path: &Path, text: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => anyhow::ensure!(meta.is_file(), "{} is not a plain file", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("Checking versions"),
+    }
     let mut file = std::fs::OpenOptions::new().append(true).create(true).open(path).context("Opening versions")?;
     file.write_all(text.as_bytes()).context("Writing versions")
 }
