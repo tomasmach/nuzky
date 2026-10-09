@@ -6,14 +6,14 @@ export function Maker() {
   return (
     <section id="why" className="mx-auto w-full max-w-[1040px] scroll-mt-10 px-5 pt-32 sm:pt-[180px]">
       <div className="flex flex-col gap-10 md:flex-row md:items-start md:gap-16">
-        <figure className="flex shrink-0 items-center gap-4 md:sticky md:top-12 md:w-[300px] md:flex-col md:items-start md:gap-5">
+        <figure className="flex w-full max-w-[300px] shrink-0 flex-col items-start gap-4 md:sticky md:top-12 md:gap-5">
           <Image
             src={maker.photo}
             alt=""
             width={300}
             height={300}
-            sizes="(min-width: 768px) 300px, 72px"
-            className="size-[72px] rounded-full object-cover ring-1 ring-white/10 md:size-[300px] md:rounded-[28px]"
+            sizes="300px"
+            className="aspect-square w-full rounded-[24px] object-cover ring-1 ring-white/10 md:rounded-[28px]"
           />
           <figcaption className="flex flex-col gap-0.5">
             <span className="text-[16px] font-semibold">{maker.name}</span>
