@@ -54,7 +54,8 @@ export type ChatItem =
   | { kind: "options"; id: string; question: string | null; options: Choice[]; chosen: string | null }
   | { kind: "run"; label: string; snap: Snapshot | null; stopped: boolean; changes: RunChange[] | null; undone?: boolean }
   | { kind: "stopped" }
-  | { kind: "error"; code: AgentErrorCode; message: string };
+  /** `retry`: the message that failed after the agent had begun answering, for Try again. */
+  | { kind: "error"; code: AgentErrorCode; message: string; retry?: string };
 
 export interface PromptContext {
   /** Selected clips at send time, or null when the user removed the chip or nothing is selected. */
@@ -68,6 +69,8 @@ interface AgentState {
   agentsError: string | null;
   agent: AgentId;
   chat: string | null;
+  /** The message being answered, so Stop reaches it even while it is starting. */
+  turn: string | null;
   items: ChatItem[];
   status: "idle" | "working" | "stopping";
   /** When the current answer started, in ms; it survives moving the panel. */
@@ -91,6 +94,7 @@ export const useAgent = create<AgentState>(() => ({
   agentsError: null,
   agent: READY.includes(localStorage.getItem(AGENT_KEY) as AgentId) ? (localStorage.getItem(AGENT_KEY) as AgentId) : "claude",
   chat: null,
+  turn: null,
   items: [],
   status: "idle",
   startedAt: null,
@@ -100,10 +104,11 @@ export const useAgent = create<AgentState>(() => ({
   frame: false,
 }));
 
-export const agentApi = {
+const agentApi = {
   list: () => invoke<AgentInfo[]>("agent_list"),
-  send: (agent: AgentId, chat: string, text: string, context: PromptContext) => invoke<void>("agent_send", { agent, chat, text, context }),
-  stop: (chat: string) => invoke<void>("agent_stop", { chat }),
+  send: (agent: AgentId, chat: string, turn: string, text: string, context: PromptContext) =>
+    invoke<void>("agent_send", { agent, chat, turn, text, context }),
+  stop: (turn: string) => invoke<void>("agent_stop", { turn }),
 };
 
 /** Tool names as the agent reports them: `mcp__capopen__get_state` (Claude) or `capopen.get_state` (Codex). */
@@ -141,14 +146,14 @@ const ANALYSES: Record<string, string> = {
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
 
 /** A short step title for a tool call, from what it was asked; tools from elsewhere keep their own name. */
-export function stepTitle(raw: string, input?: unknown): string {
+function stepTitle(raw: string, input?: unknown): string {
   const name = toolName(raw);
   if (name === "analyze") return ANALYSES[String(obj(input).kind)] ?? "Analysing the sound";
   return TITLES[name] ?? name;
 }
 
 /** The detail worth showing next to a step: which frames, which file. */
-export function stepDetail(raw: string, input?: unknown): string | null {
+function stepDetail(raw: string, input?: unknown): string | null {
   const args = obj(input);
   const name = toolName(raw);
   if (name === "inspect_frames" && Array.isArray(args.times)) return args.times.slice(0, 4).map((t) => formatTime(Number(t), false)).join(" · ") + (args.times.length > 4 ? " …" : "");
@@ -193,13 +198,13 @@ export function newChat() {
 }
 
 /** What the next message would carry, as the chips show it. */
-export function promptContext(): PromptContext {
+function promptContext(): PromptContext {
   const { selection, timeUs } = useEditor.getState();
   const { dropSelection, dropPlayhead, frame } = useAgent.getState();
   return { selection: dropSelection || selection.length === 0 ? null : [...selection], playheadUs: dropPlayhead ? null : Math.round(timeUs), frame };
 }
 
-export function describeContext(c: PromptContext): string | null {
+function describeContext(c: PromptContext): string | null {
   const parts: string[] = [];
   if (c.selection) parts.push(c.selection.length === 1 ? "1 clip" : `${c.selection.length} clips`);
   if (c.playheadUs !== null) parts.push(`Playhead ${formatTime(c.playheadUs, false)}`);
@@ -225,8 +230,10 @@ export async function send(text = useAgent.getState().draft.trim()) {
   const fromDraft = text === s.draft.trim();
   // The chat is named here, before sending, so even an agent that fails at once is heard.
   const chat = s.chat ?? crypto.randomUUID();
+  const turn = crypto.randomUUID();
   useAgent.setState({
     chat,
+    turn,
     // Earlier problems are over once a new message goes; their Try again would send this one.
     items: [...s.items.filter((i) => i.kind !== "error"), { kind: "user", text, context: describeContext(context) }],
     status: "working",
@@ -237,14 +244,14 @@ export async function send(text = useAgent.getState().draft.trim()) {
     frame: false,
   });
   try {
-    await agentApi.send(s.agent, chat, text, context);
+    await agentApi.send(s.agent, chat, turn, text, context);
   } catch (e) {
     const text = errorText(e);
     fail(text.startsWith("NOT_INSTALLED") ? "NOT_INSTALLED" : "AGENT_FAILED", plainError(text));
   }
 }
 
-/** The run card's own Undo ran: it says so instead of offering Undo again. */
+/** The run card's own Undo ran and undid the run: it says so instead of offering Undo again. */
 export function markUndone(index: number) {
   useAgent.setState((s) => ({ items: s.items.map((it, i) => (i === index && it.kind === "run" ? { ...it, undone: true } : it)) }));
 }
@@ -257,11 +264,11 @@ export function choose(id: string, label: string) {
 }
 
 export async function stop() {
-  const { chat, status } = useAgent.getState();
-  if (!chat || status !== "working") return;
+  const { turn, status } = useAgent.getState();
+  if (!turn || status !== "working") return;
   useAgent.setState({ status: "stopping" });
   try {
-    await agentApi.stop(chat);
+    await agentApi.stop(turn);
   } catch (e) {
     useAgent.setState({ status: "working" });
     useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
@@ -270,18 +277,23 @@ export async function stop() {
 
 /**
  * Ends the turn with an error. A turn that failed before the agent answered gives its message back
- * to the field, so it is never lost; the user message leaves the conversation then.
+ * to the field, so it is never lost; the user message leaves the conversation then. One that failed
+ * later keeps its message on the error, for Try again.
  */
 function fail(code: AgentErrorCode, message: string) {
   const s = useAgent.getState();
   let items = s.items;
   let draft = s.draft;
+  let retry: string | undefined;
   const last = items[items.length - 1];
   if (last?.kind === "user") {
     items = items.slice(0, -1);
     draft = draft ? `${last.text}\n${draft}` : last.text;
+  } else {
+    const asked = [...items].reverse().find((i) => i.kind === "user");
+    retry = asked?.kind === "user" ? asked.text : undefined;
   }
-  useAgent.setState({ items: [...items, { kind: "error", code, message }], draft, status: "idle" });
+  useAgent.setState({ items: [...items, { kind: "error", code, message, retry }], draft, status: "idle" });
 }
 
 function onEvent(e: AgentEvent) {

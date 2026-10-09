@@ -130,7 +130,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::SuggestOptions>(
             "suggest_options",
-            "Offer the user 2-6 choices when a decision is theirs to make, e.g. which take to keep, cut tight or loose, which caption style. In the CapOpen AI panel they show as buttons under your message, and the label picked arrives as the user's next message. Labels are short and distinct, at most 80 characters, in the user's language; detail is one optional line on what each choice does. Call it as the last thing in your turn, end the turn right after, and do not repeat the options in text. Never offer choices for something you can decide from the guide or the user's style.",
+            "Only when you run as CapOpen's AI panel (your instructions say so): offer the user 2-6 choices when a decision is theirs to make, e.g. which take to keep, cut tight or loose, which caption style. They show as buttons under your message, and the label picked arrives as the user's next message. Labels are short and distinct, at most 80 characters, in the user's language; detail is one optional line on what each choice does. Call it as the last thing in your turn, end the turn right after, and do not repeat the options in text. Anywhere else, such as a terminal, nobody sees the buttons: ask in plain text instead. Never offer choices for something you can decide from the guide or the user's style.",
         )?,
     ])
 }

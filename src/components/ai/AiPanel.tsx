@@ -44,7 +44,7 @@ import {
   type Step,
 } from "../../lib/agent";
 import { DOCK_LABELS, TOO_NARROW, useDock, useDockLayout, type DockMode } from "../../lib/dock";
-import { undoAction, useEditor } from "../../lib/store";
+import { undoAction, undoStep, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import { Button, IconButton } from "../ui";
 import { Markdown } from "./Markdown";
@@ -332,8 +332,9 @@ function ChangeRow({ change, undone }: { change: RunChange; undone: boolean }) {
 function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; index: number }) {
   // Undo is checked each render, so it turns off once later changes are on top of the run.
   useEditor((s) => `${s.snap?.sessionEpoch}:${s.snap?.revision}`);
+  const locked = useEditor((s) => !!s.aiRun);
   const undo = item.snap && !item.undone ? undoAction(item.snap) : null;
-  const valid = !!undo && (undo.valid?.() ?? true);
+  const valid = !!undo && (undo.valid?.() ?? true) && !locked;
   const label = item.undone ? `Undone: ${item.label}` : item.stopped ? `Stopped: ${item.label}` : item.label;
   return (
     <div className="flex flex-col gap-1.5 rounded-[10px] bg-raised p-3">
@@ -352,12 +353,9 @@ function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; in
           <Button
             className="h-7 shrink-0 px-2.5 text-[12px]"
             disabled={!valid}
-            disabledReason="Later changes are on top of this run. Undo them first."
+            disabledReason={locked ? "AI is editing. Wait for it, or stop it." : "Later changes are on top of this run. Undo them first."}
             title="Undo everything this run did"
-            onClick={() => {
-              undo.run();
-              markUndone(index);
-            }}
+            onClick={() => void undoStep(item.snap!).then((done) => done && markUndone(index))}
           >
             <Undo2 size={13} /> Undo
           </Button>
@@ -376,13 +374,13 @@ function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; in
   );
 }
 
-function ErrorNotice({ code, message }: { code: AgentErrorCode; message: string }) {
+function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; message: string; retryText?: string }) {
   const agents = useAgent((s) => s.agents);
   const agent = useAgent((s) => s.agent);
   const name = agents?.find((a) => a.id === agent)?.name ?? "The agent";
   const other = agents?.find((a) => a.id !== agent && a.path && READY.includes(a.id));
   const retry = (
-    <Button className="h-7 px-2.5 text-[12px]" onClick={() => void send()}>
+    <Button className="h-7 px-2.5 text-[12px]" onClick={() => void (retryText ? send(retryText) : send())}>
       Try again
     </Button>
   );
@@ -527,7 +525,7 @@ function Item({ item, index, collapsed }: { item: ChatItem; index: number; colla
         </div>
       );
     case "error":
-      return <ErrorNotice code={item.code} message={item.message} />;
+      return <ErrorNotice code={item.code} message={item.message} retryText={item.retry} />;
   }
 }
 

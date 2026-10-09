@@ -38,7 +38,6 @@ pub enum ToolStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
-    NotInstalled,
     NotSignedIn,
     UsageLimit,
     AgentFailed,

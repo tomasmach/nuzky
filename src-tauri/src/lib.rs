@@ -847,7 +847,11 @@ pub fn run() {
                     app.emit("close-save-failed", format!("{error:#}")).ok();
                 }
             }
-            tauri::RunEvent::Exit => app.state::<AppState>().quit(),
+            tauri::RunEvent::Exit => {
+                // The panel's agent runs in its own process group, so it would outlive the app.
+                app.state::<agent_panel::AgentPanel>().stop();
+                app.state::<AppState>().quit()
+            }
             _ => {}
         });
 }

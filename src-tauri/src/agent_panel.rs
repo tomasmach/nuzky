@@ -21,8 +21,10 @@ struct Chat {
 #[derive(Default)]
 pub struct AgentPanel {
     chats: Mutex<HashMap<String, Chat>>,
-    /// The message the agent is working on, by chat.
+    /// The message the agent is working on, by the id the UI gave it.
     active: Mutex<Option<(String, Turn)>>,
+    /// A message the user stopped while it was still starting; written under the `active` lock.
+    cancelled: Mutex<Option<String>>,
     /// Counts stops, so a message still starting when one comes is stopped as soon as it runs.
     stops: AtomicU64,
 }
@@ -102,20 +104,29 @@ pub async fn agent_list() -> CmdResult<Vec<AgentInfo>> {
         .map_err(err)
 }
 
-/// Sends a message in the chat the UI named; the answer arrives as `agent` events for it. The UI
-/// names the chat before sending, so even an agent that fails at once reaches it.
+/// Sends a message in the chat the UI named, under the id it gave the message; the answer arrives
+/// as `agent` events for the chat. The UI names both before sending, so even an agent that fails
+/// at once reaches it, and Stop works while the message is still starting.
 #[tauri::command]
 pub async fn agent_send(
     app: AppHandle,
     agent: AgentId,
     chat: String,
+    turn: String,
     text: String,
     context: PromptContext,
 ) -> CmdResult<()> {
-    tauri::async_runtime::spawn_blocking(move || send(&app, agent, chat, &text, &context)).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || send(&app, agent, chat, turn, &text, &context)).await.map_err(err)?
 }
 
-fn send(app: &AppHandle, agent: AgentId, chat: String, text: &str, context: &PromptContext) -> CmdResult<()> {
+fn send(
+    app: &AppHandle,
+    agent: AgentId,
+    chat: String,
+    turn: String,
+    text: &str,
+    context: &PromptContext,
+) -> CmdResult<()> {
     let panel = app.state::<AgentPanel>();
     // Another project opening, or Stop, while this starts must stop it once it runs.
     let stops = panel.stops.load(Ordering::Acquire);
@@ -125,7 +136,7 @@ fn send(app: &AppHandle, agent: AgentId, chat: String, text: &str, context: &Pro
         return Err("AGENT_BUSY: The agent is still answering. Wait for it, or stop it.".into());
     }
     let state = app.state::<AppState>();
-    let project = {
+    let (project, path) = {
         let current = state.session.lock().unwrap();
         let session = current.host.session.state().map_err(err)?;
         if let Some(run) = session.open_run {
@@ -134,11 +145,14 @@ fn send(app: &AppHandle, agent: AgentId, chat: String, text: &str, context: &Pro
                 run.label
             ));
         }
-        session.project
+        (session.project, current.path.clone())
     };
     let info = capopen_agent::find(agent);
     let exe = info.path.ok_or_else(|| format!("NOT_INSTALLED: {} is not installed.", agent.name()))?;
+    // The bridge attaches to this window's project by its path: `--current` names whatever project
+    // the window opened last made current, which may be another CapOpen window's.
     let bridge = connect::Command::this_app().map_err(err)?;
+    let args = vec!["mcp".into(), "--project".into(), path.to_string_lossy().into_owned(), "--allow-write".into()];
     let env = std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
 
     let mut chats = panel.chats.lock().unwrap();
@@ -154,11 +168,15 @@ fn send(app: &AppHandle, agent: AgentId, chat: String, text: &str, context: &Pro
         resume: chat.resumable,
         prompt: prompt(text, context, &project),
         cwd: work_dir(),
-        mcp: McpServer { command: bridge.program.into(), args: bridge.args, env },
+        mcp: McpServer { command: bridge.program.into(), args, env },
     };
     drop(chats);
+    if panel.cancelled.lock().unwrap().as_deref() == Some(turn.as_str()) {
+        app.emit("agent", PanelEvent { chat: &id, event: &AgentEvent::Done { stopped: true } }).ok();
+        return Ok(());
+    }
     let (handle, chat_id) = (app.clone(), id.clone());
-    let turn = Turn::start(request, move |event| {
+    let started = Turn::start(request, move |event| {
         handle.emit("agent", PanelEvent { chat: &chat_id, event: &event }).ok();
         let ended = matches!(event, AgentEvent::Done { .. } | AgentEvent::Error { .. });
         if !ended {
@@ -176,18 +194,24 @@ fn send(app: &AppHandle, agent: AgentId, chat: String, text: &str, context: &Pro
     })
     .map_err(err)?;
     let mut active = panel.active.lock().unwrap();
-    if panel.stops.load(Ordering::Acquire) != stops {
-        turn.stop();
+    if panel.stops.load(Ordering::Acquire) != stops || panel.cancelled.lock().unwrap().as_deref() == Some(turn.as_str())
+    {
+        started.stop();
     }
-    *active = Some((id, turn));
+    *active = Some((turn, started));
     Ok(())
 }
 
 /// Stops the agent: CapOpen ends the run first, so the editor unlocks at once whatever the agent does.
+/// A message still starting is stopped as soon as it runs.
 #[tauri::command]
-pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, chat: String) -> CmdResult<()> {
-    if !panel.active.lock().unwrap().as_ref().is_some_and(|(id, turn)| *id == chat && turn.running()) {
-        return Ok(());
+pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, turn: String) -> CmdResult<()> {
+    {
+        let active = panel.active.lock().unwrap();
+        if !active.as_ref().is_some_and(|(id, started)| *id == turn && started.running()) {
+            *panel.cancelled.lock().unwrap() = Some(turn);
+            return Ok(());
+        }
     }
     let ended = state.session.lock().unwrap().host.stop_run();
     // The agent stops even when ending the run failed, e.g. on a full disk.

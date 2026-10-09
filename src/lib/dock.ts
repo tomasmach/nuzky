@@ -60,7 +60,7 @@ export function clampFloat(r: Rect, windowW = window.innerWidth, windowH = windo
   return { x, y, w, h };
 }
 
-export function useWindowSize() {
+function useWindowSize() {
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
   useEffect(() => {
     const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight });
