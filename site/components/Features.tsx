@@ -250,7 +250,7 @@ export function Features() {
         <Tile tall title="Saves every edit" text="A crash or a closed window never costs you a cut.">
           <History />
         </Tile>
-        <Tile wide tall title="Free, for good" text="Open source under GPL-3.0. Your videos never leave your computer." backdrop={<Waves height={0.4} intensity={0.85} />}>
+        <Tile wide tall title="Free, for good" text="Open source under GPL-3.0. Your videos never leave your computer." backdrop={<Waves height={0.3} intensity={0.5} />}>
           <Free />
         </Tile>
       </div>
