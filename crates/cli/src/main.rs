@@ -21,6 +21,11 @@ const USAGE: &str = "Usage:
   nuzky bench <project.json> [width] [seconds]
   nuzky render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
       reels: Instagram Reels and TikTok, 1080x1920 at 30 fps, sound levelled to -14 LUFS (9:16 only)
+  nuzky vision-models                     download the face and subject models
+  nuzky thumbnail-frames <project.json> [--format 9:16|16:9]
+      frames worth a cover, best first, as JSON; downloads missing face models first
+  nuzky mask <project.json> <seconds> <out.png>
+      the subject of that frame as a grayscale alpha PNG; downloads the mask model first
 ";
 
 /// `[resolution] [fps]` and an optional `--preset <name>` anywhere among them.
@@ -165,6 +170,48 @@ fn publish_new_project(out: &Path, project: &Project) -> Result<()> {
     result
 }
 
+/// Downloads whichever of `models` are missing, checking size and SHA-256, once ONNX Runtime has
+/// loaded: models that could not run are not worth downloading.
+fn install_models(models: &[nuzky_vision::models::Model]) -> Result<()> {
+    nuzky_vision::runtime::require()?;
+    let dir = nuzky_analysis::models_dir();
+    let cancel = AtomicBool::new(false);
+    for model in nuzky_vision::models::missing(models, &dir) {
+        eprintln!("Downloading the {} ({} MB)", model.label, model.size.div_ceil(1_000_000));
+        let mut shown = 0;
+        let integrity = nuzky_mcp::model_download::Integrity { size: model.size, sha256: model.sha256 };
+        nuzky_mcp::model_download::download(model.url, &model.path(&dir), integrity, &cancel, |done| {
+            let pct = (done * 100.0) as u32;
+            if pct >= shown + 10 {
+                shown = pct;
+                eprintln!("{pct}%");
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// Prints how long each phase of a job took, to stderr.
+struct PhaseClock<P> {
+    phase: Option<(P, Instant)>,
+}
+
+impl<P: PartialEq + Copy + std::fmt::Debug> PhaseClock<P> {
+    fn enter(&mut self, phase: P) {
+        if self.phase.is_some_and(|(current, _)| current == phase) {
+            return;
+        }
+        self.finish();
+        self.phase = Some((phase, Instant::now()));
+    }
+
+    fn finish(&mut self) {
+        if let Some((phase, since)) = self.phase.take() {
+            eprintln!("{phase:?}: {:.2} s", since.elapsed().as_secs_f64());
+        }
+    }
+}
+
 fn main() -> Result<()> {
     // Vulkan FP16 moves Whisper word times by up to 330 ms; FP32 is as fast. ggml reads this when
     // its backend starts, so it is set here, before any other thread exists.
@@ -253,6 +300,58 @@ fn main() -> Result<()> {
                 }
             })?;
             eprintln!("Exported {out} in {:?}", start.elapsed());
+        }
+        ["vision-models"] => install_models(nuzky_vision::models::ALL)?,
+        ["thumbnail-frames", project, rest @ ..] => {
+            let format = match rest {
+                [] => None,
+                ["--format", "9:16"] => Some(nuzky_vision::Format::Vertical),
+                ["--format", "16:9"] => Some(nuzky_vision::Format::Wide),
+                _ => bail!("{USAGE}"),
+            };
+            let project = load(project)?;
+            install_models(nuzky_vision::models::FRAMES)?;
+            let (start, cancel) = (Instant::now(), AtomicBool::new(false));
+            let mut clock = PhaseClock { phase: None };
+            let candidates = nuzky_vision::thumbnail_frames(
+                &project,
+                &nuzky_analysis::models_dir(),
+                format,
+                &cancel,
+                &mut |phase, _| clock.enter(phase),
+            )?;
+            clock.finish();
+            eprintln!("{} candidates in {:.2} s", candidates.len(), start.elapsed().as_secs_f64());
+            println!("{}", serde_json::to_string_pretty(&candidates)?);
+        }
+        ["mask", project, secs, out] => {
+            check_render_output(Path::new(project), Path::new(out))?;
+            let project = load(project)?;
+            check_source_path(&project, Path::new(out))?;
+            install_models(nuzky_vision::models::MASK)?;
+            let t = (secs.parse::<f64>()? * 1e6) as i64;
+            let (start, cancel) = (Instant::now(), AtomicBool::new(false));
+            let mut clock = PhaseClock { phase: None };
+            let mask = nuzky_vision::segment_subject(
+                &project,
+                t,
+                &nuzky_analysis::models_dir(),
+                &cache_dir(),
+                &cancel,
+                &mut |phase| clock.enter(phase),
+            )?;
+            clock.finish();
+            eprintln!("Mask in {:.2} s{}", start.elapsed().as_secs_f64(), if mask.cached { " (cached)" } else { "" });
+            let bytes = std::fs::read(&mask.path).context("Reading the cached mask")?;
+            // Renaming over the destination leaves a hard-linked source file untouched.
+            let out = Path::new(out);
+            let tmp = out.with_file_name(format!(".nuzky-mask-{}.png", new_id()));
+            let written = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, out));
+            if written.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            written.with_context(|| format!("Cannot write {}", out.display()))?;
+            println!("{}", serde_json::to_string_pretty(&mask)?);
         }
         ["style", ..] => style::run(&args[1..], &cache_dir())?,
         _ => bail!("{USAGE}{}", style::USAGE),

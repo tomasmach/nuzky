@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Copy the Mach-O dependency closure into a Tauri .app and ad-hoc sign it."""
+"""Copy the Mach-O dependency closure into a Tauri .app and ad-hoc sign it.
+
+Further arguments are libraries the app opens at run time instead of linking, such as ONNX Runtime;
+they are copied under their own name, which must match their install name.
+"""
 import os
 from pathlib import Path
 import re
@@ -73,6 +77,12 @@ while pending:
         run('install_name_tool', '-change', name, prefix + target.name, str(dest))
     if install_id:
         run('install_name_tool', '-id', '@rpath/' + dest.name, str(dest))
+
+for extra in map(Path, sys.argv[2:]):
+    target = frameworks / extra.name
+    shutil.copy2(extra.resolve(), target)
+    os.chmod(target, 0o755)
+    copied[target.name] = extra.resolve()
 
 for file in [*frameworks.glob('*.dylib'), binary]:
     for dep in dependencies(file):

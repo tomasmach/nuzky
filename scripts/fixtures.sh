@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates the media and models that `cargo test -- --ignored` and scripts/repro.py read from tmp-test/.
-# Media are synthetic (FFmpeg test patterns, espeak-ng speech), so no real video is needed or committed.
+# Media are synthetic (FFmpeg test patterns, espeak-ng speech) or public-domain recordings pinned by SHA-256;
+# nothing is committed.
 # Models are downloaded once and checked against the SHA-256 the app pins in src-tauri/src/jobs.rs.
 # Existing files are kept; delete one to create it again.
 set -euo pipefail
@@ -127,6 +128,18 @@ model wav2vec2-xls-r-300m-cs-250-q8_0.gguf bde0e0d90ae14c60ffea627ccdd7ba263ea6d
   https://huggingface.co/cstr/wav2vec2-xls-r-300m-cs-250-GGUF/resolve/a264af811793d1f32a6ff3ce7de7ad9b2dcfdd40/wav2vec2-xls-r-300m-cs-250-q8_0.gguf
 model wav2vec2-base-960h.gguf 298d900e715936118c1476a5b246ceda08c1942411d350f38ccb02da1eac3cf7 \
   https://huggingface.co/cstr/wav2vec2-base-960h-GGUF/resolve/7c025ea07cffc65b211b360e5865dfe59df7e8af/wav2vec2-base-960h.gguf
+# The face and subject models of cover frames and masks, pinned like the app pins them (crates/vision/src/models.rs).
+model yunet-2026may.onnx ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0 \
+  https://media.githubusercontent.com/media/opencv/opencv_zoo/26cc381e4d2594bb9f47a26eb8fd96c94a13660d/models/face_detection_yunet/face_detection_yunet_2026may.onnx
+vision_models=https://raw.githubusercontent.com/tomasmach/nuzky-models/a4f7e3c99e0b1b971d69595a1c3efb64fbc18730
+model face-landmarks-v2.onnx 6fc4bae7e3e2c5c0870e8d1b764839c7dcefee7e96c874b454da8be514e19f47 \
+  $vision_models/face-landmarks-v2.onnx
+model face-blendshapes-v2.onnx 74029fcef4076695dd1129d9c45a3d766532745868bd1eb3cc1deff87e7d6d66 \
+  $vision_models/face-blendshapes-v2.onnx
+model selfie-segmenter.onnx 7759b1df460279b03bb39813ee1cec7bc3a1a4be38006e98ddd48294c92bd9f4 \
+  $vision_models/selfie-segmenter.onnx
+model birefnet-lite.onnx 8fd304fd859a8dc999a4a93f1fb58f4c9a6bf575de64d95c2a78027e7964d7be \
+  https://github.com/tomasmach/nuzky-models/releases/download/birefnet-lite-1/birefnet-lite.onnx
 
 # Real Czech connected speech for the word timing test (crates/analysis/tests/alignment.rs): 25 s of chapter 2
 # of Krysař by Viktor Dyk, read for LibriVox and released into the public domain. Its word boundaries were
@@ -142,3 +155,33 @@ krysar() {
   ff -ss 97.5 -t 25.1 -i "$mp3" -ac 1 -c:a pcm_s16le -f wav "$1"
 }
 media krysar-cs.wav krysar
+
+# A real face for thumbnail frame choice and person masking (crates/vision/tests): the first 10 MiB (13 s) of a
+# NASA live interview with astronaut Jeanette Epps, 4 October 2019, a US government work in the public domain
+# (https://images.nasa.gov/details/iss061m2627771232_Live_Interviews_Jeanette_Epps_191004). The S3 object is
+# versioned and has not changed since 2019, so the byte range is pinned like a whole file. Each still is a 9:16
+# crop below the black top rows, scaled to 1080x1920: at 8.992 s she looks into the camera, at 9.159 s both eyes
+# are shut mid-blink. Every -ss sits half a 59.94 fps frame before its frame. The outline of the person in
+# face-open.png, crates/vision/tests/data/face-open-person.json, was drawn by hand on this exact crop.
+epps() {
+  local mp4=$out/.epps-2019-10-04.mp4 sha=0ceeb3bc5a834bbbc470b876ef959cf364da57d36a34b2b288704914202af105
+  local id=iss061m2627771232_Live_Interviews_Jeanette_Epps_191004
+  if ! { [ -f "$mp4" ] && sha256_is "$mp4" "$sha"; }; then
+    curl --fail --location --silent --show-error --range 0-10485759 --max-filesize 10485760 \
+      --output "$mp4.part" "https://images-assets.nasa.gov/video/$id/$id~large.mp4"
+    sha256_is "$mp4.part" "$sha" || { echo "fixtures: $mp4.part does not match its SHA-256" >&2; exit 1; }
+    mv "$mp4.part" "$mp4"
+  fi
+  ff -ss "$1" -i "$mp4" -frames:v 1 -vf "crop=396:704:447:8,scale=1080:1920:flags=lanczos,format=rgb24" "$2"
+}
+media face-open.png epps 8.984
+media face-blink.png epps 9.151
+# Twelve seconds at 30 fps in 3 s segments the tests rely on: [0,3) open eyes under a strong blur, [3,6) the
+# blink, [6,12) sharp open eyes (two segments of identical frames). A keyframe starts every segment.
+face_thumb() {
+  ff -loop 1 -framerate 30 -t 3 -i "$out/face-open.png" -loop 1 -framerate 30 -t 3 -i "$out/face-blink.png" \
+    -loop 1 -framerate 30 -t 6 -i "$out/face-open.png" \
+    -filter_complex "[0:v]gblur=sigma=8[blur];[blur][1:v][2:v]concat=n=3:v=1:a=0,format=yuv420p" \
+    -c:v libx264 -preset veryfast -crf 18 -r 30 -force_key_frames 0,3,6,9 -an "$1"
+}
+media face-thumb.mp4 face_thumb

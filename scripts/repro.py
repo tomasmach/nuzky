@@ -82,6 +82,8 @@ def main(args):
     # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too.
     subprocess.run(['cargo', 'build', '--locked', '-p', 'nuzky-app', '-p', 'nuzky-cli', '-p', 'nuzky-analysis'], cwd=ROOT,
                    check=True)
+    # The debug app opens ONNX Runtime from the build dependencies when covers run.
+    subprocess.run(['node', 'scripts/fetch-onnxruntime.mjs'], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     for name in names:
         (OUT / name / 'result.json').unlink(missing_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)

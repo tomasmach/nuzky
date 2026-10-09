@@ -89,4 +89,6 @@ PATH = { value = "$SDK/bin:$PATH", force = true }
 LIBRARY_PATH = { value = "$SDK/lib${LIBRARY_PATH:+:$LIBRARY_PATH}", force = true }
 CFG
 fi
+# ONNX Runtime, which debug builds load from the same deps directory when covers run.
+NUZKY_DEPS="$DEPS" node "$REPO/scripts/fetch-onnxruntime.mjs" >/dev/null
 echo "Dev dependencies ready in $ROOT"

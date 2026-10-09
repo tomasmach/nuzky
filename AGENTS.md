@@ -48,7 +48,7 @@ Nejčastější vada je změna, která funguje jen na cestě, kterou jsi zkouše
 
 ## Ověřování
 
-- Nový checkout: `git config core.hooksPath .githooks`. Nástroje pro bránu na Fedoře a Nobaře: `sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib`, `cargo install --locked cargo-deny@0.20.2` a gitleaks 8.30.1. První kompilace testů v čistém checkoutu trvá asi 7 minut.
+- Nový checkout: `git config core.hooksPath .githooks`. Nástroje pro bránu na Fedoře a Nobaře: `sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib qemu-user-static-x86`, `cargo install --locked cargo-deny@0.20.2` a gitleaks 8.30.1. První kompilace testů v čistém checkoutu trvá asi 7 minut.
 - Bug reprodukuj přesně v toku, kde se stal. Když první oprava nezabere, přestaň hádat a najdi stav, který ho spouští.
 - E2E jsou hlavní testy. Je to tok ve skutečné appce (`tests/e2e/<oblast>.py`, spouští ho `python3 scripts/repro.py <flow>`, `--list` ukáže toky) a integrační test nad skutečnou binárkou a médii (`crates/cli/tests/`, `crates/engine/tests/qa_*.rs`).
 - Nová funkce, oprava UI, toku nebo bugu není hotová bez E2E scénáře, který by bez ní selhal. Přidej nový flow, nebo kontrolu do existujícího. Scénář ověřuje, co uživatel uvidí: stav projektu, uložený soubor, pixely náhledu nebo exportu. Nestačí, že nic nespadlo.

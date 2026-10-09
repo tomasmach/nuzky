@@ -124,6 +124,22 @@ Inspected `~/.cargo/registry/src/*/ffmpeg-sys-next-9.0.0/build.rs`, particularly
 - `LIBCLANG_PATH` locates libclang for bindgen. `BINDGEN_EXTRA_CLANG_ARGS` can supply missing compiler include paths (used by the no-root Linux setup). These are bindgen inputs, not FFmpeg runtime paths.
 - Build-time discovery does not arrange runtime loading. AppImage collection, macOS relocation and Windows DLL placement above are separate required steps.
 
+## ONNX Runtime
+
+Covers (`crates/vision`) run their models with ONNX Runtime, which Nuzky opens at run time and never links (`ort` with `load-dynamic`). `ort`'s default, pyke's prebuilt static library, needs AVX2: linked into `nuzky-app` it stopped the app before `main` on CPUs without AVX2, checked under `qemu-x86_64-static -cpu Nehalem`. Microsoft's official build picks its CPU kernels at run time and runs there, so that is what ships.
+
+`node scripts/fetch-onnxruntime.mjs` downloads the pinned ONNX Runtime 1.28.3 release archive for the platform from [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime/releases/tag/v1.28.3), checks its SHA-256 and keeps only the library, `LICENSE` and `ThirdPartyNotices.txt` in `<deps>/onnxruntime-1.28.3/` (`~/.cache/nuzky/deps`, `%LOCALAPPDATA%\Nuzky\build-deps` on Windows, or `NUZKY_DEPS`). The Linux and Windows setup scripts, `scripts/check.sh`, `scripts/repro.py`, CI and `build-bundles.mjs` run it; on macOS and Ubuntu run it once after `npm ci`. Debug builds load the library from there, release builds only from their own install:
+
+| Install | Library |
+|---|---|
+| AppImage and deb | `usr/lib/Nuzky/libonnxruntime.so.1`, Tauri's resource directory, named after `productName` |
+| .app | `Contents/Frameworks/libonnxruntime.1.dylib`, copied and signed by `bundle-macos-libs.py` |
+| NSIS | `onnxruntime.dll` beside `nuzky-app.exe`, next to the VC++ runtime Tauri already bundles |
+
+`NUZKY_ONNXRUNTIME=<file>` replaces the lookup, for packagers and release builds run outside an install. When the library cannot load, the app works as before and the cover tools answer `VISION_UNAVAILABLE` with the reason, before any model is downloaded. Telemetry, which Microsoft's Windows build turns on by default, is switched off as it loads. The library adds about 4 MB to the NSIS installer, 7–9 MB to the AppImage and deb and 11 MB to the dmg (compressed sizes of the library); the executables do not grow.
+
+`scripts/check.sh` starts `nuzky-app` and `nuzky` under an emulated Nehalem and runs the face models there, so a change that brings back an AVX2 requirement fails the gate. Only CI or real hardware shows the macOS relocation and signing with the extra library, the NSIS layout and Windows on a CPU without AVX.
+
 ## CI, release and remaining platform checks
 
 Actions minutes are capped and macOS counts ten times, so pull requests are checked locally with `scripts/check.sh` and GitHub only scans them for secrets (`secrets.yml`). `ci.yml` runs on request (`gh workflow run ci.yml --ref <branch>`) and from `release.yml`. It caches npm and Cargo, tests all three systems, then builds and uploads installers and build-info files for 14 days. A `v*` tag runs the same build/test matrix; all three jobs must pass before a draft release is created and receives all installers plus SHA-256 checksums. The tag must equal `v` plus `src-tauri/tauri.conf.json`'s version. Set all package versions consistently before tagging. The release job uses the repository's automatic `GITHUB_TOKEN` with `contents: write`; no personal token is needed. A rerun can replace draft assets but refuses to modify a published release.
@@ -141,3 +157,19 @@ Nuzky is GPL-3.0-or-later. FFmpeg with x264 is a GPL combination; use GPL shared
 Before publishing a draft, preserve the exact FFmpeg and transitive library versions, their licence/copyright notices, and complete corresponding source including patches and build scripts. Attach a source archive beside the binary downloads; a link to upstream's latest branch or a list of versions is insufficient. `build-info-*.txt`, the Windows pin and macOS `Contents/Resources/bundled-libraries.txt` identify build inputs, but the workflows do not assemble a complete third-party source archive. This is a required release-maintainer step, not an automated compliance claim.
 
 For Ubuntu images, obtain the matching distribution sources with `apt-get source ffmpeg x264` after enabling `deb-src`, and do the same for other redistributed packages. For BtbN preserve the exact FFmpeg revision, the month-end build recipes/patches and the source versions of every statically included dependency. For Homebrew preserve formula revisions, source tarballs/patches, and licences for every copied dylib. Package those inputs and notices, check they correspond to the actual build, then attach them before publishing. The `.deb` relies on distribution FFmpeg and does not itself redistribute those FFmpeg libraries.
+
+ONNX Runtime is MIT, © Microsoft; the installers carry its `LICENSE` and `ThirdPartyNotices.txt` in `licenses/onnxruntime/`. Add the ONNX Runtime 1.28.3 source (commit `0d68ff6b3b72b04aac578decd6c4c45d322bb962`, with the dependencies its `cmake/deps.txt` lists) to the release source archive next to FFmpeg's.
+
+### Downloaded models
+
+Models are not bundled. The app and `nuzky vision-models` download them on request from pinned commits or releases, and a file is used only when its size and SHA-256 match (`crates/vision/src/models.rs`). They can be redistributed under these licences:
+
+| File | Model | Licence | Source |
+|---|---|---|---|
+| `yunet-2026may.onnx` | YuNet face detector, 2026may export | MIT, © Shiqi Yu | [opencv_zoo @ 26cc381](https://github.com/opencv/opencv_zoo/tree/26cc381e4d2594bb9f47a26eb8fd96c94a13660d/models/face_detection_yunet) |
+| `face-landmarks-v2.onnx` | MediaPipe Face Mesh V2 | Apache-2.0, © Google | converted from `face_landmarker.task` float16/1 by `scripts/convert-mediapipe.py`, published with the licence and a NOTICE of the changes at [tomasmach/nuzky-models @ a4f7e3c](https://github.com/tomasmach/nuzky-models/tree/a4f7e3c99e0b1b971d69595a1c3efb64fbc18730) |
+| `face-blendshapes-v2.onnx` | MediaPipe Blendshape V2 | Apache-2.0, © Google | as above |
+| `selfie-segmenter.onnx` | MediaPipe Selfie Segmenter, 256×256 | Apache-2.0, © Google | as above, from `selfie_segmenter.tflite` float16/1 |
+| `birefnet-lite.onnx` | BiRefNet_lite with native `DeformConv` | MIT, © ZhengPeng | exported from [ZhengPeng7/BiRefNet_lite @ aa62cd8](https://huggingface.co/ZhengPeng7/BiRefNet_lite/tree/aa62cd87eafb9cc43056d08ef3615a14628b831d) by `scripts/convert-birefnet.py`, published with the licence and NOTICE as the release asset [nuzky-models `birefnet-lite-1`](https://github.com/tomasmach/nuzky-models/releases/tag/birefnet-lite-1) |
+
+The model cards state the MediaPipe licences: [Face Mesh V2](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf), [Blendshape V2](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf), [Selfie Segmentation](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfie%20Segmentation.pdf). Models under non-commercial, research-only or AGPL terms are not used, among them RMBG-1.4 and RMBG-2.0, SCRFD and the other InsightFace models, dlib's 68-point predictor and the pyiqa quality models.

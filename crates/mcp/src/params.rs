@@ -125,6 +125,8 @@ pub enum AnalysisKind {
     Retakes,
     /// Sentences said with emphasis, for a punch-in, over the whole timeline, returned at once.
     Emphasis,
+    /// Frames of the whole timeline worth a cover or thumbnail, as a job.
+    ThumbnailFrames,
 }
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -135,15 +137,24 @@ pub struct AnalysisParams {
     pub window_us: Option<i64>,
     pub threshold: Option<f32>,
     pub min_gap_us: Option<i64>,
+    /// thumbnail_frames: "9:16" (Reels, TikTok) or "16:9" (YouTube) framing counts in the score;
+    /// the canvas's own shape by default.
+    pub format: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Analyze {
     pub kind: AnalysisKind,
-    /// Required for silences, loudness, scenes and fillers. Omit for retakes and emphasis.
+    /// Required for silences, loudness, scenes and fillers. Omit for retakes, emphasis and thumbnail_frames.
     pub asset_id: Option<String>,
     #[serde(default)]
     pub params: AnalysisParams,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SegmentSubject {
+    /// Timeline time of the frame, integer microseconds.
+    pub time_us: i64,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

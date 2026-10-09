@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { VERSION as ORT_VERSION, fetchOnnxRuntime } from './fetch-onnxruntime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
@@ -13,6 +14,9 @@ const run = (cmd, args) => execFileSync(cmd, args, { stdio: 'inherit' });
 const output = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 const config = { bundle: {} };
 let bundles;
+// ONNX Runtime ships beside the app and is opened only when covers run (crates/vision/src/runtime.rs).
+const ort = await fetchOnnxRuntime();
+const ortNotices = Object.fromEntries(ort.notices.map((n) => [n, `licenses/onnxruntime/${path.basename(n)}`]));
 
 switch (process.platform) {
   case 'linux': {
@@ -22,6 +26,8 @@ switch (process.platform) {
       dependencies.push(lib + output('pkg-config', ['--modversion', lib]).split('.')[0]);
     }
     config.bundle.linux = { deb: { depends: dependencies, section: 'video' } };
+    // Resources land in usr/lib/Nuzky in both the AppImage and the deb, where the app looks.
+    config.bundle.resources = { [ort.library]: path.basename(ort.library), ...ortNotices };
     // Allow the bundler's own AppImages to run on hosts without mounted FUSE.
     process.env.APPIMAGE_EXTRACT_AND_RUN = '1';
     break;
@@ -29,6 +35,8 @@ switch (process.platform) {
   case 'darwin':
     if (process.arch !== 'arm64') throw new Error('Use an Apple Silicon host.');
     bundles = 'app';
+    // The library itself goes to Contents/Frameworks through bundle-macos-libs.py below.
+    config.bundle.resources = ortNotices;
     break;
   case 'win32': {
     bundles = 'nsis';
@@ -37,6 +45,7 @@ switch (process.platform) {
     const dlls = readdirSync(path.join(ffmpeg, 'bin')).filter(name => name.endsWith('.dll'));
     if (!dlls.some(name => name.startsWith('avcodec-'))) throw new Error('FFmpeg DLLs missing.');
     config.bundle.resources = Object.fromEntries(dlls.map(name => [path.join(ffmpeg, 'bin', name), name]));
+    Object.assign(config.bundle.resources, { [ort.library]: path.basename(ort.library) }, ortNotices);
     for (const name of ['LICENSE.txt', 'LICENSE', 'README.txt']) {
       if (existsSync(path.join(ffmpeg, name))) config.bundle.resources[path.join(ffmpeg, name)] = `licenses/ffmpeg/${name}`;
     }
@@ -51,7 +60,7 @@ run(process.execPath, ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--bund
 
 if (process.platform === 'darwin') {
   const app = path.join(bundle, 'macos', 'Nuzky.app');
-  run('python3', ['scripts/bundle-macos-libs.py', app]);
+  run('python3', ['scripts/bundle-macos-libs.py', app, ort.library]);
   const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
   mkdirSync(path.join(bundle, 'dmg'), { recursive: true });
   const stage = mkdtempSync(path.join(target, 'dmg-stage-'));
@@ -68,6 +77,7 @@ const info = [
   `Platform: ${process.platform} ${process.arch}`,
   output('rustc', ['--version']),
   output('ffmpeg', ['-version']),
+  `ONNX Runtime ${ORT_VERSION} (scripts/fetch-onnxruntime.mjs pins the official release archive)`,
   'FFmpeg redistribution/source checklist: docs/BUILDING.md',
 ];
 // Formulae only: the bundled libraries come from them, and a cask from an untrusted tap makes plain `brew list` fail.

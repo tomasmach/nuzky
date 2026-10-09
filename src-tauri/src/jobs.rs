@@ -96,6 +96,7 @@ fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
         match kind {
             "export" => running == "export",
             "captions" | "transcript" => matches!(running, "captions" | "transcript"),
+            "vision-models" => running == "vision-models",
             _ => false,
         }
     };
@@ -343,6 +344,59 @@ pub fn speech_models() -> Vec<SpeechModel> {
                 .is_ok_and(|file| file.is_file() && file.len() == integrity.size),
         })
         .collect()
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VisionModels {
+    /// Download size of what is missing.
+    pub size_mb: u64,
+    pub downloaded: bool,
+    /// Why covers cannot run on this computer at all, so nothing should be downloaded.
+    pub unavailable: Option<String>,
+}
+
+/// The face and subject models covers need: whether they can run, are installed and what is left
+/// to get. Async, so loading ONNX Runtime the first time never holds up the window.
+#[tauri::command]
+pub async fn vision_models() -> VisionModels {
+    let missing = nuzky_vision::models::missing(nuzky_vision::models::ALL, &models_dir());
+    VisionModels {
+        size_mb: missing.iter().map(|m| m.size).sum::<u64>().div_ceil(1_000_000),
+        downloaded: missing.is_empty(),
+        unavailable: nuzky_vision::runtime::require().err().map(|e| format!("{e:#}")),
+    }
+}
+
+/// Downloads the missing cover models as one job, each checked against its pinned SHA-256.
+#[tauri::command]
+pub fn start_vision_models(app: AppHandle) -> Result<String, String> {
+    nuzky_vision::runtime::require().map_err(|e| format!("{e:#}"))?;
+    let id = format!("vision-models:{}", new_id());
+    let cancel = register(&app, &id).ok_or("The cover models are already downloading")?;
+    let (worker_app, job_id) = (app.clone(), id.clone());
+    let spawn = std::thread::Builder::new().name("vision-models".into()).spawn(move || {
+        let mut rep = Reporter::new(&worker_app, &job_id, "vision-models", "Cover models".into());
+        let dir = models_dir();
+        let missing = nuzky_vision::models::missing(nuzky_vision::models::ALL, &dir);
+        let total = missing.iter().map(|m| m.size).sum::<u64>().max(1) as f32;
+        let mut before = 0;
+        let result = missing.iter().try_for_each(|model| {
+            let integrity = Integrity { size: model.size, sha256: model.sha256 };
+            model_download::download(model.url, &model.path(&dir), integrity, &cancel, |part| {
+                rep.progress((before as f32 + part * model.size as f32) / total, Some("Downloading cover models"))
+            })?;
+            before += model.size;
+            anyhow::Ok(())
+        });
+        rep.finish(result.map(|()| None), cancel.load(Ordering::Relaxed));
+        unregister(&worker_app, &job_id);
+    });
+    if let Err(error) = spawn {
+        unregister(&app, &id);
+        return Err(format!("Starting the cover model download: {error}"));
+    }
+    Ok(id)
 }
 
 #[derive(serde::Deserialize)]

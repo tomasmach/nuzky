@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/cli", "src-tauri", "crates/analysis", "crates/session", "crates/mcp", "crates/agent"]
+members = ["crates/engine", "crates/cli", "src-tauri", "crates/analysis", "crates/session", "crates/mcp", "crates/agent", "crates/vision"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,7 @@ nuzky-session = { path = "crates/session" }
 nuzky-mcp = { path = "crates/mcp" }
 nuzky-agent = { path = "crates/agent" }
 nuzky-analysis = { path = "crates/analysis" }
+nuzky-vision = { path = "crates/vision" }
 schemars = "1.2.2"
 nuzky-engine = { path = "crates/engine" }
 anyhow = "1"
