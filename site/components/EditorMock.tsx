@@ -24,6 +24,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { fitSizes } from "@/lib/fit";
 
 // A still of the Nuzky editor at 1200 × 740, drawn from the app's tokens in DESIGN.md.
 // `focus` dims everything except the part the current showcase tab talks about.
@@ -61,7 +62,7 @@ function Clip({ x, w, top, h, color, label, icon, selected, image }: { x: number
       className={`absolute overflow-hidden rounded-[7px] ${selected ? "ring-2 ring-accent" : "ring-1 ring-inset ring-white/10"}`}
       style={{ left: x, width: w - 2, top, height: h, background: color }}
     >
-      {image && <Image src={image} alt="" fill sizes="320px" className="object-cover" />}
+      {image && <Image src={image} alt="" fill sizes={fitSizes(w, 1200)} className="object-cover" />}
       <span className="absolute left-1.5 top-1 flex items-center gap-1 rounded bg-black/60 px-[5px] py-px text-[10px] font-medium">
         {icon}
         {label}
@@ -136,7 +137,7 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
           <div className="grid grid-cols-3 gap-2">
             {tiles.map((t, i) => (
               <div key={t} className="relative h-[84px] overflow-hidden rounded-[10px] bg-raised">
-                <Image src={`/media/${t}.jpg`} alt="" fill sizes="180px" className="object-cover" />
+                <Image src={`/media/${t}.jpg`} alt="" fill sizes={fitSizes(88, 1200)} className="object-cover" />
                 <span className="absolute bottom-[5px] right-[5px] rounded-[5px] bg-black/60 px-[5px] py-0.5 text-[10px] font-medium tabular-nums">{durations[i]}</span>
               </div>
             ))}
@@ -146,7 +147,7 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
         {/* Preview */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 rounded-xl bg-stage p-3.5 ring-1 ring-inset ring-white/[0.06]">
           <div className="relative h-[340px] w-[191px] ring-1 ring-white/[0.12]">
-            <Image src="/media/reel-hike.jpg" alt="" fill sizes="400px" className="object-cover" />
+            <Image src="/media/reel-hike.jpg" alt="" fill sizes={fitSizes(191, 1200)} className="object-cover" />
             <div className={`absolute inset-x-0 bottom-16 flex justify-center ${focus === "captions" ? "" : ""}`}>
               <span
                 className={`flex gap-[5px] rounded-md bg-black/70 px-2 py-1 text-[15px] font-extrabold transition-shadow duration-300 ${focus === "captions" ? "ring-2 ring-accent" : ""}`}

@@ -103,7 +103,7 @@ export function Agent() {
                   key={i}
                   className={`relative flex-1 overflow-hidden rounded-[7px] transition-shadow duration-200 ${i === lit ? "ring-2 ring-accent" : "ring-1 ring-inset ring-white/10"}`}
                 >
-                  <Image src={`/media/strip-${i}.jpg`} alt="" fill sizes="200px" className="object-cover" />
+                  <Image src={`/media/strip-${i}.jpg`} alt="" fill sizes="(min-width: 1024px) 100px, 14vw" className="object-cover" />
                 </div>
               ))}
             </div>

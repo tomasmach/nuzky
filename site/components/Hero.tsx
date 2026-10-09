@@ -1,10 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Sparkles, Undo2 } from "lucide-react";
 import { Fit } from "./Fit";
 import { AppleLogo, GitHubLogo } from "./Logos";
+import { fitSizes } from "@/lib/fit";
 import { repo } from "@/lib/site";
 
 const shadow = "drop-shadow(0 2px 8px rgb(0 0 0 / 0.7))";
@@ -13,7 +14,7 @@ function Reel({ src, w, opacity, children }: { src: string; w: number; opacity: 
   const h = Math.round((w * 16) / 9);
   return (
     <div className="relative shrink-0 overflow-hidden rounded-[14px] ring-1 ring-white/10" style={{ width: w, height: h, opacity }}>
-      <Image src={src} alt="" fill sizes={`${w * 2}px`} className="object-cover" />
+      <Image src={src} alt="" fill loading="eager" sizes={fitSizes(w, 1060)} className="object-cover" />
       {children}
     </div>
   );
@@ -36,6 +37,7 @@ const WORDS = 5;
 const FIRST_SPOKEN = 2;
 
 // The spoken word walks through the caption the way it does in the app's preview, with a breath at the end.
+// It only walks while the hero is on screen.
 function useSpokenWord(on: boolean) {
   const [spoken, setSpoken] = useState(FIRST_SPOKEN);
   useEffect(() => {
@@ -51,8 +53,8 @@ function useSpokenWord(on: boolean) {
   return spoken;
 }
 
-function Caption({ style, highlight }: { style: CaptionStyle; highlight: boolean }) {
-  const spoken = useSpokenWord(highlight);
+function Caption({ style, highlight, playing }: { style: CaptionStyle; highlight: boolean; playing: boolean }) {
+  const spoken = useSpokenWord(highlight && playing);
   const loud = style !== "Clean";
   const word = (w: string, i: number) => {
     const lit = highlight && i === spoken;
@@ -92,9 +94,17 @@ function Caption({ style, highlight }: { style: CaptionStyle; highlight: boolean
 export function Hero() {
   const [style, setStyle] = useState<CaptionStyle>("Bold");
   const [highlight, setHighlight] = useState(true);
+  const section = useRef<HTMLElement>(null);
+  const [inView, setInView] = useState(false);
+
+  useEffect(() => {
+    const io = new IntersectionObserver(([e]) => setInView(e.isIntersecting));
+    if (section.current) io.observe(section.current);
+    return () => io.disconnect();
+  }, []);
 
   return (
-    <section className="relative">
+    <section ref={section} className="relative">
       <div className="relative z-10 flex flex-col items-center px-5 pt-16 text-center sm:pt-24">
         <h1 className="heading-xl">
           Make the reel.
@@ -116,12 +126,20 @@ export function Hero() {
             {/* The UGC clip in the middle, selected the way the preview shows a selection. */}
             <div className="relative shrink-0" style={{ width: 280, height: 498 }}>
               <div className="absolute inset-0 overflow-hidden ring-1 ring-white/20">
-                <Image src="/media/ugc.jpg" alt="A creator holding a serum bottle, talking to the camera" fill priority sizes="560px" className="object-cover" />
+                <Image
+                  src="/media/ugc.jpg"
+                  alt="A creator holding a serum bottle, talking to the camera"
+                  fill
+                  loading="eager"
+                  fetchPriority="high"
+                  sizes={fitSizes(280, 1060)}
+                  className="object-cover"
+                />
                 <div className="absolute left-3.5 top-4 flex items-center gap-2" style={{ filter: shadow }}>
-                  <Image src="/media/avatar.jpg" alt="" width={26} height={26} className="size-[26px] rounded-full object-cover ring-[1.5px] ring-white" />
+                  <Image src="/media/avatar.jpg" alt="" width={26} height={26} loading="eager" className="size-[26px] rounded-full object-cover ring-[1.5px] ring-white" />
                   <span className="text-[13px] font-semibold">@mia.skin</span>
                 </div>
-                <Caption style={style} highlight={highlight} />
+                <Caption style={style} highlight={highlight} playing={inView} />
               </div>
               <div className="pointer-events-none absolute inset-0 outline outline-[1.5px] outline-fg" />
               {[

@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Slow silver swells behind a section. The same shader as nuzky-silk.glsl in the design file.
-// It draws at reduced resolution (the light is soft, so nobody sees the difference), stops while
-// the section is off screen or the tab is hidden, and holds one still frame with reduced motion.
+// It draws one pixel per two CSS pixels on every screen, 30 times a second: the light is soft and slow,
+// so nobody sees the difference, and a retina screen shades an eighth of what one pixel per CSS pixel
+// at 60 fps would cost. It stops while the section is off screen or the tab is hidden, and holds one
+// still frame with reduced motion.
+// When the GPU drops the context, the canvas hides and the gradient underneath shows until it is back.
 //
 // With `swellAt` the light spans several sections as one surface: the swells sit behind the element
 // the selector finds, an optional soft glow sits behind `glowAt`, and the light fades out before the
@@ -13,7 +16,11 @@ import { useEffect, useRef } from "react";
 const vertex = `attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }`;
 
 const fragment = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
+#else
+precision mediump float;
+#endif
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_intensity;
@@ -86,15 +93,21 @@ type Props = {
 
 // The span mode measures in CSS pixels so the swells keep the hero's proportions on a tall surface.
 const SPAN_UNIT = 1000;
+// Shader pixels per CSS pixel, whatever the screen's density.
+const SCALE = 0.5;
+// A frame is due after this long; the slack lets a 60 Hz screen draw every other frame without drifting.
+const FRAME_MS = 1000 / 30 - 3;
 
 export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className = "" }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
+  // Bumped when a lost context comes back, so the effect builds the program again.
+  const [restored, setRestored] = useState(0);
 
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "low-power" });
-    if (!gl) return;
+    if (!gl || gl.isContextLost()) return;
 
     const compile = (type: number, src: string) => {
       const s = gl.createShader(type)!;
@@ -125,7 +138,6 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
     gl.uniform1f(u("u_intensity"), intensity);
     gl.uniform1f(u("u_span"), swellAt ? 1 : 0);
 
-    const scale = Math.min(window.devicePixelRatio || 1, 2) * 0.5;
     const root = canvas.parentElement?.parentElement;
     const anchors = [swellAt, glowAt].map((s) => (s && root ? root.querySelector<HTMLElement>(s) : null));
 
@@ -133,11 +145,11 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
     const anchorY = (el: HTMLElement | null, rect: DOMRect, fallback: number) => {
       if (!el) return fallback;
       const r = el.getBoundingClientRect();
-      return (rect.bottom - (r.top + r.height / 2)) * scale;
+      return (rect.bottom - (r.top + r.height / 2)) * SCALE;
     };
     const measure = () => {
-      const w = Math.max(1, Math.round(canvas.clientWidth * scale));
-      const h = Math.max(1, Math.round(canvas.clientHeight * scale));
+      const w = Math.max(1, Math.round(canvas.clientWidth * SCALE));
+      const h = Math.max(1, Math.round(canvas.clientHeight * SCALE));
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
@@ -150,7 +162,7 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
         const rect = canvas.getBoundingClientRect();
         gl.uniform1f(uBase, anchorY(anchors[0], rect, h * height));
         gl.uniform1f(uGlow, anchorY(anchors[1], rect, -1e5));
-        gl.uniform1f(uUnit, SPAN_UNIT * scale);
+        gl.uniform1f(uUnit, SPAN_UNIT * SCALE);
       } else {
         gl.uniform1f(uBase, h * height);
         gl.uniform1f(uUnit, h);
@@ -167,9 +179,13 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
       gl.uniform1f(uTime, (now - start) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
+    let last = -Infinity;
     const loop = (now: number) => {
-      draw(now);
-      frame = visible && !still.matches && !document.hidden ? requestAnimationFrame(loop) : 0;
+      if (now - last >= FRAME_MS) {
+        last = now;
+        draw(now);
+      }
+      frame = visible && !still.matches && !document.hidden && !gl.isContextLost() ? requestAnimationFrame(loop) : 0;
     };
     const kick = () => {
       if (!frame && visible) frame = requestAnimationFrame(loop);
@@ -202,7 +218,25 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
       // the next mount of the same canvas (React runs effects twice in development).
       delete canvas.dataset.ready;
     };
-  }, [height, intensity, swellAt, glowAt]);
+  }, [height, intensity, swellAt, glowAt, restored]);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    // Mobile browsers drop WebGL contexts in the background and after GPU resets. Without this the canvas
+    // would stay black; preventing the default lets the browser hand the context back.
+    const lost = (e: Event) => {
+      e.preventDefault();
+      delete canvas.dataset.ready;
+    };
+    const back = () => setRestored((n) => n + 1);
+    canvas.addEventListener("webglcontextlost", lost);
+    canvas.addEventListener("webglcontextrestored", back);
+    return () => {
+      canvas.removeEventListener("webglcontextlost", lost);
+      canvas.removeEventListener("webglcontextrestored", back);
+    };
+  }, []);
 
   // Without WebGL the canvas stays empty and the radial light underneath shows instead.
   return (
