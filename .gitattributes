@@ -1,0 +1,3 @@
+# Written by src-tauri/src/typescript.rs from the Rust types. LF everywhere, so the test that compares it
+# with the Rust types also passes on Windows checkouts with core.autocrlf.
+src/lib/types.ts linguist-generated=true text eol=lf

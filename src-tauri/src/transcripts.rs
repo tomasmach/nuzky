@@ -10,6 +10,9 @@ use tauri::{AppHandle, Manager};
 
 use crate::{AppState, CmdResult, Snapshot};
 
+/// A word where it is heard on the timeline; `i` numbers it for cuts.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "TranscriptWord"))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Word {
@@ -20,9 +23,12 @@ pub struct Word {
     p: f32,
     /// What recognition wrote, when the user corrected the word.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     original: Option<String>,
 }
 
+/// The timeline's speech as it is now, from the transcripts of its media files.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptView {
@@ -34,6 +40,7 @@ pub struct TranscriptView {
     untranscribed: Vec<String>,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptCut {
@@ -176,6 +183,7 @@ pub struct WordFix {
     text: String,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WordsCorrected {

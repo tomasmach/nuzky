@@ -30,6 +30,7 @@ pub fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("nuzky")
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {

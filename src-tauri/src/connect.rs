@@ -11,6 +11,8 @@ use serde_json::{Value, value::RawValue};
 
 pub const NAME: &str = "nuzky";
 
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AgentKind"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Agent {
@@ -64,6 +66,7 @@ fn app_image(exe: &Path, dir: Option<PathBuf>, image: Option<PathBuf>) -> Option
     image.filter(|_| dir.is_some_and(|dir| exe.starts_with(dir)))
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum State {
@@ -77,12 +80,19 @@ pub enum State {
     Unreadable,
 }
 
+/// An agent Nuzky can be connected to, and the state of its `nuzky` MCP entry.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AgentConnection"))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
     pub agent: Agent,
     pub name: &'static str,
+    /// Its config file.
     pub path: String,
+    /// `connected`: the entry runs this app. `other`: a `nuzky` entry runs something else. `missing`: no
+    /// `nuzky` entry. `unreadable`: the file is not valid, and connecting would not touch it.
+    #[cfg_attr(test, ts(inline))]
     pub state: State,
     /// Why the file could not be read.
     pub problem: Option<String>,

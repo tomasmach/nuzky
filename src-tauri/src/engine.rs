@@ -27,6 +27,7 @@ pub enum Msg {
     Resize(u32, u32),
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Clone, Copy, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Transport {

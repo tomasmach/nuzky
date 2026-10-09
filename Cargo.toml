@@ -16,6 +16,7 @@ nuzky-agent = { path = "crates/agent" }
 nuzky-analysis = { path = "crates/analysis" }
 nuzky-vision = { path = "crates/vision" }
 schemars = "1.2.2"
+ts-rs = "12.0.1"
 nuzky-engine = { path = "crates/engine" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

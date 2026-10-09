@@ -37,18 +37,22 @@ pub fn caption_preset(name: &str) -> Option<&'static CaptionPreset> {
     caption_presets().iter().find(|preset| preset.name.eq_ignore_ascii_case(&name))
 }
 
+/// Editing limits the engine enforces, sent to the UI at start so it never copies them.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Limits {
     pub min_speed: f32,
     pub max_speed: f32,
     pub max_transition_us: i64,
+    /// Vertical offset of generated captions from the canvas centre, as a fraction of its height.
     pub caption_y: f32,
 }
 
 pub const LIMITS: Limits =
     Limits { min_speed: MIN_SPEED, max_speed: MAX_SPEED, max_transition_us: MAX_TRANSITION_US, caption_y: CAPTION_Y };
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +66,7 @@ pub struct CaptionSegment {
     pub words: Vec<CaptionWord>,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -101,6 +106,7 @@ pub enum EditCmd {
     DeleteClips {
         clip_ids: Vec<String>,
     },
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
     UpdateClip {
         clip_id: String,
         transform: Option<Transform>,
@@ -137,12 +143,14 @@ pub enum EditCmd {
     DetachAudio {
         clip_id: String,
     },
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
     UpdateTrack {
         track_id: String,
         muted: Option<bool>,
         hidden: Option<bool>,
         keep_in_place: Option<bool>,
     },
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
     SetCanvas {
         width: u32,
         height: u32,
@@ -162,6 +170,7 @@ pub enum EditCmd {
     },
     /// Cuts the timeline ranges out of every track except `keep_track_ids` (by default the
     /// tracks kept in place) and closes the gaps, so video, overlays, audio and captions stay in sync.
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
     RippleDeleteRanges {
         ranges: Vec<TimeRange>,
         #[serde(default)]
@@ -186,6 +195,7 @@ pub enum EditCmd {
 }
 
 /// A punch-in over the timeline range `[start_us, end_us)`.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +212,7 @@ pub const ZOOM_SCALES: std::ops::RangeInclusive<f64> = 0.25..=4.0;
 pub const MIN_ZOOM_PIECE_US: i64 = 300_000;
 
 /// Timeline range `[start_us, end_us)`.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +221,7 @@ pub struct TimeRange {
     pub end_us: i64,
 }
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
