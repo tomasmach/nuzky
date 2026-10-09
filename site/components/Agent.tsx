@@ -11,11 +11,14 @@ const strip = [1, 2, 3, 4, 5, 6, 7];
 const TYPING = -1;
 
 // Plays the exchanges forever while the section is on screen: the user types, the agent replies,
-// works through its steps and reports, then the next request after a short look at the result. It
-// starts on a finished first run, which is also what the server renders and what reduced motion keeps,
-// and moves on from it almost at once so the panel is never idle for long.
+// works through its steps and reports, then the next request after a short look at the result.
+// `n` only ever grows, so after the last exchange the first one is simply asked again. It starts
+// one lap in, on a finished first run under the rest of the conversation, so the panel is full from
+// the first frame; that is also what the server renders and what reduced motion keeps.
+const FIRST = exchanges.length;
+
 function useAgentLoop(active: boolean) {
-  const [n, setN] = useState(0);
+  const [n, setN] = useState(FIRST);
   const [stage, setStage] = useState(doneStage(exchanges[0]));
   const [typed, setTyped] = useState(0);
 
@@ -39,7 +42,7 @@ function useAgentLoop(active: boolean) {
           setN((k) => k + 1);
           setStage(TYPING);
         },
-        n === 0 ? 600 : 1600,
+        n === FIRST ? 600 : 1600,
       );
     }
     return () => window.clearTimeout(id);
@@ -63,8 +66,9 @@ export function Agent() {
   const at = (k: number) => exchanges[k % exchanges.length];
   const current = at(n);
   const working = stage >= 0 && stage < doneStage(current);
-  // Older runs scroll out of the panel, so two finished ones are enough history.
-  const history = [n - 2, n - 1].filter((k) => k >= 0);
+  // Enough finished runs to overfill the panel even when the short ones come together, so the
+  // oldest one leaves the DOM well above the visible part.
+  const history = [n - 4, n - 3, n - 2, n - 1];
   const lit = working ? ((n * 3 + stage) % strip.length) + 1 : 4;
 
   return (
