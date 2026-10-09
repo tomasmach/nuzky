@@ -215,16 +215,16 @@ export function Showcase() {
                   className="group absolute hidden size-12 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full md:flex"
                   style={{ left: s.x, top: s.y }}
                 >
-                  {/* Every hotspot breathes so it reads as something to point at; the open one stays still and blue. */}
+                  {/* Every hotspot breathes so it reads as something to point at; the open one turns dark like its tooltip and stays still. */}
                   {i !== spot && (
                     <span
-                      className="absolute inset-1 rounded-full bg-white/30 animate-[pulse-ring_2.2s_ease-out_infinite]"
+                      className="absolute inset-1 rounded-full bg-white/45 animate-[pulse-ring_2s_ease-out_infinite]"
                       style={{ animationDelay: `${i * 0.5}s` }}
                     />
                   )}
                   <span
                     className={`relative flex size-8 items-center justify-center rounded-full shadow-[0_0_0_4px_rgb(0_0_0/0.25),0_6px_18px_rgb(0_0_0/0.55)] transition-[background-color,transform] duration-150 group-hover:scale-110 ${
-                      i === spot ? "bg-accent-strong text-white" : "bg-fg text-bg"
+                      i === spot ? "bg-[#1c1c1f] text-fg ring-1 ring-inset ring-white/25" : "bg-fg text-bg"
                     }`}
                   >
                     <Plus className={`size-4 transition-transform duration-200 ${i === spot ? "rotate-45" : ""}`} strokeWidth={2.5} />
