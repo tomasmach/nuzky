@@ -113,6 +113,12 @@ select {
       inset 0 0 0 1px rgb(255 255 255 / 0.1),
       0 18px 50px rgb(0 0 0 / 0.55);
   }
+  /* For an overlay that is mostly text, such as the launcher: less of the video's colour comes through. */
+  .overlay-thick {
+    background: rgb(36 36 41 / 0.96);
+    -webkit-backdrop-filter: blur(28px) saturate(1.1);
+    backdrop-filter: blur(28px) saturate(1.1);
+  }
   /* While the video plays (App.tsx sets the attribute), the blur would be redone on every frame under it. */
   [data-playing] .overlay {
     background: rgb(42 42 47 / 0.97);

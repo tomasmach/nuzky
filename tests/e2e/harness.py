@@ -19,8 +19,10 @@ AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
 
 
-def flow(name, description, before=None):
+def flow(name, description, before=None, home=False):
+    """`home`: the flow starts on the home screen; others start in the editor of the restored project."""
     def register(fn):
+        fn.home = home
         FLOWS[name] = (description, before, fn)
         return fn
     return register
@@ -207,6 +209,8 @@ def run_flow(name):
         r.s = Session()
         if not wait(lambda: r.s.run('return !!window.__capopen?.store.getState().snap', retries=3), 60):
             raise RuntimeError('the app did not load a project')
+        if not body.home:
+            r.s.run("window.__capopen.store.setState({view: 'editor'})")
         time.sleep(1)
         body(r)
     except Exception:
@@ -282,30 +286,39 @@ def changed_share(a, b):
     return ImageStat.Stat(ImageChops.difference(first, second).point(lambda v: 255 if v > 48 else 0)).mean[0] / 255
 
 
-def close_window_and_confirm(r):
-    """Closes the app window like the title-bar button and confirms the native quit question with Enter."""
-    from Xlib import X, XK, display
+def _windows(d):
+    found, stack = [], [d.screen().root]
+    while stack:
+        w = stack.pop()
+        try:
+            name = w.get_wm_name()
+            stack.extend(w.query_tree().children)
+        except Exception:
+            continue
+        if name:
+            found.append((w, name.decode() if isinstance(name, bytes) else name))
+    return found
+
+
+def close_window(d=None):
+    """Closes the app window like the title-bar button."""
+    from Xlib import X, display
     from Xlib.protocol import event
-    d = display.Display()
-
-    def windows():
-        found, stack = [], [d.screen().root]
-        while stack:
-            w = stack.pop()
-            try:
-                name = w.get_wm_name()
-                stack.extend(w.query_tree().children)
-            except Exception:
-                continue
-            if name:
-                found.append((w, name.decode() if isinstance(name, bytes) else name))
-        return found
-
+    d = d or display.Display()
     protocols, delete = d.intern_atom('WM_PROTOCOLS'), d.intern_atom('WM_DELETE_WINDOW')
-    for w, name in windows():
+    for w, name in _windows(d):
         if name == 'CapOpen':
             w.send_event(event.ClientMessage(window=w, client_type=protocols, data=(32, [delete, X.CurrentTime, 0, 0, 0])))
     d.sync()
+    return d
+
+
+def close_window_and_confirm(r):
+    """Closes the app window like the title-bar button and confirms the native quit question with Enter."""
+    from Xlib import X, XK
+    from Xlib.protocol import event
+    d = close_window()
+    windows = lambda: _windows(d)
     dialog = wait(lambda: next((w for w, name in windows() if 'Quit CapOpen' in name), None), 5, 0.1)
     if not dialog:
         return False

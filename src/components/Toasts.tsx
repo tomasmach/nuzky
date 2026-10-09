@@ -79,10 +79,10 @@ function ToastItem({ toast: t, paused, dismiss }: { toast: Toast; paused: boolea
 /**
  * Bottom-left above the timeline, over the library and no wider than it (360 px less 12 px on
  * each side), so they never cover the video frame or the transport. With the AI panel docked on
- * the left, they move right with the library. The stack is a polite live
- * region; errors are alerts. F8 moves focus to the newest toast, Esc there dismisses it.
+ * the left, they move right with the library; on the home screen they sit at the grid's left edge.
+ * The stack is a polite live region; errors are alerts. F8 moves focus to the newest toast, Esc there dismisses it.
  */
-export function Toasts({ bottom, left }: { bottom: number; left: number }) {
+export function Toasts({ bottom, left }: { bottom: number; /** From the window's left edge: the editor's library, or the home screen's grid. */ left: number }) {
   const toasts = useEditor((s) => s.toasts);
   const lift = useEditor((s) => s.toastLift);
   const dismiss = useEditor((s) => s.dismissToast);

@@ -11,6 +11,8 @@ use anyhow::{Context, Result, bail, ensure};
 use capopen_session::jobs::check_cancel;
 use sha2::{Digest, Sha256};
 
+use crate::store::sidecar;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A connection that sends nothing for this long fails; the next attempt resumes the partial file.
@@ -25,12 +27,6 @@ const POLL: Duration = Duration::from_millis(100);
 pub struct Integrity {
     pub size: u64,
     pub sha256: &'static str,
-}
-
-fn sidecar(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(suffix);
-    PathBuf::from(name)
 }
 
 fn checksum(hash: Sha256) -> String {

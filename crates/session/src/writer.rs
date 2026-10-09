@@ -57,8 +57,12 @@ impl Writer {
 }
 
 fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<Message>) {
-    let mut pending = None;
+    let mut pending: Option<Snapshot> = None;
     let mut oldest = Instant::now();
+    // The revision this writer put on disk, with the file it left. Flushing it again while the file
+    // is unchanged would only move its modification time, which the home screen reads as when the
+    // project was last opened: a project closed after another one opened would look newer than it.
+    let mut saved = None;
     loop {
         let message = if pending.is_some() {
             // A steady stream of edits must not postpone the save past the maximum wait.
@@ -68,7 +72,10 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<
                 Ok(message) => Some(message),
                 Err(RecvTimeoutError::Timeout) => {
                     if let Some(snapshot) = pending.take() {
-                        let _ = save(&path, &events, snapshot);
+                        let revision = snapshot.revision;
+                        if save(&path, &events, snapshot).is_ok() {
+                            saved = on_disk(&path).map(|file| (revision, file));
+                        }
                     }
                     continue;
                 }
@@ -86,7 +93,17 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<
             }
             Some(Message::Flush(snapshot, reply)) => {
                 pending = None;
-                let _ = reply.send(save(&path, &events, snapshot));
+                let revision = snapshot.revision;
+                if saved.is_some_and(|(at, file)| at == revision && on_disk(&path) == Some(file)) {
+                    notify(&events, revision, None);
+                    let _ = reply.send(Ok(()));
+                    continue;
+                }
+                let result = save(&path, &events, snapshot);
+                if result.is_ok() {
+                    saved = on_disk(&path).map(|file| (revision, file));
+                }
+                let _ = reply.send(result);
             }
             Some(Message::Checkpoint(value, reply)) => {
                 let result = storage::save(&storage::sidecar(&path, ".checkpoint.json"), &value)
@@ -105,13 +122,20 @@ fn write_loop(path: PathBuf, events: Option<Sender<SessionEvent>>, rx: Receiver<
 
 fn save(path: &std::path::Path, events: &Option<Sender<SessionEvent>>, snapshot: Snapshot) -> Result<()> {
     let result = storage::save(path, &snapshot.project).context("SAVE_FAILED: saving project");
-    if let Some(events) = events {
-        let _ = events.send(SessionEvent::Saved {
-            revision: snapshot.revision,
-            error: result.as_ref().err().map(|error| format!("{error:#}")),
-        });
-    }
+    notify(events, snapshot.revision, result.as_ref().err().map(|error| format!("{error:#}")));
     result
+}
+
+fn notify(events: &Option<Sender<SessionEvent>>, revision: u64, error: Option<String>) {
+    if let Some(events) = events {
+        let _ = events.send(SessionEvent::Saved { revision, error });
+    }
+}
+
+/// The file's size and modification time, to notice it changed or went away since the last save.
+fn on_disk(path: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
 }
 
 impl Drop for Writer {

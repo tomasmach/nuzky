@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { Check, Minus } from "lucide-react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Check, ChevronRight, Minus } from "lucide-react";
 import { fontCss } from "../lib/fonts";
 import { AI_EDITING, useAiLocked } from "../lib/store";
 import type { TextStyle } from "../lib/types";
@@ -671,4 +672,183 @@ export function trapTab(e: KeyboardEvent<HTMLElement>) {
     e.preventDefault();
     first.focus();
   }
+}
+
+export type MenuEntry =
+  | {
+      label: string;
+      icon?: ReactNode;
+      /** Shown on the right, e.g. "F2". */
+      shortcut?: string;
+      run?: () => void;
+      /** Why it cannot be chosen now; it stays reachable and says so. */
+      disabled?: string | null;
+      danger?: boolean;
+      /** The current choice, marked with a check. */
+      checked?: boolean;
+      submenu?: MenuEntry[];
+    }
+  | "separator";
+
+type MenuItemEntry = Exclude<MenuEntry, "separator">;
+
+/**
+ * A menu at a point: a context menu, or under the button that opened it (`align: "end"` puts its
+ * right edge at `x`). ↑/↓ move, Enter or Space chooses, → opens a submenu and ← closes it, Esc closes,
+ * and so do Tab and a click elsewhere. `onClose(chose)` says whether an item ran, so the caller can
+ * return focus to what opened it. `keyboard` marks the first item at once, as when opened by a key.
+ */
+export function Menu({
+  items,
+  at,
+  label,
+  onClose,
+  keyboard = false,
+  minWidth = 220,
+}: {
+  items: MenuEntry[];
+  at: { x: number; y: number; align?: "start" | "end"; /** Opens upwards from `y`, e.g. from a bar at the bottom. */ above?: boolean };
+  label: string;
+  onClose: (chose: boolean) => void;
+  keyboard?: boolean;
+  minWidth?: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const choices = items.flatMap((item, i) => (item === "separator" ? [] : [i]));
+  const [active, setActive] = useState(keyboard ? (choices[0] ?? -1) : -1);
+  const [open, setOpen] = useState<{ index: number; keyboard: boolean } | null>(null);
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const x = at.align === "end" ? at.x - width : at.x;
+    const left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
+    const top = at.above ? Math.max(8, at.y - height) : at.y + height > window.innerHeight - 8 ? Math.max(8, window.innerHeight - height - 8) : at.y;
+    setPlace({ left, top });
+    el.focus({ preventScroll: true });
+  }, [at.x, at.y, at.align, at.above]);
+
+  useEffect(() => {
+    const outside = (e: PointerEvent) => !(e.target as Element | null)?.closest?.("[data-menu]") && onClose(false);
+    const resized = () => onClose(false);
+    window.addEventListener("pointerdown", outside, true);
+    window.addEventListener("resize", resized);
+    return () => {
+      window.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("resize", resized);
+    };
+  }, [onClose]);
+
+  const choose = (index: number, viaKeyboard: boolean) => {
+    const item = items[index] as MenuItemEntry | undefined;
+    if (!item || item.disabled) return;
+    if (item.submenu) return setOpen({ index, keyboard: viaKeyboard });
+    onClose(true);
+    item.run?.();
+  };
+  const step = (dir: 1 | -1) => {
+    if (choices.length === 0) return;
+    const at = choices.indexOf(active);
+    setActive(choices[at < 0 ? (dir === 1 ? 0 : choices.length - 1) : (at + dir + choices.length) % choices.length]);
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Keys stay in the menu: they never also reach the editor or the grid behind it.
+    e.stopPropagation();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      step(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      setActive(e.key === "Home" ? choices[0] : choices[choices.length - 1]);
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (active >= 0) choose(active, true);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      if (active >= 0 && (items[active] as MenuItemEntry).submenu) choose(active, true);
+    } else if (e.key === "Escape" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      onClose(false);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      onClose(false);
+    } else if (e.key.length === 1) {
+      // Type-ahead: the next item starting with that letter.
+      const from = choices.indexOf(active);
+      const next = [...choices.slice(from + 1), ...choices.slice(0, from + 1)].find((i) => (items[i] as MenuItemEntry).label.toLowerCase().startsWith(e.key.toLowerCase()));
+      if (next !== undefined) setActive(next);
+    }
+  };
+
+  const submenu = open && (items[open.index] as MenuItemEntry).submenu;
+  const anchor = open && ref.current?.querySelector<HTMLElement>(`[data-index="${open.index}"]`)?.getBoundingClientRect();
+  return createPortal(
+    <>
+      <div
+        ref={ref}
+        data-menu
+        role="menu"
+        aria-label={label}
+        tabIndex={-1}
+        aria-activedescendant={active >= 0 ? `${id}-${active}` : undefined}
+        onKeyDown={onKeyDown}
+        onContextMenu={(e) => e.preventDefault()}
+        className="overlay fixed z-[140] w-max max-w-[min(420px,calc(100vw-16px))] rounded-xl p-1 text-[13px] text-fg outline-none"
+        style={{ minWidth, left: place?.left ?? at.x, top: place?.top ?? at.y, visibility: place ? "visible" : "hidden" }}
+      >
+        {items.map((item, i) =>
+          item === "separator" ? (
+            <div key={i} role="separator" className="mx-2 my-1 h-px bg-white/[.08]" />
+          ) : (
+            <div
+              key={i}
+              id={`${id}-${i}`}
+              data-index={i}
+              role={item.checked !== undefined ? "menuitemradio" : "menuitem"}
+              aria-checked={item.checked}
+              aria-disabled={item.disabled ? true : undefined}
+              aria-haspopup={item.submenu ? "menu" : undefined}
+              aria-expanded={item.submenu ? open?.index === i : undefined}
+              title={item.disabled ?? undefined}
+              onPointerEnter={() => {
+                setActive(i);
+                if (item.submenu && !item.disabled) setOpen({ index: i, keyboard: false });
+                else if (open && open.index !== i) setOpen(null);
+              }}
+              onClick={() => choose(i, false)}
+              className={`flex h-7 items-center gap-2 rounded-md px-2 ${active === i ? "bg-white/[.08]" : ""} ${
+                item.disabled ? "opacity-40" : item.danger ? "text-danger" : ""
+              }`}
+            >
+              <span className={`flex w-4 shrink-0 justify-center ${item.danger ? "text-danger" : item.checked ? "text-accent" : "text-muted"}`}>
+                {item.checked ? <Check size={15} /> : item.icon}
+              </span>
+              <span className="flex-1 whitespace-nowrap">{item.label}</span>
+              {item.shortcut && <span className="min-w-0 truncate pl-4 text-[12px] text-muted">{item.shortcut}</span>}
+              {item.submenu && <ChevronRight size={14} className="shrink-0 text-muted" />}
+            </div>
+          ),
+        )}
+      </div>
+      {submenu && anchor && (
+        <Menu
+          items={submenu}
+          label={(items[open.index] as MenuItemEntry).label}
+          keyboard={open.keyboard}
+          minWidth={200}
+          at={{ x: anchor.right + 220 > window.innerWidth ? anchor.left - 4 : anchor.right + 4, y: anchor.top - 4, align: anchor.right + 220 > window.innerWidth ? "end" : "start" }}
+          onClose={(chose) => {
+            setOpen(null);
+            if (chose) onClose(true);
+            else ref.current?.focus({ preventScroll: true });
+          }}
+        />
+      )}
+    </>,
+    document.body,
+  );
 }

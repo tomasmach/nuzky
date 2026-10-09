@@ -19,7 +19,7 @@ let importKey = 0;
  * One short line for the files that failed: the name only, never the full path or FFmpeg's wording.
  * The engine's error ends with the reason, after "Cannot open <path>: ".
  */
-function importFailures(failed: { path: string; error: string }[]) {
+export function importFailures(failed: { path: string; error: string }[]) {
   // The reason is what follows the path, so a file name such as "has no video.mp4" cannot match.
   const reason = (f: { path: string; error: string }) => {
     const at = f.error.lastIndexOf(f.path);

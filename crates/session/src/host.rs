@@ -17,7 +17,12 @@ pub struct Host {
 
 impl Host {
     pub fn stop_run(&self) -> Result<crate::RunResult> {
-        self.session.stop_run_with(|run_id| self.jobs.cancel_run(run_id))
+        self.end_open_run(crate::EndAction::Keep)
+    }
+
+    /// Stops the agent's open run and its jobs; `Discard` also takes back what it changed.
+    pub fn end_open_run(&self, action: crate::EndAction) -> Result<crate::RunResult> {
+        self.session.stop_run_with(|run_id| self.jobs.cancel_run(run_id), action)
     }
 
     pub fn start_job(

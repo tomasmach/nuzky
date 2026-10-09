@@ -7,7 +7,7 @@ import { api, errorText, plainError } from "./lib/api";
 import { followPointer } from "./lib/drag";
 import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
-import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
+import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
 import type { JobEvent, ProjectSummary, Snapshot, Transport } from "./lib/types";
 import { ConnectAgentDialog } from "./components/ConnectAgentDialog";
@@ -23,6 +23,10 @@ import { listenAgentEvents, panelRunEnded, useAgent } from "./lib/agent";
 import { togglePanel, useDock, useDockLayout } from "./lib/dock";
 import { TopBar } from "./components/TopBar";
 import { Button, DisabledHint } from "./components/ui";
+import { Home } from "./components/home/Home";
+import { Launcher } from "./components/home/Launcher";
+import { SwitchDialog } from "./components/home/SwitchConfirm";
+import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
 
@@ -66,15 +70,22 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      const s = useEditor.getState();
+      // The home screen and the launcher have their own keys.
+      if (s.view === "home" || s.launcherOpen || s.snap?.recovery) return;
+      const mod = e.ctrlKey || e.metaKey;
       // Ctrl+J opens and closes the AI panel, also from inside its own field.
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "j" && !useEditor.getState().snap?.recovery) {
+      if (mod && e.key.toLowerCase() === "j") {
         e.preventDefault();
         togglePanel();
         return;
       }
-      if (isTyping(target) || useEditor.getState().exportOpen || useEditor.getState().snap?.recovery) return;
-      const s = useEditor.getState();
-      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "k" && !document.querySelector("dialog[open]")) {
+        e.preventDefault();
+        useEditor.setState({ launcherOpen: true });
+        return;
+      }
+      if (isTyping(target) || s.exportOpen) return;
       const fps = s.snap?.project.canvas.fps ?? 30;
       const key = e.key.toLowerCase();
       // A focused slider keeps its own arrow, Home and End keys.
@@ -175,7 +186,11 @@ function useBackendEvents() {
     let runStart: number | null = null;
     const unwatch = useEditor.subscribe((s, prev) => {
       if (s.aiRun) lastRun = s.aiRun;
-      if (s.aiRun && !prev.aiRun) runStart = prev.snap ? (s.snap?.revision ?? null) : null;
+      if (s.aiRun && !prev.aiRun) {
+        runStart = prev.snap ? (s.snap?.revision ?? null) : null;
+        // A new run has nothing taken back yet, even if taking back an earlier one found no run.
+        runWasDiscarded();
+      }
     });
     offs.push(
       listen<string | null>("run-changed", (e) => {
@@ -186,9 +201,22 @@ function useBackendEvents() {
         // The run's last change arrived before this event, so Undo here removes the whole run; a run
         // that changed nothing offers none, as it would undo the step before it.
         const changed = !!snap && snap.revision !== runStart;
-        // A run the AI panel's agent made shows there, with what it changed and Undo; others get a toast.
-        if (aiRun && !e.payload && !panelRunEnded(aiRun, snap && changed ? snap : null))
-          toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap && changed ? undoAction(snap) : undefined });
+        if (aiRun && !e.payload) {
+          const discarded = runWasDiscarded();
+          // A run the AI panel's agent made shows there, with what it changed and Undo; others get a toast.
+          // A run the user took back offers no Undo: it would take back the change before it.
+          if (!panelRunEnded(aiRun, snap && changed && !discarded ? snap : null)) {
+            if (discarded) toast({ kind: "info", text: `Undid the AI edit: ${aiRun}` });
+            else toast({ kind: "success", text: `AI edit done: ${aiRun}`, action: snap && changed ? undoAction(snap) : undefined });
+          }
+        }
+      }),
+    );
+    // A project moved to the Trash that someone opened meanwhile stays; it shows again.
+    offs.push(
+      listen<string>("trash-failed", (e) => {
+        useEditor.getState().toast({ kind: "error", text: e.payload });
+        void refreshLibrary();
       }),
     );
     offs.push(
@@ -205,6 +233,13 @@ function useBackendEvents() {
         if ((p.type === "enter" || p.type === "over") && hasMedia) useEditor.setState({ fileDrag: { x: p.position.x / dpr, y: p.position.y / dpr } });
         if (p.type === "leave" || p.type === "drop") useEditor.setState({ fileDrag: null });
         if (p.type !== "drop" || useEditor.getState().snap?.recovery) return;
+        // On the home screen a dropped project opens, and dropped videos start a new project.
+        if (useEditor.getState().view === "home") {
+          const project = p.paths.find((path) => path.toLowerCase().endsWith(".capopen"));
+          const media = p.paths.filter(isMedia);
+          if (project) return openProject({ path: project, name: project.split(/[\\/]/).pop()?.replace(/\.capopen$/i, "") ?? "project" });
+          if (media.length > 0) return newProjectFromMedia(media);
+        }
         const paths = p.paths.filter(isMedia);
         if (paths.length === 0) {
           useEditor.getState().toast({ kind: "error", text: "Those files are not video, audio or images CapOpen can open." });
@@ -357,7 +392,10 @@ useEditor.subscribe((s, prev) => {
 });
 
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
-if (import.meta.env.DEV) Object.assign(window, { __capopen: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock } });
+if (import.meta.env.DEV)
+  Object.assign(window, {
+    __capopen: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects },
+  });
 
 async function startEditor() {
   const boot = await api.boot();
@@ -446,6 +484,8 @@ function BootScreen() {
 
 export default function App() {
   const snap = useEditor((s) => s.snap);
+  const view = useEditor((s) => s.view);
+  const launcherOpen = useEditor((s) => s.launcherOpen);
   const [timelineH, setTimelineH, timelineMaxH] = useTimelineHeight();
   const dock = useDockLayout();
   useShortcuts();
@@ -455,9 +495,11 @@ export default function App() {
 
   if (!snap) return <BootScreen />;
 
+  const home = view === "home";
   return (
     <>
-      <div className="flex h-full flex-col" inert={snap.recovery}>
+      {/* The editor of the open project stays behind the home screen, so going back keeps everything as it was. */}
+      <div className="flex h-full flex-col" inert={snap.recovery || home || launcherOpen} aria-hidden={home || undefined}>
         <TopBar />
         <div className="flex min-h-0 flex-1">
           {dock.open && dock.mode === "left" && <DockedAiPanel side="left" width={dock.width} />}
@@ -474,14 +516,27 @@ export default function App() {
           </div>
           {dock.open && (dock.mode === "right" || dock.mode === "inspector") && <DockedAiPanel side="right" width={dock.width} inspector={dock.mode === "inspector"} />}
         </div>
-        {dock.open && dock.mode === "float" && <FloatingAiPanel rect={dock.float} />}
+        {/* Floating above the editor, it would float above the home screen too; hidden there, it keeps what was typed. */}
+        {dock.open && dock.mode === "float" && (
+          <div hidden={home}>
+            <FloatingAiPanel rect={dock.float} />
+          </div>
+        )}
         <DockDragLayer />
-        <ExportDialog />
-        <ConnectAgentDialog />
-        <Toasts bottom={timelineH + 18} left={dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
-        <DisabledHint />
         <DragChip />
       </div>
+      {home && (
+        <div className="fixed inset-0 z-[60]" inert={snap.recovery}>
+          <Home />
+        </div>
+      )}
+      {launcherOpen && !home && <Launcher />}
+      <ExportDialog />
+      <ConnectAgentDialog />
+      <SwitchDialog />
+      {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}
+      <Toasts bottom={home ? 18 : timelineH + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
+      <DisabledHint />
       {snap.recovery && <RecoveryDialog key={snap.sessionEpoch} />}
     </>
   );

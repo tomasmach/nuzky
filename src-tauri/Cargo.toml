@@ -41,6 +41,8 @@ whisper-rs = "0.16.0"
 ureq = "3.4.2"
 sha2 = "0.11.0"
 toml_edit = "0.25.15"
+trash = "5.2.9"
+unicode-normalization = "0.1.25"
 
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
