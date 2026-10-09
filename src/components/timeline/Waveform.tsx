@@ -74,5 +74,6 @@ export function Waveform({
     }
   }, [blocks, from, to, first, span, width, color]);
   if (!shown) return null;
-  return <canvas ref={ref} className={`pointer-events-none ${className}`} style={{ left: from, width: to - from }} />;
+  // A whole overview (no `visible`) fits its container; a timeline clip draws its window at one bar per pixel.
+  return <canvas ref={ref} className={`pointer-events-none ${visible ? "" : "w-full"} ${className}`} style={visible && { left: from, width: to - from }} />;
 }

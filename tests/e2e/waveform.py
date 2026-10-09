@@ -220,6 +220,20 @@ def waveform(r):
     if again:
         check_against_reference(r, 'the start again, zoomed out', again, clip, 0)
 
+    # The Audio tab's overview of the whole hour loads all its blocks and fits its row; closing it lets the store
+    # drop the blocks past the cap without waiting for another block to arrive.
+    r.s.run("window.__nuzky.store.setState({panelTab: 'audio'})")
+    overview = wait(lambda: len(r.s.run(LOADED, asset)) >= HOUR_BLOCKS, 10)
+    fits = r.s.run("""const canvas = [...document.querySelectorAll('canvas')].find((c) => !c.closest('[data-clip-id]') && c.width > 0);
+        if (!canvas) return null;
+        const own = canvas.getBoundingClientRect(), row = canvas.parentElement.getBoundingClientRect();
+        return own.left >= row.left - 0.5 && own.right <= row.right + 0.5;""")
+    r.shot('4-audio-tab')
+    r.check('the Audio tab shows the whole hour inside its row', overview and fits, {'loaded': len(r.s.run(LOADED, asset)), 'fits': fits})
+    r.s.run("window.__nuzky.store.setState({panelTab: 'media'})")
+    dropped = wait(lambda: len(r.s.run(LOADED, asset)) <= KEPT_BLOCKS + on_screen, 5)
+    r.check('closing the Audio tab drops the blocks past the cap', dropped, {'loaded': len(r.s.run(LOADED, asset))})
+
     # Splitting gives two clips of one file; the second draws from the blocks already loaded.
     r.s.run("""const api = window.__nuzky.api; window.__waveRequests = 0;
         if (!api.__counted) { const load = api.waveform; api.waveform = (...a) => { window.__waveRequests++; return load(...a); }; api.__counted = true; }""")
@@ -227,14 +241,14 @@ def waveform(r):
     r.s.call('window.__nuzky.store.getState().edit({type: "splitClip", clipId: arguments[0], atUs: arguments[1]})', clip['id'], t)
     halves = wait(lambda: (h := [c for tr in r.state()['tracks'] for c in tr['clips'] if c['assetId'] == asset]) and len(h) == 2 and h, 10)
     both = halves and wait(lambda: all(visible_bars(r, c['id']) for c in halves), 10)
-    r.shot('4-split')
+    r.shot('5-split')
     requests = r.s.run('return window.__waveRequests')
     r.check('both halves of the split draw their waveform from the blocks already loaded', both and requests == 0, {'requests': requests})
 
     webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
     if r.check('the window gets to 1024 x 640', wait(lambda: r.s.run('return window.innerWidth') == 1024, 5)):
         small = halves and all(wait(lambda: visible_bars(r, c['id']), 10, 0.05) for c in halves)
-        r.shot('5-small-window')
+        r.shot('6-small-window')
         r.check('in the smallest window the waveform on screen draws whole', small)
 
     memory.stopped = True

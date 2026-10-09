@@ -124,8 +124,9 @@ function touchWaveform(key: string) {
   waveformUse.add(key);
 }
 
-/** Drops loaded blocks past KEPT_BLOCKS that nothing shows, those shown longest ago first. */
+/** Drops loaded blocks past KEPT_BLOCKS that nothing shows, those shown longest ago first; the same object when none go. */
 function evictWaveforms(waveforms: EditorState["waveforms"]) {
+  if (waveformUse.size <= KEPT_BLOCKS) return waveforms;
   const out = { ...waveforms };
   const copied = new Set<string>();
   for (const key of waveformUse) {
@@ -139,7 +140,7 @@ function evictWaveforms(waveforms: EditorState["waveforms"]) {
     copied.add(assetId);
     delete out[assetId][block];
   }
-  return out;
+  return copied.size > 0 ? out : waveforms;
 }
 
 function retryWaveform(assetId: string, grew: boolean) {
@@ -501,7 +502,15 @@ export const useEditor = create<EditorState>((set, get) => ({
     waveformViews.set(view, { assetId, first, last });
     for (let b = first; b <= last; b++) if (waveformUse.has(`${assetId}:${b}`)) touchWaveform(`${assetId}:${b}`);
     loadWaveform(assetId);
-    return () => void waveformViews.delete(view);
+    return () => {
+      waveformViews.delete(view);
+      // After the commit, so a waveform that only moved has shown its new blocks first.
+      queueMicrotask(() => {
+        const waveforms = get().waveforms;
+        const kept = evictWaveforms(waveforms);
+        if (kept !== waveforms) set({ waveforms: kept });
+      });
+    };
   },
 
   reloadWaveform: (assetId) => {
