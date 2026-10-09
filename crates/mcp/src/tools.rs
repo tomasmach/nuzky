@@ -125,18 +125,17 @@ impl Backend {
         };
         owned?;
         let mut state = self.host.session.state()?;
-        if rules.is_some_and(|rules| rules.run_job)
-            && state.open_run.as_ref().is_some_and(|run| !runs.as_ref().is_some_and(|runs| runs.contains(&run.run_id)))
-        {
+        // Reads hold no run lock, so they look up whose run it is for the moment of this check.
+        let mine = |run: &str| match &runs {
+            Some(runs) => runs.contains(run),
+            None => self.runs.lock().unwrap().contains(run),
+        };
+        if rules.is_some_and(|rules| rules.run_job) && state.open_run.as_ref().is_some_and(|run| !mine(&run.run_id)) {
             state.open_run = None;
         }
         ensure!(read || self.client.access == Access::Write, "READ_ONLY: this client cannot mutate");
         if let Some(run) = arguments.get("run_id").and_then(Value::as_str) {
-            let mine = match &runs {
-                Some(runs) => runs.contains(run),
-                None => self.runs.lock().unwrap().contains(run),
-            };
-            ensure!(mine, "INVALID_RUN: run belongs to another client");
+            ensure!(mine(run), "INVALID_RUN: run belongs to another client");
             if name != "undo_run" {
                 self.host.session.check_run(run)?;
             }
@@ -260,13 +259,13 @@ impl Backend {
                             args.range_us.is_none() && args.min_change.is_none(),
                             "INVALID_ARGUMENTS: the cursor carries range_us and min_change; leave them out"
                         );
-                        activity::Cursor::decode(&cursor, state.stamp.revision)?
+                        activity::Cursor::decode(&cursor, &state.stamp.session_epoch, state.stamp.revision)?
                     }
                     None => {
                         let min_change = args.min_change.unwrap_or(activity::DEFAULT_MIN_CHANGE);
                         ensure!(min_change < 64, "INVALID_ARGUMENTS: min_change must be 0..=63");
                         let range = activity::timeline_range(&project, args.range_us)?;
-                        activity::Cursor::new(state.stamp.revision, range, min_change)
+                        activity::Cursor::new(&state.stamp.session_epoch, state.stamp.revision, range, min_change)
                     }
                 };
                 media::check_media(&project)?;
@@ -301,11 +300,24 @@ impl Backend {
         let range = activity::timeline_range(&project, args.range_us)?;
         media::check_media(&project)?;
         let cache = self.host.cache_dir.clone();
-        let heard = transcript::heard_assets(&project);
+        // Everything the mix plays in the range, music included; the mix leaves out unprepared files.
+        let heard: HashSet<&str> = project
+            .tracks
+            .iter()
+            .filter(|track| !track.muted && track.kind != nuzky_engine::model::TrackKind::Text)
+            .flat_map(|track| &track.clips)
+            .filter(|clip| clip.start_us < range.1 && clip.end_us() > range.0)
+            .filter_map(|clip| match &clip.content {
+                nuzky_engine::model::ClipContent::Media { asset_id, volume, .. } if *volume > 0.0 => {
+                    Some(asset_id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
         let unprepared: Vec<_> = project
             .assets
             .iter()
-            .filter(|a| heard.contains(&a.id) && nuzky_engine::audio::has_audio(a))
+            .filter(|a| heard.contains(a.id.as_str()) && nuzky_engine::audio::has_audio(a))
             .filter(|a| !nuzky_engine::audio::pcm_path(&cache, a).exists())
             .cloned()
             .collect();
@@ -965,6 +977,38 @@ mod tests {
         }
         assert!(host.session.state().unwrap().open_run.is_some());
         drop((agent, viewer));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn read_only_clients_cancel_their_own_jobs_only() {
+        let dir = std::env::temp_dir().join(format!("job-owners-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("project.nuzky");
+        std::fs::write(&path, serde_json::to_vec(&Project::new("jobs")).unwrap()).unwrap();
+        let session = ProjectSession::open(&path, Mode::Write, None).unwrap();
+        let host = Arc::new(Host::new(session, dir.join("cache")).unwrap());
+        let client = |access| Backend::shared(host.clone(), &path, Client { id: new_id(), access }).unwrap();
+        let (writer, reader) = (client(Access::Write), client(Access::ReadOnly));
+        let stamp = host.session.stamp();
+        let job = |owner: &Backend| {
+            let started = host.start_job(&owner.client.id, None, "analysis", stamp.clone(), |cancel, _| {
+                while !cancel.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                anyhow::bail!("CANCELLED: test")
+            });
+            started.unwrap()["job_id"].as_str().unwrap().to_owned()
+        };
+        let (theirs, mine) = (job(&writer), job(&reader));
+        let refused = format!("{:#}", reader.call("job", json!({"job_id": theirs, "action": "cancel"})).unwrap_err());
+        assert!(refused.starts_with("UNAUTHORIZED"), "{refused}");
+        let cancel =
+            reader.call("job", json!({"job_id": mine, "action": "cancel"})).unwrap().structured_content.unwrap();
+        assert_eq!(cancel["cancel_requested"], true);
+        host.jobs.get(&theirs, true).unwrap();
+        drop((writer, reader));
+        host.jobs.shutdown();
         std::fs::remove_dir_all(dir).unwrap();
     }
 

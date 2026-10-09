@@ -43,7 +43,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("edit_transcript", When(|args| args["dry_run"] == true), true, false, false),
     // Changes how words read, never what is heard; the recognised text stays in the project.
     rules("correct_words", Never, false, false, false),
-    rules("job", When(|args| args["action"] == "get"), false, false, false),
+    // Cancelling touches only the caller's own job, so a read-only client can stop what it started.
+    rules("job", When(|args| args["action"] == "get" || args["action"] == "cancel"), false, false, false),
     rules("build_captions", Never, true, false, false),
     rules("apply_zooms", Never, true, false, false),
     rules("export_video", Never, false, false, true),
@@ -102,7 +103,7 @@ mod tests {
         );
         assert_eq!(names(|r| r.run_job), set(&["analyze", "activity", "transcribe", "export_video"]));
         let job = find("job").unwrap();
-        assert!(job.reads(&json!({"action":"get"})) && !job.reads(&json!({"action":"cancel"})));
+        assert!(job.reads(&json!({"action":"get"})) && job.reads(&json!({"action":"cancel"})));
         let edit = find("edit_transcript").unwrap();
         assert!(edit.reads(&json!({"dry_run":true})) && !edit.reads(&json!({})));
         let analyze = find("analyze").unwrap();

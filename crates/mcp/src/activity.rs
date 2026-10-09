@@ -175,6 +175,7 @@ fn peaks(values: &[f64], times: &[i64], floor: impl Fn(f64) -> f64) -> Vec<Value
 /// last kept frames, so the next page repeats none of them.
 #[derive(Debug, PartialEq)]
 pub struct Cursor {
+    session_epoch: String,
     revision: u64,
     start: i64,
     end: i64,
@@ -185,38 +186,59 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub fn new(revision: u64, (start, end): (i64, i64), min_change: u32) -> Self {
-        let every = LOOK_EVERY_US.max((end - start + MAX_CANDIDATES - 1) / MAX_CANDIDATES);
-        Self { revision, start, end, every, index: 0, min_change, history: Vec::new() }
+    pub fn new(session_epoch: &str, revision: u64, (start, end): (i64, i64), min_change: u32) -> Self {
+        Self {
+            session_epoch: session_epoch.to_owned(),
+            revision,
+            start,
+            end,
+            every: candidate_every(start, end),
+            index: 0,
+            min_change,
+            history: Vec::new(),
+        }
     }
 
     fn encode(&self) -> String {
-        let history: Vec<_> = self.history.iter().map(|h| format!("{h:016x}")).collect();
         let fields = [self.revision as i64, self.start, self.end, self.every, self.index, self.min_change as i64];
-        let fields: Vec<_> = fields.iter().map(i64::to_string).chain(history).collect();
-        fields.join(".")
+        let history = self.history.iter().map(|h| format!("{h:016x}"));
+        std::iter::once(self.session_epoch.clone())
+            .chain(fields.iter().map(i64::to_string))
+            .chain(history)
+            .collect::<Vec<_>>()
+            .join(".")
     }
 
-    pub fn decode(text: &str, revision: u64) -> Result<Self> {
+    /// Only a cursor this session handed out for the project as it is now; anything else could
+    /// skip new pictures or scan far more candidates than a page allows.
+    pub fn decode(text: &str, session_epoch: &str, revision: u64) -> Result<Self> {
         let invalid = || anyhow::anyhow!("INVALID_ARGUMENTS: cursor is not a next value from inspect_frames");
         let parts: Vec<&str> = text.split('.').collect();
-        ensure!((6..=6 + HISTORY).contains(&parts.len()), invalid());
+        ensure!((7..=7 + HISTORY).contains(&parts.len()), invalid());
         let number = |i: usize| parts[i].parse::<i64>().map_err(|_| invalid());
         let cursor = Self {
-            revision: number(0)?.try_into().map_err(|_| invalid())?,
-            start: number(1)?,
-            end: number(2)?,
-            every: number(3)?,
-            index: number(4)?,
-            min_change: number(5)?.try_into().map_err(|_| invalid())?,
-            history: parts[6..]
+            session_epoch: parts[0].to_owned(),
+            revision: number(1)?.try_into().map_err(|_| invalid())?,
+            start: number(2)?,
+            end: number(3)?,
+            every: number(4)?,
+            index: number(5)?,
+            min_change: number(6)?.try_into().map_err(|_| invalid())?,
+            history: parts[7..]
                 .iter()
                 .map(|h| u64::from_str_radix(h, 16).map_err(|_| invalid()))
                 .collect::<Result<_>>()?,
         };
-        ensure!(cursor.start >= 0 && cursor.start < cursor.end && cursor.every > 0 && cursor.index >= 0, invalid());
         ensure!(
-            cursor.revision == revision,
+            cursor.start >= 0
+                && cursor.start < cursor.end
+                && cursor.every == candidate_every(cursor.start, cursor.end)
+                && (0..=MAX_CANDIDATES).contains(&cursor.index)
+                && cursor.min_change < 64,
+            invalid()
+        );
+        ensure!(
+            cursor.session_epoch == session_epoch && cursor.revision == revision,
             "STALE_REVISION: the project changed since this cursor; scan the range again without cursor"
         );
         Ok(cursor)
@@ -229,6 +251,11 @@ impl Cursor {
     pub fn every(&self) -> i64 {
         self.every
     }
+}
+
+/// Candidates 0.25 s apart, further apart when a range would hold more than `MAX_CANDIDATES`.
+fn candidate_every(start: i64, end: i64) -> i64 {
+    LOOK_EVERY_US.max((end - start + MAX_CANDIDATES - 1) / MAX_CANDIDATES)
 }
 
 pub struct Changes {
@@ -293,16 +320,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_round_trips_and_refuses_another_revision() {
-        let mut cursor = Cursor::new(7, (1_000, 61_001_000), 12);
+    fn cursor_round_trips_and_refuses_another_project_state_or_a_wider_scan() {
+        let mut cursor = Cursor::new("e1", 7, (1_000, 61_001_000), 12);
         assert_eq!(cursor.every, 508_334);
         cursor.index = 9;
         cursor.history = vec![0, u64::MAX, 0x0123_4567_89ab_cdef];
-        assert_eq!(Cursor::decode(&cursor.encode(), 7).unwrap(), cursor);
-        assert!(Cursor::decode(&cursor.encode(), 8).unwrap_err().to_string().starts_with("STALE_REVISION"));
-        for bad in ["", "7.0.1.1.0", "7.5.5.1.0.12", "7.0.10.1.0.12.zz", "x.0.10.1.0.12"] {
-            assert!(Cursor::decode(bad, 7).unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"), "{bad}");
+        assert_eq!(Cursor::decode(&cursor.encode(), "e1", 7).unwrap(), cursor);
+        for (epoch, revision) in [("e1", 8), ("e2", 7)] {
+            let stale = Cursor::decode(&cursor.encode(), epoch, revision).unwrap_err().to_string();
+            assert!(stale.starts_with("STALE_REVISION"), "{stale}");
         }
+        // A grid other than the one a page hands out would scan more than 120 candidates.
+        for bad in [
+            "",
+            "e1.7.0.1.1.0",
+            "e1.7.5.5.250000.0.12",
+            "e1.7.0.10000000.1.0.12",
+            "e1.7.0.10000000.250000.121.12",
+            "e1.7.0.10000000.250000.0.64",
+            "e1.7.0.10000000.250000.0.12.zz",
+            "e1.x.0.10000000.250000.0.12",
+        ] {
+            assert!(Cursor::decode(bad, "e1", 7).unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"), "{bad}");
+        }
+        assert!(Cursor::decode("e1.7.0.10000000.250000.40.12", "e1", 7).is_ok());
     }
 
     #[test]

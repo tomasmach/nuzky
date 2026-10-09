@@ -657,7 +657,7 @@ fn retakes_of_three_czech_takes_over_stdio() {
 }
 
 /// 14 s of known pictures: three still patterns cut at 4 s and 8 s, moving footage from 12 s, and
-/// silence with a loud tone from 6 s to 7 s.
+/// silence with a loud tone from 6 s to 7 s; music on its own track sounds from 12.5 s to 13.5 s.
 #[test]
 fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() {
     let mut c = Client::new(true);
@@ -675,12 +675,17 @@ fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() 
         .status()
         .expect("ffmpeg makes the test video");
     assert!(status.success());
+    let music = c.dir.join("music.wav");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1"])
+        .arg(&music)
+        .status()
+        .expect("ffmpeg makes the music");
+    assert!(status.success());
     let run = c.call("begin_run", json!({"label":"place"}));
-    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[video]}))["asset_ids"].clone();
-    c.call(
-        "apply_edits",
-        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
-    );
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[video, music]}))["asset_ids"].clone();
+    let edits = json!([{"type":"addClip","assetId":ids[0]},{"type":"addClip","assetId":ids[1],"startUs":12_500_000}]);
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":edits}));
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
 
     // One point per 0.25 s, so every cut lands on a point.
@@ -707,8 +712,10 @@ fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() 
     );
     let moving = peaks("motion");
     assert!(!moving.is_empty() && moving.iter().all(|p| p.0 >= 12_000_000), "{activity}");
-    let loud = peaks("loudness_db");
-    assert!(!loud.is_empty() && loud.iter().all(|p| (6_000_000..7_000_000).contains(&p.0)), "{activity}");
+    // The tone in the video and the music, whose sound the call prepares itself.
+    let loud: Vec<bool> = peaks("loudness_db").iter().map(|p| (6_000_000..7_000_000).contains(&p.0)).collect();
+    assert_eq!(loud, [true, false], "{activity}");
+    assert!(peaks("loudness_db")[1].0 >= 12_500_000 && peaks("loudness_db")[1].0 < 13_500_000, "{activity}");
     assert!(activity["loudness_db"][4].as_f64().unwrap() < -60.0, "{activity}");
 
     // A frame per still and one after each cut; the rest looks the same and is skipped.

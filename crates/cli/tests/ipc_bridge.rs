@@ -187,11 +187,12 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     for (tool, args) in [
         ("begin_run", json!({"label":"denied"})),
         ("transcribe", json!({})),
-        ("job", json!({"job_id":"none","action":"cancel"})),
         ("resolve_recovery", json!({"action":"keep"})),
     ] {
         reader.error(tool, args, "READ_ONLY");
     }
+    // A reader may stop a job it started, such as a long activity, but only its own.
+    reader.error("job", json!({"job_id":"none","action":"cancel"}), "UNKNOWN_JOB");
     let run = writer.call("begin_run", json!({"label":"live run"}))["run_id"].clone();
     let edit = json!({"run_id":run,"request_id":"rename","edits":[{"type":"renameProject","name":"Live"}]});
     reader.error("apply_edits", edit.clone(), "READ_ONLY");
