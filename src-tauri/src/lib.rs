@@ -1,3 +1,4 @@
+mod agent_panel;
 mod audio_out;
 mod connect;
 mod engine;
@@ -240,6 +241,9 @@ impl OpenSession {
                     SessionEvent::Saved { revision, error } => {
                         app.emit("saved", store::SavedEvent { revision, error }).ok();
                     }
+                    SessionEvent::RunSummary(changes) => {
+                        app.emit("run-summary", changes).ok();
+                    }
                     SessionEvent::Run(run) => {
                         app.emit("run-changed", run.map(|run| run.label)).ok();
                         if let Ok(snap) = current.snapshot(Vec::new()) {
@@ -423,7 +427,13 @@ fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_u
 
 /// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step.
 #[tauri::command]
-fn stop_run(state: State<'_, AppState>, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+fn stop_run(
+    state: State<'_, AppState>,
+    panel: State<'_, agent_panel::AgentPanel>,
+    expected_epoch: Option<String>,
+) -> CmdResult<Snapshot> {
+    // The AI panel's agent stops too, so it does not go on editing; before the session lock, never inside it.
+    panel.stop();
     let current = lock_session(&state.session, expected_epoch.as_deref())?;
     current.host.stop_run().map_err(err)?;
     current.snapshot(Vec::new())
@@ -582,7 +592,14 @@ fn list_fonts(state: State<'_, AppState>) -> FontFamilies {
 }
 
 #[tauri::command]
-fn new_project(state: State<'_, AppState>, width: u32, height: u32) -> CmdResult<Snapshot> {
+fn new_project(
+    state: State<'_, AppState>,
+    panel: State<'_, agent_panel::AgentPanel>,
+    width: u32,
+    height: u32,
+) -> CmdResult<Snapshot> {
+    // The panel's agent works on the open project only.
+    panel.stop();
     let mut project = Project::new("Untitled project");
     project.canvas.width = width & !1;
     project.canvas.height = height & !1;
@@ -592,8 +609,16 @@ fn new_project(state: State<'_, AppState>, width: u32, height: u32) -> CmdResult
 }
 
 #[tauri::command]
-fn open_project(state: State<'_, AppState>, path: String) -> CmdResult<Snapshot> {
+fn open_project(
+    state: State<'_, AppState>,
+    panel: State<'_, agent_panel::AgentPanel>,
+    path: String,
+) -> CmdResult<Snapshot> {
     let path = std::fs::canonicalize(path).map_err(err)?;
+    if state.session.lock().unwrap().path != path {
+        // The panel's agent works on the open project only; never stopped while holding the session.
+        panel.stop();
+    }
     let mut current = state.session.lock().unwrap();
     if current.path == path {
         return current.snapshot(Vec::new());
@@ -756,6 +781,7 @@ pub fn run() {
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
+            app.manage(agent_panel::AgentPanel::default());
             app.state::<AppState>().session.lock().unwrap().start_pump(app.handle().clone(), events);
             jobs::ensure_audio(&app.state::<AppState>(), &project);
             app.emit("ready", ()).ok();
@@ -795,6 +821,9 @@ pub fn run() {
             zooms::apply_zooms,
             agent_connections,
             connect_agent,
+            agent_panel::agent_list,
+            agent_panel::agent_send,
+            agent_panel::agent_stop,
             transcripts::correct_words,
         ])
         .build(tauri::generate_context!())
@@ -818,7 +847,11 @@ pub fn run() {
                     app.emit("close-save-failed", format!("{error:#}")).ok();
                 }
             }
-            tauri::RunEvent::Exit => app.state::<AppState>().quit(),
+            tauri::RunEvent::Exit => {
+                // The panel's agent runs in its own process group, so it would outlive the app.
+                app.state::<agent_panel::AgentPanel>().stop();
+                app.state::<AppState>().quit()
+            }
             _ => {}
         });
 }

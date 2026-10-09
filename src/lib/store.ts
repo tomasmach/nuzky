@@ -141,13 +141,19 @@ async function drain() {
  * history moved on.
  */
 export function undoAction(snap: Snapshot): NonNullable<Toast["action"]> {
-  const { revision, sessionEpoch } = snap;
-  const newest = () => {
-    const now = useEditor.getState().snap;
-    return !!now && now.revision === revision && now.sessionEpoch === sessionEpoch && now.canUndo;
-  };
+  return { label: "Undo", valid: () => isNewest(snap), run: () => void undoStep(snap) };
+}
+
+function isNewest({ revision, sessionEpoch }: Snapshot) {
+  const now = useEditor.getState().snap;
+  return !!now && now.revision === revision && now.sessionEpoch === sessionEpoch && now.canUndo;
+}
+
+/** Undoes the step that produced `snap` if it is still the newest; resolves whether it did. */
+export function undoStep(snap: Snapshot): Promise<boolean> {
+  if (aiLocked()) return Promise.resolve(false);
   // Checked again when its turn in the queue comes, after any edit made before it.
-  return { label: "Undo", valid: newest, run: () => void (aiLocked() || enqueue(async (epoch) => (newest() ? api.undo(epoch) : null))) };
+  return enqueue(async (epoch) => (isNewest(snap) ? api.undo(epoch) : null)).then((done) => !!done);
 }
 
 /** Why editing is locked while an agent's run is open. */

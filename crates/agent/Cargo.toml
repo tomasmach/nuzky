@@ -1,0 +1,14 @@
+[package]
+name = "capopen-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Runs the user's own Claude Code or Codex for one turn of CapOpen's AI panel"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.190"

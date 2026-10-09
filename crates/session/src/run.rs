@@ -15,6 +15,8 @@ pub(crate) struct Run {
     pub(crate) info: RunInfo,
     touched: Instant,
     ending: Option<EndAction>,
+    /// The project when the run began, to tell the user what it changed.
+    before: Project,
 }
 
 fn run_key(id: &str) -> String {
@@ -66,7 +68,8 @@ impl ProjectSession {
             .context("READ_ONLY: no writer")?
             .checkpoint(serde_json::to_value(checkpoint).context("Serializing checkpoint")?)?;
         let info = RunInfo { run_id: run_id.clone(), label };
-        inner.run = Some(Run { info: info.clone(), touched: Instant::now(), ending: None });
+        let before = inner.editor.project.clone();
+        inner.run = Some(Run { info: info.clone(), touched: Instant::now(), ending: None, before });
         inner.emit(SessionEvent::Run(Some(info)));
         Ok(RunResult { run_id, stamp: inner.stamp() })
     }
@@ -188,8 +191,9 @@ impl Inner {
         self.flush()?;
         // On failure leave the marker and the run available for another finish attempt.
         fs::remove_file(storage::sidecar(&self.path, ".checkpoint.json")).context("Removing run checkpoint")?;
-        self.run = None;
+        let run = self.run.take().context("INVALID_RUN: no open run")?;
         self.requests.clear();
+        self.emit(SessionEvent::RunSummary(crate::summary::summarize(&run.before, &self.editor.project)));
         self.emit(SessionEvent::Run(None));
         Ok(())
     }

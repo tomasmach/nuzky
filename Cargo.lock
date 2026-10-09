@@ -547,6 +547,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "capopen-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "capopen-analysis"
 version = "0.1.0"
 dependencies = [
@@ -564,6 +574,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "capopen-agent",
  "capopen-analysis",
  "capopen-engine",
  "capopen-mcp",

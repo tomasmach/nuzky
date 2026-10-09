@@ -2,6 +2,7 @@
 pub mod hash;
 pub mod host;
 pub mod jobs;
+pub mod summary;
 pub mod transcripts;
 
 mod changes;

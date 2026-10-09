@@ -196,6 +196,28 @@ impl Backend {
                 let a: Undo = parse(arguments)?;
                 Ok(serde_json::to_value(self.host.session.undo_run(&a.run_id)?)?)
             }
+            "suggest_options" => {
+                let a: SuggestOptions = parse(arguments)?;
+                ensure!((2..=6).contains(&a.options.len()), "INVALID_ARGUMENTS: offer 2 to 6 options");
+                let short = |text: &Option<String>| text.as_ref().is_none_or(|t| t.chars().count() <= 300);
+                ensure!(short(&a.question), "INVALID_ARGUMENTS: keep the question under 300 characters");
+                ensure!(
+                    a.options.iter().all(|c| short(&c.detail)),
+                    "INVALID_ARGUMENTS: keep each detail under 300 characters"
+                );
+                let mut seen = HashSet::new();
+                for choice in &a.options {
+                    let label = choice.label.trim();
+                    ensure!(
+                        !label.is_empty() && label.chars().count() <= 80,
+                        "INVALID_ARGUMENTS: each label needs 1 to 80 characters"
+                    );
+                    ensure!(seen.insert(label.to_lowercase()), "INVALID_ARGUMENTS: labels must differ");
+                }
+                Ok(
+                    json!({"shown": a.options.len(), "next": "End your turn now. The label the user picks arrives as their next message."}),
+                )
+            }
             "import_media" => self.import(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "transcribe" => self.transcribe(parse(arguments)?, state),

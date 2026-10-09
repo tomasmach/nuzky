@@ -63,6 +63,23 @@ pub struct Import {
     /// Reuse this id with the same paths to retry a failed save without importing twice.
     pub request_id: Option<String>,
 }
+/// Choices offered to the user; the CapOpen AI panel shows them as buttons.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestOptions {
+    /// The question, short, in the user's language.
+    pub question: Option<String>,
+    /// 2 to 6 choices. The label the user picks comes back as their next message.
+    pub options: Vec<Choice>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Choice {
+    /// What the button says, at most 80 characters.
+    pub label: String,
+    /// One short line on what happens with this choice.
+    pub detail: Option<String>,
+}
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Inspect {

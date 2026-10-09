@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Download, FilePlus2, FolderOpen, Loader2, Plug, Redo2, Sparkles, Undo2 } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Download, FilePlus2, FolderOpen, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { api, errorText } from "../lib/api";
+import { useAgent } from "../lib/agent";
+import { togglePanel, useDock } from "../lib/dock";
 import { FORMATS } from "../lib/presets";
 import { AI_EDITING, openExport, projectDuration, stopAiRun, switchProject, useAiLocked, useEditor } from "../lib/store";
 import { formatDuration } from "../lib/time";
@@ -190,6 +192,24 @@ function JobIndicator() {
   );
 }
 
+/** Opens and closes the AI panel; it stays open or closed across launches. */
+function AiToggle() {
+  const open = useDock((s) => s.open);
+  const working = useAgent((s) => s.status !== "idle");
+  return (
+    <Button
+      variant="bar"
+      pill
+      aria-pressed={open}
+      title={open ? "Close AI (Ctrl+J)" : working ? "Open AI (Ctrl+J). It is still working." : "Open AI (Ctrl+J)"}
+      onClick={togglePanel}
+      className={open ? "bg-white/[.15]" : ""}
+    >
+      {working && !open ? <Loader2 size={15} className="animate-spin text-accent" /> : <Sparkles size={15} />} AI
+    </Button>
+  );
+}
+
 /** While an agent edits, what it is doing and a way to take over. */
 function AiRunBar() {
   const label = useEditor((s) => s.aiRun);
@@ -200,7 +220,13 @@ function AiRunBar() {
       <span className="truncate">
         AI is editing <span className="font-normal text-muted">· {label}</span>
       </span>
-      <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" title="Stop the AI, keep what it did so far, and edit yourself" onClick={() => void stopAiRun()}>
+      <Button
+        pill
+        className="h-6 shrink-0 px-2.5 text-[12px]"
+        title="Stop the AI, keep what it did so far, and edit yourself"
+        // The backend stops the AI panel's agent too, so it does not go on editing.
+        onClick={() => void stopAiRun()}
+      >
         Stop and edit
       </Button>
     </div>
@@ -227,9 +253,7 @@ export function TopBar() {
       </div>
       <AiRunBar />
       <JobIndicator />
-      <Button variant="bar" pill title="Let Claude Code or Codex edit the project open here" onClick={() => useEditor.setState({ connectOpen: true })}>
-        <Plug size={15} /> Connect agent
-      </Button>
+      <AiToggle />
       <div className="bar flex items-center rounded-full">
         <IconButton round label={aiRun ? "Undo is available when the AI is done" : "Undo (Ctrl+Z)"} disabled={!snap?.canUndo || !!aiRun} onClick={undo}>
           <Undo2 size={16} />
