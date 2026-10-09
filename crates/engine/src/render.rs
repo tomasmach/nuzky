@@ -8,11 +8,11 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 
 use crate::effects::{max_animation_scale, source_time, transform_at, transition_at, transition_window};
-use crate::gpu::{Draw, Gpu, Image, Layer};
+use crate::gpu::{Draw, Gpu, Image, Layer, Mask};
 use crate::media::{Transfer, decode_size};
 use crate::model::{
-    Adjust, Asset, AssetKind, Clip, ClipContent, Project, Track, TrackKind, Transform, TransitionKind, parse_color,
-    spoken_word,
+    Adjust, Asset, AssetKind, Clip, ClipContent, Crop, MAX_BORDER_WIDTH, Project, Track, TrackKind, Transform,
+    TransitionKind, parse_color, spoken_word,
 };
 use crate::text::{TextRenderer, TextStats};
 use crate::worker::VideoWorker;
@@ -26,6 +26,11 @@ const BACKGROUND_BRIGHTNESS: f32 = 0.85;
 const MAX_TEXT_SCALE: f32 = 8.0;
 const PREFETCH_US: i64 = 1_000_000;
 const IDLE_WORKER: Duration = Duration::from_secs(5);
+/// Blur of a layer's shadow, as a share of the canvas's shorter side.
+const SHADOW_BLUR: f32 = 0.025;
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+type Quad = [[f32; 2]; 4];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Wait {
@@ -133,7 +138,9 @@ fn placement(
     Some(Placement { transform, size, text })
 }
 
-pub fn layer_bounds(project: &Project, t_us: i64, text: &mut TextRenderer) -> Vec<(String, [[f32; 2]; 4])> {
+/// Layers visible at `t_us`, bottom to top: the clip, the corners of its visible part and of the whole
+/// layer before the crop, in canvas pixels.
+pub fn layer_bounds(project: &Project, t_us: i64, text: &mut TextRenderer) -> Vec<(String, Quad, Quad)> {
     let mut bounds = Vec::new();
     for visible in project.tracks.iter().flat_map(|track| visible_clips(track, t_us)) {
         let Some(place) = placement(project, visible, t_us, 1.0, text) else { continue };
@@ -152,14 +159,52 @@ pub fn layer_bounds(project: &Project, t_us: i64, text: &mut TextRenderer) -> Ve
             );
         }
         let rect = clip_rect.unwrap_or([0.0, 0.0, project.canvas.width as f32, project.canvas.height as f32]);
-        if opacity > 0.0 && intersects_rect(&corners, rect) {
-            bounds.push((visible.clip.id.clone(), corners));
+        let shown = sub_quad(&corners, Crop::visible(place.transform.crop));
+        if opacity > 0.0 && intersects_rect(&shown, rect) {
+            bounds.push((visible.clip.id.clone(), shown, corners));
         }
     }
     bounds
 }
 
-fn intersects_rect(corners: &[[f32; 2]; 4], rect: [f32; 4]) -> bool {
+/// The part of a quad between the edges `rect` (left, top, right and bottom in 0..1).
+fn sub_quad(q: &Quad, rect: [f32; 4]) -> Quad {
+    if rect == WHOLE {
+        return *q;
+    }
+    let at = |u: f32, v: f32| std::array::from_fn(|i| q[0][i] + u * (q[1][i] - q[0][i]) + v * (q[3][i] - q[0][i]));
+    let [left, top, right, bottom] = rect;
+    [at(left, top), at(right, top), at(right, bottom), at(left, bottom)]
+}
+
+/// The crop and edge of a layer drawn over `corners` (output pixels), or `None` when it shows whole
+/// with plain edges.
+fn layer_mask(project: &Project, clip: &Clip, transform: &Transform, corners: &Quad, k: f32) -> Option<Mask> {
+    let shape = match &clip.content {
+        ClipContent::Media { shape, .. } => shape.clone().unwrap_or_default(),
+        ClipContent::Text { .. } => Default::default(),
+    };
+    let rect = Crop::visible(transform.crop);
+    if rect == WHOLE && !(shape.radius > 0.0 || shape.border_width > 0.0 || shape.shadow > 0.0) {
+        return None;
+    }
+    let side = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
+    let width = side(corners[0], corners[1]) * (rect[2] - rect[0]);
+    let height = side(corners[0], corners[3]) * (rect[3] - rect[1]);
+    let canvas = &project.canvas;
+    // Older project files can bypass session validation when rendered by the CLI.
+    let bounded = |v: f32, max: f32| if v.is_finite() { v.clamp(0.0, max) } else { 0.0 };
+    Some(Mask {
+        rect,
+        radius: bounded(shape.radius, 1.0) * width.min(height) / 2.0,
+        border: bounded(shape.border_width, MAX_BORDER_WIDTH) * k,
+        border_color: parse_color(&shape.border_color),
+        shadow: bounded(shape.shadow, 1.0),
+        shadow_blur: SHADOW_BLUR * canvas.width.min(canvas.height) as f32 * k,
+    })
+}
+
+fn intersects_rect(corners: &Quad, rect: [f32; 4]) -> bool {
     let [x0, y0, x1, y1] = rect;
     if x0 >= x1 || y0 >= y1 {
         return false;
@@ -168,7 +213,7 @@ fn intersects_rect(corners: &[[f32; 2]; 4], rect: [f32; 4]) -> bool {
     let edge = |i: usize, j: usize| [corners[i][1] - corners[j][1], corners[j][0] - corners[i][0]];
     // Separating axes also reject rotated quads whose bounding box touches the wipe.
     [[1.0, 0.0], [0.0, 1.0], edge(0, 1), edge(1, 2)].into_iter().all(|axis| {
-        let range = |points: &[[f32; 2]; 4]| {
+        let range = |points: &Quad| {
             points
                 .iter()
                 .map(|p| p[0] * axis[0] + p[1] * axis[1])
@@ -179,7 +224,7 @@ fn intersects_rect(corners: &[[f32; 2]; 4], rect: [f32; 4]) -> bool {
     })
 }
 
-fn placement_quad(project: &Project, place: &Placement, k: f32) -> [[f32; 2]; 4] {
+fn placement_quad(project: &Project, place: &Placement, k: f32) -> Quad {
     let scale = place.transform.scale * k;
     quad(
         &place.transform,
@@ -357,6 +402,7 @@ impl Renderer {
             blur: 0.0,
             clip: layer.clip,
             transfer: layer.transfer,
+            mask: None,
         }
     }
 
@@ -448,19 +494,20 @@ impl Renderer {
             blur: 0.0,
             clip: None,
             transfer,
+            mask: layer_mask(project, clip, &place.transform, &corners, k),
         }))
     }
 }
 
 fn transition_geometry(
-    mut corners: [[f32; 2]; 4],
+    mut corners: Quad,
     opacity: f32,
     kind: TransitionKind,
     p: f32,
     incoming: bool,
     w: u32,
     h: u32,
-) -> ([[f32; 2]; 4], f32, Option<[f32; 4]>) {
+) -> (Quad, f32, Option<[f32; 4]>) {
     use TransitionKind::*;
     let weight = if incoming { p } else { 1.0 - p };
     let mut t = Transform::default();
@@ -516,6 +563,7 @@ fn solid(image: &Image, w: u32, h: u32) -> Layer {
         blur: 0.0,
         clip: None,
         transfer: Transfer::Sdr,
+        mask: None,
     }
 }
 
@@ -590,7 +638,7 @@ fn box_blur(src: &[[f32; 4]], dst: &mut [[f32; 4]], w: usize, h: usize, radius: 
 }
 
 /// Corner positions (tl, tr, br, bl) in output pixels for a layer of `size` output pixels.
-fn quad(t: &Transform, size: (f32, f32), cw: f32, ch: f32, k: f32) -> [[f32; 2]; 4] {
+fn quad(t: &Transform, size: (f32, f32), cw: f32, ch: f32, k: f32) -> Quad {
     let cx = (cw / 2.0 + t.x * cw) * k;
     let cy = (ch / 2.0 + t.y * ch) * k;
     let (hw, hh) = (size.0 / 2.0, size.1 / 2.0);
@@ -678,7 +726,7 @@ mod tests {
                         )
                         .0;
                     }
-                    if let Some((_, expected)) = bounds.iter().find(|(id, _)| *id == visible.clip.id) {
+                    if let Some((_, expected, _)) = bounds.iter().find(|(id, ..)| *id == visible.clip.id) {
                         assert_eq!(corners.map(|p| [p[0] / k, p[1] / k]), *expected);
                     }
                 }
@@ -758,6 +806,7 @@ mod tests {
                     fade_in_us: 0,
                     fade_out_us: 0,
                     clean_voice: false,
+                    shape: None,
                 },
             ));
         }

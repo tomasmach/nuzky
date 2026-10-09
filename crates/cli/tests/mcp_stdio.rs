@@ -167,6 +167,42 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     assert_eq!(disk["name"], "Original");
 }
 
+/// The guide's B-roll over a phrase: a screenshot in a corner window from the first word to the last,
+/// then made a round bubble with a border.
+#[test]
+fn picture_in_picture_over_a_phrase_with_crop_and_shape_over_stdio() {
+    let mut c = Client::new(true);
+    let (talk, screen) = (c.dir.join("talk.ppm"), c.dir.join("screen.ppm"));
+    std::fs::write(&talk, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+    std::fs::write(&screen, [b"P6\n4 2\n255\n".as_slice(), &[200; 24]].concat()).unwrap();
+    let run = c.call("begin_run", json!({"label":"b-roll"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[talk, screen]}))["asset_ids"].clone();
+    let edits = json!([{"type":"addClip","assetId":ids[0]},
+        {"type":"addPictureInPicture","assetId":ids[1],"startUs":1_000_000,"durationUs":1_500_000}]);
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":edits}));
+    let pip = c.call("get_state", json!({}))["tracks"][1]["clips"][0].clone();
+    assert_eq!((&pip["startUs"], &pip["durationUs"]), (&json!(1_000_000), &json!(1_500_000)));
+    assert!((pip["content"]["shape"]["radius"].as_f64().unwrap() - 0.15).abs() < 1e-6, "{pip}");
+    let mut transform = pip["content"]["transform"].clone();
+    transform["crop"] = json!({"left":0.25,"right":0.25});
+    let round = json!({"radius":1.0,"borderWidth":8.0,"borderColor":"#ffffff","shadow":0.5});
+    let update = |request: &str, transform: &Value, shape: &Value| {
+        json!({"run_id":run["run_id"],"request_id":request,
+            "edits":[{"type":"updateClip","clipId":pip["id"],"transform":transform,"shape":shape}]})
+    };
+    c.call("apply_edits", update("round", &transform, &round));
+    let mut wide_open = transform.clone();
+    wide_open["crop"] = json!({"left":0.6,"right":0.5});
+    assert!(c.error("apply_edits", update("too-much", &wide_open, &round)).contains("crop must leave"));
+    let broken = json!({"radius":2});
+    assert!(c.error("apply_edits", update("broken", &transform, &broken)).contains("shape of"));
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    c.finish();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
+    let content = &disk["tracks"][1]["clips"][0]["content"];
+    assert_eq!((&content["shape"], &content["transform"]["crop"]["left"]), (&round, &json!(0.25)), "{content}");
+}
+
 #[test]
 fn readonly_resources_prompts_and_clear_errors() {
     let mut c = Client::with_style(None);

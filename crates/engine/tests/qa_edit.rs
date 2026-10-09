@@ -36,6 +36,7 @@ fn update_speed(id: &str, speed: f32) -> EditCmd {
         fade_in_us: None,
         fade_out_us: None,
         clean_voice: None,
+        shape: None,
     }
 }
 fn invariants(p: &Project) -> Result<(), String> {

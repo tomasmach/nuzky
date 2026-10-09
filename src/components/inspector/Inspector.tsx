@@ -12,6 +12,7 @@ import { InspectorHeader } from "./Header";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
 import { MultiInspector } from "./MultiInspector";
 import { ProjectSection } from "./ProjectSection";
+import { ShapeSection } from "./ShapeSection";
 import { TextSection } from "./TextSection";
 import { TransformSection } from "./TransformSection";
 
@@ -57,6 +58,7 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
       <TabPanel group="clip" id={tab} className="min-h-0 flex-1 overflow-y-auto">
         <AiLock>
           {(tab === "video" || tab === "transform") && <TransformSection clip={clip} asset={asset} />}
+          {tab === "video" && c.type === "media" && <ShapeSection clip={clip} content={c} asset={asset} />}
           {tab === "text" && c.type === "text" && <TextSection clip={clip} text={c.text} style={c.style} caption={kind === "caption"} />}
           {tab === "adjust" && c.type === "media" && <AdjustSection clip={clip} content={c} />}
           {tab === "speed" && c.type === "media" && <SpeedSection clip={clip} content={c} asset={asset} />}

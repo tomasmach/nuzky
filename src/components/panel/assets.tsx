@@ -122,6 +122,12 @@ export async function addAtPlayhead(assetId: string) {
   if (added && added.track.id === MAIN_TRACK) seek(added.clip.startUs + added.clip.durationUs);
 }
 
+/** Puts a video or image in a small rounded window in the corner, from the playhead, above the main track. */
+export function addPictureInPicture(assetId: string) {
+  const { edit, timeUs } = useEditor.getState();
+  return edit({ type: "addPictureInPicture", assetId, startUs: Math.round(timeUs), durationUs: null });
+}
+
 export let dropResolver: ((x: number, y: number) => { trackId: string | null; startUs: number } | null) | null = null;
 export function setDropResolver(fn: typeof dropResolver) {
   dropResolver = fn;

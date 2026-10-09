@@ -1,5 +1,5 @@
 import captionStyles from "../../assets/presets/captions.json";
-import type { Adjust, AnimationKind, TextStyle, Transform, TransitionKind } from "./types";
+import type { Adjust, AnimationKind, Crop, Shape, TextStyle, Transform, TransitionKind } from "./types";
 
 export const FORMATS = [
   { label: "9:16", hint: "Reels, TikTok, Shorts", width: 1080, height: 1920 },
@@ -13,6 +13,8 @@ export function formatLabel(width: number, height: number) {
 }
 
 export const DEFAULT_TRANSFORM: Transform = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 };
+export const NO_CROP: Crop = { left: 0, top: 0, right: 0, bottom: 0 };
+export const NO_SHAPE: Shape = { radius: 0, borderWidth: 0, borderColor: "#ffffff", shadow: 0 };
 export const NO_ADJUST: Adjust = { exposure: 0, tint: 0, highlights: 0, shadows: 0, fade: 0, brightness: 0, contrast: 0, saturation: 0, temperature: 0, vignette: 0 };
 
 export const ADJUST_ROWS: { key: keyof Adjust; label: string; min: number }[] = [

@@ -4,7 +4,7 @@
 
 use nuzky_engine::Project;
 use nuzky_engine::edit::MAIN_TRACK;
-use nuzky_engine::model::{Clip, ClipContent, TrackKind};
+use nuzky_engine::model::{Clip, ClipContent, Crop, TrackKind};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -121,6 +121,12 @@ fn origins<'a>(before: &'a Project, after: &'a Project) -> Vec<(&'a Clip, Option
 fn scale(clip: &Clip) -> f32 {
     match &clip.content {
         ClipContent::Media { transform, .. } | ClipContent::Text { transform, .. } => transform.scale,
+    }
+}
+
+fn crop(clip: &Clip) -> Option<Crop> {
+    match &clip.content {
+        ClipContent::Media { transform, .. } | ClipContent::Text { transform, .. } => transform.crop,
     }
 }
 
@@ -261,6 +267,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 fade_in_us: fi1,
                 fade_out_us: fo1,
                 clean_voice: cv1,
+                shape: sh1,
                 ..
             },
             ClipContent::Media {
@@ -270,6 +277,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 fade_in_us: fi2,
                 fade_out_us: fo2,
                 clean_voice: cv2,
+                shape: sh2,
                 ..
             },
         ) = (&o.content, &clip.content)
@@ -289,6 +297,9 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             }
             if a1 != a2 {
                 push("Changed the colour of");
+            }
+            if sh1 != sh2 || (crop(clip) != crop(o) && clip.keyframes == o.keyframes) {
+                push("Changed the crop or shape of");
             }
             if (fi1, fo1) != (fi2, fo2) {
                 push("Changed the sound fades of");

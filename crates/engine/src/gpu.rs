@@ -12,11 +12,15 @@ use crate::model::Adjust;
 const SHADER: &str = r#"
 struct Layer {
     corners: array<vec4<f32>, 4>, // xy = clip-space position, zw = uv
+    local: array<vec4<f32>, 4>, // xy = output pixels from the centre of the visible part
     opacity: vec4<f32>, // opacity, transfer (0 SDR, 1 PQ, 2 HLG)
     adjust: vec4<f32>,
     effects: vec4<f32>,
     grading: vec4<f32>, // exposure, tint, highlights, shadows
     clip: vec4<f32>,
+    mask: vec4<f32>, // half width and height of the visible part, corner radius, border width; no mask at 0 width
+    border: vec4<f32>, // premultiplied border colour
+    shadow: vec4<f32>, // opacity, blur, offset down
 };
 @group(0) @binding(0) var<uniform> layer: Layer;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -24,6 +28,7 @@ struct Layer {
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) local: vec2<f32>,
 };
 
 @vertex
@@ -32,7 +37,14 @@ fn vs(@builtin(vertex_index) i: u32) -> VsOut {
     var out: VsOut;
     out.pos = vec4<f32>(c.xy, 0.0, 1.0);
     out.uv = c.zw;
+    out.local = layer.local[i].xy;
     return out;
+}
+
+// Signed distance from a box with rounded corners centred on 0, negative inside.
+fn rounded_box(p: vec2<f32>, half: vec2<f32>, radius: f32) -> f32 {
+    let q = abs(p) - half + radius;
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
 fn srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
@@ -171,7 +183,20 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         }
         rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * c.a;
     }
-    return vec4<f32>(rgb, c.a) * layer.opacity.x;
+    var color = vec4<f32>(rgb, c.a);
+    if layer.mask.x > 0.0 {
+        // Coverage of the visible part and of it with the border, smoothed over one pixel.
+        let d = rounded_box(in.local, layer.mask.xy, layer.mask.z);
+        let inside = clamp(0.5 - d, 0.0, 1.0);
+        let bordered = clamp(0.5 - d + layer.mask.w, 0.0, 1.0);
+        color = color * inside + layer.border * (bordered - inside);
+        if layer.shadow.x > 0.0 {
+            let outer = layer.mask.xy + layer.mask.w;
+            let s = rounded_box(in.local - vec2<f32>(0.0, layer.shadow.z), outer, layer.mask.z + layer.mask.w);
+            color += vec4<f32>(0.0, 0.0, 0.0, layer.shadow.x * (1.0 - smoothstep(-layer.shadow.y, layer.shadow.y, s))) * (1.0 - color.a);
+        }
+    }
+    return color * layer.opacity.x;
 }
 "#;
 
@@ -179,11 +204,15 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LayerUniform {
     corners: [[f32; 4]; 4],
+    local: [[f32; 4]; 4],
     opacity: [f32; 4],
     adjust: [f32; 4],
     effects: [f32; 4],
     grading: [f32; 4],
     clip: [f32; 4],
+    mask: [f32; 4],
+    border: [f32; 4],
+    shadow: [f32; 4],
 }
 
 /// Straight-alpha RGBA image shared between frames without copying.
@@ -208,6 +237,47 @@ pub struct Layer {
     pub blur: f32,
     pub clip: Option<[f32; 4]>,
     pub transfer: Transfer,
+    pub mask: Option<Mask>,
+}
+
+/// The visible part of a layer and how its edge is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mask {
+    /// Left, top, right and bottom edges of the visible part, in 0..1 of the quad.
+    pub rect: [f32; 4],
+    /// Output pixels.
+    pub radius: f32,
+    /// Output pixels, outside the edge.
+    pub border: f32,
+    /// Straight RGBA.
+    pub border_color: [f32; 4],
+    /// Opacity of the shadow, 0 for none.
+    pub shadow: f32,
+    /// Output pixels.
+    pub shadow_blur: f32,
+}
+
+impl Mask {
+    /// How far the border and shadow reach past the visible part, plus a pixel of edge smoothing.
+    fn reach(&self) -> f32 {
+        let shadow = if self.shadow > 0.0 { self.shadow_blur * SHADOW_OFFSET + self.shadow_blur } else { 0.0 };
+        self.border + shadow + 1.0
+    }
+}
+
+/// How far a shadow falls below the layer, as a share of its blur.
+const SHADOW_OFFSET: f32 = 0.4;
+
+/// Where the image point shown at `(u, v)` of the quad lies in the texture, for an image rotated clockwise by
+/// `rotation` and then mirrored.
+fn texture_uv(u: f32, v: f32, rotation: u32, mirror: bool) -> [f32; 2] {
+    let u = if mirror { 1.0 - u } else { u };
+    match rotation % 360 {
+        90 => [v, 1.0 - u],
+        180 => [1.0 - u, 1.0 - v],
+        270 => [1.0 - v, u],
+        _ => [u, v],
+    }
 }
 
 pub enum Draw {
@@ -420,22 +490,67 @@ impl Gpu {
         let base = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let shift = (layer.uv_rotation / 90) as usize % 4;
         let mut corners = [[0.0; 4]; 4];
+        let mut local = [[0.0; 4]; 4];
+        let clip_space = |p: [f32; 2]| [p[0] / w as f32 * 2.0 - 1.0, 1.0 - p[1] / h as f32 * 2.0];
         // Triangle strip order: top-left, top-right, bottom-left, bottom-right.
-        for (slot, cyclic) in [0usize, 1, 3, 2].into_iter().enumerate() {
-            let p = layer.corners[cyclic];
-            // Mirrored, each corner shows what its left-right partner would.
-            let source = if layer.mirror { [1, 0, 3, 2][cyclic] } else { cyclic };
-            let uv = base[(source + 4 - shift) % 4];
-            corners[slot] = [p[0] / w as f32 * 2.0 - 1.0, 1.0 - p[1] / h as f32 * 2.0, uv[0], uv[1]];
-        }
+        let strip = [0usize, 1, 3, 2];
+        let (mask, border, shadow) = match layer.mask {
+            None => {
+                for (slot, cyclic) in strip.into_iter().enumerate() {
+                    let p = clip_space(layer.corners[cyclic]);
+                    // Mirrored, each corner shows what its left-right partner would.
+                    let source = if layer.mirror { [1, 0, 3, 2][cyclic] } else { cyclic };
+                    let uv = base[(source + 4 - shift) % 4];
+                    corners[slot] = [p[0], p[1], uv[0], uv[1]];
+                }
+                ([0.0; 4], [0.0; 4], [0.0; 4])
+            }
+            Some(mask) => {
+                // The quad is a parallelogram: a point at (u, v) of it is the top-left corner plus u of
+                // the top edge and v of the left one. The drawn quad is the visible part plus the reach
+                // of the border and shadow.
+                let [tl, tr, _, bl] = layer.corners;
+                let across = [tr[0] - tl[0], tr[1] - tl[1]];
+                let down = [bl[0] - tl[0], bl[1] - tl[1]];
+                let size = [across[0].hypot(across[1]).max(1e-3), down[0].hypot(down[1]).max(1e-3)];
+                let [left, top, right, bottom] = mask.rect;
+                let centre = [(left + right) / 2.0, (top + bottom) / 2.0];
+                let reach = [mask.reach() / size[0], mask.reach() / size[1]];
+                let drawn = [
+                    [left - reach[0], top - reach[1]],
+                    [right + reach[0], top - reach[1]],
+                    [right + reach[0], bottom + reach[1]],
+                    [left - reach[0], bottom + reach[1]],
+                ];
+                for (slot, cyclic) in strip.into_iter().enumerate() {
+                    let [u, v] = drawn[cyclic];
+                    let p = clip_space([tl[0] + u * across[0] + v * down[0], tl[1] + u * across[1] + v * down[1]]);
+                    let uv = texture_uv(u, v, layer.uv_rotation, layer.mirror);
+                    corners[slot] = [p[0], p[1], uv[0], uv[1]];
+                    local[slot] = [(u - centre[0]) * size[0], (v - centre[1]) * size[1], 0.0, 0.0];
+                }
+                // min and max rather than clamp, which panics on the NaN of a broken project.
+                let half = [((right - left) * size[0] / 2.0).max(1e-3), ((bottom - top) * size[1] / 2.0).max(1e-3)];
+                let [r, g, b, a] = mask.border_color;
+                (
+                    [half[0], half[1], mask.radius.min(half[0].min(half[1])).max(0.0), mask.border],
+                    [r * a, g * a, b * a, a],
+                    [mask.shadow, mask.shadow_blur.max(1e-3), mask.shadow_blur * SHADOW_OFFSET, 0.0],
+                )
+            }
+        };
         let a = layer.adjust;
         let uniform = LayerUniform {
             corners,
+            local,
             opacity: [layer.opacity.clamp(0.0, 1.0), layer.transfer as u8 as f32, 0.0, 0.0],
             adjust: [a.brightness, a.contrast, a.saturation, a.temperature],
             effects: [a.vignette, layer.blur, premult as u8 as f32, a.fade],
             grading: [a.exposure, a.tint, a.highlights, a.shadows],
             clip: layer.clip.unwrap_or([0.0, 0.0, w as f32, h as f32]),
+            mask,
+            border,
+            shadow,
         };
         let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("layer"),
@@ -551,11 +666,15 @@ impl Gpu {
                             [-1.0, -1.0, 0.0, 1.0],
                             [1.0, -1.0, 1.0, 1.0],
                         ],
+                        local: [[0.0; 4]; 4],
                         opacity: [1.0, 0.0, 0.0, 0.0],
                         adjust: [0.0; 4],
                         effects: [0.0, 0.0, 1.0, 0.0],
                         grading: [0.0; 4],
                         clip: [0.0, 0.0, w as f32, h as f32],
+                        mask: [0.0; 4],
+                        border: [0.0; 4],
+                        shadow: [0.0; 4],
                     };
                     self.queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
                     bind_groups.push(target.bind_group.clone());
@@ -624,6 +743,7 @@ mod tests {
             blur: 0.0,
             clip: None,
             transfer: Transfer::Sdr,
+            mask: None,
         };
         let draws = [Draw::Transition([layer.clone(), layer])];
         let first = gpu.render(2, 2, [0.0; 4], &draws).unwrap();
@@ -655,6 +775,7 @@ mod tests {
             blur: 0.0,
             clip: None,
             transfer: Transfer::Sdr,
+            mask: None,
         };
         for adjust in [false, true] {
             layer.adjust.contrast = if adjust { 0.2 } else { 0.0 };
@@ -686,6 +807,7 @@ mod tests {
                 blur: 0.0,
                 clip: None,
                 transfer: Transfer::Sdr,
+                mask: None,
             };
             assert_eq!(gpu.render(1, 1, [0.0; 4], &[Draw::Layer(layer)]).unwrap(), [80, 100, 120, 255]);
         };
@@ -725,6 +847,7 @@ mod tests {
             blur: 0.0,
             clip: None,
             transfer: Transfer::Sdr,
+            mask: None,
         };
         assert_eq!(gpu.render(2, 2, [0.0; 4], &[Draw::Layer(layer.clone())]).unwrap(), pixels);
         let mut half = layer.clone();

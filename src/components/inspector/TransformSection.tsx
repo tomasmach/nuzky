@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } fro
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
 import { LIMITS } from "../../lib/limits";
 import { DEFAULT_TRANSFORM } from "../../lib/presets";
-import { editClip, isCaptionTrack, readoutTime, setClipTransform, undoAction, useEditor } from "../../lib/store";
+import { editClip, isCaptionTrack, readoutTime, setClipTransform, transformAtPlayhead, undoAction, useEditor } from "../../lib/store";
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
 import { Button, IconButton, NumberInput, Section, Segmented, Slider } from "../ui";
 import { QUIET } from "./Header";
@@ -139,9 +139,14 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
   const framing = !centred ? null : Math.abs(transform.scale - 1) < 1e-4 ? "fit" : Math.abs(transform.scale - fillScale) < 1e-4 ? "fill" : null;
 
   // New text is centred; captions sit low in the frame, where the engine puts them.
+  // The crop at the playhead stays: it has its own section and reset.
   const reset = () =>
     editClip(clip.id, (c, track) => [
-      { type: "updateClip", clipId: c.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0 } },
+      {
+        type: "updateClip",
+        clipId: c.id,
+        transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0, crop: transformAtPlayhead(c, useEditor.getState().timeUs).crop },
+      },
       { type: "setKeyframes", clipId: c.id, keyframes: [] },
     ]);
 

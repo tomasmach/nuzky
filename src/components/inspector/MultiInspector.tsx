@@ -49,7 +49,7 @@ function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }
       }),
     ),
   );
-  const field = (k: keyof Transform) => shared(found.map((_, i) => flat[i * KEYS.length + KEYS.indexOf(k)]));
+  const field = (k: (typeof KEYS)[number]) => shared(found.map((_, i) => flat[i * KEYS.length + KEYS.indexOf(k)]));
   const keyed = found.filter((f) => f.clip.keyframes.length > 0).length;
   // One absolute value for every clip, keyframes included, so "110 % everywhere" really is everywhere.
   const set = (patch: Partial<Transform>, key: string) =>
@@ -64,7 +64,11 @@ function TransformRows({ found, coalesce }: { found: Found[]; coalesce: string }
     );
   const reset = () =>
     editClips(ids, (clip, track) => [
-      { type: "updateClip", clipId: clip.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0 } },
+      {
+        type: "updateClip",
+        clipId: clip.id,
+        transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0, crop: transformAtPlayhead(clip, useEditor.getState().timeUs).crop },
+      },
       { type: "setKeyframes", clipId: clip.id, keyframes: [] },
     ]);
   const scale = field("scale");

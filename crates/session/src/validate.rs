@@ -5,8 +5,8 @@ use anyhow::{Result, ensure};
 use nuzky_engine::{
     Project,
     model::{
-        AssetKind, Clip, ClipContent, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO,
-        PROJECT_VERSION, TrackKind, Transform, max_stroke_width,
+        AssetKind, Clip, ClipContent, MAX_BORDER_WIDTH, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO,
+        MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TrackKind, Transform, max_stroke_width,
     },
 };
 
@@ -130,6 +130,14 @@ fn transform(value: &Transform) -> Result<()> {
         "INVALID_PROJECT: non-finite transform"
     );
     ensure!(value.scale > 0.0 && (0.0..=1.0).contains(&value.opacity), "INVALID_PROJECT: transform scale or opacity");
+    if let Some(c) = value.crop {
+        ensure!(
+            [c.left, c.top, c.right, c.bottom].iter().all(|v| v.is_finite() && *v >= 0.0)
+                && c.left + c.right < 1.0
+                && c.top + c.bottom < 1.0,
+            "INVALID_PROJECT: a crop must leave part of the layer visible"
+        );
+    }
     Ok(())
 }
 
@@ -146,6 +154,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             fade_out_us,
             adjust,
             clean_voice,
+            shape,
         } => {
             let asset =
                 project.asset(asset_id).ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
@@ -192,6 +201,16 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                 "INVALID_PROJECT: non-finite adjustment"
             );
             transform(t)?;
+            if let Some(shape) = shape {
+                ensure!(
+                    (0.0..=1.0).contains(&shape.radius)
+                        && (0.0..=MAX_BORDER_WIDTH).contains(&shape.border_width)
+                        && (0.0..=1.0).contains(&shape.shadow),
+                    "INVALID_PROJECT: shape of {} needs a radius and shadow from 0 to 1 and a border up to {MAX_BORDER_WIDTH} px",
+                    clip.id
+                );
+                color(&shape.border_color, "border color")?;
+            }
         }
         ClipContent::Text { style, transform: t, words, .. } => {
             ensure!(

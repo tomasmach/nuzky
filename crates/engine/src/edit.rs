@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Keyframe, Project,
-    TextStyle, Track, TrackKind, Transform, Transition, WordCorrection,
+    Shape, TextStyle, Track, TrackKind, Transform, Transition, WordCorrection,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -82,6 +82,15 @@ pub enum EditCmd {
         start_us: Option<i64>,
         track_id: Option<String>,
     },
+    /// Puts a video or image in a small window with rounded corners and a soft shadow in the top right
+    /// corner, inside the Reels and TikTok safe area on vertical videos, on an overlay track above the
+    /// main track. `duration_us` defaults to the whole video, or 3 s of an image.
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
+    AddPictureInPicture {
+        asset_id: String,
+        start_us: i64,
+        duration_us: Option<i64>,
+    },
     AddText {
         start_us: i64,
         text: String,
@@ -120,6 +129,8 @@ pub enum EditCmd {
         fade_out_us: Option<i64>,
         /// Clean voice on clips with sound: less rumble, hum, background noise and harsh s sounds.
         clean_voice: Option<bool>,
+        /// Video and image clips: corners, border and shadow. The default shape removes them.
+        shape: Option<Shape>,
     },
     SetAnimation {
         clip_id: String,
@@ -258,6 +269,45 @@ fn track_kind_for(asset: &Asset) -> TrackKind {
 
 fn min_duration(project: &Project) -> i64 {
     project.frame_duration_us().ceil() as i64
+}
+
+fn media(asset_id: String, transform: Transform, shape: Option<Shape>) -> ClipContent {
+    ClipContent::Media {
+        asset_id,
+        source_in_us: 0,
+        volume: 1.0,
+        transform,
+        speed: 1.0,
+        adjust: Adjust::default(),
+        fade_in_us: 0,
+        fade_out_us: 0,
+        clean_voice: false,
+        shape,
+    }
+}
+
+/// The longer side of a picture in picture, as a share of the canvas's shorter side.
+const PIP_SIZE: f32 = 0.45;
+/// Gap to the canvas edges where no safe area applies, as a share of the canvas's shorter side.
+const PIP_MARGIN: f32 = 0.04;
+const PIP_RADIUS: f32 = 0.15;
+const PIP_SHADOW: f32 = 0.5;
+
+/// The asset scaled down into the top right corner: inside the safe area on vertical videos, a small gap
+/// from the edges on the others.
+fn picture_in_picture(canvas: &Canvas, asset: &Asset) -> Transform {
+    let (cw, ch) = (canvas.width as f32, canvas.height as f32);
+    let fit = (cw / asset.width as f32).min(ch / asset.height as f32);
+    let (w, h) = (asset.width as f32 * fit, asset.height as f32 * fit);
+    let scale = PIP_SIZE * cw.min(ch) / w.max(h);
+    let margin = PIP_MARGIN * cw.min(ch);
+    let (right, top) = canvas.safe_area().map_or((cw - margin, margin), |area| (area.right, area.top));
+    Transform {
+        x: (right - w * scale / 2.0) / cw - 0.5,
+        y: (top + h * scale / 2.0) / ch - 0.5,
+        scale,
+        ..Transform::default()
+    }
 }
 
 impl Project {
@@ -455,6 +505,7 @@ impl Project {
             EditCmd::AddAssets { .. }
             | EditCmd::RemoveAsset { .. }
             | EditCmd::AddClip { .. }
+            | EditCmd::AddPictureInPicture { .. }
             | EditCmd::AddText { .. }
             | EditCmd::DetachAudio { .. } => self.apply_media(cmd, &mut out, &mut moved)?,
             EditCmd::MoveClip { .. }
@@ -503,22 +554,7 @@ impl Project {
                 let keep = asset.kind == AssetKind::Audio;
                 let duration =
                     if asset.kind == AssetKind::Image { IMAGE_DURATION_US } else { asset.duration_us.max(min) };
-                let clip = Clip::new(
-                    new_id(),
-                    0,
-                    duration,
-                    ClipContent::Media {
-                        asset_id,
-                        source_in_us: 0,
-                        volume: 1.0,
-                        transform: Transform::default(),
-                        speed: 1.0,
-                        adjust: Adjust::default(),
-                        fade_in_us: 0,
-                        fade_out_us: 0,
-                        clean_voice: false,
-                    },
-                );
+                let clip = Clip::new(new_id(), 0, duration, media(asset_id, Transform::default(), None));
                 out.select.push(clip.id.clone());
                 let requested = track_id.and_then(|id| self.track_index(&id)).filter(|&i| self.tracks[i].kind == kind);
                 let target = match (kind, requested) {
@@ -536,6 +572,24 @@ impl Project {
                     }
                     self.tracks[target].clips.push(Clip { start_us: start, ..clip });
                 }
+            }
+            EditCmd::AddPictureInPicture { asset_id, start_us, duration_us } => {
+                let asset = self.asset(&asset_id).ok_or_else(|| anyhow!("Unknown media"))?.clone();
+                ensure!(
+                    asset.kind != AssetKind::Audio && asset.width > 0 && asset.height > 0,
+                    "Only a video or an image can be a picture in picture"
+                );
+                let duration = match (asset.kind, duration_us) {
+                    (AssetKind::Image, d) => d.unwrap_or(IMAGE_DURATION_US).max(min),
+                    (_, d) => d.unwrap_or(asset.duration_us).clamp(min, asset.duration_us.max(min)),
+                };
+                let start = start_us.max(0);
+                let shape = Shape { radius: PIP_RADIUS, shadow: PIP_SHADOW, ..Shape::default() };
+                let content = media(asset_id, picture_in_picture(&self.canvas, &asset), Some(shape));
+                let clip = Clip::new(new_id(), start, duration, content);
+                let track = self.free_track(TrackKind::Video, start, start + duration, false);
+                out.select.push(clip.id.clone());
+                self.tracks[track].clips.push(clip);
             }
             EditCmd::AddText { start_us, text, style } => {
                 let start = start_us.max(0);
@@ -569,9 +623,10 @@ impl Project {
                     bail!("This clip has no sound to detach");
                 }
                 let mut sound = Clip::new(new_id(), clip.start_us, clip.duration_us, clip.content.clone());
-                if let ClipContent::Media { transform, adjust, .. } = &mut sound.content {
+                if let ClipContent::Media { transform, adjust, shape, .. } = &mut sound.content {
                     *transform = Transform::default();
                     *adjust = Adjust::default();
+                    *shape = None;
                 }
                 if let ClipContent::Media { volume, .. } = &mut self.tracks[ti].clips[ci].content {
                     *volume = 0.0;
@@ -717,9 +772,14 @@ impl Project {
                 fade_in_us,
                 fade_out_us,
                 clean_voice,
+                shape,
             } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let changes_length = speed.is_some();
+                ensure!(
+                    shape.is_none() || matches!(self.tracks[ti].clips[ci].content, ClipContent::Media { .. }),
+                    "Only video and image clips have a shape"
+                );
                 if clean_voice == Some(true) {
                     let sound = match &self.tracks[ti].clips[ci].content {
                         ClipContent::Media { asset_id, .. } => {
@@ -742,10 +802,14 @@ impl Project {
                         fade_in_us: fi,
                         fade_out_us: fo,
                         clean_voice: cv,
+                        shape: sh,
                         ..
                     } => {
                         if let Some(x) = transform {
                             *tr = x;
+                        }
+                        if let Some(x) = shape {
+                            *sh = Some(x).filter(|x| *x != Shape::default());
                         }
                         if let Some(x) = volume {
                             *v = x.clamp(0.0, 4.0);
@@ -1535,6 +1599,72 @@ mod tests {
     }
 
     #[test]
+    fn picture_in_picture_sits_in_the_top_right_corner_above_the_main_track() {
+        let mut p = project();
+        let wide = Asset { width: 1920, height: 1080, ..asset("wide", AssetKind::Video, 4) };
+        let photo = Asset { width: 1000, height: 1000, ..asset("photo", AssetKind::Image, 0) };
+        p.apply(EditCmd::AddAssets { assets: vec![wide, photo] }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let pip = |p: &mut Project, asset: &str, start_us, duration_us| {
+            let cmd = EditCmd::AddPictureInPicture { asset_id: asset.into(), start_us, duration_us };
+            let id = p.apply(cmd).unwrap().select[0].clone();
+            let (ti, ci) = p.find_clip(&id).unwrap();
+            let clip = &p.tracks[ti].clips[ci];
+            let ClipContent::Media { shape, .. } = &clip.content else { panic!() };
+            assert_eq!(shape.as_ref().map(|s| (s.radius, s.shadow)), Some((PIP_RADIUS, PIP_SHADOW)));
+            let bounds = crate::render::layer_bounds(p, clip.start_us, &mut crate::text::TextRenderer::new());
+            let corners = bounds.iter().find(|b| b.0 == id).unwrap().1;
+            (ti, clip.start_us, clip.duration_us, corners)
+        };
+        // Vertical: inside the Reels and TikTok safe area, against its top right corner.
+        let (track, start, duration, [tl, tr, br, _]) = pip(&mut p, "wide", 1_000_000, None);
+        let area = p.canvas.safe_area().unwrap();
+        assert_eq!((track, start, duration), (1, 1_000_000, 4_000_000));
+        assert!((tr[0] - area.right).abs() < 0.01 && (tr[1] - area.top).abs() < 0.01, "{tr:?}");
+        assert!(
+            ((tr[0] - tl[0]) - 0.45 * 1080.0).abs() < 0.01
+                && ((br[1] - tr[1]) - 0.45 * 1080.0 * 9.0 / 16.0).abs() < 0.01
+        );
+        // Another one over the first goes on a new track above it; an image lasts 3 s or as asked.
+        assert_eq!(pip(&mut p, "photo", 2_000_000, None).0, 2);
+        assert_eq!(pip(&mut p, "photo", 6_000_000, Some(500_000)).2, 500_000);
+        // A video is never longer than its file.
+        assert_eq!(pip(&mut p, "wide", 9_000_000, Some(60_000_000)).2, 4_000_000);
+        // 16:9: a small gap from the top and right edges of the canvas.
+        p.apply(EditCmd::SetCanvas { width: 1920, height: 1080, background: None, background_blur: None }).unwrap();
+        let (.., [_, tr, ..]) = pip(&mut p, "photo", 20_000_000, None);
+        assert!((tr[0] - (1920.0 - 0.04 * 1080.0)).abs() < 0.01 && (tr[1] - 0.04 * 1080.0).abs() < 0.01, "{tr:?}");
+        let sound = EditCmd::AddPictureInPicture { asset_id: "m".into(), start_us: 0, duration_us: None };
+        assert!(p.apply(sound).is_err());
+    }
+
+    #[test]
+    fn a_default_shape_is_no_shape_and_text_has_none() {
+        let mut p = project();
+        let id = p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap().select[0]
+            .clone();
+        let shape = |p: &Project| match &p.tracks[0].clips[0].content {
+            ClipContent::Media { shape, .. } => shape.clone(),
+            ClipContent::Text { .. } => unreachable!(),
+        };
+        let set = |clip_id: &str, shape: Shape| {
+            serde_json::from_value::<EditCmd>(
+                serde_json::json!({"type": "updateClip", "clipId": clip_id, "shape": shape}),
+            )
+            .unwrap()
+        };
+        let round = Shape { radius: 1.0, border_width: 6.0, ..Shape::default() };
+        p.apply(set(&id, round.clone())).unwrap();
+        assert_eq!(shape(&p), Some(round));
+        p.apply(set(&id, Shape::default())).unwrap();
+        assert_eq!(shape(&p), None);
+        let style: TextStyle =
+            serde_json::from_value(serde_json::json!({"fontSize": 60.0, "color": "#ffffff"})).unwrap();
+        let text = p.apply(EditCmd::AddText { start_us: 0, text: "Hi".into(), style }).unwrap().select[0].clone();
+        assert!(p.apply(set(&text, Shape::default())).is_err());
+    }
+
+    #[test]
     fn moving_off_main_creates_overlay_and_removes_empty_tracks() {
         let mut p = project();
         p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
@@ -1616,6 +1746,7 @@ mod tests {
             fade_in_us: None,
             fade_out_us: None,
             clean_voice: None,
+            shape: None,
         }
     }
 
@@ -1640,6 +1771,7 @@ mod tests {
             fade_in_us,
             fade_out_us,
             clean_voice: None,
+            shape: None,
         })
         .unwrap();
         assert_eq!(main_layout(&p), vec![(0, 2500)]);
@@ -1678,6 +1810,7 @@ mod tests {
             fade_in_us,
             fade_out_us,
             clean_voice: None,
+            shape: None,
         };
         assert!(e.apply(slower, None).is_err());
         assert_eq!(e.project, before);
@@ -1704,6 +1837,7 @@ mod tests {
             fade_in_us,
             fade_out_us,
             clean_voice: None,
+            shape: None,
         })
         .unwrap();
         p.apply(EditCmd::TrimClip { clip_id: id, start_us: 0, duration_us: 33_334, source_in_us: Some(4_966_666) })
@@ -1876,6 +2010,7 @@ mod tests {
                     fade_in_us: None,
                     fade_out_us: None,
                     clean_voice: None,
+                    shape: None,
                 },
                 "split_left" => EditCmd::SplitClip { clip_id, at_us: 5_500_000 },
                 "split_right" => EditCmd::SplitClip { clip_id, at_us: 9_500_000 },
@@ -1940,6 +2075,7 @@ mod tests {
                 fade_in_us: None,
                 fade_out_us: None,
                 clean_voice: None,
+                shape: None,
             };
             e.apply(cmd, Some("vol".into())).unwrap();
         }
@@ -2473,7 +2609,7 @@ mod tests {
         };
         p.apply(EditCmd::AddText { start_us: 500_000, text: "Title".into(), style }).unwrap();
         let first = p.tracks[0].clips[0].id.clone();
-        let framed = Transform { x: 0.1, y: -0.05, scale: 1.1, rotation: 5.0, opacity: 1.0 };
+        let framed = Transform { x: 0.1, y: -0.05, scale: 1.1, rotation: 5.0, ..Transform::default() };
         p.apply(changes(&first, serde_json::json!({"transform": framed}))).unwrap();
         let before = p.clone();
         // The second range starts 0.2 s before the cut: too little of the first clip to zoom, so

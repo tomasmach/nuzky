@@ -744,8 +744,10 @@ pub struct Filmstrip {
 #[serde(rename_all = "camelCase")]
 pub struct LayerBounds {
     clip_id: String,
-    /// Top-left, top-right, bottom-right, bottom-left in canvas pixels.
+    /// Top-left, top-right, bottom-right, bottom-left of the visible part in canvas pixels.
     corners: [[f32; 2]; 4],
+    /// The same corners of the whole layer, before its crop.
+    frame: [[f32; 2]; 4],
 }
 
 /// Layers visible at `t_us`, bottom to top, with animations and keyframes applied.
@@ -758,7 +760,7 @@ async fn layer_bounds(app: AppHandle, t_us: i64) -> CmdResult<Vec<LayerBounds>> 
         let text = text.get_or_insert_with(nuzky_engine::text::TextRenderer::new);
         nuzky_engine::render::layer_bounds(&project, t_us, text)
             .into_iter()
-            .map(|(clip_id, corners)| LayerBounds { clip_id, corners })
+            .map(|(clip_id, corners, frame)| LayerBounds { clip_id, corners, frame })
             .collect()
     })
     .await
