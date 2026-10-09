@@ -71,6 +71,10 @@ function Clip({ x, w, top, h, color, label, icon, selected, image }: { x: number
   );
 }
 
+// The timeline draws 110 px per 3 s. The preview shows the frame under the playhead: the selected
+// clip, the caption line it sits in and the time it reads, so change them together.
+const PLAYHEAD = 398;
+
 export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
   const dim = (on: boolean) => `transition-opacity duration-300 ${on ? "opacity-100" : "opacity-35"}`;
   const lanes = { captions: 26, title: 58, video: 90, audio: 152 };
@@ -152,13 +156,13 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
               <span
                 className={`flex gap-[5px] rounded-md bg-black/70 px-2 py-1 text-[15px] font-extrabold transition-shadow duration-300 ${focus === "captions" ? "ring-2 ring-accent" : ""}`}
               >
-                first light <span className="text-caption-yellow">on the ridge</span>
+                we made <span className="text-caption-yellow">it</span>
               </span>
             </div>
           </div>
           <div className="capsule flex h-10 w-full items-center justify-between rounded-full px-3.5">
             <span className="w-[130px] text-[12px] font-medium tabular-nums">
-              00:04.12 <span className="font-normal text-muted">/ 00:31.00</span>
+              00:10.85 <span className="font-normal text-muted">/ 00:30.00</span>
             </span>
             <div className="flex items-center gap-3.5">
               <SkipBack className="size-3.5" />
@@ -268,7 +272,7 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
             <div className={dim(focus !== "captions")}>
               {[
                 [0, 250, "IMG_2041.MOV", "clip-a"],
-                [250, 320, "IMG_2044.MOV", "strip-4"],
+                [250, 320, "IMG_2044.MOV", "reel-hike"],
                 [570, 230, "IMG_2047.MOV", "strip-2"],
                 [800, 300, "IMG_2052.MOV", "strip-6"],
               ].map(([x, w, l, img], i) => (
@@ -292,8 +296,8 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
                 ))}
               </div>
             </div>
-            <span className="absolute top-4 h-[200px] w-[1.5px] bg-white" style={{ left: 398 }} />
-            <span className="absolute top-3 size-[11px] rounded-full bg-white" style={{ left: 393 }} />
+            <span className="absolute top-4 h-[200px] w-[1.5px] bg-white" style={{ left: PLAYHEAD }} />
+            <span className="absolute top-3 size-[11px] rounded-full bg-white" style={{ left: PLAYHEAD - 5 }} />
           </div>
         </div>
       </Pane>
