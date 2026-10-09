@@ -10,7 +10,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono-face", display: "swap", preload: false });
 
 // Search results show the title, which names what people search for. Shares show the slogan.
-const slogan = "Nuzky | Make the reel. Skip the subscription.";
+const slogan = "Nuzky | You just wanted to edit. Now you can.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(url),
