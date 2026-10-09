@@ -6,6 +6,7 @@ import { CircleCheck, Loader, Terminal } from "lucide-react";
 import { AgentPanel, Run, doneStage, exchanges } from "./AgentPanel";
 import { ClaudeCodeLogo, OpenAILogo } from "./Logos";
 import { SectionHeading } from "./SectionHeading";
+import { usePlaying } from "@/lib/playing";
 
 const strip = [1, 2, 3, 4, 5, 6, 7];
 const TYPING = -1;
@@ -53,16 +54,7 @@ function useAgentLoop(active: boolean) {
 
 export function Agent() {
   const section = useRef<HTMLElement>(null);
-  const [active, setActive] = useState(false);
-
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const io = new IntersectionObserver(([e]) => setActive(e.isIntersecting), { threshold: 0.3 });
-    if (section.current) io.observe(section.current);
-    return () => io.disconnect();
-  }, []);
-
-  const { n, stage, typed } = useAgentLoop(active);
+  const { n, stage, typed } = useAgentLoop(usePlaying(section, 0.3));
   const at = (k: number) => exchanges[k % exchanges.length];
   const current = at(n);
   const working = stage >= 0 && stage < doneStage(current);

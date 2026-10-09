@@ -6,6 +6,7 @@ import { Check, Sparkles, Undo2 } from "lucide-react";
 import { Fit } from "./Fit";
 import { AppleLogo, GitHubLogo } from "./Logos";
 import { fitSizes } from "@/lib/fit";
+import { usePlaying } from "@/lib/playing";
 import { repo } from "@/lib/site";
 
 const shadow = "drop-shadow(0 2px 8px rgb(0 0 0 / 0.7))";
@@ -37,11 +38,11 @@ const WORDS = 5;
 const FIRST_SPOKEN = 2;
 
 // The spoken word walks through the caption the way it does in the app's preview, with a breath at the end.
-// It only walks while the hero is on screen.
+// It only walks while the hero plays.
 function useSpokenWord(on: boolean) {
   const [spoken, setSpoken] = useState(FIRST_SPOKEN);
   useEffect(() => {
-    if (!on || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!on) return;
     let id = 0;
     const next = (i: number) => {
       setSpoken(i);
@@ -95,13 +96,7 @@ export function Hero() {
   const [style, setStyle] = useState<CaptionStyle>("Bold");
   const [highlight, setHighlight] = useState(true);
   const section = useRef<HTMLElement>(null);
-  const [inView, setInView] = useState(false);
-
-  useEffect(() => {
-    const io = new IntersectionObserver(([e]) => setInView(e.isIntersecting));
-    if (section.current) io.observe(section.current);
-    return () => io.disconnect();
-  }, []);
+  const playing = usePlaying(section);
 
   return (
     <section ref={section} className="relative">
@@ -139,7 +134,7 @@ export function Hero() {
                   <Image src="/media/avatar.jpg" alt="" width={26} height={26} loading="eager" className="size-[26px] rounded-full object-cover ring-[1.5px] ring-white" />
                   <span className="text-[13px] font-semibold">@mia.skin</span>
                 </div>
-                <Caption style={style} highlight={highlight} playing={inView} />
+                <Caption style={style} highlight={highlight} playing={playing} />
               </div>
               <div className="pointer-events-none absolute inset-0 outline outline-[1.5px] outline-fg" />
               {[

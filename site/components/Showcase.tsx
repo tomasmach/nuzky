@@ -5,6 +5,7 @@ import { Captions, Plus, Scissors, Sparkles, Upload } from "lucide-react";
 import { AgentPanel } from "./AgentPanel";
 import { EditorMock, type EditorFocus } from "./EditorMock";
 import { Fit } from "./Fit";
+import { usePlaying } from "@/lib/playing";
 
 // `side` places the tooltip where it covers nothing the tab is showing. Without it the
 // tooltip goes below the hotspot, or above it in the lower half.
@@ -107,31 +108,26 @@ function ExportDialog() {
 export function Showcase() {
   const [active, setActive] = useState(0);
   const [spot, setSpot] = useState(0);
-  // `auto` moves between tabs and ends when the visitor picks one; `still` (reduced motion) stops everything.
+  // `auto` moves between tabs and ends when the visitor picks one.
   const [auto, setAuto] = useState(true);
-  const [still, setStill] = useState(false);
   // The pointer or keyboard focus is on a hotspot, so the one the visitor is reading stays open.
   const [held, setHeld] = useState(false);
-  const [inView, setInView] = useState(false);
   const section = useRef<HTMLElement>(null);
+  const playing = usePlaying(section, 0.35);
   const tab = tabs[active];
 
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) setStill(true);
     // `?tour=captions` opens the tour on a tab, for links that point at one feature.
     const linked = tabs.findIndex((t) => t.id === new URLSearchParams(window.location.search).get("tour"));
     if (linked >= 0) {
       setActive(linked);
       setAuto(false);
     }
-    const io = new IntersectionObserver(([e]) => setInView(e.isIntersecting), { threshold: 0.35 });
-    if (section.current) io.observe(section.current);
-    return () => io.disconnect();
   }, []);
 
   // Walks through the hotspots of the open tab, then on to the next tab. A tab the visitor
   // picked keeps cycling its own hotspots.
-  const running = !still && !held && inView;
+  const running = !held && playing;
   useEffect(() => {
     if (!running) return;
     const id = window.setTimeout(() => {
