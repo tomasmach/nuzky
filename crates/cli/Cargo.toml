@@ -1,18 +1,18 @@
 [package]
-name = "capopen-cli"
+name = "nuzky-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "capopen"
+name = "nuzky"
 path = "src/main.rs"
 
 [dependencies]
-capopen-analysis.workspace = true
-capopen-engine.workspace = true
-capopen-mcp.workspace = true
-capopen-session.workspace = true
+nuzky-analysis.workspace = true
+nuzky-engine.workspace = true
+nuzky-mcp.workspace = true
+nuzky-session.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 png = "0.18"
@@ -20,4 +20,4 @@ dirs = "6"
 
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
-capopen-analysis = { workspace = true, features = ["gpu"] }
+nuzky-analysis = { workspace = true, features = ["gpu"] }

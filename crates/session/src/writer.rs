@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use capopen_engine::Project;
+use nuzky_engine::Project;
 
 use crate::{SAVE_DEBOUNCE, SAVE_MAX_WAIT, SessionEvent, storage};
 
@@ -29,7 +29,7 @@ impl Writer {
     pub(crate) fn start(path: PathBuf, events: Option<Sender<SessionEvent>>) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
         let worker = std::thread::Builder::new()
-            .name("capopen-session-writer".into())
+            .name("nuzky-session-writer".into())
             .spawn(move || write_loop(path, events, rx))
             .context("Starting project writer")?;
         Ok(Self { tx, worker: Some(worker) })

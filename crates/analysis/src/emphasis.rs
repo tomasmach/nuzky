@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use capopen_engine::{
+use nuzky_engine::{
     Project,
     audio::us_to_samples,
     model::CHANNELS,
@@ -92,7 +92,7 @@ pub fn word_energy(
         // Reading a word's level must never start decoding a whole file nobody can stop: the app
         // prepares sound in the background and recognition leaves it ready.
         anyhow::ensure!(
-            capopen_engine::audio::pcm_path(cache, asset).exists(),
+            nuzky_engine::audio::pcm_path(cache, asset).exists(),
             "AUDIO_NOT_READY: the sound of {} is still being prepared; try again in a moment",
             asset.name
         );
@@ -321,12 +321,12 @@ mod tests {
         let (words, _) = timeline(&[("Tohle je důležité!", -20.0, 900_000)]);
         let mut project = Project::new("emphasis");
         project
-            .apply(capopen_engine::edit::EditCmd::AddAssets {
-                assets: vec![capopen_engine::model::Asset {
+            .apply(nuzky_engine::edit::EditCmd::AddAssets {
+                assets: vec![nuzky_engine::model::Asset {
                     id: words[0].asset_id.clone(),
                     name: "take.mov".into(),
                     path: "/nonexistent/take.mov".into(),
-                    kind: capopen_engine::model::AssetKind::Video,
+                    kind: nuzky_engine::model::AssetKind::Video,
                     duration_us: 5_000_000,
                     width: 2,
                     height: 2,
@@ -337,7 +337,7 @@ mod tests {
                 }],
             })
             .unwrap();
-        let cache = std::env::temp_dir().join(format!("capopen-emphasis-{}", capopen_engine::edit::new_id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-emphasis-{}", nuzky_engine::edit::new_id()));
         let error = word_energy(&project, &words, &HashMap::new(), &cache).unwrap_err().to_string();
         assert!(error.starts_with("AUDIO_NOT_READY") && error.contains("take.mov"), "{error}");
         assert!(!cache.exists(), "nothing was decoded");

@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use capopen_engine::{
+use nuzky_engine::{
     audio::{samples_to_us, us_to_samples},
     model::{Asset, CHANNELS},
 };

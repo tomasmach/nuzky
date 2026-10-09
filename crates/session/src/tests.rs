@@ -1,13 +1,13 @@
 use super::*;
-use capopen_engine::model::{Adjust, Asset, AssetKind, Clip, ClipContent, Transform};
+use nuzky_engine::model::{Adjust, Asset, AssetKind, Clip, ClipContent, Transform};
 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!("capopen-session-{}", new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-session-{}", new_id()));
         fs::create_dir_all(&dir).unwrap();
         // The session resolves symlinks in the project path; macOS's temp dir sits under the /var symlink.
-        let path = fs::canonicalize(dir).unwrap().join("project.capopen");
+        let path = fs::canonicalize(dir).unwrap().join("project.nuzky");
         storage::save(&path, &Project::new("Original")).unwrap();
         Self(path)
     }
@@ -477,8 +477,8 @@ fn trim_preserves_valid_keyframes_outside_clip_bounds() {
             EditCmd::SetKeyframes {
                 clip_id: id.clone(),
                 keyframes: vec![
-                    capopen_engine::model::Keyframe { t_us: 0, transform: Transform::default() },
-                    capopen_engine::model::Keyframe {
+                    nuzky_engine::model::Keyframe { t_us: 0, transform: Transform::default() },
+                    nuzky_engine::model::Keyframe {
                         t_us: 10_000_000,
                         transform: Transform { scale: 2.0, ..Transform::default() },
                     },

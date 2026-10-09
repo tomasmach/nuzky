@@ -6,7 +6,7 @@
 # System Vulkan development packages or an existing VULKAN_SDK take precedence.
 set -euo pipefail
 
-DEPS="${CAPOPEN_DEPS:-$HOME/.cache/capopen/deps}"
+DEPS="${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}"
 ROOT="$DEPS/root"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
-use capopen_engine::{
+use nuzky_engine::{
     audio::{Pcm, ensure_pcm, has_audio, samples_to_us, us_to_samples},
     loudness::Meter,
     model::{Asset, CHANNELS},

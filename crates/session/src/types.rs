@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use capopen_engine::{Project, edit::EditOutcome, model::Clip};
+use nuzky_engine::{Project, edit::EditOutcome, model::Clip};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

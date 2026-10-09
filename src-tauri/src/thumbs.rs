@@ -4,8 +4,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use base64::Engine as _;
-use capopen_engine::media::{VideoDecoder, decode_size, orient};
-use capopen_engine::model::{Asset, AssetKind};
+use nuzky_engine::media::{VideoDecoder, decode_size, orient};
+use nuzky_engine::model::{Asset, AssetKind};
 
 const THUMB_HEIGHT: f32 = 120.0;
 const MAX_SPRITE_PIXELS: u64 = 4_000_000;
@@ -121,7 +121,7 @@ mod tests {
     #[ignore = "requires tmp-test/filmstrip-long.mp4"]
     fn filmstrip_long_gop_timing() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tmp-test/filmstrip-long.mp4");
-        let mut asset = capopen_engine::media::probe(&path, "long".into()).unwrap();
+        let mut asset = nuzky_engine::media::probe(&path, "long".into()).unwrap();
         for duration in [600_000_000, 60_000_000] {
             asset.duration_us = duration;
             let start = std::time::Instant::now();
@@ -138,7 +138,7 @@ mod tests {
         let out = root.join("engine-evidence");
         std::fs::create_dir_all(&out).unwrap();
         for name in ["portrait.mp4", "wide.mp4", "phone_hevc_vfr.mov", "music.mp3", "engine-evidence/identity.png"] {
-            let asset = capopen_engine::media::probe(&root.join(name), name.into()).unwrap();
+            let asset = nuzky_engine::media::probe(&root.join(name), name.into()).unwrap();
             let strip = filmstrip(&asset).unwrap();
             if asset.kind == AssetKind::Audio {
                 assert!(strip.is_none());

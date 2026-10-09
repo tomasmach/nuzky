@@ -112,7 +112,7 @@ export function Home() {
 
   useEffect(() => {
     void refreshLibrary();
-    // Files may have changed while CapOpen was in the background; a list a few seconds old is kept.
+    // Files may have changed while Nuzky was in the background; a list a few seconds old is kept.
     const onFocus = () => void refreshLibrary(3000);
     window.addEventListener("focus", onFocus);
     // A search started in the launcher continues here.

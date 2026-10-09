@@ -41,7 +41,7 @@ impl Host {
         self.jobs.begin_shutdown();
         let host = self.clone();
         std::thread::Builder::new()
-            .name("capopen-retire-host".into())
+            .name("nuzky-retire-host".into())
             .spawn(move || {
                 host.jobs.shutdown();
                 if let Err(error) = host.session.disconnect() {
@@ -68,17 +68,17 @@ impl Drop for Host {
 mod tests {
     use super::*;
     use crate::{EndAction, Mode};
-    use capopen_engine::{Project, edit::new_id};
+    use nuzky_engine::{Project, edit::new_id};
     use serde_json::json;
     use std::sync::mpsc;
 
     #[test]
     fn transcript_publication_notifies_host_from_cloned_store() {
         use crate::transcripts::{Record, VERSION};
-        use capopen_engine::model::{Asset, AssetKind};
+        use nuzky_engine::model::{Asset, AssetKind};
         let dir = std::env::temp_dir().join(format!("host-transcripts-{}", new_id()));
         std::fs::create_dir(&dir).unwrap();
-        let path = dir.join("p.capopen");
+        let path = dir.join("p.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("events")).unwrap()).unwrap();
         let (tx, rx) = mpsc::channel();
         let mut host =
@@ -131,7 +131,7 @@ mod tests {
     fn stop_cancels_jobs_even_when_saving_fails() {
         let dir = std::env::temp_dir().join(format!("host-stop-{}", new_id()));
         std::fs::create_dir(&dir).unwrap();
-        let path = dir.join("p.capopen");
+        let path = dir.join("p.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("stop")).unwrap()).unwrap();
         let host = Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap();
         let run = host.session.begin_run("export".into()).unwrap();
@@ -163,7 +163,7 @@ mod tests {
     fn client_disconnect_and_run_stop_cancel_only_owned_jobs() {
         let dir = std::env::temp_dir().join(format!("host-jobs-{}", new_id()));
         std::fs::create_dir(&dir).unwrap();
-        let path = dir.join("p.capopen");
+        let path = dir.join("p.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("jobs")).unwrap()).unwrap();
         let host = Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap();
         let run_a = host.session.begin_run("A".into()).unwrap();

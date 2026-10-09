@@ -1,9 +1,9 @@
 ---
-name: capopen-edit
-description: Edit local videos by words through CapOpen MCP, then build safe-area captions, inspect frames and export.
+name: nuzky-edit
+description: Edit local videos by words through Nuzky MCP, then build safe-area captions, inspect frames and export.
 ---
 
-# Edit with CapOpen
+# Edit with Nuzky
 
 Use MCP for every project change. Never write project JSON or overwrite source media. Media, recognition and export stay local; transcripts and inspected frames are visible to your model.
 
@@ -20,12 +20,12 @@ Use MCP for every project change. Never write project JSON or overwrite source m
 
 ## Make it dynamic, only when asked
 
-For “rozhýbej to, občas zoom, pomalý nájezd”, or when the creator's style asks for zoom, read the story first. Keep it subtle, not on every sentence. For 1.15–1.3 punch-ins on key claims or punchlines run `analyze(kind: "emphasis")` after the cuts: it answers at once with zooms {from,to,start_us,end_us,text,score,scale} on get_transcript's word numbers and transcript_key, scored by loudness, exclamation and the opening hook, at least 5 s apart and about one per 12 s. AUDIO_NOT_READY names a job preparing the sound; poll it, then analyze again. Read each against the text: drop one that is not a claim or punchline, add a sentence it missed, keep the count low. Apply them inside a run with `apply_zooms(run_id, transcript_key, zooms: [{from,to,scale}], request_id)`: one undo step, the picture changes in the silence between words and the sound stays as it was; clips with keyframes are left alone and listed in skipped. A constant base zoom around 1.1, a slow push-in of 6–10% over one sentence when building up and a pull-out at a reveal or turn stay manual: split at sentence boundaries from get_transcript timeline times, then updateClip transform or setKeyframes. Read capopen://schema for exact edit fields. A complete transform is {"x":0,"y":0,"scale":1.2,"rotation":0,"opacity":1}. Inspect frames with safe_area=true after changes.
+For “rozhýbej to, občas zoom, pomalý nájezd”, or when the creator's style asks for zoom, read the story first. Keep it subtle, not on every sentence. For 1.15–1.3 punch-ins on key claims or punchlines run `analyze(kind: "emphasis")` after the cuts: it answers at once with zooms {from,to,start_us,end_us,text,score,scale} on get_transcript's word numbers and transcript_key, scored by loudness, exclamation and the opening hook, at least 5 s apart and about one per 12 s. AUDIO_NOT_READY names a job preparing the sound; poll it, then analyze again. Read each against the text: drop one that is not a claim or punchline, add a sentence it missed, keep the count low. Apply them inside a run with `apply_zooms(run_id, transcript_key, zooms: [{from,to,scale}], request_id)`: one undo step, the picture changes in the silence between words and the sound stays as it was; clips with keyframes are left alone and listed in skipped. A constant base zoom around 1.1, a slow push-in of 6–10% over one sentence when building up and a pull-out at a reveal or turn stay manual: split at sentence boundaries from get_transcript timeline times, then updateClip transform or setKeyframes. Read nuzky://schema for exact edit fields. A complete transform is {"x":0,"y":0,"scale":1.2,"rotation":0,"opacity":1}. Inspect frames with safe_area=true after changes.
 
 ## Runs and low-level edits
 
 All timeline times are integer microseconds; time ranges are half-open [start,end). Word-index ranges above are inclusive. apply_edits takes camelCase EditCmd fields, a fresh request_id per batch, and optional expected_revision/expected_speech_layout_key from get_state. edit_transcript instead uses get_transcript.transcript_key, which also guards against re-recognition. Retry identical content with the same request_id after a save failure; the live edit may already be applied. The main track is magnetic. One run is one Undo; end_run(discard) restores its start. Runs auto-keep after two idle minutes, so plan before opening one. A stopped run returns RUN_STOPPED; never resume it. undo_run works only for the last history entry in this session. Never change the user's selection.
 
-When a decision is the user's to make (which take to keep, tight or loose cuts, which caption style) and you run as CapOpen's AI panel, call `suggest_options(question, options: [{label, detail}])` with 2–6 short choices as the last thing in your turn and end the turn; the panel shows them as buttons and the label picked comes back as the user's next message. In a terminal, ask in plain text instead. Decide yourself whatever the guide or the creator's style already answers.
+When a decision is the user's to make (which take to keep, tight or loose cuts, which caption style) and you run as Nuzky's AI panel, call `suggest_options(question, options: [{label, detail}])` with 2–6 short choices as the last thing in your turn and end the turn; the panel shows them as buttons and the label picked comes back as the user's next message. In a terminal, ask in plain text instead. Decide yourself whatever the guide or the creator's style already answers.
 
 For speech recorded with audible room noise, hum or harsh s sounds, set `{"type":"updateClip","clipId":…,"cleanVoice":true}` on its clips with sound (high-pass, gentle denoise, de-ess; not for music); export waits for the cleaned sound.

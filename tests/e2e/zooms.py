@@ -13,7 +13,7 @@ MODEL = 'large-v3-turbo-q5_0'
 # The yellow square: 400 px wide in the 1080 px frame, centred.
 SQUARE = 'drawbox=x=340:y=760:w=400:h=400:color=0xffd400@1:t=fill'
 GRID = 'drawgrid=w=135:h=160:t=6:color=white@0.8'
-PROJECT = 'return window.__capopen.store.getState().snap.project'
+PROJECT = 'return window.__nuzky.store.getState().snap.project'
 # Said with emphasis: twice as loud as the rest of the take.
 LOUDER = ('Kamera musí stát pevně na stativu.', 'Celé to zabere deset minut.')
 
@@ -82,7 +82,7 @@ def merged(clips):
 
 def remove_pauses(r):
     """How long each pause is that Remove pauses would shorten now, asked of the app as the Transcript tab asks it."""
-    found = r.s.call('window.__capopen.api.transcriptView(500000).then((v) => JSON.stringify(v.pauses.map((p) => p.gapUs)))')
+    found = r.s.call('window.__nuzky.api.transcriptView(500000).then((v) => JSON.stringify(v.pauses.map((p) => p.gapUs)))')
     return found['value'] if found['ok'] else found
 
 
@@ -185,7 +185,7 @@ def suggest_and_apply(r, bridge):
     strongest = max(analysis['zooms'], key=lambda z: z['scale'])
     scale = strongest['scale']
     at = (strongest['start_us'] + strongest['end_us']) // 2
-    r.s.run('window.__capopen.store.getState().select([])')
+    r.s.run('window.__nuzky.store.getState().select([])')
     r.seek(at)
     time.sleep(1.5)
     r.shot('zoom-applied')

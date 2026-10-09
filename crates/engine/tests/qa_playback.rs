@@ -1,5 +1,5 @@
 mod qa_support;
-use capopen_engine::{
+use nuzky_engine::{
     Renderer, Wait,
     edit::{EditCmd, TimeRange},
 };
@@ -24,8 +24,8 @@ fn playback_through_many_cut_pieces_of_one_file() {
         return;
     }
     let d = dir("many-pieces");
-    // CAPOPEN_QA_SIZE=3840x2160 measures 4K sources.
-    let size = std::env::var("CAPOPEN_QA_SIZE").unwrap_or_else(|_| "1920x1080".into());
+    // NUZKY_QA_SIZE=3840x2160 measures 4K sources.
+    let size = std::env::var("NUZKY_QA_SIZE").unwrap_or_else(|_| "1920x1080".into());
     let path = d.join(format!("source-{size}.mp4"));
     if !path.exists() {
         ff(
@@ -132,7 +132,7 @@ fn cut_pieces_of_one_file_share_a_decoder_and_show_the_right_frames() {
                 continue;
             }
             let clip = p.tracks[0].clips.iter().find(|c| c.contains(t)).unwrap();
-            let source = capopen_engine::effects::source_time(clip, t);
+            let source = nuzky_engine::effects::source_time(clip, t);
             let index = timestamps.iter().rposition(|&ts| ts <= source).unwrap();
             let error = mae(&frame, &truth[index * 96 * 64 * 4..(index + 1) * 96 * 64 * 4]);
             assert!(error < 3.0, "t={t} source={source}: MAE {error}");

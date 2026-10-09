@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 out=tmp-test
-models=$out/xdg/data/capopen/models
+models=$out/xdg/data/nuzky/models
 mkdir -p "$out/engine-evidence" "$models"
 for tool in ffmpeg espeak-ng curl sha256sum; do
   command -v "$tool" >/dev/null || { echo "fixtures: $tool is required" >&2; exit 1; }

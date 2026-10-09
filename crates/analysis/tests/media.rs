@@ -5,11 +5,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use capopen_analysis::{
+use nuzky_analysis::{
     AudioSource, SceneParams, SilenceParams, loudness, scene_cuts, silences, silences_cancellable,
     transcribe_words_cancellable,
 };
-use capopen_engine::media::probe;
+use nuzky_engine::media::probe;
 
 fn directory(name: &str) -> Result<PathBuf> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").canonicalize()?;
@@ -135,10 +135,10 @@ fn pcm_cache_audio_api_and_cli_are_consistent() -> Result<()> {
     assert_eq!(gaps.len(), 1);
     assert!((gaps[0].start_us - 1_120_000).abs() <= 30_000);
     assert!((gaps[0].end_us - 1_880_000).abs() <= 30_000);
-    let binary = env!("CARGO_BIN_EXE_capopen-analyze");
+    let binary = env!("CARGO_BIN_EXE_nuzky-analyze");
     let result = Command::new(binary).arg(&path).arg("silences").arg("--cache").arg(&dir).output()?;
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    assert_eq!(serde_json::from_slice::<Vec<capopen_analysis::Range>>(&result.stdout)?, gaps);
+    assert_eq!(serde_json::from_slice::<Vec<nuzky_analysis::Range>>(&result.stdout)?, gaps);
     let other = dir.join("silence.wav");
     ffmpeg(&["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo:d=1", "-c:a", "pcm_f32le"], &other)?;
     let result = Command::new(binary).arg(&other).arg("loudness").arg("--cache").arg(&dir).output()?;
@@ -186,7 +186,7 @@ fn cancelled_analysis_stops_preparing_audio_and_leaves_no_partial_cache() -> Res
 fn cancelling_speech_recognition_half_way_reports_a_cancellation() -> Result<()> {
     let dir = directory("speech-cancel")?;
     let root = dir.ancestors().nth(4).context("Missing workspace root")?;
-    let models = root.join("tmp-test/xdg/data/capopen/models");
+    let models = root.join("tmp-test/xdg/data/nuzky/models");
     let path = root.join("tmp-test/speech.wav");
     let asset = probe(&path, "speech".into())?;
     let cache = dir.join("cache");

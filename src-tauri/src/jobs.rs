@@ -8,15 +8,15 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use capopen_analysis::CaptionGrouping;
-use capopen_analysis::models_dir;
-use capopen_engine::audio::{ensure_pcm, has_audio};
-use capopen_engine::edit::new_id;
-use capopen_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
-use capopen_engine::model::{Asset, ClipContent, Project, TextStyle};
-use capopen_engine::voice::{ensure_voice_pcm, voice_pcm_path};
-use capopen_mcp::transcript;
-use capopen_session::{host::Host, transcripts::TranscriptStore};
+use nuzky_analysis::CaptionGrouping;
+use nuzky_analysis::models_dir;
+use nuzky_engine::audio::{ensure_pcm, has_audio};
+use nuzky_engine::edit::new_id;
+use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
+use nuzky_engine::model::{Asset, ClipContent, Project, TextStyle};
+use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
+use nuzky_mcp::transcript;
+use nuzky_session::{host::Host, transcripts::TranscriptStore};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -119,7 +119,7 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
     let app = state.app.clone();
     // Missing media waits for relinking, and a source that failed is not retried on every edit.
     for asset in project.assets.iter().filter(|a| has_audio(a) && Path::new(&a.path).is_file()) {
-        let path = capopen_engine::audio::pcm_path(&state.cache_dir, asset);
+        let path = nuzky_engine::audio::pcm_path(&state.cache_dir, asset);
         if path.exists() || state.audio_failed.lock().unwrap().contains(&path) {
             continue;
         }
@@ -148,7 +148,7 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
             // ids); its request found this job running and was skipped, so it is made now.
             let state = app.state::<AppState>();
             if let Ok(open) = state.project()
-                && open.assets.iter().any(|a| a.id == asset.id && capopen_engine::audio::pcm_path(&cache, a) != path)
+                && open.assets.iter().any(|a| a.id == asset.id && nuzky_engine::audio::pcm_path(&cache, a) != path)
             {
                 ensure_audio(&state, &open);
             }
@@ -492,7 +492,7 @@ fn run_speech_job(
         .edit(
             vec![cmd],
             None,
-            capopen_session::Expect { revision: None, speech_layout_key: Some(view.speech_layout_key) },
+            nuzky_session::Expect { revision: None, speech_layout_key: Some(view.speech_layout_key) },
         )
         .context("Applying captions")?;
     // Not the frontend's own edit: send it the new timeline, as for an agent's edits.
@@ -532,7 +532,7 @@ fn recognise(
     Ok(())
 }
 
-use capopen_analysis::VAD_MODEL;
+use nuzky_analysis::VAD_MODEL;
 
 fn download_model(id: &str, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathBuf> {
     let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{id}.bin");
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn unconfirmed_existing_destination_fails_before_export() {
-        let dir = std::env::temp_dir().join(format!("capopen-destination-{}", new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-destination-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let out = dir.join("clip.mp4");
         check_destination(&out, false).unwrap();

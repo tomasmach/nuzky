@@ -259,7 +259,7 @@ export interface LibraryProject {
   height: number;
   collection: string | null;
   /**
-   * broken: the file cannot be read. busy: another CapOpen window or an agent has it open.
+   * broken: the file cannot be read. busy: another Nuzky window or an agent has it open.
    * missing: some of its media files are gone. empty: nothing on the timeline.
    */
   state: "broken" | "busy" | "missing" | "empty" | null;
@@ -311,7 +311,7 @@ export interface SpeechModel {
   downloaded: boolean;
 }
 
-/** Families the engine can draw: bundled ones ship with CapOpen, system ones are installed here. */
+/** Families the engine can draw: bundled ones ship with Nuzky, system ones are installed here. */
 export interface FontFamilies {
   bundled: string[];
   system: string[];
@@ -442,14 +442,14 @@ export type EditCmd =
   /** Splits main-track clips at the range edges and multiplies the scale inside; clips with keyframes stay as they are. */
   | { type: "zoomRanges"; ranges: ZoomRange[] };
 
-/** An agent CapOpen can be connected to, and the state of its `capopen` MCP entry. */
+/** An agent Nuzky can be connected to, and the state of its `nuzky` MCP entry. */
 export type AgentKind = "claudeCode" | "codex";
 export interface AgentConnection {
   agent: AgentKind;
   name: string;
   /** Its config file. */
   path: string;
-  /** connected: runs this app; other: a capopen entry that runs something else. */
+  /** connected: runs this app; other: a nuzky entry that runs something else. */
   state: "connected" | "other" | "missing" | "unreadable";
   problem: string | null;
   /** The copy made before the last change. */

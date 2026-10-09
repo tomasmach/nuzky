@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use capopen_engine::{Project, Renderer, Wait};
+use nuzky_engine::{Project, Renderer, Wait};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 

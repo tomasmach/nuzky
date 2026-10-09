@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 
 use crate::Stamp;
 use anyhow::{Context, Result, ensure};
-use capopen_engine::edit::new_id;
+use nuzky_engine::edit::new_id;
 use serde_json::{Value, json};
 
 const MAX_ACTIVE: usize = 4;
@@ -113,7 +113,7 @@ impl Jobs {
         let response = state.lock().unwrap().json();
         let owned = state.clone();
         let worker = std::thread::Builder::new()
-            .name(format!("capopen-{kind}"))
+            .name(format!("nuzky-{kind}"))
             .spawn(move || {
                 let cancel = owned.lock().unwrap().cancel.clone();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -19,16 +19,16 @@ use serde_json::Value;
 
 use bridge::Target;
 
-const GUIDE: &str = include_str!("../../../skills/capopen-edit/SKILL.md");
-const STYLE_FIRST: &str = "This creator has their own editing style, capopen://style, measured from their recordings and finished cuts. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
+const GUIDE: &str = include_str!("../../../skills/nuzky-edit/SKILL.md");
+const STYLE_FIRST: &str = "This creator has their own editing style, nuzky://style, measured from their recordings and finished cuts. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
 /// The whole way from raw takes to a reel, as the guide describes it, so one prompt starts it.
 const ROUGH_CUT: &str = "Make a rough cut of this whole project for Instagram Reels and TikTok, then export it, following the guide below.\n\n1. get_state. Transcribe whatever is untranscribed and poll job until done.\n2. get_transcript, read every sentence, then analyze(kind: \"retakes\"). Keep the last complete attempt of each restarted sentence and drop the fillers that start sentences; check every group against the text and decide each review pair yourself. Add other slips and false starts you find.\n3. Plan with edit_transcript dry_run, then in one run: edit_transcript with the deletions (long pauses shorten by default), build_captions with the Reel style, inspect_frames with safe_area around cuts and captions, end_run keep.\n4. export_video with preset \"reels\" to a new .mp4 in the user's Videos folder (an absolute path), named after the project, poll until done and report the path, the duration and anything you were unsure about.";
 
-const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at capopen://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
+const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at nuzky://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
 
 /// The creator's EDIT.md, read anew each time so edits to it apply to the next request.
 fn style() -> Option<String> {
-    std::fs::read_to_string(capopen_analysis::style::style_path()).ok().filter(|text| !text.trim().is_empty())
+    std::fs::read_to_string(nuzky_analysis::style::style_path()).ok().filter(|text| !text.trim().is_empty())
 }
 
 /// The guide with the creator's style, pointed to first so a client that shortens long
@@ -62,7 +62,7 @@ fn catalog() -> Result<Vec<Tool>> {
     Ok(vec![
         tool::<params::State>(
             "get_state",
-            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), timeline-layout speech_layout_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read capopen://guide before editing.",
+            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), timeline-layout speech_layout_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read nuzky://guide before editing.",
         )?,
         tool::<params::Begin>(
             "begin_run",
@@ -130,7 +130,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::SuggestOptions>(
             "suggest_options",
-            "Only when you run as CapOpen's AI panel (your instructions say so): offer the user 2-6 choices when a decision is theirs to make, e.g. which take to keep, cut tight or loose, which caption style. They show as buttons under your message, and the label picked arrives as the user's next message. Labels are short and distinct, at most 80 characters, in the user's language; detail is one optional line on what each choice does. Call it as the last thing in your turn, end the turn right after, and do not repeat the options in text. Anywhere else, such as a terminal, nobody sees the buttons: ask in plain text instead. Never offer choices for something you can decide from the guide or the user's style.",
+            "Only when you run as Nuzky's AI panel (your instructions say so): offer the user 2-6 choices when a decision is theirs to make, e.g. which take to keep, cut tight or loose, which caption style. They show as buttons under your message, and the label picked arrives as the user's next message. Labels are short and distinct, at most 80 characters, in the user's language; detail is one optional line on what each choice does. Call it as the last thing in your turn, end the turn right after, and do not repeat the options in text. Anywhere else, such as a terminal, nobody sees the buttons: ask in plain text instead. Never offer choices for something you can decide from the guide or the user's style.",
         )?,
     ])
 }
@@ -138,7 +138,7 @@ fn catalog() -> Result<Vec<Tool>> {
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().enable_prompts().build())
-            .with_server_info(Implementation::new("capopen", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("nuzky", env!("CARGO_PKG_VERSION")))
             .with_instructions(guide())
     }
 
@@ -173,12 +173,12 @@ impl ServerHandler for Server {
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         let mut resources = vec![
-            Resource::new("capopen://guide", "Editing guide").with_mime_type("text/markdown"),
-            Resource::new("capopen://schema", "Project JSON schema").with_mime_type("application/schema+json"),
+            Resource::new("nuzky://guide", "Editing guide").with_mime_type("text/markdown"),
+            Resource::new("nuzky://schema", "Project JSON schema").with_mime_type("application/schema+json"),
         ];
         if style().is_some() {
             resources
-                .push(Resource::new("capopen://style", "This creator's editing style").with_mime_type("text/markdown"));
+                .push(Resource::new("nuzky://style", "This creator's editing style").with_mime_type("text/markdown"));
         }
         Ok(ListResourcesResult::with_all_items(resources))
     }
@@ -189,12 +189,12 @@ impl ServerHandler for Server {
         _: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let text = match request.uri.as_str() {
-            "capopen://guide" => guide(),
-            "capopen://schema" => schema_for!(capopen_engine::Project).to_value().to_string(),
-            "capopen://style" => style().ok_or_else(|| {
-                ErrorData::invalid_params("No EDIT.md yet: capopen style learn writes one from finished cuts", None)
+            "nuzky://guide" => guide(),
+            "nuzky://schema" => schema_for!(nuzky_engine::Project).to_value().to_string(),
+            "nuzky://style" => style().ok_or_else(|| {
+                ErrorData::invalid_params("No EDIT.md yet: nuzky style learn writes one from finished cuts", None)
             })?,
-            _ => return Err(ErrorData::invalid_params("Unknown CapOpen resource", None)),
+            _ => return Err(ErrorData::invalid_params("Unknown Nuzky resource", None)),
         };
         Ok(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri)]).into())
     }

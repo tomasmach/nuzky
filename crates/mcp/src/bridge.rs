@@ -41,7 +41,7 @@ impl Target {
 
 /// Why `--current` found nothing to attach to.
 const NOT_OPEN: &str =
-    "APP_NOT_RUNNING: no project is open in CapOpen. Open the project in CapOpen, then restart the agent's MCP server";
+    "APP_NOT_RUNNING: no project is open in Nuzky. Open the project in Nuzky, then restart the agent's MCP server";
 
 /// `require_app`: attach to the open app or fail; never edit the project headless.
 pub fn run(project: &Path, allow_write: bool, cache: PathBuf, require_app: bool) -> Result<()> {

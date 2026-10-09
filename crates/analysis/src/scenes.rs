@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::{
+use nuzky_engine::{
     media::VideoDecoder,
     model::{Asset, AssetKind},
 };
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn cancelled_scene_analysis_stops_at_the_next_frame() {
-        let dir = std::env::temp_dir().join(format!("capopen-scenes-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-scenes-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("long.mp4");
         let status = std::process::Command::new("ffmpeg")
@@ -99,7 +99,7 @@ mod tests {
             .status()
             .expect("ffmpeg is required for scene tests");
         assert!(status.success());
-        let asset = capopen_engine::media::probe(&path, "long".into()).unwrap();
+        let asset = nuzky_engine::media::probe(&path, "long".into()).unwrap();
         let checks = AtomicUsize::new(0);
         let error =
             scene_cuts_cancellable(&asset, SceneParams::default(), || checks.fetch_add(1, Ordering::Relaxed) >= 3)

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::{model::Asset, speech::Word};
+use nuzky_engine::{model::Asset, speech::Word};
 use serde::{Deserialize, Serialize};
 
 const SAMPLE_BYTES: u64 = 1024 * 1024;
@@ -51,7 +51,7 @@ pub struct TranscriptStore {
 impl TranscriptStore {
     pub fn open() -> Result<Self> {
         let data = dirs::data_dir().context("STORE_UNAVAILABLE: no data directory")?;
-        Self::at(data.join("capopen/transcripts"))
+        Self::at(data.join("nuzky/transcripts"))
     }
 
     pub fn at(directory: PathBuf) -> Result<Self> {
@@ -151,7 +151,7 @@ fn hash_chunk(file: &mut File, offset: u64, buffer: &mut [u8], hash: &mut u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::{edit::new_id, model::AssetKind};
+    use nuzky_engine::{edit::new_id, model::AssetKind};
 
     #[test]
     fn fingerprint_survives_copy_move_and_invalidates_changed_content() {

@@ -2,9 +2,9 @@
 //! The panel shows them under the run, so the user sees exactly what happened without
 //! trusting the agent's own account.
 
-use capopen_engine::Project;
-use capopen_engine::edit::MAIN_TRACK;
-use capopen_engine::model::{Clip, ClipContent, TrackKind};
+use nuzky_engine::Project;
+use nuzky_engine::edit::MAIN_TRACK;
+use nuzky_engine::model::{Clip, ClipContent, TrackKind};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -422,7 +422,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::edit::{EditCmd, Editor};
+    use nuzky_engine::edit::{EditCmd, Editor};
     use serde_json::json;
 
     fn editor() -> Editor {

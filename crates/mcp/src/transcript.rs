@@ -5,21 +5,21 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, ensure};
-use capopen_analysis::{AudioSource, CaptionGrouping, group_words};
-use capopen_engine::{
+use nuzky_analysis::{AudioSource, CaptionGrouping, group_words};
+use nuzky_engine::{
     Project,
     edit::{EditCmd, TimeRange, merge_ranges},
     model::{Asset, ClipContent, MAX_CORRECTION_CHARS, TextStyle, WordCorrection},
     speech::{TimelineWord, Word, is_heard, map_words},
 };
-use capopen_session::{
+use nuzky_session::{
     jobs::check_cancel,
     transcripts::{Record, Segment, TranscriptStore, VERSION},
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use capopen_analysis::VAD_MODEL;
+use nuzky_analysis::VAD_MODEL;
 pub const BEFORE_WORD_US: i64 = 80_000;
 pub const AFTER_WORD_US: i64 = 120_000;
 const SENTENCE_GAP_US: i64 = 600_000;
@@ -35,7 +35,7 @@ pub fn models(model: &str) -> Result<(PathBuf, PathBuf)> {
             !model.contains(['/', '\\']) && !model.contains(".."),
             "MODEL_MISSING: use an installed name or absolute path"
         );
-        capopen_analysis::models_dir().join(format!("ggml-{model}.bin"))
+        nuzky_analysis::models_dir().join(format!("ggml-{model}.bin"))
     };
     ensure!(
         path.is_file(),
@@ -48,7 +48,7 @@ pub fn models(model: &str) -> Result<(PathBuf, PathBuf)> {
 }
 
 pub fn best_model() -> &'static str {
-    if capopen_analysis::models_dir().join("ggml-large-v3-turbo-q5_0.bin").is_file() {
+    if nuzky_analysis::models_dir().join("ggml-large-v3-turbo-q5_0.bin").is_file() {
         "large-v3-turbo-q5_0"
     } else {
         "small"
@@ -68,9 +68,9 @@ pub fn recognise(
     cancel: &AtomicBool,
     waiting: impl FnMut(bool),
 ) -> Result<Record> {
-    let _slot = recognition_slot(&capopen_analysis::models_dir().join(".recognition.lock"), cancel, waiting)?;
+    let _slot = recognition_slot(&nuzky_analysis::models_dir().join(".recognition.lock"), cancel, waiting)?;
     let fingerprint = store.fingerprint(asset)?;
-    let mut result = capopen_analysis::transcribe_words_cancellable(
+    let mut result = nuzky_analysis::transcribe_words_cancellable(
         AudioSource::Asset { asset, cache },
         model_path,
         vad,
@@ -79,7 +79,7 @@ pub fn recognise(
     )?;
     check_cancel(cancel)?;
     // Cuts are planned from these times, so they follow the sound, not Whisper's estimates.
-    capopen_analysis::align_to_sound(&mut result.words, asset, cache, || cancel.load(Ordering::Relaxed))?;
+    nuzky_analysis::align_to_sound(&mut result.words, asset, cache, || cancel.load(Ordering::Relaxed))?;
     let record = Record {
         version: VERSION,
         fingerprint,
@@ -207,7 +207,7 @@ pub fn word_key(project: &Project, words: &[TimelineWord]) -> String {
     for word in words {
         (&word.asset_id, word.source_start_us, word.start_us, word.end_us, &word.text).hash(&mut hash);
     }
-    format!("{}:{:016x}", capopen_engine::speech::speech_layout_key(project), hash.finish())
+    format!("{}:{:016x}", nuzky_engine::speech::speech_layout_key(project), hash.finish())
 }
 
 pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
@@ -673,7 +673,7 @@ pub fn caption_corrections(project: &Project, derived: &Derived, changes: &[(usi
                 .count();
             // A karaoke caption knows when each of its words is said, which also holds after its
             // start was trimmed off; other captions count the word's earlier repeats inside them.
-            let spoken = capopen_engine::model::spoken_word(shown, timed, at - clip.start_us)
+            let spoken = nuzky_engine::model::spoken_word(shown, timed, at - clip.start_us)
                 .and_then(|range| matching.iter().find(|&&(start, _)| start == range.start));
             let Some(&(start, end)) = spoken.or(matching.get(before)).or(matching.last()) else { continue };
             let entry = match planned.iter().position(|(id, ..)| *id == clip.id) {
@@ -755,7 +755,7 @@ pub fn plan_cut(project: &Project, derived: &Derived, ranges: Vec<TimeRange>) ->
     let edit = EditCmd::RippleDeleteRanges { ranges: ranges.clone(), keep_track_ids: None };
     let mut preview = project.clone();
     preview.apply(edit.clone()).context("EDIT_REJECTED: preview failed")?;
-    capopen_session::validate(&preview)?;
+    nuzky_session::validate(&preview)?;
     let words = map_words(&preview, &derived.sources);
     let identities = |words: &[TimelineWord]| {
         let mut ids: Vec<_> = words.iter().map(|w| (w.asset_id.clone(), w.source_start_us, w.text.clone())).collect();
@@ -818,7 +818,7 @@ pub fn caption_edit(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use capopen_engine::model::{Asset, AssetKind, TrackKind};
+    use nuzky_engine::model::{Asset, AssetKind, TrackKind};
 
     pub fn fixture() -> (Project, HashMap<String, Vec<Word>>) {
         let mut project = Project::new("speech test");
@@ -909,7 +909,7 @@ pub(crate) mod tests {
             .unwrap();
         let mut overlay = project.tracks[0].clips[1].clone();
         (overlay.id, overlay.start_us) = ("overlay".into(), 14_000_000);
-        project.tracks.push(capopen_engine::model::Track {
+        project.tracks.push(nuzky_engine::model::Track {
             id: "over".into(),
             kind: TrackKind::Video,
             name: "Overlay".into(),
@@ -1013,12 +1013,12 @@ pub(crate) mod tests {
         let word =
             |start_us, text: &str| Word { start_us, end_us: start_us + 400_000, text: text.into(), probability: 1.0 };
         sources.insert("talk".into(), vec![word(500_000, "To"), word(1_500_000, "je"), word(2_500_000, "to.")]);
-        let timed = |text: &str, start_us| capopen_engine::model::CaptionWord {
+        let timed = |text: &str, start_us| nuzky_engine::model::CaptionWord {
             text: text.into(),
             start_us,
             end_us: start_us + 400_000,
         };
-        let segment = capopen_engine::edit::CaptionSegment {
+        let segment = nuzky_engine::edit::CaptionSegment {
             start_us: 400_000,
             end_us: 3_000_000,
             text: "To je to.".into(),
@@ -1129,7 +1129,7 @@ pub(crate) mod tests {
         let id = project.tracks[0].clips[1].id.clone();
         project.apply(serde_json::from_value(json!({"type":"updateClip","clipId":id,"speed":1.5})).unwrap()).unwrap();
         let words = map_words(&project, &sources);
-        let style = capopen_engine::edit::caption_preset("karaoke").unwrap().style.clone();
+        let style = nuzky_engine::edit::caption_preset("karaoke").unwrap().style.clone();
         let grouping = CaptionGrouping { max_words: 3, max_chars: 30, break_gap_us: 1_000_000 };
         let (edit, _) = caption_edit(&words, &project, style, grouping).unwrap();
         project.apply(edit).unwrap();
@@ -1140,7 +1140,7 @@ pub(crate) mod tests {
             let middle = (word.start_us + word.end_us) / 2;
             let clip = captions.iter().find(|c| c.contains(middle)).unwrap();
             let ClipContent::Text { text, words: spoken, .. } = &clip.content else { panic!() };
-            let range = capopen_engine::model::spoken_word(text, spoken, middle - clip.start_us).unwrap();
+            let range = nuzky_engine::model::spoken_word(text, spoken, middle - clip.start_us).unwrap();
             assert_eq!(&text[range], word.text.trim(), "at {middle}");
         }
     }
@@ -1273,7 +1273,7 @@ pub(crate) mod tests {
     fn one_recognition_at_a_time_and_waiting_stays_cancellable() {
         use std::sync::{Arc, mpsc};
         use std::time::Duration;
-        let dir = std::env::temp_dir().join(format!("recognition-slot-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("recognition-slot-{}", nuzky_engine::edit::new_id()));
         let lock = dir.join(".recognition.lock");
         let first = recognition_slot(&lock, &AtomicBool::new(false), |_| panic!("the slot was free")).unwrap();
         assert!(first.is_some());
@@ -1346,7 +1346,7 @@ pub(crate) mod tests {
     fn add_captions(project: &mut Project, segments: &[(i64, i64, &str)]) {
         let segments = segments
             .iter()
-            .map(|&(start_us, end_us, text)| capopen_engine::edit::CaptionSegment {
+            .map(|&(start_us, end_us, text)| nuzky_engine::edit::CaptionSegment {
                 start_us,
                 end_us,
                 text: text.into(),
@@ -1422,7 +1422,7 @@ pub(crate) mod tests {
         assert_eq!(caption_texts(&project), ["word0 word1 word2.", "Fixed! word4 five."]);
         let after = &project.tracks.last().unwrap().clips[1];
         assert_eq!((after.start_us, after.duration_us), (before[1].start_us, before[1].duration_us));
-        let look = |c: &capopen_engine::model::Clip| match &c.content {
+        let look = |c: &nuzky_engine::model::Clip| match &c.content {
             ClipContent::Text { style, transform, .. } => (style.clone(), *transform),
             ClipContent::Media { .. } => unreachable!(),
         };

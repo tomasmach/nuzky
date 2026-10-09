@@ -2,9 +2,9 @@
 //! them, so every edit keeps them right; cuts are planned exactly as for agents.
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::{edit::TimeRange, model::MAX_CORRECTION_CHARS};
-use capopen_mcp::transcript::{self, Pause};
-use capopen_session::{Expect, host::Host};
+use nuzky_engine::{edit::TimeRange, model::MAX_CORRECTION_CHARS};
+use nuzky_mcp::transcript::{self, Pause};
+use nuzky_session::{Expect, host::Host};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
@@ -221,13 +221,13 @@ async fn apply_cut(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::{
+    use nuzky_engine::{
         Project,
         edit::{EditCmd, new_id},
         model::{Asset, AssetKind},
         speech,
     };
-    use capopen_session::{
+    use nuzky_session::{
         Mode, ProjectSession,
         transcripts::{Record, TranscriptStore, VERSION},
     };
@@ -261,7 +261,7 @@ mod tests {
             .unwrap();
         project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "music".into(), start_us: Some(0), track_id: None }).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
         let store = TranscriptStore::at(dir.join("transcripts")).unwrap();
         let talk = &project.assets[0];
@@ -361,18 +361,18 @@ mod tests {
     #[test]
     fn a_corrected_word_shows_in_the_view_and_its_caption_and_one_undo_takes_both_back() {
         let (dir, host) = fixture();
-        let segments = vec![capopen_engine::edit::CaptionSegment {
+        let segments = vec![nuzky_engine::edit::CaptionSegment {
             start_us: 2_000_000,
             end_us: 4_000_000,
             text: "w2 w3".into(),
             words: vec![],
         }];
-        let style = capopen_engine::edit::caption_presets()[0].style.clone();
+        let style = nuzky_engine::edit::caption_presets()[0].style.clone();
         host.session.edit(vec![EditCmd::AddCaptions { segments, style }], None, Expect::default()).unwrap();
         let caption = |host: &Host| {
             let project = host.session.state().unwrap().project;
             match &project.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].content {
-                capopen_engine::model::ClipContent::Text { text, .. } => text.clone(),
+                nuzky_engine::model::ClipContent::Text { text, .. } => text.clone(),
                 _ => unreachable!(),
             }
         };

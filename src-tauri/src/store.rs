@@ -5,13 +5,13 @@ use std::sync::mpsc::Sender;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use capopen_engine::Project;
-use capopen_session::{Mode, ProjectSession, SessionEvent};
+use nuzky_engine::Project;
+use nuzky_session::{Mode, ProjectSession, SessionEvent};
 use serde::Serialize;
 
-pub const EXTENSION: &str = "capopen";
+pub const EXTENSION: &str = "nuzky";
 
-/// The file next to `path` named like it with `suffix` added, such as `project.capopen.lock`.
+/// The file next to `path` named like it with `suffix` added, such as `project.nuzky.lock`.
 pub fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(suffix);
@@ -19,7 +19,7 @@ pub fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("nuzky")
 }
 
 pub fn projects_dir() -> PathBuf {
@@ -27,7 +27,7 @@ pub fn projects_dir() -> PathBuf {
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
+    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("nuzky")
 }
 
 #[derive(Serialize, Clone)]
@@ -41,12 +41,12 @@ pub struct ProjectSummary {
 
 pub fn load(path: &Path) -> Result<Project> {
     let json = std::fs::read_to_string(path).with_context(|| format!("Cannot read {}", path.display()))?;
-    serde_json::from_str(&json).with_context(|| format!("{} is not a CapOpen project", path.display()))
+    serde_json::from_str(&json).with_context(|| format!("{} is not a Nuzky project", path.display()))
 }
 
 /// The error of `open` for a project another window or an agent holds.
 pub const BUSY: &str =
-    "This project is open in another CapOpen window or an AI agent is editing it. Close it there first.";
+    "This project is open in another Nuzky window or an AI agent is editing it. Close it there first.";
 
 pub fn open(path: &Path, events: Option<Sender<SessionEvent>>) -> Result<ProjectSession> {
     ProjectSession::open(path, Mode::Write, events)
@@ -57,7 +57,7 @@ pub fn create(path: &Path, project: &Project) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let _lock = capopen_session::lock_project(path, true)?;
+    let _lock = nuzky_session::lock_project(path, true)?;
     save(path, project)
 }
 
@@ -66,11 +66,11 @@ pub fn save(path: &Path, project: &Project) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    capopen_session::write_json_atomic(path, project)
+    nuzky_session::write_json_atomic(path, project)
 }
 
 pub fn new_project_path() -> PathBuf {
-    projects_dir().join(format!("{}.{EXTENSION}", capopen_engine::edit::new_id()))
+    projects_dir().join(format!("{}.{EXTENSION}", nuzky_engine::edit::new_id()))
 }
 
 pub fn list() -> Vec<ProjectSummary> {
@@ -112,8 +112,8 @@ mod tests {
     #[test]
     fn desktop_session_owns_lock_and_reports_busy_projects() {
         let _children = crate::CHILD_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = std::env::temp_dir().join(format!("capopen-store-{}", capopen_engine::edit::new_id()));
-        let path = dir.join("project.capopen");
+        let dir = std::env::temp_dir().join(format!("nuzky-store-{}", nuzky_engine::edit::new_id()));
+        let path = dir.join("project.nuzky");
         let project = Project::new("Lock test");
         create(&path, &project).unwrap();
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -126,7 +126,7 @@ mod tests {
         let agent = ProjectSession::open(&path, Mode::Write, None).unwrap();
         assert_eq!(
             open(&path, Some(tx)).err().unwrap().to_string(),
-            "This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
+            "This project is open in another Nuzky window or an AI agent is editing it. Close it there first."
         );
         drop(agent);
         std::fs::remove_dir_all(dir).unwrap();

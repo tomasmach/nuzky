@@ -5,7 +5,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use capopen_engine::{Project, edit::new_id};
+use nuzky_engine::{Project, edit::new_id};
 use serde_json::{Value, json};
 
 struct Client {
@@ -28,18 +28,18 @@ impl Client {
         Self::start(false, None, Some(style))
     }
     fn start(write: bool, checkpoint: Option<Project>, style: Option<Option<&str>>) -> Self {
-        let dir = std::env::temp_dir().join(format!("capopen-mcp-{}", new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-mcp-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("Original")).unwrap()).unwrap();
         if let Some(project) = checkpoint {
             std::fs::write(
-                dir.join("project.capopen.checkpoint.json"),
+                dir.join("project.nuzky.checkpoint.json"),
                 serde_json::to_vec(&json!({"project": project})).unwrap(),
             )
             .unwrap();
         }
-        let binary = env!("CARGO_BIN_EXE_capopen");
+        let binary = env!("CARGO_BIN_EXE_nuzky");
         let mut command = Command::new(binary);
         command.arg("mcp").arg("--project").arg(path).arg("--cache").arg(dir.join("cache"));
         if write {
@@ -47,9 +47,9 @@ impl Client {
         }
         if let Some(style) = style {
             let data = dir.join("data");
-            std::fs::create_dir_all(data.join("capopen")).unwrap();
+            std::fs::create_dir_all(data.join("nuzky")).unwrap();
             if let Some(text) = style {
-                std::fs::write(data.join("capopen/EDIT.md"), text).unwrap();
+                std::fs::write(data.join("nuzky/EDIT.md"), text).unwrap();
             }
             command.env("XDG_DATA_HOME", data);
         }
@@ -58,7 +58,7 @@ impl Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .expect("Build capopen-cli first");
+            .expect("Build nuzky-cli first");
         let input = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         let (tx, output) = mpsc::channel();
@@ -73,7 +73,7 @@ impl Client {
         });
         let mut client = Self { init: Value::Null, child, input, output, dir, seq: 0 };
         let init = client.rpc("initialize", json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}}));
-        assert_eq!(init["result"]["serverInfo"]["name"], "capopen");
+        assert_eq!(init["result"]["serverInfo"]["name"], "nuzky");
         client.init = init;
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
         client
@@ -163,7 +163,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     c.call("undo_run", json!({"run_id":run["run_id"]}));
     assert_eq!(c.call("get_state", json!({}))["name"], before["name"]);
     c.finish();
-    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
     assert_eq!(disk["name"], "Original");
 }
 
@@ -176,7 +176,7 @@ fn readonly_resources_prompts_and_clear_errors() {
     assert!(error["result"]["content"][0]["text"].as_str().unwrap().contains("READ_ONLY"));
     let resources = c.rpc("resources/list", json!({}));
     assert_eq!(resources["result"]["resources"].as_array().unwrap().len(), 2);
-    let guide = c.rpc("resources/read", json!({"uri":"capopen://guide"}));
+    let guide = c.rpc("resources/read", json!({"uri":"nuzky://guide"}));
     assert!(guide["result"]["contents"][0]["text"].as_str().unwrap().contains("rippleDeleteRanges"));
     let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
     assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
@@ -214,35 +214,35 @@ fn readonly_resources_prompts_and_clear_errors() {
     c.finish();
 }
 
-// Only on Linux does XDG_DATA_HOME choose where CapOpen looks for EDIT.md.
+// Only on Linux does XDG_DATA_HOME choose where Nuzky looks for EDIT.md.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_creator_style_reaches_the_agent_and_without_one_nothing_changes() {
-    let guide = include_str!("../../../skills/capopen-edit/SKILL.md");
+    let guide = include_str!("../../../skills/nuzky-edit/SKILL.md");
     let mut plain = Client::with_style(None);
     assert_eq!(plain.init["result"]["instructions"], guide);
     assert_eq!(plain.rpc("resources/list", json!({}))["result"]["resources"].as_array().unwrap().len(), 2);
-    assert_eq!(plain.rpc("resources/read", json!({"uri":"capopen://guide"}))["result"]["contents"][0]["text"], guide);
+    assert_eq!(plain.rpc("resources/read", json!({"uri":"nuzky://guide"}))["result"]["contents"][0]["text"], guide);
     assert!(
-        plain.rpc("resources/read", json!({"uri":"capopen://style"}))["error"]["message"]
+        plain.rpc("resources/read", json!({"uri":"nuzky://style"}))["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("capopen style learn")
+            .contains("nuzky style learn")
     );
     plain.finish();
 
     let style = "# Editing style\n\nKeep pauses under 120 ms.\n";
     let mut styled = Client::with_style(Some(style));
     let instructions = styled.init["result"]["instructions"].as_str().unwrap().to_owned();
-    assert!(instructions.starts_with("This creator has their own editing style, capopen://style"), "{instructions}");
+    assert!(instructions.starts_with("This creator has their own editing style, nuzky://style"), "{instructions}");
     assert!(instructions.contains(guide) && instructions.ends_with(style));
     let resources = styled.rpc("resources/list", json!({}));
     let uris: Vec<&str> =
         resources["result"]["resources"].as_array().unwrap().iter().map(|r| r["uri"].as_str().unwrap()).collect();
-    assert_eq!(uris, ["capopen://guide", "capopen://schema", "capopen://style"]);
-    assert_eq!(styled.rpc("resources/read", json!({"uri":"capopen://style"}))["result"]["contents"][0]["text"], style);
+    assert_eq!(uris, ["nuzky://guide", "nuzky://schema", "nuzky://style"]);
+    assert_eq!(styled.rpc("resources/read", json!({"uri":"nuzky://style"}))["result"]["contents"][0]["text"], style);
     assert!(
-        styled.rpc("resources/read", json!({"uri":"capopen://guide"}))["result"]["contents"][0]["text"]
+        styled.rpc("resources/read", json!({"uri":"nuzky://guide"}))["result"]["contents"][0]["text"]
             .as_str()
             .unwrap()
             .ends_with(style)
@@ -261,8 +261,8 @@ fn disconnect_keeps_and_removes_checkpoint() {
         json!({"run_id":run["run_id"],"request_id":"rename","edits":[{"type":"renameProject","name":"Kept"}]}),
     );
     c.finish();
-    assert!(!c.dir.join("project.capopen.checkpoint.json").exists());
-    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    assert!(!c.dir.join("project.nuzky.checkpoint.json").exists());
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
     assert_eq!(disk["name"], "Kept");
 }
 
@@ -276,7 +276,7 @@ fn recovery_tool_resolves_both_choices_over_stdio() {
         let state = c.call("get_state", json!({}));
         assert_eq!(state["name"], name);
         assert!(state["recovery_checkpoint"].is_null());
-        assert!(!c.dir.join("project.capopen.checkpoint.json").exists());
+        assert!(!c.dir.join("project.nuzky.checkpoint.json").exists());
         c.call("begin_run", json!({"label": "after recovery"}));
         c.finish();
     }
@@ -303,12 +303,12 @@ fn retakes_answer_at_once_even_for_read_only_clients() {
     writer.finish();
 }
 
-// Only on Linux does XDG_DATA_HOME choose where CapOpen keeps transcripts.
+// Only on Linux does XDG_DATA_HOME choose where Nuzky keeps transcripts.
 #[cfg(target_os = "linux")]
 #[test]
 fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
-    use capopen_engine::{model::Asset, model::AssetKind, speech::Word};
-    use capopen_session::transcripts::{Record, TranscriptStore, VERSION};
+    use nuzky_engine::{model::Asset, model::AssetKind, speech::Word};
+    use nuzky_session::transcripts::{Record, TranscriptStore, VERSION};
     let mut c = Client::start(true, None, Some(None));
     // Words come from the store, so the file is never decoded and any bytes do.
     let path = c.dir.join("take.mov");
@@ -337,7 +337,7 @@ fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
             probability: 0.9,
         })
         .collect();
-    let store = TranscriptStore::at(c.dir.join("data/capopen/transcripts")).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/nuzky/transcripts")).unwrap();
     let record = Record {
         version: VERSION,
         fingerprint: store.fingerprint(&asset).unwrap(),
@@ -387,7 +387,7 @@ fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
     assert_eq!(captions(&mut c), shown);
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     c.finish();
-    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.capopen")).unwrap()).unwrap();
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
     assert_eq!(
         disk["wordCorrections"],
         json!([{"assetId":"take","sourceStartUs":1_000_000,"original":"vejte","text":"dejte"}])
@@ -399,7 +399,7 @@ fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
 #[cfg(target_os = "linux")]
 #[test]
 fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
-    use capopen_session::transcripts::{Record, TranscriptStore, VERSION};
+    use nuzky_session::transcripts::{Record, TranscriptStore, VERSION};
     let mut c = Client::start(true, None, Some(None));
     let mut samples = vec![0i16; 12 * 48_000];
     let mut words = Vec::new();
@@ -445,9 +445,9 @@ fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
     );
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     assert!(c.error("analyze", json!({"kind":"emphasis"})).contains("TRANSCRIPT_MISSING"));
-    let asset: capopen_engine::model::Asset =
+    let asset: nuzky_engine::model::Asset =
         serde_json::from_value(c.call("get_state", json!({}))["assets"][0].clone()).unwrap();
-    let store = TranscriptStore::at(c.dir.join("data/capopen/transcripts")).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/nuzky/transcripts")).unwrap();
     let record = Record {
         version: VERSION,
         fingerprint: store.fingerprint(&asset).unwrap(),
@@ -573,10 +573,10 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
 }
 
 #[test]
-#[ignore = "Requires tmp-test/reel-1..3.mp4 from scripts/fixtures.sh and large-v3-turbo-q5_0 + Silero in tmp-test/xdg/data/capopen/models"]
+#[ignore = "Requires tmp-test/reel-1..3.mp4 from scripts/fixtures.sh and large-v3-turbo-q5_0 + Silero in tmp-test/xdg/data/nuzky/models"]
 fn retakes_of_three_czech_takes_over_stdio() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
-    let model = root.join("tmp-test/xdg/data/capopen/models/ggml-large-v3-turbo-q5_0.bin");
+    let model = root.join("tmp-test/xdg/data/nuzky/models/ggml-large-v3-turbo-q5_0.bin");
     let takes: Vec<PathBuf> = (1..=3).map(|n| root.join(format!("tmp-test/reel-{n}.mp4"))).collect();
     // Its own data directory, so no transcript stored by an earlier run is found.
     let mut c = Client::start(true, None, Some(None));

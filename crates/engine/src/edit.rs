@@ -2567,7 +2567,7 @@ mod tests {
     fn zoom_keeps_the_sound_sample_for_sample() {
         use crate::audio::{Mixer, pcm_path};
         use crate::model::CHANNELS;
-        let cache = std::env::temp_dir().join(format!("capopen-zoom-sound-{}", new_id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-zoom-sound-{}", new_id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let mut p = project();
         for id in ["a", "b"] {

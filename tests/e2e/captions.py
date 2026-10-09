@@ -7,7 +7,7 @@ from e2e.harness import FIXTURES, changed_share, flow, link_models, preview_crop
 def captions(r):
     r.import_media(FIXTURES / 'talk.mp4')
     r.add_clip('talk.mp4')
-    r.s.run("window.__capopen.speech.setState({model: 'small', language: 'en'})")
+    r.s.run("window.__nuzky.speech.setState({model: 'small', language: 'en'})")
     r.s.run("[...document.querySelectorAll('[role=tab]')].find((t) => t.textContent.trim() === 'Captions').click()")
     time.sleep(0.5)
     r.s.run("[...document.querySelectorAll('button')].find((b) => b.textContent.includes('Generate captions')).click()")
@@ -26,7 +26,7 @@ def captions(r):
     time.sleep(1.5)
     r.shot('captions-seek')
     before = preview_crop(r.work / 'captions-seek.png', preview_rect(r))
-    hide = "window.__capopen.store.getState().edit({type: 'updateTrack', trackId: arguments[0], hidden: arguments[1]})"
+    hide = "window.__nuzky.store.getState().edit({type: 'updateTrack', trackId: arguments[0], hidden: arguments[1]})"
     r.s.call(hide, track['id'], True)
     hidden, redrawn_hidden = preview_redraw(r, 'captions-hidden', before)
     r.s.call(hide, track['id'], False)

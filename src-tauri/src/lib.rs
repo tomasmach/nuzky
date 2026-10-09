@@ -18,10 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use capopen_engine::Project;
-use capopen_engine::edit::{EditCmd, new_id};
-use capopen_engine::media::probe;
-use capopen_session::{Expect, Origin, RecoveryAction, SessionEvent, host::Host};
+use nuzky_engine::Project;
+use nuzky_engine::edit::{EditCmd, new_id};
+use nuzky_engine::media::probe;
+use nuzky_session::{Expect, Origin, RecoveryAction, SessionEvent, host::Host};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -45,7 +45,7 @@ pub struct AppState {
     thumbs: Mutex<HashMap<String, String>>,
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
     preview_locks: Mutex<HashMap<String, PreviewLock>>,
-    bounds_text: Mutex<Option<capopen_engine::text::TextRenderer>>,
+    bounds_text: Mutex<Option<nuzky_engine::text::TextRenderer>>,
     fonts: OnceLock<FontFamilies>,
     /// Why the most recent project was not opened at startup.
     startup_notice: Option<String>,
@@ -85,14 +85,14 @@ fn snapshot_project<S: serde::Serializer>(project: &Project, serializer: S) -> R
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Boot {
-    limits: capopen_engine::edit::Limits,
+    limits: nuzky_engine::edit::Limits,
     snapshot: Snapshot,
     preview_url: String,
     transport: Transport,
     engine_error: Option<String>,
     startup_notice: Option<String>,
     version: String,
-    /// False when `CAPOPEN_NO_UPDATE_CHECK=1`: CapOpen then never asks whether a newer version exists.
+    /// False when `NUZKY_NO_UPDATE_CHECK=1`: Nuzky then never asks whether a newer version exists.
     update_checks: bool,
 }
 
@@ -120,7 +120,7 @@ fn err(e: impl std::fmt::Display) -> String {
 struct OpenSession {
     host: Arc<Host>,
     #[cfg(unix)]
-    listener: Option<capopen_mcp::ipc::Listener>,
+    listener: Option<nuzky_mcp::ipc::Listener>,
     bridge_error: Option<String>,
     path: PathBuf,
     stopped: Arc<AtomicBool>,
@@ -152,7 +152,7 @@ impl OpenSession {
             hosts.retain(|(_, host)| host.strong_count() > 0);
             anyhow::ensure!(
                 !hosts.iter().any(|(open, _)| open == &canonical),
-                "CapOpen is still finishing background work on this project. Try again in a few seconds."
+                "Nuzky is still finishing background work on this project. Try again in a few seconds."
             );
         }
         let (tx, rx) = mpsc::channel();
@@ -173,7 +173,7 @@ impl OpenSession {
     /// The project stays open for editing when the live agent bridge cannot start.
     fn start_bridge(&mut self) {
         #[cfg(unix)]
-        match capopen_mcp::ipc::Listener::start(self.host.clone()) {
+        match nuzky_mcp::ipc::Listener::start(self.host.clone()) {
             Ok(listener) => {
                 self.listener = Some(listener);
                 self.bridge_error = None;
@@ -306,7 +306,7 @@ impl AppState {
         &self,
         asset_id: &str,
         cache: &Mutex<HashMap<String, T>>,
-        decode: impl FnOnce(&capopen_engine::model::Asset) -> anyhow::Result<Option<T>>,
+        decode: impl FnOnce(&nuzky_engine::model::Asset) -> anyhow::Result<Option<T>>,
     ) -> CmdResult<Option<T>> {
         let (asset, lock) = {
             let current = self.session.lock().unwrap();
@@ -371,7 +371,7 @@ impl AppState {
 #[tauri::command]
 fn boot(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boot> {
     Ok(Boot {
-        limits: capopen_engine::edit::LIMITS,
+        limits: nuzky_engine::edit::LIMITS,
         snapshot: state.session.lock().unwrap().snapshot(Vec::new())?,
         preview_url: state.preview_url.clone(),
         transport: *state.engine.transport.lock().unwrap(),
@@ -447,8 +447,7 @@ fn stop_run(
     // The AI panel's agent stops too, so it does not go on editing; before the session lock, never inside it.
     panel.stop();
     let current = lock_session(&state.session, expected_epoch.as_deref())?;
-    let action =
-        if discard == Some(true) { capopen_session::EndAction::Discard } else { capopen_session::EndAction::Keep };
+    let action = if discard == Some(true) { nuzky_session::EndAction::Discard } else { nuzky_session::EndAction::Keep };
     current.host.end_open_run(action).map_err(err)?;
     current.snapshot(Vec::new())
 }
@@ -466,13 +465,13 @@ fn resolve_recovery(state: State<'_, AppState>, action: String, expected_epoch: 
 }
 
 /// The media files that open, in the given order, and why the others do not.
-async fn probe_media(paths: Vec<String>) -> CmdResult<(Vec<capopen_engine::model::Asset>, Vec<ImportFailure>)> {
+async fn probe_media(paths: Vec<String>) -> CmdResult<(Vec<nuzky_engine::model::Asset>, Vec<ImportFailure>)> {
     let probed = tauri::async_runtime::spawn_blocking(move || {
         paths
             .into_iter()
             .map(|p| {
                 // FFmpeg would open URLs and protocol prefixes; only local files are media.
-                let local = capopen_session::local_media_path(&p).and_then(|()| {
+                let local = nuzky_session::local_media_path(&p).and_then(|()| {
                     anyhow::ensure!(Path::new(&p).is_file(), "{p} is not a file");
                     Ok(())
                 });
@@ -529,10 +528,10 @@ async fn waveform(app: AppHandle, asset_id: String) -> CmdResult<Option<Vec<u8>>
     let state = app.state::<AppState>();
     let asset = state.project()?.asset(&asset_id).cloned();
     let Some(asset) = asset else { return Ok(None) };
-    let path = capopen_engine::audio::pcm_path(&state.cache_dir, &asset);
+    let path = nuzky_engine::audio::pcm_path(&state.cache_dir, &asset);
     tauri::async_runtime::spawn_blocking(move || {
-        let pcm = capopen_engine::audio::Pcm::open(&path).ok()?;
-        Some(capopen_engine::audio::peaks(&pcm, 50))
+        let pcm = nuzky_engine::audio::Pcm::open(&path).ok()?;
+        Some(nuzky_engine::audio::peaks(&pcm, 50))
     })
     .await
     .map_err(err)
@@ -563,7 +562,7 @@ fn list_projects() -> Vec<ProjectSummary> {
     store::list()
 }
 
-/// Claude Code's and Codex's link to CapOpen, read from their own configs.
+/// Claude Code's and Codex's link to Nuzky, read from their own configs.
 #[tauri::command]
 async fn agent_connections() -> CmdResult<Vec<connect::Connection>> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -577,7 +576,7 @@ async fn agent_connections() -> CmdResult<Vec<connect::Connection>> {
     .map_err(err)?
 }
 
-/// Writes the `capopen` entry into the agent's config after a backup; nothing else changes.
+/// Writes the `nuzky` entry into the agent's config after a backup; nothing else changes.
 #[tauri::command]
 async fn connect_agent(agent: connect::Agent) -> CmdResult<connect::Connection> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -601,7 +600,7 @@ fn list_fonts(state: State<'_, AppState>) -> FontFamilies {
     state
         .fonts
         .get_or_init(|| {
-            use capopen_engine::text::{BUNDLED_FONT_FAMILIES, TextRenderer};
+            use nuzky_engine::text::{BUNDLED_FONT_FAMILIES, TextRenderer};
             let mut renderer = state.bounds_text.lock().unwrap();
             let families = renderer.get_or_insert_with(TextRenderer::new).font_families();
             let (bundled, system) =
@@ -638,7 +637,7 @@ async fn new_project_from_media(app: AppHandle, paths: Vec<String>) -> CmdResult
         return Err(format!("None of those files could be opened: {}", reasons.join("; ")));
     }
     let mut project = Project::new(library::UNTITLED);
-    if let Some(first) = assets.iter().find(|a| a.kind != capopen_engine::model::AssetKind::Audio && a.width > 0) {
+    if let Some(first) = assets.iter().find(|a| a.kind != nuzky_engine::model::AssetKind::Audio && a.width > 0) {
         let (width, height) = canvas_for(first.width, first.height);
         project.apply(EditCmd::SetCanvas { width, height, background: None, background_blur: None }).map_err(err)?;
     }
@@ -647,7 +646,7 @@ async fn new_project_from_media(app: AppHandle, paths: Vec<String>) -> CmdResult
     for id in &added {
         project.apply(EditCmd::AddClip { asset_id: id.clone(), start_us: None, track_id: None }).map_err(err)?;
     }
-    capopen_session::validate(&project).map_err(err)?;
+    nuzky_session::validate(&project).map_err(err)?;
     let path = store::new_project_path();
     store::create(&path, &project).map_err(err)?;
     // The panel's agent works on the open project only; never stopped while holding the session.
@@ -733,8 +732,8 @@ async fn layer_bounds(app: AppHandle, t_us: i64) -> CmdResult<Vec<LayerBounds>> 
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let mut text = state.bounds_text.lock().unwrap();
-        let text = text.get_or_insert_with(capopen_engine::text::TextRenderer::new);
-        capopen_engine::render::layer_bounds(&project, t_us, text)
+        let text = text.get_or_insert_with(nuzky_engine::text::TextRenderer::new);
+        nuzky_engine::render::layer_bounds(&project, t_us, text)
             .into_iter()
             .map(|(clip_id, corners)| LayerBounds { clip_id, corners })
             .collect()
@@ -798,7 +797,7 @@ fn skipped_notice(name: &str, instead: Option<&str>, error: &anyhow::Error) -> S
         .map_or_else(|| "A new project opened instead.".to_string(), |other| format!("“{other}” opened instead."));
     if error.to_string() == store::BUSY {
         format!(
-            "“{name}” is open in another CapOpen window or an AI agent is editing it, so {}. Close it there, then open it from Projects.",
+            "“{name}” is open in another Nuzky window or an AI agent is editing it, so {}. Close it there, then open it from Projects.",
             lowercase_first(&instead).trim_end_matches('.')
         )
     } else {
@@ -907,7 +906,7 @@ pub fn run() {
             updates::open_release_page,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building CapOpen")
+        .expect("error while building Nuzky")
         .run(|app, event| match event {
             tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
                 let state = app.state::<AppState>();
@@ -997,7 +996,7 @@ fn confirm_quit(app: &AppHandle, label: &str, question: &'static str) {
     let mut dialog = app
         .dialog()
         .message(question)
-        .title("Quit CapOpen?")
+        .title("Quit Nuzky?")
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom("Quit".into(), "Keep working".into()));
     if let Some(window) = &window {
@@ -1044,9 +1043,9 @@ mod ipc_lifecycle_tests {
         #[derive(serde::Serialize)]
         struct View<'a> {
             #[serde(serialize_with = "super::snapshot_project")]
-            project: &'a capopen_engine::Project,
+            project: &'a nuzky_engine::Project,
         }
-        let mut project = capopen_engine::Project::new("test");
+        let mut project = nuzky_engine::Project::new("test");
         project.canvas.width = 1080;
         project.canvas.height = 1920;
         let snapshot = serde_json::to_value(View { project: &project }).unwrap();
@@ -1057,7 +1056,7 @@ mod ipc_lifecycle_tests {
         assert!(serde_json::to_value(&project).unwrap()["canvas"].get("safeArea").is_none());
         project.canvas.height = 1080;
         assert!(serde_json::to_value(View { project: &project }).unwrap()["project"]["canvas"]["safeArea"].is_null());
-        let limits = serde_json::to_value(capopen_engine::edit::LIMITS).unwrap();
+        let limits = serde_json::to_value(nuzky_engine::edit::LIMITS).unwrap();
         assert_eq!(limits["maxTransitionUs"], 2_000_000);
         assert_eq!(limits["maxSpeed"], 10.0);
     }
@@ -1074,15 +1073,15 @@ mod ipc_lifecycle_tests {
     #[cfg(unix)]
     #[test]
     fn refused_switch_restores_ipc_after_save_failure() {
-        let dir = std::env::temp_dir().join(format!("capopen-save-failure-{}", new_id()));
-        let path = dir.join("project.capopen");
+        let dir = std::env::temp_dir().join(format!("nuzky-save-failure-{}", new_id()));
+        let path = dir.join("project.nuzky");
         store::create(&path, &Project::new("still open")).unwrap();
         let (mut current, _) = OpenSession::open(path.clone()).unwrap();
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(current.prepare_switch().unwrap_err().to_string().contains("SAVE_FAILED"));
         assert!(current.listener.is_some());
-        let remote = capopen_mcp::ipc::Remote::connect(&path, false).unwrap().unwrap();
+        let remote = nuzky_mcp::ipc::Remote::connect(&path, false).unwrap().unwrap();
         let result = remote.call("get_state".into(), serde_json::json!({})).unwrap();
         assert_ne!(result.is_error, Some(true));
         assert_eq!(result.structured_content.unwrap()["name"], "still open");
@@ -1096,10 +1095,10 @@ mod ipc_lifecycle_tests {
     #[test]
     fn squatted_agent_endpoint_still_opens_the_project() {
         use std::os::unix::fs::DirBuilderExt;
-        let dir = std::env::temp_dir().join(format!("capopen-squatted-{}", new_id()));
-        let path = dir.join("project.capopen");
+        let dir = std::env::temp_dir().join(format!("nuzky-squatted-{}", new_id()));
+        let path = dir.join("project.nuzky");
         store::create(&path, &Project::new("no bridge")).unwrap();
-        let socket = capopen_mcp::ipc::socket_path(&path).unwrap();
+        let socket = nuzky_mcp::ipc::socket_path(&path).unwrap();
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(socket.parent().unwrap()).unwrap();
         std::fs::create_dir(&socket).unwrap();
         let opened = OpenSession::open(path.clone());
@@ -1120,20 +1119,20 @@ mod ipc_lifecycle_tests {
 
     #[test]
     fn busy_recent_project_opens_the_next_one_with_a_notice() {
-        let dir = std::env::temp_dir().join(format!("capopen-busy-{}", new_id()));
-        let (older, newer) = (dir.join("older.capopen"), dir.join("newer.capopen"));
+        let dir = std::env::temp_dir().join(format!("nuzky-busy-{}", new_id()));
+        let (older, newer) = (dir.join("older.nuzky"), dir.join("newer.nuzky"));
         store::create(&older, &Project::new("Older")).unwrap();
         store::create(&newer, &Project::new("Newer")).unwrap();
         let an_hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
         std::fs::File::options().write(true).open(&older).unwrap().set_modified(an_hour_ago).unwrap();
-        let agent = capopen_session::ProjectSession::open(&newer, capopen_session::Mode::Write, None).unwrap();
+        let agent = nuzky_session::ProjectSession::open(&newer, nuzky_session::Mode::Write, None).unwrap();
         let (opened, notice) = open_recent(store::list_in(&dir));
         let (current, _) = opened.unwrap();
         assert_eq!(current.snapshot(Vec::new()).unwrap().project.name, "Older");
         let notice = notice.unwrap();
         assert_eq!(
             notice,
-            "“Newer” is open in another CapOpen window or an AI agent is editing it, so “Older” opened instead. Close it there, then open it from Projects."
+            "“Newer” is open in another Nuzky window or an AI agent is editing it, so “Older” opened instead. Close it there, then open it from Projects."
         );
         let (opened, notice) = open_recent(store::list_in(&dir));
         assert!(opened.is_none() && notice.is_some());
@@ -1159,11 +1158,11 @@ mod ipc_lifecycle_tests {
         assert_eq!(quit_question(&kinds(&["audio"])), None);
         assert!(quit_question(&kinds(&["audio", "captions"])).unwrap().starts_with("Speech recognition"));
         assert!(quit_question(&kinds(&["transcription", "export"])).unwrap().starts_with("An export"));
-        let dir = std::env::temp_dir().join(format!("capopen-quit-{}", new_id()));
-        let path = dir.join("project.capopen");
+        let dir = std::env::temp_dir().join(format!("nuzky-quit-{}", new_id()));
+        let path = dir.join("project.nuzky");
         store::create(&path, &Project::new("quit")).unwrap();
         let (current, _) = OpenSession::open(path).unwrap();
-        let unfinished = dir.join(".capopen-part-agent.mp4");
+        let unfinished = dir.join(".nuzky-part-agent.mp4");
         std::fs::write(&unfinished, b"partial").unwrap();
         let stamp = current.host.session.stamp();
         let file = unfinished.clone();
@@ -1203,9 +1202,9 @@ mod ipc_lifecycle_tests {
 
     #[test]
     fn pending_mutation_rejects_replaced_session_epoch() {
-        let dir = std::env::temp_dir().join(format!("capopen-epoch-{}", new_id()));
-        let old_path = dir.join("old.capopen");
-        let next_path = dir.join("next.capopen");
+        let dir = std::env::temp_dir().join(format!("nuzky-epoch-{}", new_id()));
+        let old_path = dir.join("old.nuzky");
+        let next_path = dir.join("next.nuzky");
         store::create(&old_path, &Project::new("old")).unwrap();
         store::create(&next_path, &Project::new("next")).unwrap();
         let (old, _) = OpenSession::open(old_path).unwrap();
@@ -1237,9 +1236,9 @@ mod ipc_lifecycle_tests {
 
     #[test]
     fn switching_with_slow_job_returns_promptly_and_retains_project_lock() {
-        let dir = std::env::temp_dir().join(format!("capopen-switch-{}", new_id()));
-        let old_path = dir.join("old.capopen");
-        let next_path = dir.join("next.capopen");
+        let dir = std::env::temp_dir().join(format!("nuzky-switch-{}", new_id()));
+        let old_path = dir.join("old.nuzky");
+        let next_path = dir.join("next.nuzky");
         store::create(&old_path, &Project::new("old")).unwrap();
         store::create(&next_path, &Project::new("next")).unwrap();
         let (mut current, _) = OpenSession::open(old_path.clone()).unwrap();
@@ -1257,15 +1256,15 @@ mod ipc_lifecycle_tests {
         current.prepare_switch().unwrap();
         current = next;
         let elapsed = began.elapsed();
-        let locked = capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_err();
+        let locked = nuzky_session::ProjectSession::open(&old_path, nuzky_session::Mode::Write, None).is_err();
         let reopened = OpenSession::open(old_path.clone()).err().unwrap().to_string();
         release.send(()).unwrap();
-        assert!(reopened.starts_with("CapOpen is still finishing background work"), "{reopened}");
+        assert!(reopened.starts_with("Nuzky is still finishing background work"), "{reopened}");
         assert!(elapsed < Duration::from_millis(300), "switch took {elapsed:?}");
         assert!(locked, "old project lock must survive until work ends");
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if capopen_session::ProjectSession::open(&old_path, capopen_session::Mode::Write, None).is_ok() {
+            if nuzky_session::ProjectSession::open(&old_path, nuzky_session::Mode::Write, None).is_ok() {
                 break;
             }
             assert!(Instant::now() < deadline);

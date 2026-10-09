@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// CapOpen's MCP bridge as the agent should start it.
+/// Nuzky's MCP bridge as the agent should start it.
 #[derive(Clone, Debug)]
 pub struct McpServer {
     pub command: PathBuf,
@@ -27,7 +27,7 @@ pub struct TurnRequest {
     pub session: String,
     pub resume: bool,
     pub prompt: String,
-    /// An empty folder of CapOpen's own, so no project instructions or settings load from it.
+    /// An empty folder of Nuzky's own, so no project instructions or settings load from it.
     pub cwd: PathBuf,
     pub mcp: McpServer,
 }
@@ -42,7 +42,7 @@ pub struct Turn {
     finished: Arc<AtomicBool>,
 }
 
-/// Variables of a parent Claude Code session (CapOpen started from one, as in development),
+/// Variables of a parent Claude Code session (Nuzky started from one, as in development),
 /// which would connect the agent to that session instead of starting its own.
 fn parent_session_var(name: &str) -> bool {
     name == "CLAUDECODE"

@@ -1,4 +1,4 @@
-//! `capopen style`: learn a creator's EDIT.md from recordings and their finished cuts, and score
+//! `nuzky style`: learn a creator's EDIT.md from recordings and their finished cuts, and score
 //! any cut of a recording against the creator's own. Everything runs on this computer.
 
 use std::collections::{HashMap, HashSet};
@@ -6,16 +6,16 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, Result, bail, ensure};
-use capopen_analysis::style::{self, Alignment};
-use capopen_engine::model::{Asset, AssetKind};
-use capopen_engine::speech::map_words;
-use capopen_mcp::transcript::{best_model, models, recognise};
-use capopen_session::transcripts::{Record, TranscriptStore};
+use nuzky_analysis::style::{self, Alignment};
+use nuzky_engine::model::{Asset, AssetKind};
+use nuzky_engine::speech::map_words;
+use nuzky_mcp::transcript::{best_model, models, recognise};
+use nuzky_session::transcripts::{Record, TranscriptStore};
 use serde_json::json;
 
 pub const USAGE: &str =
-    "  capopen style learn [--out <EDIT.md>] [--replace] [--lang auto|cs|en] <recording> <cut> [<recording> <cut>...]
-  capopen style compare [--lang auto|cs|en] <recording> <cut> <project.capopen>";
+    "  nuzky style learn [--out <EDIT.md>] [--replace] [--lang auto|cs|en] <recording> <cut> [<recording> <cut>...]
+  nuzky style compare [--lang auto|cs|en] <recording> <cut> <project.nuzky>";
 
 /// A media file with its recognised words, stored like the app stores them.
 struct Recording {
@@ -88,9 +88,9 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
 }
 
 fn probe(path: &Path) -> Result<Asset> {
-    let asset = capopen_engine::media::probe(path, stable_id(path)?)
+    let asset = nuzky_engine::media::probe(path, stable_id(path)?)
         .with_context(|| format!("Cannot read {}", path.display()))?;
-    ensure!(capopen_engine::audio::has_audio(&asset), "{} has no sound", path.display());
+    ensure!(nuzky_engine::audio::has_audio(&asset), "{} has no sound", path.display());
     Ok(asset)
 }
 
@@ -107,7 +107,7 @@ fn stable_id(path: &Path) -> Result<String> {
 /// Words stored for this file, recognised now if it has none yet.
 fn recording(path: &Path, language: &str, store: &TranscriptStore, cache: &Path) -> Result<Recording> {
     let asset = probe(path)?;
-    // CapOpen hears speech in videos only; a sound file on the timeline is music.
+    // Nuzky hears speech in videos only; a sound file on the timeline is music.
     ensure!(
         asset.kind == AssetKind::Video,
         "{} has no picture: style learns from and scores video recordings",

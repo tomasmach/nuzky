@@ -170,7 +170,7 @@ def close_window():
             stack.extend(w.query_tree().children)
         except Exception:
             continue
-        if name in ('CapOpen', b'CapOpen'):
+        if name in ('Nuzky', b'Nuzky'):
             w.send_event(event.ClientMessage(window=w, client_type=protocols, data=(32, [delete, X.CurrentTime, 0, 0, 0])))
     d.sync()
 
@@ -188,7 +188,7 @@ def alive(r):
 def corrections(r):
     r.import_media(TAKE)
     r.add_clip('reel-2.mp4')
-    r.s.run("window.__capopen.speech.setState({model: arguments[0], language: 'cs'})", MODEL)
+    r.s.run("window.__nuzky.speech.setState({model: arguments[0], language: 'cs'})", MODEL)
     job = generate_captions(r)
     r.check('Czech captions are generated', job and job['status'] == 'done' and caption_texts(r), job)
     tab(r, 'transcript')
@@ -260,7 +260,7 @@ def corrections(r):
     r.s.close()
     r.s = Session()
     r.check('the app starts again with the project',
-            wait(lambda: r.s.run('return !!window.__capopen?.store.getState().snap', retries=3), 60)
+            wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60)
             and wait(lambda: caption_with(r, right), 10), caption_texts(r))
     tab(r, 'transcript')
     r.check('after reopening, the transcript still reads the correction',

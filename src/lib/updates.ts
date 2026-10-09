@@ -3,12 +3,12 @@ import { api, errorText } from "./api";
 import { useEditor } from "./store";
 
 /**
- * Whether a newer CapOpen was released. A check asks the backend, which reads only the version on
+ * Whether a newer Nuzky was released. A check asks the backend, which reads only the version on
  * the latest GitHub release. Automatic checks run 10 s after start and then at most once a day,
  * also across launches, and say nothing when they fail; Check for updates always answers.
  */
 type Updates = {
-  /** This CapOpen's version. */
+  /** This Nuzky's version. */
   version: string;
   /** False when update checks are turned off for this installation; nothing is asked then. */
   enabled: boolean;
@@ -22,7 +22,7 @@ type Updates = {
 
 type Saved = { auto: boolean; checkedAt: number; latest: string | null; /** The version that checked; another one checks anew. */ by: string };
 
-const KEY = "capopen.updates";
+const KEY = "nuzky.updates";
 const FIRST_CHECK_MS = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -81,8 +81,8 @@ export async function checkForUpdates(manual: boolean) {
     useUpdates.setState({ latest });
     if (asked()) {
       const toast = useEditor.getState().toast;
-      if (latest) toast({ kind: "info", text: `CapOpen ${latest} is available.`, action: { label: "Download", run: downloadUpdate } });
-      else toast({ kind: "success", text: `CapOpen ${version} is the latest version.` });
+      if (latest) toast({ kind: "info", text: `Nuzky ${latest} is available.`, action: { label: "Download", run: downloadUpdate } });
+      else toast({ kind: "success", text: `Nuzky ${version} is the latest version.` });
     }
   } catch (e) {
     console.warn("Update check failed", errorText(e));

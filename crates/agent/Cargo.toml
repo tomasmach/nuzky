@@ -1,9 +1,9 @@
 [package]
-name = "capopen-agent"
+name = "nuzky-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Runs the user's own Claude Code or Codex for one turn of CapOpen's AI panel"
+description = "Runs the user's own Claude Code or Codex for one turn of Nuzky's AI panel"
 
 [dependencies]
 anyhow.workspace = true

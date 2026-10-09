@@ -12,9 +12,9 @@ pub use score::{Passage, Score, score};
 
 use std::path::PathBuf;
 
-/// Where the creator's style lives. MCP serves it as capopen://style when it exists.
+/// Where the creator's style lives. MCP serves it as nuzky://style when it exists.
 pub fn style_path() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen").join("EDIT.md")
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("nuzky").join("EDIT.md")
 }
 
 /// Lowercase letters and digits only, so "Opus," and "opus" are the same word.

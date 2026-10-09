@@ -7,12 +7,12 @@ import { Button, IconButton, trapTab } from "./ui";
 
 const STATE_TEXT: Record<AgentConnection["state"], string> = {
   connected: "Connected",
-  other: "Set up for another copy of CapOpen or turned off",
+  other: "Set up for another copy of Nuzky or turned off",
   missing: "Not connected",
   unreadable: "Its settings file could not be read",
 };
 
-/** Connect your agent: one click writes CapOpen into Claude Code's or Codex's own settings. */
+/** Connect your agent: one click writes Nuzky into Claude Code's or Codex's own settings. */
 export function ConnectAgentDialog() {
   const open = useEditor((s) => s.connectOpen);
   const [rows, setRows] = useState<AgentConnection[] | null>(null);
@@ -117,7 +117,7 @@ export function ConnectAgentDialog() {
                   variant={row === first ? "primary" : undefined}
                   data-autofocus={row === first || undefined}
                   disabled={row.state === "unreadable" || busy !== null}
-                  disabledReason={row.state === "unreadable" ? `Fix ${row.path} first; CapOpen does not change a file it cannot read` : "Connecting…"}
+                  disabledReason={row.state === "unreadable" ? `Fix ${row.path} first; Nuzky does not change a file it cannot read` : "Connecting…"}
                   onClick={() => void connect(row)}
                 >
                   {row.state === "other" ? "Reconnect" : "Connect"}
@@ -132,7 +132,7 @@ export function ConnectAgentDialog() {
             </p>
           )}
           <p className="text-[12px] text-muted">
-            Only the capopen entry is added, after a backup of the file. The agent edits the project open here; start it once your project is open.
+            Only the nuzky entry is added, after a backup of the file. The agent edits the project open here; start it once your project is open.
           </p>
         </div>
         <div className="mt-6 flex justify-end">

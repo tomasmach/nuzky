@@ -18,8 +18,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::edit::new_id;
-use capopen_session::{
+use nuzky_engine::edit::new_id;
+use nuzky_session::{
     hash::{FNV_OFFSET, hash_bytes},
     host::Host,
 };
@@ -43,14 +43,14 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
 const ACCEPT_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_HELLO_BYTES: usize = 4096;
 const MAX_CONNECTIONS: usize = 8;
-pub const APP_CLOSED: &str = "APP_CLOSED: CapOpen was closed; restart the agent's MCP server";
+pub const APP_CLOSED: &str = "APP_CLOSED: Nuzky was closed; restart the agent's MCP server";
 
 /// Where the app's private endpoints live.
 fn endpoint_directory() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .filter(|v| !v.is_empty())
-        .map(|p| PathBuf::from(p).join("capopen"))
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("capopen-{}", uid())))
+        .map(|p| PathBuf::from(p).join("nuzky"))
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("nuzky-{}", uid())))
 }
 
 pub fn socket_path(project: &Path) -> Result<PathBuf> {
@@ -107,7 +107,7 @@ fn remove(path: &Path) -> Result<()> {
 
 #[derive(Deserialize, Serialize)]
 struct Hello {
-    capopen: u32,
+    nuzky: u32,
     token: String,
     client: String,
     access: Access,
@@ -170,7 +170,7 @@ impl Listener {
         let connections = owner.connections.clone();
         owner.worker = Some(
             std::thread::Builder::new()
-                .name("capopen-ipc".into())
+                .name("nuzky-ipc".into())
                 .spawn(move || {
                     std::thread::scope(|scope| {
                         while !stop.load(Ordering::Acquire) {
@@ -259,7 +259,7 @@ fn connection(mut stream: UnixStream, host: Arc<Host>, project: &Path, token: &s
     let mut reader = BufReader::new(stream.try_clone()?);
     let hello =
         receive::<Hello>(&mut reader, MAX_HELLO_BYTES, Some(Instant::now() + HELLO_TIMEOUT)).and_then(|hello| {
-            ensure!(hello.capopen == PROTOCOL, "PROTOCOL_MISMATCH: expected capopen {PROTOCOL}");
+            ensure!(hello.nuzky == PROTOCOL, "PROTOCOL_MISMATCH: expected nuzky {PROTOCOL}");
             ensure!(security::equal_token(&hello.token, token), "UNAUTHORIZED: invalid token");
             Ok(hello)
         });
@@ -360,9 +360,9 @@ impl Remote {
         send(
             &mut stream,
             &Hello {
-                capopen: PROTOCOL,
+                nuzky: PROTOCOL,
                 token,
-                client: "capopen-mcp".into(),
+                client: "nuzky-mcp".into(),
                 access: if allow_write { Access::Write } else { Access::ReadOnly },
             },
         )?;
@@ -380,7 +380,7 @@ impl Remote {
         let closed = Arc::new(AtomicBool::new(false));
         let (requests, ended) = (pending.clone(), closed.clone());
         let worker = std::thread::Builder::new()
-            .name("capopen-ipc-results".into())
+            .name("nuzky-ipc-results".into())
             .spawn(move || {
                 while let Ok(response) = receive::<Response>(&mut reader, MAX_LINE_BYTES, None) {
                     if let Some(tx) = requests.lock().unwrap().remove(&response.id) {

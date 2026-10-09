@@ -1,18 +1,18 @@
-# CapOpen
+# Nuzky
 
-CapOpen je open-source desktopový střihač videa ve stylu CapCutu (GPL-3.0-or-later). Rust engine (`crates/engine`: model projektu, editace a undo, dekódování přes FFmpeg, wgpu kompozitor, mix zvuku, export), lokální Whisper (`crates/analysis`), editační autorita (`crates/session`), nástroje pro AI agenty (`crates/mcp`, `crates/cli`), desktop v Tauri 2 (`src-tauri`) a UI v React 19 + zustand (`src`). Stav: prototyp. Ověřený je Linux, macOS a Windows se zatím jen kompilují.
+Nuzky ([nuzky.app](https://nuzky.app)) jsou open-source desktopový střihač videa ve stylu CapCutu (GPL-3.0-or-later). Rust engine (`crates/engine`: model projektu, editace a undo, dekódování přes FFmpeg, wgpu kompozitor, mix zvuku, export), lokální Whisper (`crates/analysis`), editační autorita (`crates/session`), nástroje pro AI agenty (`crates/mcp`, `crates/cli`), desktop v Tauri 2 (`src-tauri`) a UI v React 19 + zustand (`src`). Stav: prototyp. Ověřený je Linux, macOS a Windows se zatím jen kompilují.
 
 Uživatel stříhá videa z telefonu a často k tomu pouští AI agenta, který stříhá za něj. Změna málokdy patří jen jednomu povrchu: UI, engine, MCP nástroje, CLI a export sdílejí stejný projekt.
 
-Tenhle soubor je pro vývoj. Jak appka vypadá, popisuje `DESIGN.md`, jak se chová, `docs/INTERACTION.md`. `skills/capopen-edit/` je návod pro agenta, který v CapOpen stříhá video.
+Tenhle soubor je pro vývoj. Jak appka vypadá, popisuje `DESIGN.md`, jak se chová, `docs/INTERACTION.md`. `skills/nuzky-edit/` je návod pro agenta, který v Nuzkách stříhá video.
 
 ## Co nikdy neobětujeme
 
 Co rozbiješ, rozbiješ někomu rozdělané video.
 
-1. **Média a projekty uživatele.** Zdrojová média nikdy nepřepiš ani nesmaž. Export do existujícího souboru proběhne jen s výslovným souhlasem a přes dočasný `.capopen-part-*`. Projekt se ukládá atomicky a úprava se neztratí ani po pádu nebo zavření okna. Projekt uložený starší verzí se vždy otevře, takže nové pole modelu má `#[serde(default)]`. Změna formátu cache zvedne verzi v názvu souboru (`PCM_VERSION`), aby se stará data nečetla jako nová.
+1. **Média a projekty uživatele.** Zdrojová média nikdy nepřepiš ani nesmaž. Export do existujícího souboru proběhne jen s výslovným souhlasem a přes dočasný `.nuzky-part-*`. Projekt se ukládá atomicky a úprava se neztratí ani po pádu nebo zavření okna. Projekt uložený starší verzí se vždy otevře, takže nové pole modelu má `#[serde(default)]`. Změna formátu cache zvedne verzi v názvu souboru (`PCM_VERSION`), aby se stará data nečetla jako nová.
 2. **Co vidíš, to exportuješ.** Náhled i export kreslí stejný renderer. Střih sedí na snímek podle skutečných časů (VFR a HEVC z telefonu), orientace a zrcadlení z metadat sedí v náhledu, miniaturách i exportu a zvuk drží synchron s obrazem. Dekódování a vykreslení porovnávej s referencí z FFmpeg, ne s vlastním odhadem. Selfie z přední kamery (EXIF 2, 4, 5, 7) se jednou místo zrcadlení otáčela.
-3. **Soubory zvenku jsou nedůvěryhodné.** Projekt `.capopen` i médium může přijít od kohokoli. FFmpeg otevírá vstupy jen přes `media::open_input`, který povolí jen protokol `file`; review našlo, že sdílený projekt s cestou `http://…` nechal FFmpeg stahovat z cizího serveru. Nevalidní projekt nesmí shodit náhled ani appku (panika na barvě `#€`). Lokální IPC zůstává 0700/0600 s tokenem a nic neposlouchá na síti. Síť se používá jen pro stažení modelů s pevným SHA-256 a pro kontrolu nové verze, která jednou denně přečte z pevné adresy na GitHubu jen číslo verze a nic nestahuje ani nespouští.
+3. **Soubory zvenku jsou nedůvěryhodné.** Projekt `.nuzky` i médium může přijít od kohokoli. FFmpeg otevírá vstupy jen přes `media::open_input`, který povolí jen protokol `file`; review našlo, že sdílený projekt s cestou `http://…` nechal FFmpeg stahovat z cizího serveru. Nevalidní projekt nesmí shodit náhled ani appku (panika na barvě `#€`). Lokální IPC zůstává 0700/0600 s tokenem a nic neposlouchá na síti. Síť se používá jen pro stažení modelů s pevným SHA-256 a pro kontrolu nové verze, která jednou denně přečte z pevné adresy na GitHubu jen číslo verze a nic nestahuje ani nespouští.
 4. **AI agent pracuje pod kontrolou uživatele.** Každá změna z UI, od agenta i z CLI jde přes `ProjectSession` a validaci `EditCmd`. JSON projektu nikdo nepíše přímo. Běh agenta je živě vidět a celý se vrátí jedním krokem undo. Během běhu UI ukazuje zámek s důvodem a tlačítkem Stop. Zastavení agenta nebo jobu zabere nanejvýš pár sekund, i uprostřed Whisperu nebo analýzy.
 5. **Klid a rychlost.** UI nikdy nečeká na dekódování, analýzu ani export. Pomalá práce běží jako job s procenty a jde zrušit. Rozpočty odezvy jsou v `docs/INTERACTION.md` (Response time). Přehrávání nepřekresluje celou appku s každým snímkem.
 
@@ -20,7 +20,7 @@ Pravidlo odsud, které bojuje s úkolem, neporušuj potichu. Řekni to nahlas.
 
 ## Čtyři způsoby, jak si ublížit
 
-1. **Skutečná data uživatele.** Appka čte projekty, nedávné projekty a modely z `$XDG_DATA_HOME/capopen`, cache zvuku z `$XDG_CACHE_HOME/capopen` a IPC socket má v `$XDG_RUNTIME_DIR/capopen`. Appku, CLI ani `capopen mcp` nespouštěj se skutečnými adresáři uživatele: otevřela by jeho poslední projekt nebo se připojila k jeho běžící appce. `scripts/repro.py` všechno izoluje sám, ruční běh izoluj stejně. Na macOS appka `XDG_DATA_HOME` a `XDG_CACHE_HOME` ignoruje a čte `~/Library`, tam izoluj přes `HOME`. `~/.cache/capopen/deps` patří build skriptům, nemaž ho.
+1. **Skutečná data uživatele.** Appka čte projekty, nedávné projekty a modely z `$XDG_DATA_HOME/nuzky`, cache zvuku z `$XDG_CACHE_HOME/nuzky` a IPC socket má v `$XDG_RUNTIME_DIR/nuzky`. Appku, CLI ani `nuzky mcp` nespouštěj se skutečnými adresáři uživatele: otevřela by jeho poslední projekt nebo se připojila k jeho běžící appce. `scripts/repro.py` všechno izoluje sám, ruční běh izoluj stejně. Na macOS appka `XDG_DATA_HOME` a `XDG_CACHE_HOME` ignoruje a čte `~/Library`, tam izoluj přes `HOME`. `~/.cache/nuzky/deps` patří build skriptům, nemaž ho.
 2. **Disk a souběžné buildy.** Každý `CARGO_TARGET_DIR` je celý build s FFmpeg, wgpu a whisper.cpp. Sedmnáct `target-*` adresářů jednou zabralo 235 GB. Používej `target/` svého checkoutu. Vlastní target adresář založ jen pro souběžný build a po práci ho smaž. Dvě plné testovací sady naráz nespouštěj a velké testovací soubory nedávej do `/tmp`, je v paměti.
 3. **Okna a procesy na ploše.** Appka otevírá skutečná okna, nativní dialogy a notifikace. Proklikávej přes `scripts/repro.py`: headless gamescope a vypnutý D-Bus. Vite běží na pevném portu 1420 a WebKitWebDriver na 4444. Obsazený port znamená cizí session; nezabíjej ji a počkej. Ukončuj jen vlastní procesy podle PID nebo skupiny.
 4. **GitHub Actions.** Repo je soukromé a minuty mají rozpočet, macOS se počítá desetkrát. Job, který skončí za pár sekund bez logu, neběžel kvůli rozpočtu. Řekni mi to a kód kvůli tomu neopravuj.
@@ -31,7 +31,7 @@ Pravidlo odsud, které bojuje s úkolem, neporušuj potichu. Řekni to nahlas.
 - Náhled kreslí vlákno v `src-tauri/src/engine.rs` přes wgpu (`crates/engine/src/render.rs`, `gpu.rs`) a posílá snímky přes loopback WebSocket s tajemstvím a kontrolou originu. Export používá stejný renderer.
 - Zvuk každého souboru se jednou dekóduje do 48kHz cache (`crates/engine/src/audio.rs`). Přehrávání, waveformy, export i titulky míchají z ní. Cache patří souboru (cesta, velikost, mtime), ne jen ID assetu, protože agent může pod stejné ID vložit jiný soubor.
 - Dlouhá práce běží jako job: export, titulky, příprava zvuku a modely v `src-tauri/src/jobs.rs`, práce agenta v `crates/session/src/jobs.rs`. Každý job hlásí průběh a reaguje na zrušení.
-- Přístup každého MCP nástroje je v jedné tabulce `crates/mcp/src/rules.rs`. Návod pro agenty `skills/capopen-edit/SKILL.md` je zároveň `capopen://guide`. Architektura AI je v `docs/AI-ARCHITECTURE.md`.
+- Přístup každého MCP nástroje je v jedné tabulce `crates/mcp/src/rules.rs`. Návod pro agenty `skills/nuzky-edit/SKILL.md` je zároveň `nuzky://guide`. Architektura AI je v `docs/AI-ARCHITECTURE.md`.
 - Chybové kódy jsou prefixy zpráv (`RUN_ACTIVE`, `CANCELLED`, `READ_ONLY`, `OUTPUT_EXISTS`…) a frontend je čte přes `startsWith`. Kód nepřejmenovávej bez úpravy všech míst, která ho čtou.
 
 ## Zasáhni všechny povrchy

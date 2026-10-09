@@ -394,7 +394,7 @@ function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; messa
     code === "NOT_SIGNED_IN"
       ? [<AlertCircle size={16} className="text-danger" />, `${name} isn't signed in.`, <>Open a terminal, run {cmd} and sign in. Your message is still here.</>, <>{retry}{switchTo}</>]
       : code === "USAGE_LIMIT"
-        ? [<AlertTriangle size={16} className="text-warn" />, `${name} usage limit reached.`, <>{message} The limit comes from your plan, not from CapOpen. Your message is still here.</>, switchTo]
+        ? [<AlertTriangle size={16} className="text-warn" />, `${name} usage limit reached.`, <>{message} The limit comes from your plan, not from Nuzky. Your message is still here.</>, switchTo]
         : code === "NOT_INSTALLED"
           ? [
               <AlertCircle size={16} className="text-danger" />,
@@ -454,7 +454,7 @@ function Empty() {
     return (
       <div className="my-auto flex flex-col px-1">
         <h3 className="text-[15px] font-semibold text-fg">No AI agent found</h3>
-        <p className="mb-3 mt-1.5 text-[12px] leading-[18px] text-muted">CapOpen runs the AI you already use. Install one, sign in from your terminal, then check again.</p>
+        <p className="mb-3 mt-1.5 text-[12px] leading-[18px] text-muted">Nuzky runs the AI you already use. Install one, sign in from your terminal, then check again.</p>
         {agents.filter((a) => READY.includes(a.id)).map((a) => (
           <div key={a.id} className="flex h-9 items-center justify-between border-t border-white/[.07] text-[13px]">
             {a.name}

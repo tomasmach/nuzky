@@ -16,7 +16,7 @@ const GAP = 6;
 const EDITOR_MIN = 360 + 300 + 300 + 4 * GAP;
 
 type Saved = { open: boolean; mode: DockMode; width: number; float: Rect };
-const KEY = "capopen.aiPanel";
+const KEY = "nuzky.aiPanel";
 
 const defaultFloat = (): Rect => ({ x: window.innerWidth - GAP - 380, y: TOP_BAR + GAP, w: 380, h: Math.min(600, window.innerHeight - TOP_BAR - 2 * GAP) });
 

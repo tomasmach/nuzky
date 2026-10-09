@@ -6,7 +6,7 @@
 //! deleting the others and the leading fillers. It only reads words: the same words always give
 //! the same result, with fixed thresholds and no ordering taken from maps or sets.
 
-use capopen_engine::speech::TimelineWord;
+use nuzky_engine::speech::TimelineWord;
 use serde::Serialize;
 
 /// A pause this long ends a sentence, as in get_transcript.

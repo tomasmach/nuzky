@@ -259,7 +259,7 @@ impl Gpu {
         .context("No GPU adapter found")?;
         let adapter_name = adapter.get_info().name;
         let (device, queue) = pollster::block_on(
-            adapter.request_device(&wgpu::DeviceDescriptor { label: Some("capopen"), ..Default::default() }),
+            adapter.request_device(&wgpu::DeviceDescriptor { label: Some("nuzky"), ..Default::default() }),
         )
         .context("Cannot open GPU device")?;
 

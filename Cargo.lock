@@ -547,124 +547,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "capopen-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "capopen-analysis"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "capopen-engine",
- "dirs 6.0.0",
- "serde",
- "serde_json",
- "whisper-rs",
-]
-
-[[package]]
-name = "capopen-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "capopen-agent",
- "capopen-analysis",
- "capopen-engine",
- "capopen-mcp",
- "capopen-session",
- "cpal",
- "dirs 6.0.0",
- "env_logger",
- "log",
- "png 0.18.1",
- "rtrb",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "toml_edit 0.25.15+spec-1.1.0",
- "trash",
- "tungstenite",
- "unicode-normalization",
- "ureq",
- "uuid",
- "whisper-rs",
-]
-
-[[package]]
-name = "capopen-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "capopen-analysis",
- "capopen-engine",
- "capopen-mcp",
- "capopen-session",
- "dirs 6.0.0",
- "png 0.18.1",
- "serde_json",
-]
-
-[[package]]
-name = "capopen-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "cosmic-text",
- "ffmpeg-next",
- "log",
- "memmap2",
- "nnnoiseless",
- "pollster",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "uuid",
- "wgpu",
-]
-
-[[package]]
-name = "capopen-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "capopen-analysis",
- "capopen-engine",
- "capopen-session",
- "libc",
- "png 0.18.1",
- "rmcp",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "capopen-session"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "capopen-engine",
- "dirs 6.0.0",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "cargo-platform"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3093,6 +2975,124 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "nuzky-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nuzky-analysis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "nuzky-engine",
+ "serde",
+ "serde_json",
+ "whisper-rs",
+]
+
+[[package]]
+name = "nuzky-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "cpal",
+ "dirs 6.0.0",
+ "env_logger",
+ "log",
+ "nuzky-agent",
+ "nuzky-analysis",
+ "nuzky-engine",
+ "nuzky-mcp",
+ "nuzky-session",
+ "png 0.18.1",
+ "rtrb",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "toml_edit 0.25.15+spec-1.1.0",
+ "trash",
+ "tungstenite",
+ "unicode-normalization",
+ "ureq",
+ "uuid",
+ "whisper-rs",
+]
+
+[[package]]
+name = "nuzky-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "nuzky-analysis",
+ "nuzky-engine",
+ "nuzky-mcp",
+ "nuzky-session",
+ "png 0.18.1",
+ "serde_json",
+]
+
+[[package]]
+name = "nuzky-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "cosmic-text",
+ "ffmpeg-next",
+ "log",
+ "memmap2",
+ "nnnoiseless",
+ "pollster",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
+ "wgpu",
+]
+
+[[package]]
+name = "nuzky-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "libc",
+ "nuzky-analysis",
+ "nuzky-engine",
+ "nuzky-session",
+ "png 0.18.1",
+ "rmcp",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "nuzky-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "nuzky-engine",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

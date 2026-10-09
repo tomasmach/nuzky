@@ -1,11 +1,11 @@
-use capopen_engine::{Project, edit::new_id};
+use nuzky_engine::{Project, edit::new_id};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn fixture() -> (PathBuf, PathBuf, Vec<u8>) {
     let dir = std::env::temp_dir().join(format!("cli-files-{}", new_id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("project.capopen");
+    let path = dir.join("project.nuzky");
     let bytes = serde_json::to_vec(&Project::new("preserve me")).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     (dir, path, bytes)
@@ -13,7 +13,7 @@ fn fixture() -> (PathBuf, PathBuf, Vec<u8>) {
 
 /// `render` and `frame` take the same output checks; `frame` also needs a time.
 fn write_output(command: &str, project: &Path, out: &Path) -> std::process::Output {
-    let mut cli = Command::new(env!("CARGO_BIN_EXE_capopen"));
+    let mut cli = Command::new(env!("CARGO_BIN_EXE_nuzky"));
     cli.arg(command).arg(project);
     if command == "frame" {
         cli.arg("0");
@@ -26,7 +26,7 @@ fn render_and_frame_refuse_project_and_sidecars_including_symlinks() {
     let (dir, project, bytes) = fixture();
     for command in ["render", "frame"] {
         for suffix in ["", ".lock", ".checkpoint.json", ".tmp"] {
-            let out = dir.join(format!("project.capopen{suffix}"));
+            let out = dir.join(format!("project.nuzky{suffix}"));
             let result = write_output(command, &project, &out);
             assert!(!result.status.success(), "{command} {suffix}");
             assert!(String::from_utf8_lossy(&result.stderr).contains("Output would overwrite"));
@@ -62,7 +62,7 @@ fn frame_refuses_project_media_and_keeps_hard_links_intact() {
     // A hard link is another name for the media; the frame replaces the name, not the file.
     let link = dir.join("link.png");
     std::fs::hard_link(&source, &link).unwrap();
-    let empty = dir.join("empty.capopen");
+    let empty = dir.join("empty.nuzky");
     std::fs::write(&empty, serde_json::to_vec(&Project::new("empty")).unwrap()).unwrap();
     let result = write_output("frame", &empty, &link);
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
@@ -75,13 +75,13 @@ fn frame_refuses_project_media_and_keeps_hard_links_intact() {
 fn render_refuses_atomic_save_temporaries_and_legacy_names_through_aliases() {
     let (dir, project, bytes) = fixture();
     let outputs = [
-        capopen_session::json_temp_path(&project),
-        capopen_session::json_temp_path(&dir.join("project.capopen.checkpoint.json")),
-        dir.join("project.capopen.future-sidecar"),
+        nuzky_session::json_temp_path(&project),
+        nuzky_session::json_temp_path(&dir.join("project.nuzky.checkpoint.json")),
+        dir.join("project.nuzky.future-sidecar"),
         dir.join("project.tmp"),
     ];
     let refused = |input: &std::path::Path, output: &std::path::Path| {
-        let result = Command::new(env!("CARGO_BIN_EXE_capopen")).arg("render").arg(input).arg(output).output().unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_nuzky")).arg("render").arg(input).arg(output).output().unwrap();
         assert!(!result.status.success());
         assert!(
             String::from_utf8_lossy(&result.stderr).contains("Output would overwrite"),
@@ -99,7 +99,7 @@ fn render_refuses_atomic_save_temporaries_and_legacy_names_through_aliases() {
         assert_eq!(std::fs::read(&output).unwrap(), b"pending JSON save");
         #[cfg(unix)]
         {
-            let input_alias = dir.join("input-alias.capopen");
+            let input_alias = dir.join("input-alias.nuzky");
             let output_alias = dir.join("output-alias.mp4");
             std::os::unix::fs::symlink(&project, &input_alias).unwrap();
             std::os::unix::fs::symlink(output.file_name().unwrap(), &output_alias).unwrap();
@@ -115,24 +115,24 @@ fn render_refuses_atomic_save_temporaries_and_legacy_names_through_aliases() {
     {
         let alias = dir.join("directory-alias");
         std::os::unix::fs::symlink(&dir, &alias).unwrap();
-        refused(&alias.join("project.capopen"), &alias.join("project.capopen.some-id.tmp"));
-        let input_alias = dir.join("alternate.capopen");
+        refused(&alias.join("project.nuzky"), &alias.join("project.nuzky.some-id.tmp"));
+        let input_alias = dir.join("alternate.nuzky");
         std::os::unix::fs::symlink(&project, &input_alias).unwrap();
-        refused(&input_alias, &dir.join("alternate.capopen.some-id.tmp"));
+        refused(&input_alias, &dir.join("alternate.nuzky.some-id.tmp"));
         refused(&input_alias, &dir.join("alternate.tmp"));
         // A reserved destination remains reserved even when it is a symlink pointing outwards.
         let external = dir.join("unrelated.mp4");
         std::fs::write(&external, b"unrelated output").unwrap();
-        let sidecar = dir.join("project.capopen.outward.tmp");
+        let sidecar = dir.join("project.nuzky.outward.tmp");
         std::os::unix::fs::symlink(&external, &sidecar).unwrap();
         refused(&project, &sidecar);
         assert_eq!(std::fs::read(external).unwrap(), b"unrelated output");
     }
     let other = dir.join("other");
     std::fs::create_dir(&other).unwrap();
-    for output in [dir.join("project.capopen-movie.mp4"), other.join("project.capopen.export.mp4")] {
+    for output in [dir.join("project.nuzky-movie.mp4"), other.join("project.nuzky.export.mp4")] {
         let result =
-            Command::new(env!("CARGO_BIN_EXE_capopen")).arg("render").arg(&project).arg(output).output().unwrap();
+            Command::new(env!("CARGO_BIN_EXE_nuzky")).arg("render").arg(&project).arg(output).output().unwrap();
         // The empty fixture stops at export validation, after the output guard has accepted it.
         assert!(String::from_utf8_lossy(&result.stderr).contains("The timeline is empty"));
     }
@@ -146,9 +146,9 @@ fn new_refuses_existing_or_locked_project_and_publishes_complete_json() {
     let image = dir.join("image.ppm");
     std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
     let create = |path: &std::path::Path| {
-        Command::new(env!("CARGO_BIN_EXE_capopen")).arg("new").arg(path).arg(&image).output().unwrap()
+        Command::new(env!("CARGO_BIN_EXE_nuzky")).arg("new").arg(path).arg(&image).output().unwrap()
     };
-    let lock = capopen_session::lock_project(&project, true).unwrap();
+    let lock = nuzky_session::lock_project(&project, true).unwrap();
     let busy = create(&project);
     assert!(!busy.status.success());
     assert!(String::from_utf8_lossy(&busy.stderr).contains("PROJECT_BUSY"));
@@ -157,7 +157,7 @@ fn new_refuses_existing_or_locked_project_and_publishes_complete_json() {
     assert!(!exists.status.success());
     assert!(String::from_utf8_lossy(&exists.stderr).contains("already exists"));
     assert_eq!(std::fs::read(&project).unwrap(), bytes);
-    let fresh = dir.join("fresh.capopen");
+    let fresh = dir.join("fresh.nuzky");
     let created = create(&fresh);
     assert!(created.status.success(), "{}", String::from_utf8_lossy(&created.stderr));
     let saved: Project = serde_json::from_slice(&std::fs::read(&fresh).unwrap()).unwrap();
@@ -174,7 +174,7 @@ fn frame_and_render_reject_bad_sizes_and_invalid_projects_without_panicking() {
     for (width, message) in
         [("0", "Frame width"), ("8", "Frame width"), ("100000", "Frame width"), ("7000", "Frame height")]
     {
-        let result = Command::new(env!("CARGO_BIN_EXE_capopen"))
+        let result = Command::new(env!("CARGO_BIN_EXE_nuzky"))
             .arg("frame")
             .arg(&project)
             .arg("0")

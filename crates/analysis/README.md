@@ -1,4 +1,4 @@
-# capopen-analysis
+# nuzky-analysis
 
 Local, synchronous analysis for editing proposals. All public results and parameter
 structs implement serde. Times are integer microseconds relative to the media's
@@ -70,25 +70,25 @@ that preserves both size and mtime is not detected; this is not a content hash.
 ## CLI
 
 ```sh
-cargo run -p capopen-analysis --bin capopen-analyze -- clip.mp4 silences
-cargo run -p capopen-analysis --bin capopen-analyze -- clip.mp4 words --lang cs \
+cargo run -p nuzky-analysis --bin nuzky-analyze -- clip.mp4 silences
+cargo run -p nuzky-analysis --bin nuzky-analyze -- clip.mp4 words --lang cs \
   --model /path/ggml-small.bin --vad-model /path/ggml-silero-v5.1.2.bin
 ```
 
 Commands: `loudness`, `silences`, `scenes`, `words`, `fillers`. Output is one compact
 JSON value on stdout; errors and native diagnostics go to stderr. Loudness reports
 100 ms RMS windows plus `integrated_lufs` (null for silence) and `true_peak_dbtp`. `--cache` selects
-a cache directory; default is the OS temp directory's `capopen-analysis` folder.
+a cache directory; default is the OS temp directory's `nuzky-analysis` folder.
 CLI cache IDs depend on canonical path, file size and modification time. API callers
 keep asset IDs stable; `pcm_path` performs the same size+mtime invalidation for them.
 
-Model discovery checks `$XDG_DATA_HOME/capopen/models` (or
-`~/.local/share/capopen/models`) and `tmp-test/xdg/data/capopen/models`. Explicit model
+Model discovery checks `$XDG_DATA_HOME/nuzky/models` (or
+`~/.local/share/nuzky/models`) and `tmp-test/xdg/data/nuzky/models`. Explicit model
 paths take priority. Silero is also looked up alongside the chosen Whisper model.
 
 ## Verification
 
-`cargo test -p capopen-analysis` includes synthetic tones/noisy pauses, UTF-8 token
+`cargo test -p nuzky-analysis` includes synthetic tones/noisy pauses, UTF-8 token
 joining and time mapping, conservative filler/stutter cases, and FFmpeg-generated
 hard cuts, slow fades, rotation and VFR. FFmpeg with libx264 must be available.
 Fixtures stay under `tmp-test/analysis`. Real model checks are separate so ordinary

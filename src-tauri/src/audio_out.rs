@@ -7,10 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use capopen_engine::Project;
-use capopen_engine::audio::{Mixer, us_to_samples};
-use capopen_engine::model::{CHANNELS, SAMPLE_RATE};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use nuzky_engine::Project;
+use nuzky_engine::audio::{Mixer, us_to_samples};
+use nuzky_engine::model::{CHANNELS, SAMPLE_RATE};
 
 const CHUNK: usize = 1024;
 const RING_FRAMES: usize = SAMPLE_RATE as usize / 5; // 200 ms

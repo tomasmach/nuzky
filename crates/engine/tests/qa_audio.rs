@@ -1,5 +1,5 @@
 mod qa_support;
-use capopen_engine::{
+use nuzky_engine::{
     audio::{Pcm, ensure_pcm, peaks},
     media::{extract_pcm, probe},
     model::*,
@@ -123,7 +123,7 @@ fn late_audio_is_padded_to_video_container_origin() {
     );
     let asset = probe(&source, "late-audio-qa".into()).unwrap();
     let cache = d.join("cache");
-    let cached = capopen_engine::audio::pcm_path(&cache, &asset);
+    let cached = nuzky_engine::audio::pcm_path(&cache, &asset);
     if cached.exists() {
         std::fs::remove_file(&cached).unwrap();
     }
@@ -242,7 +242,7 @@ fn mp3_attached_picture_remains_audio_asset() {
     assert_eq!(a.kind, AssetKind::Audio);
     assert_eq!((a.width, a.height), (0, 0));
     assert!(a.has_audio);
-    assert!(capopen_engine::media::VideoDecoder::open(&source).is_err());
+    assert!(nuzky_engine::media::VideoDecoder::open(&source).is_err());
     let out = d.join("cover.f32");
     let n = extract_pcm(&source, &out, |_| Ok(())).unwrap();
     assert!((n as i64 - 48000).abs() <= 1024, "frames={n}");

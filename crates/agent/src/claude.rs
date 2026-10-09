@@ -6,14 +6,14 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::process::Command;
 
-/// What CapOpen tells the agent about where it is, on top of the MCP server's own instructions.
-const SYSTEM: &str = "You are the AI panel inside CapOpen, a video editor. The user watches the open project change as you work. \
-Use only the capopen tools and follow the CapOpen instructions you were given. One request is one run: begin_run once before \
+/// What Nuzky tells the agent about where it is, on top of the MCP server's own instructions.
+const SYSTEM: &str = "You are the AI panel inside Nuzky, a video editor. The user watches the open project change as you work. \
+Use only the nuzky tools and follow the Nuzky instructions you were given. One request is one run: begin_run once before \
 changing anything and end_run with keep when you are done. Answer briefly in the user's language and say what you changed. \
-When the user has to decide something, call suggest_options as the last thing in your turn. The [CapOpen] lines at the end \
+When the user has to decide something, call suggest_options as the last thing in your turn. The [Nuzky] lines at the end \
 of a message say what the user had selected when they sent it.";
 
-/// Settings CapOpen needs; `outputStyle` doubles as a check that Claude applied them at all,
+/// Settings Nuzky needs; `outputStyle` doubles as a check that Claude applied them at all,
 /// since it silently ignores a settings value it does not accept.
 fn settings() -> Value {
     json!({"disableAllHooks": true, "outputStyle": "default", "autoMemoryEnabled": false})
@@ -21,14 +21,14 @@ fn settings() -> Value {
 
 pub(crate) fn command(req: &TurnRequest) -> Command {
     let env: Map<String, Value> = req.mcp.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
-    let mcp = json!({"mcpServers": {"capopen": {"type": "stdio", "command": req.mcp.command, "args": req.mcp.args, "env": env}}});
+    let mcp = json!({"mcpServers": {"nuzky": {"type": "stdio", "command": req.mcp.command, "args": req.mcp.args, "env": env}}});
     let mut c = Command::new(&req.exe);
     c.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
         // The user's login, model and gateway stay; the folder's settings, hooks and MCP servers do not.
         .args(["--setting-sources", "user", "--settings", &settings().to_string()])
         .args(["--strict-mcp-config", "--mcp-config", &mcp.to_string()])
-        // No shell, files or web: only CapOpen's tools, allowed without asking.
-        .args(["--tools", "", "--allowedTools", "mcp__capopen", "--permission-mode", "dontAsk"])
+        // No shell, files or web: only Nuzky's tools, allowed without asking.
+        .args(["--tools", "", "--allowedTools", "mcp__nuzky", "--permission-mode", "dontAsk"])
         .args(["--disable-slash-commands", "--append-system-prompt", SYSTEM])
         .args([if req.resume { "--resume" } else { "--session-id" }, &req.session]);
     c
@@ -36,7 +36,7 @@ pub(crate) fn command(req: &TurnRequest) -> Command {
 
 pub(crate) enum Step {
     Event(AgentEvent),
-    /// Ends the turn with this error; CapOpen stops the agent.
+    /// Ends the turn with this error; Nuzky stops the agent.
     Fail(ErrorCode, String),
     /// The agent's own closing error, which a stopped turn also produces.
     ResultError(String),
@@ -140,33 +140,29 @@ impl Parser {
     }
 }
 
-/// Fails closed unless Claude runs with CapOpen's settings and nothing but CapOpen's tools.
+/// Fails closed unless Claude runs with Nuzky's settings and nothing but Nuzky's tools.
 fn init(v: &Value) -> Option<Step> {
-    let foreign = v["tools"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .find(|t| !t.starts_with("mcp__capopen__"));
+    let foreign =
+        v["tools"].as_array().into_iter().flatten().filter_map(Value::as_str).find(|t| !t.starts_with("mcp__nuzky__"));
     if let Some(tool) = foreign {
         return Some(Step::Fail(
             ErrorCode::AgentFailed,
             format!(
-                "Claude Code offered a tool CapOpen did not give it ({tool}), so CapOpen stopped it. Update Claude Code and CapOpen."
+                "Claude Code offered a tool Nuzky did not give it ({tool}), so Nuzky stopped it. Update Claude Code and Nuzky."
             ),
         ));
     }
-    let capopen = v["mcp_servers"].as_array().into_iter().flatten().find(|s| s["name"] == "capopen");
-    if capopen.is_none_or(|s| s["status"] != "connected") {
+    let nuzky = v["mcp_servers"].as_array().into_iter().flatten().find(|s| s["name"] == "nuzky");
+    if nuzky.is_none_or(|s| s["status"] != "connected") {
         return Some(Step::Fail(
             ErrorCode::AgentFailed,
-            "Claude Code could not reach CapOpen's tools. Try again; if it keeps failing, restart CapOpen.".into(),
+            "Claude Code could not reach Nuzky's tools. Try again; if it keeps failing, restart Nuzky.".into(),
         ));
     }
     if v.get("output_style").is_some_and(|s| s != "default") {
         return Some(Step::Fail(
             ErrorCode::AgentFailed,
-            "Claude Code ignored CapOpen's settings, so CapOpen stopped it. Update Claude Code and try again.".into(),
+            "Claude Code ignored Nuzky's settings, so Nuzky stopped it. Update Claude Code and try again.".into(),
         ));
     }
     None
@@ -190,17 +186,17 @@ mod tests {
     }
 
     fn init_line(tools: &[&str], style: &str) -> Value {
-        json!({"type":"system","subtype":"init","tools":tools,"mcp_servers":[{"name":"capopen","status":"connected"}],"output_style":style})
+        json!({"type":"system","subtype":"init","tools":tools,"mcp_servers":[{"name":"nuzky","status":"connected"}],"output_style":style})
     }
 
     // Shapes from a real claude 2.1.292 turn (docs/research/2026-10-08-acp-spike.md and the panel transport proposals).
     #[test]
     fn a_turn_streams_text_once_and_names_tool_results() {
         let lines = [
-            init_line(&["mcp__capopen__get_state"], "default"),
+            init_line(&["mcp__nuzky__get_state"], "default"),
             json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start"}}),
-            json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"t1","name":"mcp__capopen__get_state","input":{}}}}),
-            json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__capopen__get_state","input":{"range":null}}]}}),
+            json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"t1","name":"mcp__nuzky__get_state","input":{}}}}),
+            json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__nuzky__get_state","input":{"range":null}}]}}),
             json!({"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"{}"}]}]}}),
             json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start"}}),
             json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hoto"}}}),
@@ -209,7 +205,7 @@ mod tests {
             json!({"type":"result","subtype":"success","is_error":false,"result":"Hotovo."}),
         ];
         let get_state = |status, input| {
-            Ok(AgentEvent::Tool { id: "t1".into(), name: "mcp__capopen__get_state".into(), status, input })
+            Ok(AgentEvent::Tool { id: "t1".into(), name: "mcp__nuzky__get_state".into(), status, input })
         };
         assert_eq!(
             events(&lines),
@@ -226,11 +222,11 @@ mod tests {
     #[test]
     fn foreign_tools_ignored_settings_and_login_problems_fail_the_turn() {
         assert_eq!(
-            events(&[init_line(&["mcp__capopen__get_state", "Bash"], "default")])[0].as_ref().unwrap_err().0,
+            events(&[init_line(&["mcp__nuzky__get_state", "Bash"], "default")])[0].as_ref().unwrap_err().0,
             ErrorCode::AgentFailed
         );
         assert_eq!(
-            events(&[init_line(&["mcp__capopen__get_state"], "Proactive")])[0].as_ref().unwrap_err().0,
+            events(&[init_line(&["mcp__nuzky__get_state"], "Proactive")])[0].as_ref().unwrap_err().0,
             ErrorCode::AgentFailed
         );
         let logged_out = json!({"type":"assistant","error":"authentication_failed","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"Not logged in · Please run /login"}]}});

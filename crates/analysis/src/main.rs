@@ -1,12 +1,12 @@
 use std::{io::Write, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use capopen_analysis::{
+use nuzky_analysis::{
     AudioSource, SceneParams, SilenceParams, filler_words, loudness, program_loudness, scene_cuts, silences,
     transcribe_words,
 };
 
-const USAGE: &str = "capopen-analyze <media> <loudness|silences|scenes|words|fillers> [--lang auto|cs|en] [--model path] [--vad-model path] [--cache path]";
+const USAGE: &str = "nuzky-analyze <media> <loudness|silences|scenes|words|fillers> [--lang auto|cs|en] [--model path] [--vad-model path] [--cache path]";
 
 enum Command {
     Loudness,
@@ -41,8 +41,8 @@ fn main() -> Result<()> {
             _ => bail!("Unknown argument: {arg}\n{USAGE}"),
         }
     }
-    let asset = capopen_engine::media::probe(&media, cache_id(&media)?).context("Probing media")?;
-    let cache = cache.unwrap_or_else(|| std::env::temp_dir().join("capopen-analysis"));
+    let asset = nuzky_engine::media::probe(&media, cache_id(&media)?).context("Probing media")?;
+    let cache = cache.unwrap_or_else(|| std::env::temp_dir().join("nuzky-analysis"));
     let output = match command {
         Command::Loudness => {
             let program = program_loudness(&asset, &cache)?;
@@ -58,8 +58,8 @@ fn main() -> Result<()> {
                 .or_else(|| find_model("ggml-small.bin"))
                 .context("Pass --model with a local Whisper model path")?;
             let vad = vad
-                .or_else(|| model.parent().map(|p| p.join(capopen_analysis::VAD_MODEL)).filter(|p| p.is_file()))
-                .or_else(|| find_model(capopen_analysis::VAD_MODEL))
+                .or_else(|| model.parent().map(|p| p.join(nuzky_analysis::VAD_MODEL)).filter(|p| p.is_file()))
+                .or_else(|| find_model(nuzky_analysis::VAD_MODEL))
                 .context("Pass --vad-model with a local Silero model path")?;
             let transcript =
                 transcribe_words(AudioSource::Asset { asset: &asset, cache: &cache }, &model, &vad, &language)?;
@@ -79,8 +79,8 @@ fn find_model(name: &str) -> Option<PathBuf> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-    data.map(|p| p.join("capopen/models").join(name)).filter(|p| p.is_file()).or_else(|| {
-        let p = PathBuf::from("tmp-test/xdg/data/capopen/models").join(name);
+    data.map(|p| p.join("nuzky/models").join(name)).filter(|p| p.is_file()).or_else(|| {
+        let p = PathBuf::from("tmp-test/xdg/data/nuzky/models").join(name);
         p.is_file().then_some(p)
     })
 }

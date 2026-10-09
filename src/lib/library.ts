@@ -7,7 +7,7 @@ import type { Collection, Library, LibraryProject, Project, Said, Snapshot } fro
 import { MEDIA_EXTENSIONS, importFailures } from "../components/panel/assets";
 
 type Sort = "opened" | "name";
-const SORT_KEY = "capopen.homeSort";
+const SORT_KEY = "nuzky.homeSort";
 
 /** What opening another project asks while an agent is editing this one. */
 export interface PendingSwitch {
@@ -206,8 +206,8 @@ export function whenLabel(ms: number, now = Date.now()): string {
 
 /** Why a project cannot be opened here, for its card and its tooltip. */
 export function blocked(p: LibraryProject): string | null {
-  if (p.state === "busy") return "This project is open in another CapOpen window or an AI agent is editing it. Close it there first.";
-  if (p.state === "broken") return `This file can't be opened. It may be damaged, or saved by a newer CapOpen. ${p.error ?? ""}`.trim();
+  if (p.state === "busy") return "This project is open in another Nuzky window or an AI agent is editing it. Close it there first.";
+  if (p.state === "broken") return `This file can't be opened. It may be damaged, or saved by a newer Nuzky. ${p.error ?? ""}`.trim();
   return null;
 }
 
@@ -216,7 +216,7 @@ function pristine(project: Project) {
   return project.name === "Untitled project" && project.assets.length === 0 && allClips(project).length === 0;
 }
 
-/** No projects but the empty one CapOpen made: the home screen offers formats to start with. */
+/** No projects but the empty one Nuzky made: the home screen offers formats to start with. */
 export function onlyPristine(projects: LibraryProject[] | null, snap: Snapshot | null) {
   return projects !== null && projects.every((p) => !!snap && p.path === snap.path && pristine(snap.project));
 }
@@ -312,8 +312,8 @@ export async function pickVideosForNewProject() {
 }
 
 export async function openProjectFile() {
-  const picked = await pickFiles({ multiple: false, filters: [{ name: "CapOpen project", extensions: ["capopen"] }] });
-  if (typeof picked === "string") openProject({ path: picked, name: picked.split(/[\\/]/).pop()?.replace(/\.capopen$/, "") ?? "project" });
+  const picked = await pickFiles({ multiple: false, filters: [{ name: "Nuzky project", extensions: ["nuzky"] }] });
+  if (typeof picked === "string") openProject({ path: picked, name: picked.split(/[\\/]/).pop()?.replace(/\.nuzky$/, "") ?? "project" });
 }
 
 // --- Managing -----------------------------------------------------------------------------------
