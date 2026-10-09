@@ -165,12 +165,13 @@
   }
 }
 
+/* Fills from --from to --to, so a bar can grow one step at a time. */
 @keyframes progress {
   from {
-    transform: scaleX(0);
+    transform: scaleX(var(--from, 0));
   }
   to {
-    transform: scaleX(1);
+    transform: scaleX(var(--to, 1));
   }
 }
 

@@ -57,7 +57,8 @@ const tabs: Tab[] = [
   },
 ];
 
-const ADVANCE_MS = 7000;
+// Each hotspot opens in turn for this long; after the last one the tour moves to the next tab.
+const SPOT_MS = 3200;
 const TIP_W = 292;
 
 function tipPosition(s: Spot): React.CSSProperties {
@@ -106,14 +107,17 @@ function ExportDialog() {
 export function Showcase() {
   const [active, setActive] = useState(0);
   const [spot, setSpot] = useState(0);
+  // `auto` moves between tabs and ends when the visitor picks one; `still` (reduced motion) stops everything.
   const [auto, setAuto] = useState(true);
-  const [paused, setPaused] = useState(false);
+  const [still, setStill] = useState(false);
+  // The pointer or keyboard focus is on a hotspot, so the one the visitor is reading stays open.
+  const [held, setHeld] = useState(false);
   const [inView, setInView] = useState(false);
   const section = useRef<HTMLElement>(null);
   const tab = tabs[active];
 
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) setAuto(false);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) setStill(true);
     // `?tour=captions` opens the tour on a tab, for links that point at one feature.
     const linked = tabs.findIndex((t) => t.id === new URLSearchParams(window.location.search).get("tour"));
     if (linked >= 0) {
@@ -125,15 +129,20 @@ export function Showcase() {
     return () => io.disconnect();
   }, []);
 
-  const running = auto && !paused && inView;
+  // Walks through the hotspots of the open tab, then on to the next tab. A tab the visitor
+  // picked keeps cycling its own hotspots.
+  const running = !still && !held && inView;
   useEffect(() => {
     if (!running) return;
     const id = window.setTimeout(() => {
-      setActive((a) => (a + 1) % tabs.length);
-      setSpot(0);
-    }, ADVANCE_MS);
+      if (spot + 1 < tab.spots.length) setSpot(spot + 1);
+      else {
+        if (auto) setActive((a) => (a + 1) % tabs.length);
+        setSpot(0);
+      }
+    }, SPOT_MS);
     return () => window.clearTimeout(id);
-  }, [running, active]);
+  }, [running, active, spot, auto, tab.spots.length]);
 
   const choose = (i: number) => {
     setAuto(false);
@@ -176,10 +185,6 @@ export function Showcase() {
           role="tabpanel"
           aria-labelledby={`tab-${tab.id}`}
           className="w-full"
-          onPointerEnter={() => setPaused(true)}
-          onPointerLeave={() => setPaused(false)}
-          onFocus={() => setPaused(true)}
-          onBlur={() => setPaused(false)}
         >
           <Fit width={1200} height={740} waves="glow" className="mx-auto">
             <div className="relative size-full rounded-[14px] shadow-[0_50px_140px_rgb(0_0_0/0.9),0_0_0_1px_rgb(255_255_255/0.08)]">
@@ -196,8 +201,16 @@ export function Showcase() {
                   key={`${tab.id}-${i}`}
                   aria-label={s.title}
                   aria-pressed={i === spot}
-                  onPointerEnter={() => setSpot(i)}
-                  onFocus={() => setSpot(i)}
+                  onPointerEnter={() => {
+                    setSpot(i);
+                    setHeld(true);
+                  }}
+                  onPointerLeave={() => setHeld(false)}
+                  onFocus={() => {
+                    setSpot(i);
+                    setHeld(true);
+                  }}
+                  onBlur={() => setHeld(false)}
                   onClick={() => setSpot(i)}
                   className="group absolute hidden size-12 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full md:flex"
                   style={{ left: s.x, top: s.y }}
@@ -238,14 +251,22 @@ export function Showcase() {
           <p key={tab.id} className="min-h-[1.5em] text-[17px] text-muted animate-[fade-up_240ms_ease-out]">
             {tab.summary}
           </p>
+          {/* The open tab's bar fills one step per hotspot. */}
           <div className="flex items-center gap-1.5" aria-hidden>
             {tabs.map((t, i) => (
               <span key={t.id} className={`relative h-1.5 overflow-hidden rounded-full bg-white/25 transition-[width] duration-300 ${i === active ? "w-7" : "w-1.5"}`}>
                 {i === active && (
                   <span
-                    key={`${active}-${running}`}
+                    key={`${active}-${spot}-${running}`}
                     className="absolute inset-0 origin-left rounded-full bg-fg"
-                    style={running ? { animation: `progress ${ADVANCE_MS}ms linear forwards` } : undefined}
+                    style={
+                      {
+                        "--from": spot / tab.spots.length,
+                        "--to": (spot + 1) / tab.spots.length,
+                        transform: `scaleX(${(spot + 1) / tab.spots.length})`,
+                        animation: running ? `progress ${SPOT_MS}ms linear forwards` : undefined,
+                      } as React.CSSProperties
+                    }
                   />
                 )}
               </span>
