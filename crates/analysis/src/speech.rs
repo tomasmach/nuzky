@@ -19,8 +19,25 @@ const CS: usize = RATE / 100;
 const GAP: usize = RATE / 5;
 /// Audio Whisper encodes in one pass.
 const WINDOW: usize = 30 * RATE;
-/// Vulkan where the `gpu` feature is on, Metal on every Mac.
-const GPU: bool = cfg!(any(feature = "gpu", target_os = "macos"));
+
+/// Vulkan where the `gpu` feature is on, Metal on a Mac that has a Metal device. whisper.cpp lists a
+/// Metal device even without one and then crashes allocating the model there, before the CPU retry.
+fn use_gpu() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "Metal", kind = "framework")]
+        unsafe extern "C" {
+            fn MTLCreateSystemDefaultDevice() -> *mut std::ffi::c_void;
+        }
+        static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        // SAFETY: takes no arguments; the default device stays alive for the process, as in whisper.cpp.
+        *METAL.get_or_init(|| !unsafe { MTLCreateSystemDefaultDevice() }.is_null())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        cfg!(feature = "gpu")
+    }
+}
 
 pub enum AudioSource<'a> {
     Asset { asset: &'a Asset, cache: &'a Path },
@@ -90,10 +107,11 @@ pub fn transcribe_words_cancellable(
         return Ok(transcript);
     }
     let mut context_params = WhisperContextParameters::default();
-    context_params.use_gpu(GPU);
+    let gpu = use_gpu();
+    context_params.use_gpu(gpu);
     let context = match WhisperContext::new_with_params(model_path, context_params) {
         Ok(context) => context,
-        Err(error) if GPU => {
+        Err(error) if gpu => {
             eprintln!("GPU speech context failed ({error}); retrying on CPU");
             let mut cpu_params = WhisperContextParameters::default();
             cpu_params.use_gpu(false);
