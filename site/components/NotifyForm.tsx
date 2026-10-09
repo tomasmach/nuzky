@@ -14,6 +14,8 @@ const problems: Partial<Record<State, string>> = {
 // /api/notify. `noteId` points at the promise printed under the field, so a screen reader hears it with the field.
 export function NotifyForm({ id, noteId }: { id?: string; noteId: string }) {
   const [state, setState] = useState<State>("idle");
+  // Until the script runs, a plain submit would put the address in the page URL, so the button waits for it.
+  const [ready, setReady] = useState(false);
   const field = useId();
   const problemId = useId();
   const thanks = useRef<HTMLParagraphElement>(null);
@@ -21,6 +23,8 @@ export function NotifyForm({ id, noteId }: { id?: string; noteId: string }) {
 
   // After sending, the field is gone, so the thank-you takes the focus and gets read out. A refused address
   // sends the focus back to the field to fix it.
+  useEffect(() => setReady(true), []);
+
   useEffect(() => {
     if (state === "sent") thanks.current?.focus();
     if (state === "invalid") input.current?.focus();
@@ -86,8 +90,9 @@ export function NotifyForm({ id, noteId }: { id?: string; noteId: string }) {
         <input name="website" tabIndex={-1} autoComplete="off" aria-hidden className="absolute -left-[9999px] size-px opacity-0" />
         <button
           type="submit"
+          disabled={!ready}
           aria-disabled={sending}
-          className="btn-light flex h-10 shrink-0 cursor-pointer items-center rounded-full px-[18px] text-[14px] font-semibold aria-disabled:cursor-default aria-disabled:opacity-60"
+          className="btn-light flex h-10 shrink-0 cursor-pointer items-center rounded-full px-[18px] text-[14px] font-semibold aria-disabled:cursor-default aria-disabled:opacity-60 disabled:cursor-default"
         >
           {sending ? "Sending…" : "Notify me"}
         </button>

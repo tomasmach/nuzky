@@ -21,7 +21,7 @@ const shareImage = (src: string) => ({
   url: src,
   width: 2400,
   height: 1260,
-  alt: "Nuzky: Make the reel. Skip the subscription. A free, open source video editor with AI built in.",
+  alt: "Nuzky: You just wanted to edit. Now you can. A free, open source video editor that writes your captions and cuts out the ums, the pauses and the retakes.",
 });
 
 export const metadata: Metadata = {
