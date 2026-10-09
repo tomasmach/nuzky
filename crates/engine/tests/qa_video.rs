@@ -500,8 +500,15 @@ fn hlg_and_pq_sources_are_tone_mapped_like_libplacebo() {
         return;
     }
     // libplacebo makes the reference on a Vulkan GPU; a machine without one, like a CI runner, cannot.
-    let probe = ["-v", "error", "-f", "lavfi", "-i", "color=s=16x16:d=0.04", "-vf", "libplacebo", "-f", "null", "-"];
-    if !Command::new("ffmpeg").args(probe).output().is_ok_and(|o| o.status.success()) {
+    // Any other failure of this probe fails the test, so the comparison never goes quiet by accident.
+    let probe = Command::new("ffmpeg")
+        .args(["-v", "error", "-threads", "2", "-filter_threads", "1", "-f", "lavfi", "-i", "color=s=16x16:d=0.04"])
+        .args(["-vf", "libplacebo", "-f", "null", "-"])
+        .output()
+        .unwrap();
+    if !probe.status.success() {
+        let error = String::from_utf8_lossy(&probe.stderr);
+        assert!(error.contains("Vulkan device"), "libplacebo probe failed:\n{error}");
         eprintln!("SKIP: libplacebo has no Vulkan device");
         return;
     }
