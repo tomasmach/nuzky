@@ -60,10 +60,12 @@ function Caption({ style, highlight }: { style: CaptionStyle; highlight: boolean
       style === "Bold"
         ? lit && "text-caption-yellow"
         : style === "Pop"
-          ? lit && "-rotate-2 rounded-[5px] bg-accent shadow-[0_0_0_4px_var(--color-accent)]"
+          ? lit
+            ? "-rotate-2 rounded-[5px] bg-accent shadow-[0_0_0_4px_var(--color-accent)]"
+            : "[text-shadow:3px_3px_0_var(--color-accent)]"
           : highlight && !lit && "text-white/55";
     return (
-      <span key={w} className={`inline-block transition-[color,background-color,box-shadow,transform] duration-150 ${look || ""}`}>
+      <span key={w} className={`inline-block transition-[color,background-color,box-shadow,text-shadow,transform] duration-150 ${look || ""}`}>
         {loud ? w.toUpperCase() : w}
       </span>
     );
