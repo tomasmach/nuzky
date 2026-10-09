@@ -63,24 +63,30 @@ function checkIfDue() {
   if (useUpdates.getState().auto && Date.now() - checkedAt >= DAY_MS) void checkForUpdates(false);
 }
 
-/** `manual` answers with a toast, also when this is the latest version or the check failed. */
+/** `manual` answers with a toast, also when this is the latest version or the check failed, and also when it joins a check that was running. */
 export async function checkForUpdates(manual: boolean) {
   const { enabled, checking, version } = useUpdates.getState();
-  if (!enabled || checking) return;
+  if (!enabled) return;
+  // A check already on its way answers this one too.
+  if (checking) {
+    if (manual) useUpdates.setState({ checking: "manual" });
+    return;
+  }
   useUpdates.setState({ checking: manual ? "manual" : "auto" });
+  const asked = () => useUpdates.getState().checking === "manual";
   // A failed check counts too, so an unreachable server is asked at most once a day.
   checkedAt = Date.now();
   try {
     const latest = await api.checkForUpdate();
     useUpdates.setState({ latest });
-    if (manual) {
+    if (asked()) {
       const toast = useEditor.getState().toast;
       if (latest) toast({ kind: "info", text: `CapOpen ${latest} is available.`, action: { label: "Download", run: downloadUpdate } });
       else toast({ kind: "success", text: `CapOpen ${version} is the latest version.` });
     }
   } catch (e) {
     console.warn("Update check failed", errorText(e));
-    if (manual) useEditor.getState().toast({ kind: "error", text: "Couldn't check for updates. Check your internet connection or try again later." });
+    if (asked()) useEditor.getState().toast({ kind: "error", text: "Couldn't check for updates. Check your internet connection or try again later." });
   } finally {
     useUpdates.setState({ checking: null });
     save();

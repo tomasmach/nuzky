@@ -819,7 +819,11 @@ export function Menu({
               onPointerEnter={() => {
                 setActive(i);
                 if (item.submenu && !item.disabled) setOpen({ index: i, keyboard: false });
-                else if (open && open.index !== i) setOpen(null);
+                else if (open && open.index !== i) {
+                  // The submenu had the focus; the keys go on working here once it closes.
+                  ref.current?.focus({ preventScroll: true });
+                  setOpen(null);
+                }
               }}
               onClick={() => choose(i, false)}
               className={`flex h-7 items-center gap-2 rounded-md px-2 ${active === i ? "bg-white/[.08]" : ""} ${

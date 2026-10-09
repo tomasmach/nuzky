@@ -26,12 +26,13 @@ LOADED = "return !window.__oldPage && !!window.__capopen?.store.getState().snap"
 class Server:
     """latest.json as the release would serve it, counting the requests."""
     def __init__(self):
-        self.status, self.body, self.requests, self.gzip = 200, b'', 0, False
+        self.status, self.body, self.requests, self.gzip, self.delay = 200, b'', 0, False, 0
         server = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 server.requests += 1
+                time.sleep(server.delay)
                 self.send_response(server.status)
                 self.send_header('Content-Type', 'application/json')
                 if server.gzip:
@@ -187,6 +188,17 @@ def updates(r):
         r.check('turned on again a day after the last check, it asks at once and finds the newer version',
                 wait(lambda: row(r).get('text') == 'Update available99.0.0', 15) and server.requests == asked + 1 and toasts(r) == [],
                 (row(r), server.requests, toasts(r)))
+        # Another day passes, on a slow connection; Check for updates is chosen while the automatic check runs.
+        asked, server.delay = server.requests, 3
+        r.s.run("const s = JSON.parse(localStorage.getItem('capopen.updates')); s.checkedAt = Date.now() - 25 * 3600e3;"
+                "localStorage.setItem('capopen.updates', JSON.stringify(s));" + RELOAD)
+        wait(lambda: r.s.run(LOADED, retries=3), 30)
+        wait(lambda: server.requests == asked + 1, 15)
+        r.s.call('window.__capopen.checkForUpdates(true)')
+        r.check('Check for updates during the automatic check answers once it is done, without asking twice',
+                wait(lambda: toasts(r), 10) and toasts(r)[-1] == {'kind': 'info', 'text': 'CapOpen 99.0.0 is available.'}
+                and server.requests == asked + 1, (toasts(r), server.requests, asked))
+        server.delay = 0
         r.check('nothing went wrong on the way', [t for t in toasts(r) if t['kind'] == 'error'] == [], toasts(r))
     finally:
         server.http.shutdown()
