@@ -122,16 +122,17 @@ impl ProjectSession {
     }
 
     pub fn stop_run(&self) -> Result<RunResult> {
-        self.stop_run_with(|_| {})
+        self.stop_run_with(|_| {}, EndAction::Keep)
     }
 
-    pub(crate) fn stop_run_with(&self, revoked: impl FnOnce(&str)) -> Result<RunResult> {
+    /// Ends the open run for the user: `Keep` leaves its changes as one undo step, `Discard` takes them back.
+    pub(crate) fn stop_run_with(&self, revoked: impl FnOnce(&str), action: EndAction) -> Result<RunResult> {
         let mut inner = self.inner.lock().unwrap();
         inner.writable()?;
         let run_id = inner.run.as_ref().context("INVALID_RUN: no open run")?.info.run_id.clone();
         inner.stopped_runs.insert(run_id.clone());
         revoked(&run_id);
-        inner.finish(EndAction::Keep)?;
+        inner.finish(action)?;
         Ok(RunResult { run_id, stamp: inner.stamp() })
     }
 

@@ -245,6 +245,62 @@ export interface ProjectSummary {
   durationUs: number;
 }
 
+/** A project on the home screen. */
+export interface LibraryProject {
+  path: string;
+  name: string;
+  modifiedMs: number;
+  durationUs: number;
+  /** Canvas size; 0 for a project that cannot be read. */
+  width: number;
+  height: number;
+  collection: string | null;
+  /**
+   * broken: the file cannot be read. busy: another CapOpen window or an agent has it open.
+   * missing: some of its media files are gone. empty: nothing on the timeline.
+   */
+  state: "broken" | "busy" | "missing" | "empty" | null;
+  missing: number;
+  /** Why a broken project cannot be read. */
+  error: string | null;
+}
+
+export interface Collection {
+  id: string;
+  name: string;
+}
+
+export interface Library {
+  projects: LibraryProject[];
+  collections: Collection[];
+  /** Set when the collections could not be read. */
+  notice: string | null;
+}
+
+/** What Undo needs to bring a deleted collection back. */
+export interface DeletedCollection {
+  collection: Collection;
+  position: number;
+  paths: string[];
+}
+
+/** Where words of a search were said: the project and its timeline time. */
+export interface SaidHit {
+  path: string;
+  startUs: number;
+  before: string;
+  text: string;
+  after: string;
+}
+
+export interface Said {
+  hits: SaidHit[];
+  /** Projects with speech that is not transcribed, so only their names were searched. */
+  untranscribed: string[];
+  /** How many projects have a transcript to search. */
+  transcribed: number;
+}
+
 export interface SpeechModel {
   id: string;
   label: string;

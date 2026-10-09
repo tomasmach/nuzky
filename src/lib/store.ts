@@ -54,6 +54,10 @@ interface EditorState {
   exportJobId: string | null;
   panelTab: PanelTab;
   ratioOpen: boolean;
+  /** The home screen with every project, or the editor of the open project behind it. */
+  view: "home" | "editor";
+  /** The launcher over the editor: recent projects, new ones and search. */
+  launcherOpen: boolean;
 
   /** `opened`: the snapshot of a project just opened, created or booted; others must belong to the open session. */
   setSnap: (snap: Snapshot, keepSelection?: boolean, opened?: boolean) => void;
@@ -165,7 +169,7 @@ export const AI_EDITING = "AI is editing. Stop it to edit yourself.";
  */
 function noticeAiRun() {
   if (useEditor.getState().toasts.some((t) => t.text === AI_EDITING)) return;
-  useEditor.getState().toast({ kind: "info", sticky: true, text: AI_EDITING, action: { label: "Stop and edit", run: stopAiRun, valid: () => !!useEditor.getState().aiRun } });
+  useEditor.getState().toast({ kind: "info", sticky: true, text: AI_EDITING, action: { label: "Stop and edit", run: () => void stopAiRun(), valid: () => !!useEditor.getState().aiRun } });
 }
 
 /** True while an agent's run is open: the edit is not sent, and the notice shows once. */
@@ -175,13 +179,33 @@ export function aiLocked(): boolean {
   return true;
 }
 
-/** Ends the agent's run with its changes kept, so the user can edit; Undo then removes the whole run. */
-export async function stopAiRun() {
+let discarding = false;
+
+/**
+ * Ends the agent's run so the user can edit: kept, Undo then removes the whole run; with `discard`,
+ * its changes are taken back. False when it could not be stopped.
+ */
+export async function stopAiRun(discard = false) {
+  // Kept until the run ends: one whose taking back could not be saved is still taken back when
+  // it ends later, also by Stop and edit.
+  discarding ||= discard;
   try {
-    useEditor.getState().setSnap(await api.stopRun(currentEpoch()));
+    useEditor.getState().setSnap(await api.stopRun(currentEpoch(), discard));
+    return true;
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });
+    return false;
   }
+}
+
+/**
+ * Whether the user took back the run that just ended, asked once per run. Its end then offers no
+ * Undo: the run is no longer in the history, so Undo would take back the change before it.
+ */
+export function runWasDiscarded() {
+  const discarded = discarding;
+  discarding = false;
+  return discarded;
 }
 
 /**
@@ -208,7 +232,7 @@ if (typeof window !== "undefined") {
  * Media previews arrive as PNG data URLs of up to a few MB. As a blob URL the same image is a short string,
  * so a `src` or background holding it costs nothing to compare when a clip or tile re-renders.
  */
-function blobUrl(url: string): string {
+export function blobUrl(url: string): string {
   const head = /^data:([^;,]+);base64,/.exec(url);
   if (!head) return url;
   const bin = atob(url.slice(head[0].length));
@@ -247,6 +271,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   exportJobId: null,
   panelTab: "media",
   ratioOpen: false,
+  view: "home",
+  launcherOpen: false,
 
   setSnap: (snap, keepSelection = true, opened = false) => {
     const previous = get().snap;

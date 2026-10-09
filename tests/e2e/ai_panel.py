@@ -173,8 +173,10 @@ def ai_panel(r):
     r.key('ArrowRight')
     r.check('the gap beside it resizes it from the keyboard', wait(lambda: panel(r)['width'] == 384, 3), panel(r))
     r.shot('docked-left')
-    r.s.run('location.reload()')
-    wait(lambda: r.s.run('return !!window.__capopen?.store.getState().snap', retries=3), 30)
+    r.s.run('window.__oldPage = true; location.reload()')
+    # CapOpen starts on the home screen; the panel is in the editor behind it.
+    wait(lambda: r.s.run("const c = window.__capopen; if (window.__oldPage || !c?.store.getState().snap) return false; "
+                         "c.store.setState({view: 'editor'}); return true", retries=3), 30)
     r.check('after a restart it opens where it was, as wide as it was', wait(lambda: (panel(r) or {}).get('left') == 6 and panel(r)['width'] == 384, 10), panel(r))
     inspector = r.s.run("const b = document.querySelector('aside[aria-label=Inspector]').getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]")
     r.s.run(DRAG, inspector[0], inspector[1], True)
@@ -189,6 +191,11 @@ def ai_panel(r):
     r.key('ArrowRight')
     r.check('a floating panel resizes from the keyboard too', wait(lambda: panel(r)['width'] == p['width'] + 24, 3), {'before': p['width'], 'after': panel(r)['width']})
     r.shot('floating')
+    r.s.run("window.__capopen.store.setState({view: 'home'})")
+    r.check('on the home screen the floating panel does not show over the projects', wait(lambda: (panel(r) or {}).get('width') == 0, 3), panel(r))
+    click(r, 'AI', 'div[aria-label=Projects] header')
+    r.check("AI on the home screen goes back to the editor with the panel where it was",
+            wait(lambda: r.s.run('return window.__capopen.store.getState().view') == 'editor' and (panel(r) or {}).get('width') == p['width'] + 24, 3), panel(r))
     click(r, 'Close AI (Ctrl+J)')
     r.check('× closes it entirely', wait(lambda: panel(r) is None, 3))
     click(r, 'AI', 'header')

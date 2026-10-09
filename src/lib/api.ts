@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, ProjectSummary, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, Said, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -10,7 +10,8 @@ type Epoch = string | undefined;
 export const api = {
   setUiContext: (selection: string[], playheadUs: number) => invoke<void>("set_ui_context", { selection, playheadUs: Math.round(playheadUs) }),
   resolveRecovery: (action: "keep" | "restore", epoch: Epoch) => invoke<Snapshot>("resolve_recovery", { action, expectedEpoch: epoch }),
-  stopRun: (epoch: Epoch) => invoke<Snapshot>("stop_run", { expectedEpoch: epoch }),
+  /** Ends the agent's run, keeping its changes as one undo step; `discard` takes them back instead. */
+  stopRun: (epoch: Epoch, discard = false) => invoke<Snapshot>("stop_run", { expectedEpoch: epoch, discard }),
   boot: () => invoke<Boot>("boot"),
   applyEdit: (cmd: EditCmd, coalesce: string | null, epoch: Epoch) => invoke<Snapshot>("apply_edit", { cmd, coalesce, expectedEpoch: epoch }),
   /** All or nothing, as one undo step. */
@@ -30,6 +31,25 @@ export const api = {
   connectAgent: (agent: AgentKind) => invoke<AgentConnection>("connect_agent", { agent }),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
+  /** A new project with the media on its timeline, in the format of the first picture. */
+  newProjectFromMedia: (paths: string[]) =>
+    invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("new_project_from_media", { paths }),
+  library: () => invoke<Library>("library"),
+  /** A PNG data URL of the project's picture, or null when it has none. */
+  projectPoster: (path: string) => invoke<string | null>("project_poster", { path }),
+  searchSaid: (query: string, collection: string | null = null) => invoke<Said>("search_said", { query, collection }),
+  /** For a project that is not open; the open one is renamed with an edit. */
+  renameProject: (path: string, name: string) => invoke<void>("rename_project", { path, name }),
+  /** Returns the copy's path. */
+  duplicateProject: (path: string) => invoke<string>("duplicate_project", { path }),
+  trashProjects: (paths: string[]) => invoke<void>("trash_projects", { paths }),
+  restoreProjects: (paths: string[]) => invoke<void>("restore_projects", { paths }),
+  createCollection: (name: string) => invoke<Collection>("create_collection", { name }),
+  renameCollection: (id: string, name: string) => invoke<void>("rename_collection", { id, name }),
+  deleteCollection: (id: string) => invoke<DeletedCollection>("delete_collection", { id }),
+  restoreCollection: (deleted: DeletedCollection) => invoke<void>("restore_collection", { deleted }),
+  /** null takes the projects out of their collection. */
+  setCollection: (paths: string[], collection: string | null) => invoke<void>("set_collection", { paths, collection }),
   /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */
   startExport: (path: string, options: ExportRequest, epoch: Epoch, replaceExisting: boolean) =>
     invoke<string>("start_export", { path, options, expectedEpoch: epoch, replaceExisting }),

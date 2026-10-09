@@ -3,6 +3,7 @@ mod audio_out;
 mod connect;
 mod engine;
 mod jobs;
+mod library;
 mod model_download;
 mod preview_server;
 mod store;
@@ -47,6 +48,7 @@ pub struct AppState {
     fonts: OnceLock<FontFamilies>,
     /// Why the most recent project was not opened at startup.
     startup_notice: Option<String>,
+    library: Arc<library::Library>,
 }
 
 /// Per asset id: the source file its cached previews show, and the lock of their decoding.
@@ -138,8 +140,10 @@ static HOSTS: Mutex<Vec<(PathBuf, std::sync::Weak<Host>)>> = Mutex::new(Vec::new
 
 impl OpenSession {
     fn open(path: PathBuf) -> anyhow::Result<(Self, Receiver<SessionEvent>)> {
+        // The home screen and the editor compare projects by this path.
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
         {
-            let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            let canonical = path.clone();
             let mut hosts = HOSTS.lock().unwrap();
             hosts.retain(|(_, host)| host.strong_count() > 0);
             anyhow::ensure!(
@@ -148,7 +152,7 @@ impl OpenSession {
             );
         }
         let (tx, rx) = mpsc::channel();
-        let host = Arc::new(Host::new(store::open(&path, tx)?, store::cache_dir())?);
+        let host = Arc::new(Host::new(store::open(&path, Some(tx))?, store::cache_dir())?);
         HOSTS.lock().unwrap().push((host.session.locked_path()?, Arc::downgrade(&host)));
         let mut session = Self {
             host,
@@ -425,17 +429,21 @@ fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_u
     state.session.lock().unwrap().host.session.set_ui_context(selection, playhead_us);
 }
 
-/// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step.
+/// Stop in the "AI is editing" bar: the run ends with its changes kept, as one undo step. With
+/// `discard`, before opening another project, its changes are taken back instead.
 #[tauri::command]
 fn stop_run(
     state: State<'_, AppState>,
     panel: State<'_, agent_panel::AgentPanel>,
     expected_epoch: Option<String>,
+    discard: Option<bool>,
 ) -> CmdResult<Snapshot> {
     // The AI panel's agent stops too, so it does not go on editing; before the session lock, never inside it.
     panel.stop();
     let current = lock_session(&state.session, expected_epoch.as_deref())?;
-    current.host.stop_run().map_err(err)?;
+    let action =
+        if discard == Some(true) { capopen_session::EndAction::Discard } else { capopen_session::EndAction::Keep };
+    current.host.end_open_run(action).map_err(err)?;
     current.snapshot(Vec::new())
 }
 
@@ -451,8 +459,8 @@ fn resolve_recovery(state: State<'_, AppState>, action: String, expected_epoch: 
     current.snapshot(Vec::new())
 }
 
-#[tauri::command]
-async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option<String>) -> CmdResult<ImportResult> {
+/// The media files that open, in the given order, and why the others do not.
+async fn probe_media(paths: Vec<String>) -> CmdResult<(Vec<capopen_engine::model::Asset>, Vec<ImportFailure>)> {
     let probed = tauri::async_runtime::spawn_blocking(move || {
         paths
             .into_iter()
@@ -469,7 +477,6 @@ async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option
     })
     .await
     .map_err(err)?;
-    let state = app.state::<AppState>();
     let mut assets = Vec::new();
     let mut failed = Vec::new();
     for (path, result) in probed {
@@ -478,6 +485,13 @@ async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option
             Err(e) => failed.push(ImportFailure { path, error: format!("{e:#}") }),
         }
     }
+    Ok((assets, failed))
+}
+
+#[tauri::command]
+async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option<String>) -> CmdResult<ImportResult> {
+    let (assets, failed) = probe_media(paths).await?;
+    let state = app.state::<AppState>();
     let added: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
     let snapshot = if assets.is_empty() {
         lock_session(&state.session, expected_epoch.as_deref())?.snapshot(Vec::new())?
@@ -608,6 +622,47 @@ fn new_project(
     state.replace_project(&mut state.session.lock().unwrap(), path)
 }
 
+/// A new project with the media on its timeline in the given order, in the format of the first
+/// picture: the matching common format, or the picture's own shape.
+#[tauri::command]
+async fn new_project_from_media(app: AppHandle, paths: Vec<String>) -> CmdResult<ImportResult> {
+    let (assets, failed) = probe_media(paths).await?;
+    if assets.is_empty() {
+        let reasons: Vec<String> = failed.iter().map(|f| f.error.clone()).collect();
+        return Err(format!("None of those files could be opened: {}", reasons.join("; ")));
+    }
+    let mut project = Project::new(library::UNTITLED);
+    if let Some(first) = assets.iter().find(|a| a.kind != capopen_engine::model::AssetKind::Audio && a.width > 0) {
+        let (width, height) = canvas_for(first.width, first.height);
+        project.apply(EditCmd::SetCanvas { width, height, background: None, background_blur: None }).map_err(err)?;
+    }
+    let added: Vec<String> = assets.iter().map(|a| a.id.clone()).collect();
+    project.apply(EditCmd::AddAssets { assets }).map_err(err)?;
+    for id in &added {
+        project.apply(EditCmd::AddClip { asset_id: id.clone(), start_us: None, track_id: None }).map_err(err)?;
+    }
+    capopen_session::validate(&project).map_err(err)?;
+    let path = store::new_project_path();
+    store::create(&path, &project).map_err(err)?;
+    // The panel's agent works on the open project only; never stopped while holding the session.
+    app.state::<agent_panel::AgentPanel>().stop();
+    let state = app.state::<AppState>();
+    let snapshot = state.replace_project(&mut state.session.lock().unwrap(), path)?;
+    Ok(ImportResult { snapshot, added, failed })
+}
+
+/// The canvas for a picture of this size: a common format of the same shape, or 1080 on its short side.
+fn canvas_for(width: u32, height: u32) -> (u32, u32) {
+    const FORMATS: [(u32, u32); 4] = [(1080, 1920), (1920, 1080), (1080, 1080), (1080, 1350)];
+    let ratio = f64::from(width) / f64::from(height.max(1));
+    if let Some(&format) = FORMATS.iter().find(|(w, h)| (f64::from(*w) / f64::from(*h) / ratio - 1.0).abs() < 0.02) {
+        return format;
+    }
+    let scale = 1080.0 / f64::from(width.min(height).max(1));
+    let side = |v: u32| ((f64::from(v) * scale).round() as u32).clamp(16, 7680) & !1;
+    (side(width), side(height))
+}
+
 #[tauri::command]
 fn open_project(
     state: State<'_, AppState>,
@@ -623,7 +678,10 @@ fn open_project(
     if current.path == path {
         return current.snapshot(Vec::new());
     }
-    state.replace_project(&mut current, path)
+    let snapshot = state.replace_project(&mut current, path.clone())?;
+    drop(current);
+    state.library.remember(&path);
+    Ok(snapshot)
 }
 
 /// `replace_existing` is true once the user confirmed this exact path; false fails with
@@ -778,6 +836,7 @@ pub fn run() {
                 bounds_text: Mutex::new(None),
                 fonts: OnceLock::new(),
                 startup_notice,
+                library: Arc::default(),
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
@@ -806,7 +865,20 @@ pub fn run() {
             list_projects,
             list_fonts,
             new_project,
+            new_project_from_media,
             open_project,
+            library::library,
+            library::project_poster,
+            library::search_said,
+            library::rename_project,
+            library::duplicate_project,
+            library::trash_projects,
+            library::restore_projects,
+            library::create_collection,
+            library::rename_collection,
+            library::delete_collection,
+            library::restore_collection,
+            library::set_collection,
             start_export,
             filmstrip,
             layer_bounds,
@@ -845,6 +917,16 @@ pub fn run() {
                 {
                     api.prevent_close();
                     app.emit("close-save-failed", format!("{error:#}")).ok();
+                    return;
+                }
+                // Projects waiting for the Trash go now. One that someone opened meanwhile stays, and
+                // the window stays open to say so; nothing is left waiting, so the next close quits.
+                let failed = state.library.flush_trash();
+                if !failed.is_empty() {
+                    api.prevent_close();
+                    for message in failed {
+                        app.emit("trash-failed", message).ok();
+                    }
                 }
             }
             tauri::RunEvent::Exit => {
@@ -884,6 +966,9 @@ impl AppState {
         }
         if let Err(error) = host.session.disconnect() {
             log::error!("Cannot save project on exit: {error:#}");
+        }
+        for message in self.library.flush_trash() {
+            log::error!("{message}");
         }
     }
 }
@@ -1047,6 +1132,17 @@ mod ipc_lifecycle_tests {
         assert_eq!(store::list_in(&dir).len(), 2, "no new project is created while projects are busy");
         drop((current, agent));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn new_project_from_media_takes_the_format_of_the_first_picture() {
+        assert_eq!(canvas_for(1080, 1920), (1080, 1920));
+        assert_eq!(canvas_for(720, 1280), (1080, 1920));
+        assert_eq!(canvas_for(3840, 2160), (1920, 1080));
+        assert_eq!(canvas_for(1440, 1800), (1080, 1350));
+        // No common format of that shape: its own, 1080 on the short side.
+        assert_eq!(canvas_for(4032, 3024), (1440, 1080));
+        assert_eq!(canvas_for(1000, 21), (7680, 1080));
     }
 
     #[test]

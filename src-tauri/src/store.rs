@@ -11,8 +11,19 @@ use serde::Serialize;
 
 pub const EXTENSION: &str = "capopen";
 
+/// The file next to `path` named like it with `suffix` added, such as `project.capopen.lock`.
+pub fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+pub fn data_dir() -> PathBuf {
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
+}
+
 pub fn projects_dir() -> PathBuf {
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("capopen").join("projects")
+    data_dir().join("projects")
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -37,8 +48,8 @@ pub fn load(path: &Path) -> Result<Project> {
 pub const BUSY: &str =
     "This project is open in another CapOpen window or an AI agent is editing it. Close it there first.";
 
-pub fn open(path: &Path, events: Sender<SessionEvent>) -> Result<ProjectSession> {
-    ProjectSession::open(path, Mode::Write, Some(events))
+pub fn open(path: &Path, events: Option<Sender<SessionEvent>>) -> Result<ProjectSession> {
+    ProjectSession::open(path, Mode::Write, events)
         .map_err(|error| if error.to_string().starts_with("PROJECT_BUSY:") { anyhow::anyhow!(BUSY) } else { error })
 }
 
@@ -106,7 +117,7 @@ mod tests {
         let project = Project::new("Lock test");
         create(&path, &project).unwrap();
         let (tx, _rx) = std::sync::mpsc::channel();
-        let desktop = open(&path, tx.clone()).unwrap();
+        let desktop = open(&path, Some(tx.clone())).unwrap();
         assert!(ProjectSession::open(&path, Mode::Write, None).is_err());
         assert!(ProjectSession::open(&path, Mode::ReadOnly, None).is_ok());
         assert_eq!(load(&path).unwrap(), project);
@@ -114,7 +125,7 @@ mod tests {
         drop(desktop);
         let agent = ProjectSession::open(&path, Mode::Write, None).unwrap();
         assert_eq!(
-            open(&path, tx).err().unwrap().to_string(),
+            open(&path, Some(tx)).err().unwrap().to_string(),
             "This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
         );
         drop(agent);
