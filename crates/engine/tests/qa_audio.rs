@@ -297,3 +297,129 @@ fn waveform_of_the_start_of_a_long_recording_comes_while_it_decodes() {
     let end = waveform_peaks(&cache, &asset, reference.len() - 10, reference.len() + 500).unwrap();
     assert_eq!(end, (reference[reference.len() - 10..].to_vec(), true));
 }
+
+/// Level in dBFS of the `hz` tone in `samples` (one channel of 48 kHz stereo) from `at` for `len` seconds,
+/// through a Hann window, so speech next to it in the spectrum does not count.
+fn tone_db(samples: &[f32], hz: f64, at: f64, len: f64) -> f64 {
+    let (from, n) = ((at * 48_000.0) as usize, (len * 48_000.0) as usize);
+    let (mut re, mut im, mut weight) = (0.0, 0.0, 0.0);
+    for i in 0..n {
+        let w = 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos();
+        let x = samples[(from + i) * 2] as f64 * w;
+        let phase = 2.0 * std::f64::consts::PI * hz * (from + i) as f64 / 48_000.0;
+        (re, im, weight) = (re + x * phase.cos(), im + x * phase.sin(), weight + w);
+    }
+    20.0 * (2.0 * (re * re + im * im).sqrt() / weight).log10()
+}
+
+/// Music on an audio track with ducking goes down by its `duck_db` while the talking head speaks and comes
+/// back in the pause, smoothly, the same in playback-sized buffers as in one go, and in the Reels export
+/// levelled to -14 LUFS. Speech is a voice-like sound in 0.5–2.5 s and 5–7 s; the music is a 5 kHz tone.
+#[test]
+fn music_ducks_under_speech_and_comes_back_in_the_pause() {
+    use nuzky_engine::audio::Mixer;
+    use nuzky_engine::export::{Delivery, ExportOptions, export};
+    use std::sync::atomic::AtomicBool;
+    if !available() {
+        return;
+    }
+    let d = dir("ducking");
+    let (talk, music) = (d.join("talk.mkv"), d.join("music.wav"));
+    let voice = "(sin(2*PI*130*t)+0.7*sin(2*PI*260*t)+0.5*sin(2*PI*390*t)+0.35*sin(2*PI*700*t))\
+        *pow(max(0\\,sin(2*PI*3.3*t))\\,4)*(between(t\\,0.5\\,2.5)+between(t\\,5\\,7))*0.15";
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x2b3a4a:s=108x192:r=30:d=8",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("aevalsrc={voice}|{voice}:s=48000:d=8"),
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:amplitude=0.004:seed=1:sample_rate=48000:duration=8",
+            "-filter_complex",
+            "[1:a][2:a]amix=inputs=2:normalize=0[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "pcm_f32le",
+        ],
+        &talk,
+    );
+    ff(&["-f", "lavfi", "-i", "sine=f=5000:r=48000:d=8", "-c:a", "pcm_f32le"], &music);
+    let mut p = project(&talk, 8_000_000);
+    let song = probe(&music, "qa-music".into()).unwrap();
+    p.tracks.push(Track {
+        id: "music".into(),
+        kind: TrackKind::Audio,
+        name: "Music".into(),
+        muted: false,
+        hidden: false,
+        keep_in_place: true,
+        clips: vec![clip("qa-song", &song.id, 0, 8_000_000)],
+    });
+    p.assets.push(song.clone());
+    let cache = d.join("cache");
+    for asset in &p.assets {
+        ensure_pcm(&cache, asset, |_| Ok(())).unwrap();
+    }
+    let mix = |p: &Project, chunk: usize| {
+        let mut out = vec![0.0; 8 * 48_000 * CHANNELS];
+        let mut mixer = Mixer::new(cache.clone());
+        for (index, part) in out.chunks_mut(chunk * CHANNELS).enumerate() {
+            mixer.mix(p, (index * chunk) as i64, part);
+        }
+        out
+    };
+    let plain = mix(&p, 8 * 48_000);
+    let ClipContent::Media { duck_db, .. } = &mut p.tracks[1].clips[0].content else { unreachable!() };
+    *duck_db = 12.0;
+    let ducked = mix(&p, 8 * 48_000);
+    assert!(mix(&p, 1024) == ducked, "playback-sized buffers mix differently from one buffer");
+
+    // The music's own gain at every sample, where the tone is far enough from a zero crossing to read it.
+    let tone = pcm(&ensure_pcm(&cache, &song, |_| Ok(())).unwrap());
+    let gain: Vec<Option<f32>> = (0..8 * 48_000)
+        .map(|i| (tone[i * 2].abs() > 0.05).then(|| 1.0 + (ducked[i * 2] - plain[i * 2]) / tone[i * 2]))
+        .collect();
+    let at = |t: f64| (t * 48_000.0) as usize;
+    let near = |range: std::ops::Range<usize>, want: f32| gain[range].iter().flatten().all(|g| (g - want).abs() < 1e-4);
+    // Read across zero crossings too: the tone crosses zero where the 10 ms speech blocks start.
+    let read: Vec<f32> = gain[at(0.01)..at(7.99)].iter().flatten().copied().collect();
+    let step = read.windows(2).map(|pair| (pair[1] - pair[0]).abs()).fold(0.0f32, f32::max);
+    let down = 10f32.powf(-12.0 / 20.0);
+    eprintln!("QA ducking: largest gain step between samples {step:.6}");
+    assert!(near(at(0.8)..at(2.3), down) && near(at(5.3)..at(6.8), down), "the music is not 12 dB down under speech");
+    assert!(near(at(0.01)..at(0.3), 1.0) && near(at(3.4)..at(4.8), 1.0), "the music is not back in the pause");
+    // 12 dB over the 150 ms attack moves the gain by 0.0002 a sample, a few samples apart at most where
+    // the tone is too near zero to read; a click would jump.
+    assert!(step < 0.002, "the gain jumps by {step} between two samples");
+
+    let out = d.join("ducked-reel.mp4");
+    let options = ExportOptions { delivery: Some(Delivery::Reels), replace_existing: true, ..ExportOptions::default() };
+    export(&p, &cache, &out, &options, &AtomicBool::new(false), |_| {}).unwrap();
+    let decoded = run(Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&out)
+        .args(["-vn", "-f", "f32le", "-ac", "2", "-ar", "48000", "-"]))
+    .stdout
+    .chunks_exact(4)
+    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+    .collect::<Vec<f32>>();
+    let speech = [1.4, 5.9].map(|t| tone_db(&decoded, 5000.0, t, 0.2));
+    let pause = tone_db(&decoded, 5000.0, 3.7, 0.2);
+    eprintln!("QA ducking export: music {speech:.2?} dBFS under speech, {pause:.2} dBFS in the pause");
+    for level in speech {
+        assert!((level - pause + 12.0).abs() < 1.0, "the exported music is {:.2} dB under speech", level - pause);
+    }
+}

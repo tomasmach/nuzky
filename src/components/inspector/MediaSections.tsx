@@ -1,7 +1,7 @@
 import { RotateCcw, Unlink } from "lucide-react";
 import { LIMITS } from "../../lib/limits";
 import { ADJUST_ROWS, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
-import { detachAudio, detachBlocker, editClip, findClip, setCleanVoice, useEditor, useVoicePreparation } from "../../lib/store";
+import { detachAudio, detachBlocker, editClip, editClips, findClip, setCleanVoice, useEditor, useVoicePreparation } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
 import { Button, Checkbox, IconButton, ProgressBar, Section, Segmented, Slider } from "../ui";
@@ -97,6 +97,47 @@ export function CleanVoiceRow({ clips }: { clips: Clip[] }) {
   );
 }
 
+/** How far a clip goes down under speech when Lower under speech is turned on, in dB. */
+const DUCK_DB = 12;
+
+/**
+ * Lower under speech (ducking) for one or more clips with sound: they go down while a video's own
+ * sound has speech and come back in the pauses. The strength shows once all of them have it on.
+ */
+export function DuckingRow({ clips, coalesce }: { clips: Clip[]; coalesce: string }) {
+  const levels = clips.map((c) => (c.content.type === "media" ? (c.content.duckDb ?? 0) : 0));
+  const on = levels.filter((v) => v > 0);
+  const all = on.length === levels.length;
+  const ids = clips.map((c) => c.id);
+  // Checking keeps the strength of clips that already have it.
+  const turn = (v: boolean) =>
+    editClips(ids, (c) => (c.content.type !== "media" || (v && (c.content.duckDb ?? 0) > 0) ? null : { type: "updateClip", clipId: c.id, duckDb: v ? DUCK_DB : 0 }));
+  return (
+    <>
+      <Checkbox
+        label="Lower under speech"
+        checked={all}
+        mixed={!all && on.length > 0}
+        title="Turns this sound down while someone speaks in a video and back up in the pauses"
+        onChange={turn}
+      />
+      {all && (
+        <Slider
+          label="Lower by"
+          mixed={on.some((v) => v !== on[0])}
+          value={on[0]}
+          min={1}
+          max={LIMITS.maxDuckDb}
+          step={1}
+          unit="dB"
+          format={(v) => String(Math.round(v))}
+          onChange={(v) => editClips(ids, (c) => ({ type: "updateClip", clipId: c.id, duckDb: v }), `${coalesce}:duck`)}
+        />
+      )}
+    </>
+  );
+}
+
 export function AudioSection({ clip, content }: { clip: Clip; content: Media }) {
   const project = useEditor((s) => s.snap!.project);
   const edit = useEditor((s) => s.edit);
@@ -137,6 +178,7 @@ export function AudioSection({ clip, content }: { clip: Clip; content: Media }) 
         onChange={(v) => edit({ type: "updateClip", clipId: clip.id, fadeOutUs: Math.round(v * US) }, `${clip.id}:fadeOut`)}
       />
       <CleanVoiceRow clips={[clip]} />
+      <DuckingRow clips={[clip]} coalesce={clip.id} />
       {isVideo && (
         <Button className="w-full" disabled={!!blocker} disabledReason={blocker ?? undefined} title="Move the sound to its own audio track" onClick={() => detachAudio([clip.id])}>
           <Unlink size={14} /> Detach audio
