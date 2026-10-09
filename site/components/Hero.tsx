@@ -4,7 +4,9 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { Check, Sparkles, Undo2 } from "lucide-react";
 import { Fit } from "./Fit";
-import { AppleLogo, GitHubLogo } from "./Logos";
+import { GitHubLogo } from "./Logos";
+import { NotifyForm } from "./NotifyForm";
+import { notifyNote } from "@/lib/content";
 import { fitSizes } from "@/lib/fit";
 import { usePlaying } from "@/lib/playing";
 import { repo } from "@/lib/site";
@@ -102,11 +104,13 @@ export function Hero() {
     <section ref={section} className="relative">
       <div className="relative z-10 flex flex-col items-center px-5 pt-16 text-center sm:pt-24">
         <h1 className="heading-xl">
-          Make the reel.
+          Make the video.
           <br />
-          <span className="text-subtle">Skip the subscription.</span>
+          <span className="text-subtle">Skip the boring{"\u00a0"}part.</span>
         </h1>
-        <p className="mt-7 max-w-xl text-[17px] text-muted sm:text-[20px]">A free, open source video editor with AI built in.</p>
+        <p className="mt-7 max-w-[600px] text-[17px] text-muted sm:text-[20px]">
+          A free video editor. AI writes the captions in your language and cuts out the ums, the pauses and the retakes.
+        </p>
 
         <Fit width={1060} height={498} waves="swell" className="mt-14 sm:mt-16">
           <div className="flex h-full items-center justify-center gap-5">
@@ -210,18 +214,17 @@ export function Hero() {
         </Fit>
 
         <div className="mt-14 flex flex-col items-center gap-3.5 sm:mt-16">
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            {/* Not released yet: the button keeps its place but stays dim and inert until the first build ships. */}
-            <span aria-disabled="true" role="link" className="btn-light pointer-events-none flex h-12 select-none items-center gap-2 rounded-full px-6 text-[15px] font-semibold opacity-40">
-              <AppleLogo className="size-[17px] -translate-y-px" />
-              Download for macOS
-            </span>
-            <a href={repo} className="glass flex h-12 items-center gap-2 rounded-full px-[22px] text-[15px] font-semibold transition-colors hover:bg-white/10">
+          {/* Not released yet: the email field takes the download's place until the first build ships. */}
+          <div className="flex w-full max-w-[400px] flex-col items-center gap-3 sm:max-w-none sm:flex-row sm:justify-center">
+            <NotifyForm id="notify" noteId="hero-notify-note" />
+            <a href={repo} className="glass flex h-12 shrink-0 items-center gap-2 rounded-full px-[22px] text-[15px] font-semibold transition-colors hover:bg-white/10">
               <GitHubLogo className="size-[17px]" />
               Star on GitHub
             </a>
           </div>
-          <p className="text-[14px] text-muted">Coming soon for macOS, Windows and Linux. No account, no watermark.</p>
+          <p id="hero-notify-note" className="max-w-[460px] text-[14px] leading-[1.5] text-muted">
+            Coming soon for Mac, Windows and Linux. {notifyNote}
+          </p>
         </div>
       </div>
     </section>

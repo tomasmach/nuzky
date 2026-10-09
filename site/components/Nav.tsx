@@ -30,13 +30,9 @@ export function Nav({ base = "" }: { base?: string }) {
           <GitHubLogo className="size-4" />
           GitHub
         </a>
-        <span
-          aria-disabled="true"
-          role="link"
-          className="btn-light pointer-events-none flex h-[34px] select-none items-center rounded-full px-4 text-[13px] font-semibold opacity-40"
-        >
-          Download
-        </span>
+        <a href={`${base}#notify`} className="btn-light flex h-[34px] items-center rounded-full px-4 text-[13px] font-semibold">
+          Get notified
+        </a>
       </div>
     </header>
   );

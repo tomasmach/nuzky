@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import { CircleCheck, Loader, Terminal } from "lucide-react";
+import { CircleCheck, Loader } from "lucide-react";
 import { AgentPanel, Run, doneStage, exchanges } from "./AgentPanel";
 import { ClaudeCodeLogo, OpenAILogo } from "./Logos";
 import { SectionHeading } from "./SectionHeading";
@@ -65,7 +65,7 @@ export function Agent() {
 
   return (
     <section id="agents" ref={section} className="mx-auto w-full max-w-[1240px] scroll-mt-10 px-5 pt-32 sm:pt-[180px]">
-      <SectionHeading center first="Or let an agent cut it." second="You watch, and one undo takes it all back." />
+      <SectionHeading center first="Or hand the cut to ChatGPT or Claude." second="You watch, and one undo takes it all back." />
       <div className="mt-10 flex flex-col gap-4 lg:h-[560px] lg:flex-row">
         <AgentPanel className="h-[560px] lg:h-auto lg:w-[440px] lg:shrink-0" draft={stage === TYPING ? current.ask.slice(0, typed) : ""}>
           {history.map((k) => (
@@ -104,21 +104,24 @@ export function Agent() {
             </p>
           </div>
           <div className="surface flex flex-col gap-3.5 rounded-[20px] px-7 py-6">
-            <span className="text-[15px] font-semibold">Connect agent</span>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <span className="text-[15px] font-semibold">Connect your AI</span>
+            <div className="grid gap-3 sm:grid-cols-2">
               {[
-                { name: "Claude Code", logo: <ClaudeCodeLogo className="size-[18px] text-claude" />, ready: true },
-                { name: "Codex", logo: <OpenAILogo className="size-[18px]" />, ready: true },
-                { name: "Any MCP client", logo: <Terminal className="size-[18px] text-muted" />, ready: false },
-              ].map(({ name, logo, ready }) => (
+                { name: "ChatGPT", via: "with Codex", logo: <OpenAILogo className="size-[18px]" /> },
+                { name: "Claude", via: "with Claude Code", logo: <ClaudeCodeLogo className="size-[18px] text-claude" /> },
+              ].map(({ name, via, logo }) => (
                 <div key={name} className="flex h-12 items-center gap-2.5 rounded-[10px] bg-raised px-3.5 text-[13px] font-medium">
                   {logo}
-                  <span className="flex-1">{name}</span>
-                  {ready && <CircleCheck className="size-4 text-ok" />}
+                  <span className="flex-1">
+                    {name} <span className="font-normal text-muted">{via}</span>
+                  </span>
+                  <CircleCheck className="size-4 text-ok" />
                 </div>
               ))}
             </div>
-            <span className="text-[13px] text-muted">One click sets up Claude Code and Codex.</span>
+            <span className="text-[13px] leading-[1.5] text-muted">
+              Runs on the ChatGPT or Claude plan you already pay for, with no credits to buy. The first time, Nuzky walks you through setting it up.
+            </span>
           </div>
         </div>
       </div>
