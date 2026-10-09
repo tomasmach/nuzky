@@ -357,11 +357,12 @@ impl History {
     }
 }
 
-/// How many different projects the versions beside `project` hold. More than one means its
-/// history has something to lose, even when the project itself is empty now.
-pub fn distinct_versions(project: &Path) -> usize {
-    let history = History::load(&storage::sidecar(project, HISTORY_SUFFIX));
-    history.versions.iter().map(|v| &v.hash).collect::<HashSet<_>>().len()
+/// Whether the versions beside `path` hold anything but `project`, or cannot all be read: then
+/// deleting them could lose work, even when the project itself is empty now.
+pub fn other_versions(path: &Path, project: &Project) -> bool {
+    let history = History::load(&storage::sidecar(path, HISTORY_SUFFIX));
+    let current = serde_json::to_string(project).map(|json| sha256(json.as_bytes())).unwrap_or_default();
+    history.broken.load(Ordering::Relaxed) || history.versions.iter().any(|v| v.hash != current)
 }
 
 impl ProjectSession {

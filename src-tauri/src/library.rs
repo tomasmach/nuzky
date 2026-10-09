@@ -326,10 +326,8 @@ impl Library {
         let Ok(lock) = nuzky_session::lock_project(path, true) else { return false };
         // Read again under the lock: it may have changed since it was listed.
         // Its versions may hold what it had before it was emptied.
-        if !store::load(path).is_ok_and(|p| pristine(&p))
-            || sidecar(path, ".checkpoint.json").exists()
-            || nuzky_session::distinct_versions(path) > 1
-        {
+        let Some(project) = store::load(path).ok().filter(pristine) else { return false };
+        if sidecar(path, ".checkpoint.json").exists() || nuzky_session::other_versions(path, &project) {
             return false;
         }
         if let Err(error) = std::fs::remove_file(path) {
@@ -904,11 +902,18 @@ mod tests {
         session.edit(vec![EditCmd::RenameProject { name: "Holiday".into() }], None, Default::default()).unwrap();
         session.edit(vec![EditCmd::RenameProject { name: UNTITLED.into() }], None, Default::default()).unwrap();
         drop(session);
+        // An older project with only one version, as it opened with its clips, emptied without a
+        // version: a write of the versions failed, for example.
+        let older = dir.join("older.nuzky");
+        store::create(&older, &Project::new("Holiday")).unwrap();
+        drop(store::open(&older, None).unwrap());
+        store::save(&older, &Project::new(UNTITLED)).unwrap();
         let library = Library::default();
         assert!(library.remove_pristine(&fresh), "a project that never had anything goes");
         assert!(!fresh.exists() && !sidecar(&fresh, nuzky_session::HISTORY_SUFFIX).exists());
         assert!(!library.remove_pristine(&emptied));
-        assert!(emptied.exists());
+        assert!(!library.remove_pristine(&older));
+        assert!(emptied.exists() && older.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
