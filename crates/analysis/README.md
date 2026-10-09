@@ -12,6 +12,8 @@ silences(asset: &Asset, cache: &Path, params: SilenceParams) -> Result<Vec<Range
 scene_cuts(asset: &Asset, params: SceneParams) -> Result<Vec<SceneCut>>
 transcribe_words(source: AudioSource<'_>, model: &Path, vad: &Path, language: &str)
     -> Result<Transcript>
+align_to_sound(words: &mut [Word], asset: &Asset, cache: &Path, aligner: Option<&Aligner>,
+    cancelled: impl Fn() -> bool) -> Result<bool>
 filler_words(transcript: &Transcript, language: &str) -> Vec<Range>
 ```
 
@@ -59,6 +61,25 @@ that preserves both size and mtime is not detected; this is not a content hash.
   is an estimate, not forced alignment. Zero-duration token estimates are retained
   as words; they cannot be used directly as deletion ranges. The 48->16 kHz box
   filter follows the existing caption path, not a high-quality antialias resampler.
+- `align_to_sound` measures word times in the sound after recognition. With an `Aligner`
+  (`align_model(language)`: Czech `wav2vec2-xls-r-300m-cs-250` quantised to 8 bits, 373 MB,
+  and English `wav2vec2-base-960h`, 207 MB, both Apache-2.0 GGUF files run with candle on
+  the CPU), a wav2vec2 CTC model hears which letter is spoken in every 20 ms frame and a
+  Viterbi path spells the words through those frames. Words a second apart in Whisper's
+  times are aligned separately; a stretch over 20 s runs in windows with 2 s of context. A
+  word the model cannot spell (digits, acronyms, `např.`, letters outside its alphabet) is
+  one placeholder per character, and with words the model hears too faintly it shares the
+  gap between measured neighbours in proportion to Whisper's durations. A stretch whose
+  path costs over 1 nat per frame more than the model's own guess (other speech, music,
+  a hallucinated sentence) keeps Whisper's times. Measured edges then follow the sound
+  into the gap while it stays within 20 dB of the word's own level, so a held vowel before
+  a pause ends where it ends and the room's echo is not the word; between two measured
+  words with no quiet moment the cut is the middle of the gap the model left. Without a
+  model the words keep `align_words`: Whisper's estimates moved into the nearest pause.
+  On 25 s of real Czech connected speech (`tests/alignment.rs`) the model's boundaries
+  land on average 4 ms and at most 30 ms past the hand-checked ranges; `align_words`
+  alone missed by 85 ms on average and up to 270 ms. The Czech model measured those 25 s in
+  5.7 s on a 16-thread Ryzen 7 5800X3D; a stop is noticed between its layers.
 - Czech fillers are `ehm`, `hmm`, `eee`; English fillers are `um`, `uh`, `erm`.
   `jakoby`, `prostě`, `like`, and `you know` require >=150 ms pauses or commas on
   both sides (file edges count). Adjacent repeated words separated by <=250 ms
@@ -75,7 +96,8 @@ cargo run -p nuzky-analysis --bin nuzky-analyze -- clip.mp4 words --lang cs \
   --model /path/ggml-small.bin --vad-model /path/ggml-silero-v5.1.2.bin
 ```
 
-Commands: `loudness`, `silences`, `scenes`, `words`, `fillers`. Output is one compact
+Commands: `loudness`, `silences`, `scenes`, `words`, `fillers`. `words` prints Whisper's
+own estimates, before `align_to_sound`. Output is one compact
 JSON value on stdout; errors and native diagnostics go to stderr. Loudness reports
 100 ms RMS windows plus `integrated_lufs` (null for silence) and `true_peak_dbtp`. `--cache` selects
 a cache directory; default is the OS temp directory's `nuzky-analysis` folder.

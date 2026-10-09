@@ -12,13 +12,21 @@ use nuzky_engine::{
     model::{Asset, CHANNELS},
 };
 
-use crate::{Word, audio::open_pcm};
+use crate::{
+    Word,
+    align::Aligner,
+    audio::{open_pcm, speech_rate},
+};
 
 /// Level windows of 10 ms every 5 ms.
 const WINDOW: usize = 480;
 const HOP: usize = 240;
 /// How far from Whisper's estimate a boundary may move, never past the middle of either word.
 const REACH_US: i64 = 400_000;
+/// A measured word's sound goes on while it stays within this of the word's own level. Its
+/// edges follow the sound only that far: the word timing model hears a held vowel end early and
+/// a soft onset late, but the room's echo after a word is not the word.
+const WORD_DROP_DB: f32 = 20.0;
 /// A quiet run this long is a pause between words; shorter ones may be the closure of a
 /// consonant inside a word, so a pause nearby wins over them.
 const PAUSE_US: i64 = 100_000;
@@ -35,9 +43,21 @@ const SILENT_DB: f32 = -100.0;
 /// their order and text; a boundary with no quiet stretch near it stays where Whisper put it at
 /// the edges of speech, and moves to the quietest nearby moment between two words.
 pub fn align_words(words: &mut [Word], samples: &[f32]) {
+    refine_words(words, samples, &vec![false; words.len()]);
+}
+
+/// [`align_words`] after the word timing model measured the words marked in `measured`. Their
+/// edges stay where the model heard them and only grow into the gap while their sound goes on;
+/// between two measured words with no quiet moment, the boundary is the middle of the gap the
+/// model left. Boundaries between unmeasured words move as [`align_words`] moves them.
+pub(crate) fn refine_words(words: &mut [Word], samples: &[f32], measured: &[bool]) {
     let levels = Levels::new(samples);
     let Some(threshold) = levels.threshold() else { return };
     for i in 0..=words.len() {
+        if (i > 0 && measured[i - 1]) || measured.get(i) == Some(&true) {
+            levels.follow_sound(words, measured, i, threshold);
+            continue;
+        }
         let left = i.checked_sub(1).map(|j| (words[j].start_us, words[j].end_us));
         let right = words.get(i).map(|w| (w.start_us, w.end_us));
         let (from, to) = match (left, right) {
@@ -88,11 +108,25 @@ pub fn align_words(words: &mut [Word], samples: &[f32]) {
     }
 }
 
-/// [`align_words`] on the sound of `asset`, from its PCM cache, which recognition has just used.
-pub fn align_to_sound(words: &mut [Word], asset: &Asset, cache: &Path, cancelled: impl Fn() -> bool) -> Result<()> {
+/// Measures `words` in the sound of `asset`, from its PCM cache, which recognition has just used:
+/// with the word timing model when there is one, then [`align_words`]. True when the model
+/// measured at least one word.
+pub fn align_to_sound(
+    words: &mut [Word],
+    asset: &Asset,
+    cache: &Path,
+    aligner: Option<&Aligner>,
+    cancelled: impl Fn() -> bool,
+) -> Result<bool> {
     let pcm = open_pcm(asset, cache, &cancelled)?;
-    align_words(words, pcm.samples());
-    Ok(())
+    let placed = match aligner {
+        // The model hears the sound as recognition does.
+        Some(aligner) => aligner.align(words, &speech_rate(pcm.samples()), &cancelled)?,
+        None => vec![false; words.len()],
+    };
+    anyhow::ensure!(!cancelled(), "CANCELLED: transcription cancelled");
+    refine_words(words, pcm.samples(), &placed);
+    Ok(placed.contains(&true))
 }
 
 struct Levels {
@@ -155,6 +189,82 @@ impl Levels {
             }
         }
         runs
+    }
+
+    /// The boundary between words `i - 1` and `i`, one of them measured by the word timing model.
+    /// A measured edge grows into the gap while its word's sound goes on: up to the other word's
+    /// edge when that one is measured too, up to the middle of an unmeasured one, which then gives
+    /// way. An unmeasured word only holds a share of the gap, not a measured time.
+    fn follow_sound(&self, words: &mut [Word], measured: &[bool], i: usize, room: f32) {
+        let floor = |word: &Word| self.loudness(word.start_us, word.end_us).map(|db| (db - WORD_DROP_DB).max(room));
+        let time = |hop: usize| samples_to_us((hop * HOP).min(self.frames) as i64);
+        let middle = |word: &Word| (word.start_us + word.end_us) / 2;
+        let (left, right) = (i.checked_sub(1), (i < words.len()).then_some(i));
+        let (left_measured, right_measured) = (left.is_some_and(|j| measured[j]), right.is_some_and(|j| measured[j]));
+        let mut end = left.map(|j| words[j].end_us);
+        let mut start = right.map(|j| words[j].start_us);
+        let mut quiet = true;
+        if let Some(j) = left.filter(|_| left_measured)
+            && let Some(floor) = floor(&words[j])
+        {
+            let from = words[j].end_us;
+            let limit = match right {
+                Some(r) if measured[r] => words[r].start_us,
+                Some(r) => middle(&words[r]),
+                None => (from + REACH_US).min(self.duration_us()),
+            }
+            .max(from);
+            let (mut k, last) = (Self::hop(from), Self::hop(limit).min(self.db.len()));
+            while k < last && self.db[k] >= floor {
+                k += 1;
+            }
+            quiet = k < last;
+            end = Some(time(k).clamp(from, limit));
+        }
+        if let Some(r) = right.filter(|_| right_measured)
+            && let Some(floor) = floor(&words[r])
+        {
+            let from = words[r].start_us;
+            let limit = match left {
+                Some(_) if left_measured => end.unwrap_or(from),
+                Some(j) => middle(&words[j]),
+                None => (from - REACH_US).max(0),
+            }
+            .min(from);
+            let (first, mut k) = (Self::hop(limit), Self::hop(from).min(self.db.len()));
+            while k > first && self.db[k - 1] >= floor {
+                k -= 1;
+            }
+            start = Some(time(k).clamp(limit, from));
+        }
+        if let (Some(j), Some(r)) = (left, right)
+            && left_measured
+            && right_measured
+            && !quiet
+        {
+            // Connected speech: the model's gap is the boundary.
+            let at = (words[j].end_us + words[r].start_us) / 2;
+            (end, start) = (Some(at), Some(at));
+        }
+        if let Some(j) = left {
+            let edge = if left_measured { end } else { start.map(|s| s.min(words[j].end_us)) };
+            words[j].end_us = edge.unwrap_or(words[j].end_us).max(words[j].start_us);
+        }
+        if let Some(r) = right {
+            let edge = if right_measured { start } else { end.map(|e| e.max(words[r].start_us)) };
+            words[r].start_us = edge.unwrap_or(words[r].start_us).min(words[r].end_us);
+        }
+    }
+
+    /// The level a word is spoken at: the 90th percentile of its windows.
+    fn loudness(&self, start: i64, end: i64) -> Option<f32> {
+        let (first, last) = (Self::hop(start), Self::hop(end).max(Self::hop(start) + 1).min(self.db.len()));
+        let mut heard: Vec<f32> = self.db.get(first..last)?.to_vec();
+        if heard.is_empty() {
+            return None;
+        }
+        heard.sort_unstable_by(f32::total_cmp);
+        Some(heard[(heard.len() - 1) * 9 / 10])
     }
 
     /// The middle of the quietest window in `range`, the one nearest `near` on a tie.
@@ -297,5 +407,69 @@ mod tests {
         assert_eq!(words, vec![word(0.1, 0.5, "a")]);
         align_words(&mut words, &[]);
         assert_eq!(words, vec![word(0.1, 0.5, "a")]);
+    }
+
+    #[test]
+    fn a_measured_word_that_ends_early_before_a_pause_ends_with_its_sound() {
+        // The model hears a held vowel end at 0.6 s; it sounds until 0.9 s. The next word, heard
+        // 50 ms late, starts at 1.4 s.
+        let samples = recording(2.5, &[(0.1, 0.9), (1.4, 2.0)]);
+        let mut words = vec![word(0.1, 0.6, "dnů."), word(1.45, 2.0, "Byla")];
+        refine_words(&mut words, &samples, &[true, true]);
+        assert!(near(words[0].end_us, 0.9) && near(words[1].start_us, 1.4), "{words:?}");
+        assert!(near(words[0].start_us, 0.1) && near(words[1].end_us, 2.0), "{words:?}");
+    }
+
+    #[test]
+    fn connected_measured_words_keep_the_models_boundary() {
+        // One stretch of speech; the second word's stop closure sits 60 ms after the boundary the
+        // model heard. Pause alignment would move the cut into that closure, into the word.
+        let samples = recording(2.0, &[(0.1, 1.5)]);
+        let mut words = vec![word(0.1, 0.7, "jako"), word(0.74, 1.5, "noční")];
+        let mut pauses = words.clone();
+        refine_words(&mut words, &samples, &[true, true]);
+        assert_eq!((words[0].end_us, words[1].start_us), (720_000, 720_000));
+        align_words(&mut pauses, &samples);
+        assert!(near(pauses[1].start_us, 0.82), "{pauses:?}");
+    }
+
+    #[test]
+    fn the_rooms_echo_after_a_word_is_not_the_word() {
+        // Speech near -20 dBFS to 0.6 s, then an echo 25 dB lower to 0.8 s, then the room.
+        let samples: Vec<f32> = (0..RATE * 2)
+            .flat_map(|n| {
+                let t = n as f64 / RATE as f64;
+                let tone = (t * 2.0 * std::f64::consts::PI * 180.0).sin() as f32;
+                let level = if (0.1..0.6).contains(&t) {
+                    0.14
+                } else if (0.6..0.8).contains(&t) {
+                    0.008
+                } else {
+                    0.0003
+                };
+                [tone * level; CHANNELS]
+            })
+            .collect();
+        let mut words = vec![word(0.1, 0.5, "krysy."), word(1.5, 1.9, "Byla")];
+        refine_words(&mut words, &samples, &[true, false]);
+        assert!(near(words[0].end_us, 0.6), "{words:?}");
+    }
+
+    #[test]
+    fn a_measured_word_next_to_an_unmeasured_one_still_follows_its_sound() {
+        // "za 10 minut": the number holds the gap the model left between its neighbours, whose
+        // onset the model heard 50 ms late; the onset still moves back to where "minut" sounds.
+        let samples = recording(3.0, &[(0.1, 0.5), (0.6, 1.3), (1.4, 2.0)]);
+        let mut words = vec![word(0.1, 0.5, "za"), word(0.5, 1.45, "10"), word(1.45, 2.0, "minut")];
+        refine_words(&mut words, &samples, &[true, false, true]);
+        assert!(near(words[2].start_us, 1.4), "{words:?}");
+        assert_eq!(words[1].end_us, words[2].start_us.min(words[1].end_us));
+        assert!(words[1].end_us <= words[2].start_us && words[1].start_us <= words[1].end_us, "{words:?}");
+        // And the other way round: a measured word's held end grows into the number's share.
+        let mut words = vec![word(0.1, 0.7, "dnů"), word(0.7, 1.3, "10"), word(1.4, 2.0, "minut")];
+        let samples = recording(3.0, &[(0.1, 0.9), (1.0, 1.3), (1.4, 2.0)]);
+        refine_words(&mut words, &samples, &[true, false, true]);
+        assert!(near(words[0].end_us, 0.9), "{words:?}");
+        assert!(words[1].start_us >= words[0].end_us, "{words:?}");
     }
 }

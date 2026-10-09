@@ -111,6 +111,7 @@ mod tests {
             language: "en".into(),
             words: vec![],
             segments: vec![],
+            alignment: None,
         };
         for _ in 0..2 {
             store.put(&asset, &record).unwrap();

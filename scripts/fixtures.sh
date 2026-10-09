@@ -118,3 +118,23 @@ model ggml-large-v3-turbo-q5_0.bin 394221709cd5ad1f40c46e6031ca61bce88931e6e088c
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
 model ggml-silero-v5.1.2.bin 29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf \
   https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+# The word timing models the app downloads for Czech and English transcripts (crates/analysis/src/align.rs).
+model wav2vec2-xls-r-300m-cs-250-q8_0.gguf bde0e0d90ae14c60ffea627ccdd7ba263ea6d4a3d27882476fce32a257914eb8 \
+  https://huggingface.co/cstr/wav2vec2-xls-r-300m-cs-250-GGUF/resolve/a264af811793d1f32a6ff3ce7de7ad9b2dcfdd40/wav2vec2-xls-r-300m-cs-250-q8_0.gguf
+model wav2vec2-base-960h.gguf 298d900e715936118c1476a5b246ceda08c1942411d350f38ccb02da1eac3cf7 \
+  https://huggingface.co/cstr/wav2vec2-base-960h-GGUF/resolve/7c025ea07cffc65b211b360e5865dfe59df7e8af/wav2vec2-base-960h.gguf
+
+# Real Czech connected speech for the word timing test (crates/analysis/tests/alignment.rs): 25 s of chapter 2
+# of Krysař by Viktor Dyk, read for LibriVox and released into the public domain. Its word boundaries were
+# checked by hand in crates/analysis/tests/data/krysar-cs-boundaries.tsv; the cut must stay exactly this one.
+krysar() {
+  local mp3=$out/.krysar-02.mp3 sha=2ed724c0d782029b4b5219fd86c52682ac33acda1ca6dda3f0ebb8a95f88659b
+  if ! { [ -f "$mp3" ] && sha256_is "$mp3" "$sha"; }; then
+    curl --fail --location --silent --show-error --output "$mp3.part" \
+      https://archive.org/download/krysar_2007_librivox/krysar_02_dyk_64kb.mp3
+    sha256_is "$mp3.part" "$sha" || { echo "fixtures: $mp3.part does not match its SHA-256" >&2; exit 1; }
+    mv "$mp3.part" "$mp3"
+  fi
+  ff -ss 97.5 -t 25.1 -i "$mp3" -ac 1 -c:a pcm_s16le -f wav "$1"
+}
+media krysar-cs.wav krysar

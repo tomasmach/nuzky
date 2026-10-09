@@ -382,10 +382,14 @@ class Bridge:
             stop(self.process)
 
 
+# The word timing models recognition downloads on first use; linked so no flow reaches the network.
+ALIGN_MODELS = ('wav2vec2-xls-r-300m-cs-250-q8_0.gguf', 'wav2vec2-base-960h.gguf')
+
+
 def link_models(r, names=('ggml-small.bin', 'ggml-silero-v5.1.2.bin')):
     models = r.work / 'data/nuzky/models'
     models.mkdir(parents=True)
-    for name in names:
+    for name in (*names, *ALIGN_MODELS):
         try:
             os.link(MODELS / name, models / name)
         except OSError:

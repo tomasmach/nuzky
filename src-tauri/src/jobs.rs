@@ -15,15 +15,13 @@ use nuzky_engine::edit::new_id;
 use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
 use nuzky_engine::model::{Asset, ClipContent, Project, TextStyle};
 use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
+use nuzky_mcp::model_download::{self, Integrity};
 use nuzky_mcp::transcript;
 use nuzky_session::{host::Host, transcripts::TranscriptStore};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{
-    AppState,
-    model_download::{self, Integrity},
-};
+use crate::AppState;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -467,8 +465,10 @@ fn run_speech_job(
             missing.push(asset);
         }
     }
-    recognise(&store, &cache, missing, request, cancel, rep)?;
+    let estimated = recognise(&store, &cache, missing, request, cancel, rep)?;
     check_cancelled(cancel)?;
+    // Recognition goes on without the word timing model, for example offline; say so.
+    let note = if estimated { ". Word times are estimated: the word timing model could not be loaded" } else { "" };
     let app = rep.app.clone();
     let state = app.state::<AppState>();
     let current = state.session.lock().unwrap();
@@ -477,7 +477,7 @@ fn run_speech_job(
     let derived = transcript::derive(&view.project, &current.host.transcripts)?;
     anyhow::ensure!(!derived.words.is_empty(), "No speech was recognised.");
     let Some(captions) = &request.captions else {
-        return Ok(Some(count_label(derived.words.len(), "word", "words")));
+        return Ok(Some(count_label(derived.words.len(), "word", "words") + note));
     };
     anyhow::ensure!(
         derived.untranscribed.is_empty(),
@@ -499,10 +499,11 @@ fn run_speech_job(
     if let Ok(snap) = current.snapshot(Vec::new()) {
         app.emit("project-changed", snap).ok();
     }
-    Ok(Some(count_label(count, "caption", "captions")))
+    Ok(Some(count_label(count, "caption", "captions") + note))
 }
 
 /// Recognises each file once, in its own time, storing every transcript as soon as it is ready.
+/// True when a file's words could have been measured but kept Whisper's estimates.
 fn recognise(
     store: &TranscriptStore,
     cache: &Path,
@@ -510,11 +511,12 @@ fn recognise(
     request: &SpeechRequest,
     cancel: &AtomicBool,
     rep: &mut Reporter,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     if assets.is_empty() {
         rep.progress(1.0, Some("Using stored transcripts"));
-        return Ok(());
+        return Ok(false);
     }
+    let mut estimated = false;
     let models = (download_model(&request.model, cancel, rep)?, download_vad(cancel, rep)?);
     let mut recognised = HashSet::new();
     for (i, asset) in assets.iter().enumerate() {
@@ -523,13 +525,20 @@ fn recognise(
         if !recognised.insert(store.fingerprint(asset)?) {
             continue;
         }
-        rep.progress(i as f32 / assets.len() as f32, Some("Recognising speech"));
-        let phase = |waiting| if waiting { "Waiting for another transcription" } else { "Recognising speech" };
-        let wait = |waiting| rep.progress(i as f32 / assets.len() as f32, Some(phase(waiting)));
-        transcript::recognise(store, asset, cache, &request.model, &models, &request.language, cancel, wait)
-            .with_context(|| format!("Transcribing {}", asset.name))?;
+        let done = i as f32 / assets.len() as f32;
+        rep.progress(done, Some("Recognising speech"));
+        let stage = |stage| match stage {
+            transcript::Stage::Waiting => rep.progress(done, Some("Waiting for another transcription")),
+            transcript::Stage::Recognising => rep.progress(done, Some("Recognising speech")),
+            transcript::Stage::DownloadingAligner(part) => rep.progress(part, Some("Downloading word timing model")),
+            transcript::Stage::Aligning => rep.progress(done, Some("Measuring word times")),
+        };
+        let record =
+            transcript::recognise(store, asset, cache, &request.model, &models, &request.language, cancel, stage)
+                .with_context(|| format!("Transcribing {}", asset.name))?;
+        estimated |= record.alignment.is_none() && nuzky_analysis::align_model(&record.language).is_some();
     }
-    Ok(())
+    Ok(estimated)
 }
 
 use nuzky_analysis::VAD_MODEL;

@@ -14,6 +14,11 @@ serde.workspace = true
 serde_json.workspace = true
 dirs = "6"
 whisper-rs = "0.16.0"
+candle-core = { version = "0.11.0", default-features = false }
+candle-nn = { version = "0.11.0", default-features = false }
+unicode-normalization = "0.1.25"
+rayon = "1"
+libm = "0.2"
 
 [[bin]]
 name = "nuzky-analyze"

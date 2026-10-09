@@ -4,7 +4,6 @@ mod connect;
 mod engine;
 mod jobs;
 mod library;
-mod model_download;
 mod preview_server;
 mod store;
 mod thumbs;

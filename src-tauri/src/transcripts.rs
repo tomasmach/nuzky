@@ -284,6 +284,7 @@ mod tests {
                     language: "cs".into(),
                     words,
                     segments: vec![],
+                    alignment: None,
                 },
             )
             .unwrap();
