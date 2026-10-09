@@ -15,6 +15,7 @@ use ff::software::{resampling, scaling};
 use ff::util::{color, format::Pixel, frame};
 use ffmpeg_next as ff;
 
+use crate::audio::PeakWriter;
 use crate::model::{Asset, AssetKind, CHANNELS, SAMPLE_RATE};
 
 pub fn init() {
@@ -488,7 +489,23 @@ pub fn decode_size(src: (u32, u32), rotation: u32, display: (f32, f32), max_side
 /// Decodes the whole audio stream to 48 kHz interleaved stereo f32 little-endian.
 /// The file starts at the container origin, padded with silence if audio starts late.
 /// An error from `progress` stops the extraction and removes the partial file.
-pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Result<()>) -> Result<u64> {
+pub fn extract_pcm(path: &Path, out: &Path, progress: impl FnMut(f32) -> Result<()>) -> Result<u64> {
+    extract(path, out, None, progress)
+}
+
+/// Like `extract_pcm`, and writes the waveform peaks of the sound to `peaks` as it is decoded, so the
+/// decoded part can be drawn while the rest of a long file is still decoding. They are complete once
+/// `out` exists; a stopped or failed extraction removes them.
+pub fn extract_pcm_with_peaks(
+    path: &Path,
+    out: &Path,
+    peaks: &Path,
+    progress: impl FnMut(f32) -> Result<()>,
+) -> Result<u64> {
+    extract(path, out, Some(peaks), progress)
+}
+
+fn extract(path: &Path, out: &Path, peaks: Option<&Path>, mut progress: impl FnMut(f32) -> Result<()>) -> Result<u64> {
     let mut input = open_input(path)?;
     let stream = input.streams().best(ff::media::Type::Audio).ok_or_else(|| anyhow!("No audio stream"))?;
     let stream_index = stream.index();
@@ -515,6 +532,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
             skip: 0,
             audio: 0,
             gaps: 0,
+            peaks: peaks.map(PeakWriter::create).transpose()?,
         };
         let mut decoded = frame::Audio::empty();
         let mut last_progress = 0.0;
@@ -561,9 +579,10 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
                 sink.write_out(&tail)?;
             }
         }
-        let PcmSink { mut writer, written, .. } = sink;
+        let PcmSink { mut writer, written, peaks, .. } = sink;
         writer.flush()?;
         drop(writer);
+        peaks.map(PeakWriter::finish).transpose()?;
         std::fs::rename(&tmp, out)?;
         // The cache is complete and published; a late stop request has nothing left to stop.
         progress(1.0).ok();
@@ -571,6 +590,9 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
+        if let Some(peaks) = peaks {
+            let _ = std::fs::remove_file(peaks);
+        }
     }
     result
 }
@@ -590,6 +612,8 @@ struct PcmSink {
     /// Sample frames of decoded audio written, and of silence written for gaps after the first frame.
     audio: u64,
     gaps: u64,
+    /// The waveform of what is written, when the caller wants it.
+    peaks: Option<PeakWriter>,
 }
 
 fn us_to_frames(us: i64) -> i64 {
@@ -614,8 +638,15 @@ impl PcmSink {
                 buf.extend_from_slice(&s.to_le_bytes());
             }
             self.writer.write_all(&buf)?;
+            if let Some(peaks) = &mut self.peaks {
+                peaks.push(src, 1)?;
+            }
         } else {
-            self.writer.write_all(&out.data(0)[dropped * CHANNELS * 4..n * CHANNELS * 4])?;
+            let bytes = &out.data(0)[dropped * CHANNELS * 4..n * CHANNELS * 4];
+            self.writer.write_all(bytes)?;
+            if let Some(peaks) = &mut self.peaks {
+                peaks.push(bytemuck_slice(bytes), CHANNELS)?;
+            }
         }
         self.written += (n - dropped) as u64;
         self.audio += (n - dropped) as u64;
@@ -625,6 +656,9 @@ impl PcmSink {
     fn silence(&mut self, frames: i64) -> Result<()> {
         let frames = frames.max(0) as u64;
         std::io::copy(&mut std::io::repeat(0).take(frames * (CHANNELS * 4) as u64), &mut self.writer)?;
+        if let Some(peaks) = &mut self.peaks {
+            peaks.silence(frames)?;
+        }
         self.written += frames;
         Ok(())
     }
@@ -917,8 +951,12 @@ mod tests {
             return;
         }
         let pcm = |path: &Path| {
-            let out = path.with_extension("f32");
-            extract_pcm(path, &out, |_| Ok(())).unwrap();
+            let (out, peaks) = (path.with_extension("f32"), path.with_extension("peaks"));
+            extract_pcm_with_peaks(path, &out, &peaks, |_| Ok(())).unwrap();
+            // Peaks written during the extraction are those of the finished samples, filled gaps and dropped
+            // overlaps included.
+            let finished = crate::audio::peaks(&crate::audio::Pcm::open(&out).unwrap(), 50);
+            assert_eq!(std::fs::read(&peaks).unwrap(), finished, "{}", path.display());
             let samples: Vec<f32> = bytemuck::cast_slice(&std::fs::read(&out).unwrap()).to_vec();
             // Peak level between two times in seconds.
             move |from: f64, to: f64| {
@@ -980,8 +1018,17 @@ mod tests {
     fn an_absurd_timestamp_jump_writes_no_silence() {
         let path = std::env::temp_dir().join(format!("nuzky-pcm-jump-{}", uuid::Uuid::new_v4()));
         let writer = BufWriter::new(File::create(&path).unwrap());
-        let mut sink =
-            PcmSink { writer, written: 0, resampler: None, mono: false, shift: None, skip: 0, audio: 0, gaps: 0 };
+        let mut sink = PcmSink {
+            writer,
+            written: 0,
+            resampler: None,
+            mono: false,
+            shift: None,
+            skip: 0,
+            audio: 0,
+            gaps: 0,
+            peaks: None,
+        };
         sink.place(0, None).unwrap();
         // One second of audio played.
         (sink.written, sink.audio) = (48_000, 48_000);

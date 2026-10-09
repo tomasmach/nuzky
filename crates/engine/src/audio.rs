@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use anyhow::Result;
 use memmap2::Mmap;
 
 use crate::effects::transition_window;
-use crate::media::extract_pcm;
+use crate::media::extract_pcm_with_peaks;
 use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
 
 /// Short fades at clip edges with nothing to crossfade with, so they do not click.
@@ -89,16 +90,28 @@ pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
 /// v4: gaps are filled by timestamp for long audio-only recordings too.
 pub(crate) const PCM_VERSION: &str = "v4";
 
-/// Removes this asset's caches from older extraction versions, which nothing reads any more.
+/// Raised whenever waveform peaks change, so peaks made before are made again. Their name also carries
+/// the extraction's version, since they describe its samples.
+const PEAKS_VERSION: &str = "p1";
+
+/// Where the waveform peaks of the cache at `pcm` are: written while it is extracted.
+fn peaks_for(pcm: &Path) -> PathBuf {
+    pcm.with_extension(format!("{PEAKS_VERSION}.peaks"))
+}
+
+/// Removes this asset's caches and peaks from older versions, which nothing reads any more.
 /// Other revisions of the current version stay: a project may still play from them.
 fn remove_older_versions(path: &Path, asset: &Asset) {
-    let (Some(dir), prefix, current) = (path.parent(), format!("{}.", asset.id), format!(".{PCM_VERSION}.f32")) else {
+    let (Some(dir), prefix) = (path.parent(), format!("{}.", asset.id)) else {
         return;
     };
+    let (current, current_peaks) = (format!(".{PCM_VERSION}.f32"), format!(".{PCM_VERSION}.{PEAKS_VERSION}.peaks"));
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let cache = name.strip_suffix(".lock").unwrap_or(&name);
-        if name.starts_with(&prefix) && cache.ends_with(".f32") && !cache.ends_with(&current) {
+        let old_cache = cache.ends_with(".f32") && !cache.ends_with(&current);
+        let old_peaks = name.ends_with(".peaks") && !name.ends_with(&current_peaks);
+        if name.starts_with(&prefix) && (old_cache || old_peaks) {
             std::fs::remove_file(entry.path()).ok();
         }
     }
@@ -126,7 +139,7 @@ pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32)
         }
     }
     if !path.exists() {
-        extract_pcm(Path::new(&asset.path), &path, progress)?;
+        extract_pcm_with_peaks(Path::new(&asset.path), &path, &peaks_for(&path), progress)?;
         remove_older_versions(&path, asset);
     }
     Ok(path)
@@ -394,10 +407,137 @@ fn gain_at(
 pub fn peaks(pcm: &Pcm, per_second: u32) -> Vec<u8> {
     let samples = pcm.samples();
     let bucket = (SAMPLE_RATE / per_second.max(1)) as usize * CHANNELS;
-    samples
-        .chunks(bucket.max(CHANNELS))
-        .map(|c| (c.iter().fold(0f32, |m, s| m.max(s.abs())).min(1.0) * 255.0) as u8)
-        .collect()
+    samples.chunks(bucket.max(CHANNELS)).map(|c| peak(loudest(0.0, c))).collect()
+}
+
+fn loudest(from: f32, samples: &[f32]) -> f32 {
+    samples.iter().fold(from, |m, s| m.max(s.abs()))
+}
+
+fn peak(loudest: f32) -> u8 {
+    (loudest.min(1.0) * 255.0) as u8
+}
+
+/// Waveform peaks per second of sound: each is the loudest sample of either channel over 20 ms.
+pub const PEAKS_PER_SECOND: u32 = 50;
+const PEAK_FRAMES: usize = (SAMPLE_RATE / PEAKS_PER_SECOND) as usize;
+
+/// Writes the waveform peaks of samples as they are extracted. They reach the file every second of
+/// sound, so a reader sees the decoded part grow.
+pub(crate) struct PeakWriter {
+    file: File,
+    /// The loudest sample of the peak being filled, and how many frames it has.
+    loudest: f32,
+    frames: usize,
+    pending: Vec<u8>,
+}
+
+impl PeakWriter {
+    pub(crate) fn create(path: &Path) -> Result<Self> {
+        Ok(Self { file: File::create(path)?, loudest: 0.0, frames: 0, pending: Vec::new() })
+    }
+
+    /// Interleaved samples of `channels` channels.
+    pub(crate) fn push(&mut self, samples: &[f32], channels: usize) -> Result<()> {
+        let mut rest = samples;
+        while !rest.is_empty() {
+            let (part, tail) = rest.split_at(((PEAK_FRAMES - self.frames) * channels).min(rest.len()));
+            self.loudest = loudest(self.loudest, part);
+            self.add(part.len() / channels);
+            rest = tail;
+        }
+        self.write(false)
+    }
+
+    pub(crate) fn silence(&mut self, mut frames: u64) -> Result<()> {
+        while frames > 0 {
+            let part = ((PEAK_FRAMES - self.frames) as u64).min(frames);
+            self.add(part as usize);
+            frames -= part;
+        }
+        self.write(false)
+    }
+
+    fn add(&mut self, frames: usize) {
+        self.frames += frames;
+        if self.frames == PEAK_FRAMES {
+            self.pending.push(peak(self.loudest));
+            (self.loudest, self.frames) = (0.0, 0);
+        }
+    }
+
+    fn write(&mut self, all: bool) -> Result<()> {
+        if self.pending.len() >= PEAKS_PER_SECOND as usize || all {
+            self.file.write_all(&self.pending)?;
+            self.pending.clear();
+        }
+        Ok(())
+    }
+
+    /// Writes the last peak, which the end of the sound may leave short.
+    pub(crate) fn finish(mut self) -> Result<()> {
+        if self.frames > 0 {
+            self.pending.push(peak(self.loudest));
+        }
+        self.write(true)
+    }
+}
+
+/// Waveform peaks `from..to` (at `PEAKS_PER_SECOND`) of `asset`'s sound, and whether they are final.
+/// While its cache is extracted, only the part decoded so far is there. A cache extracted before peaks
+/// were written gets them from its samples, reading only that part.
+pub fn waveform_peaks(cache_dir: &Path, asset: &Asset, from: usize, to: usize) -> Result<(Vec<u8>, bool)> {
+    // Nothing will be decoded: no sound, or the file is gone.
+    if !has_audio(asset) || !Path::new(&asset.path).is_file() {
+        return Ok((Vec::new(), true));
+    }
+    let pcm = pcm_path(cache_dir, asset);
+    let peaks = peaks_for(&pcm);
+    let total = match std::fs::metadata(&pcm) {
+        Ok(cache) => (cache.len() as usize / (CHANNELS * 4)).div_ceil(PEAK_FRAMES),
+        Err(_) => return Ok((read_bytes(&peaks, from, to).unwrap_or_default(), false)),
+    };
+    let to = to.min(total);
+    if from >= to {
+        return Ok((Vec::new(), true));
+    }
+    if std::fs::metadata(&peaks).is_ok_and(|p| p.len() as usize == total) {
+        return Ok((read_bytes(&peaks, from, to)?, true));
+    }
+    let mut file = File::open(&pcm)?;
+    file.seek(SeekFrom::Start((from * PEAK_FRAMES * CHANNELS * 4) as u64))?;
+    let mut buffer = vec![0f32; 64 * PEAK_FRAMES * CHANNELS];
+    let mut out = Vec::with_capacity(to - from);
+    while out.len() < to - from {
+        let want = ((to - from - out.len()) * PEAK_FRAMES * CHANNELS).min(buffer.len());
+        let read = read_full(&mut file, bytemuck::cast_slice_mut(&mut buffer[..want]))? / 4 / CHANNELS * CHANNELS;
+        out.extend(buffer[..read].chunks(PEAK_FRAMES * CHANNELS).map(|c| peak(loudest(0.0, c))));
+        if read < want {
+            break;
+        }
+    }
+    Ok((out, true))
+}
+
+/// Bytes `from..to` of the file, fewer where it ends.
+fn read_bytes(path: &Path, from: usize, to: usize) -> Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    file.seek(SeekFrom::Start(from as u64))?;
+    let mut out = Vec::new();
+    file.take(to.saturating_sub(from) as u64).read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// Fills `buffer` unless the file ends first; returns how much it read.
+fn read_full(file: &mut File, buffer: &mut [u8]) -> Result<usize> {
+    let mut read = 0;
+    while read < buffer.len() {
+        match file.read(&mut buffer[read..])? {
+            0 => break,
+            n => read += n,
+        }
+    }
+    Ok(read)
 }
 
 #[cfg(test)]

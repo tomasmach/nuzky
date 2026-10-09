@@ -83,7 +83,7 @@ export const ClipView = memo(function ClipView({
   tabbable?: boolean;
   ghost?: boolean;
   timing?: { startUs: number; durationUs: number };
-  /** Visible lane range in px, so long clips only draw the frames on screen. */
+  /** Visible lane range in px, so long clips only draw the frames and waveform on screen. */
   visible: [number, number];
   onPointerDown?: (e: React.PointerEvent, clip: Clip, track: Track) => void;
   onContextMenu?: (e: React.MouseEvent, clip: Clip) => void;
@@ -137,11 +137,11 @@ export const ClipView = memo(function ClipView({
     >
       {strip && c.type === "media" && <FilmstripTiles strip={strip} sourceInUs={c.sourceInUs} speed={speed} zoom={zoom} width={width} height={innerH} visible={local} />}
       {sound && asset && c.type === "media" && (
-        <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} color="#30d158" />
+        <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} visible={local} color="#30d158" />
       )}
       {soundStrip && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5 bg-black/55">
-          <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} color="#7ee2a8" className="absolute inset-0 h-full" />
+          <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} visible={local} color="#7ee2a8" className="absolute inset-y-0 h-full" />
         </div>
       )}
 

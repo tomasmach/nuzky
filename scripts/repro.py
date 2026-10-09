@@ -37,6 +37,7 @@ def preflight(names):
         except ImportError:
             problems.append(f'Python package {package} is missing')
     if (not (FIXTURES / 'talk.mp4').exists() or ('captions' in names and not (MODELS / 'ggml-small.bin').exists())
+            or ('waveform' in names and not (FIXTURES / 'hour.m4a').exists())
             or ('reel' in names and not all((FIXTURES / f).exists() for f in (
                 'reel-1.mp4', 'reel-2.mp4', 'reel-3.mp4', 'xdg/data/nuzky/models/ggml-large-v3-turbo-q5_0.bin')))):
         problems.append('test media or models are missing: run scripts/fixtures.sh')

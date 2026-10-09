@@ -46,6 +46,10 @@ media music.mp3 ff -f lavfi -i "aevalsrc=0.3*sin(2*PI*(330+110*floor(mod(t\,4)))
 # Ten minutes with a keyframe every ten seconds, for filmstrip timing.
 media filmstrip-long.mp4 ff -f lavfi -i testsrc=s=1920x1080:r=25:d=600 -c:v libx264 -preset ultrafast \
   -g 250 -pix_fmt yuv420p -an
+# An hour of speech-like sound with pauses, for loading the waveform of a long recording (tests/e2e/waveform.py).
+media hour.m4a ff -f lavfi \
+  -i "aevalsrc=0.5*sin(2*PI*180*t)*(0.55+0.45*sin(2*PI*0.37*t))*gt(sin(2*PI*0.11*t)+0.3\,0):s=48000:c=stereo:d=3600" \
+  -c:a aac -b:a 128k
 media engine-evidence/identity.png ff -f lavfi -i testsrc2=s=540x960 -frames:v 1 -update 1
 
 # The Czech talking head of the reel flow, spoken from tests/e2e/reel_takes.tsv: one file per take, each
