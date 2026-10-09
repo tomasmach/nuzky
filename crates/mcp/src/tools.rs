@@ -543,6 +543,7 @@ impl Backend {
                     progress.set(
                         match phase {
                             nuzky_vision::mask::Phase::Rendering => "rendering",
+                            nuzky_vision::mask::Phase::Waiting => "waiting_for_other_mask",
                             nuzky_vision::mask::Phase::Segmenting => "segmenting",
                         },
                         None,

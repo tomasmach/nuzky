@@ -130,7 +130,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 19);
+    assert_eq!(tools.len(), 20);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -838,14 +838,21 @@ fn cover_frames_and_subject_mask_of_a_face_over_stdio() {
     assert_eq!(best["faces"].as_array().unwrap().len(), 1, "{result}");
     assert!(best["subject_box"].is_array() && best["crops"]["16:9"].is_array(), "{result}");
 
-    // Stopped in the middle of the mask model, the job ends within a few seconds.
+    // A second mask waits for the first instead of adding up in memory.
     let job = c.call("segment_subject", json!({"time_us": 1_500_000}));
     wait_job(&mut c, &job, Duration::from_secs(30), |s| s["phase"] == "segmenting");
+    let second = c.call("segment_subject", json!({"time_us": 4_500_000}));
+    let waiting = wait_job(&mut c, &second, Duration::from_secs(10), |s| s["phase"] == "waiting_for_other_mask");
+    assert_eq!(waiting["phase"], "waiting_for_other_mask", "{waiting}");
+    // Stopped in the middle of the mask model, the job ends within a few seconds.
     std::thread::sleep(Duration::from_millis(2500));
     let asked = std::time::Instant::now();
     c.call("job", json!({"job_id": job["job_id"], "action": "cancel"}));
-    let stopped = wait_job(&mut c, &job, Duration::from_secs(10), |_| false);
-    assert_eq!(stopped["status"], "cancelled", "{stopped}");
+    c.call("job", json!({"job_id": second["job_id"], "action": "cancel"}));
+    for job in [&job, &second] {
+        let stopped = wait_job(&mut c, job, Duration::from_secs(10), |_| false);
+        assert_eq!(stopped["status"], "cancelled", "{stopped}");
+    }
     assert!(asked.elapsed() < Duration::from_secs(3), "cancelling took {:?}", asked.elapsed());
 
     let job = c.call("segment_subject", json!({"time_us": 7_500_000}));

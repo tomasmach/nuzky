@@ -3,6 +3,7 @@
 //! otherwise the most prominent object.
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Mutex, TryLockError};
 
 use anyhow::{Context, Result};
 use nuzky_engine::{Project, Renderer};
@@ -21,8 +22,13 @@ const SUBJECT_ALPHA: u8 = 128;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Rendering,
+    /// Another mask is being made; one at a time, since each takes a lot of memory.
+    Waiting,
     Segmenting,
 }
+
+/// Held while BiRefNet runs, so masks asked for together take turns instead of adding up in memory.
+static SEGMENTING: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Serialize)]
 pub struct Mask {
@@ -67,6 +73,17 @@ pub fn segment_subject(
     let (alpha, cached) = match read_png(&path, size) {
         Some(alpha) => (alpha, true),
         None => {
+            let _turn = loop {
+                match SEGMENTING.try_lock() {
+                    Ok(turn) => break turn,
+                    Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                    Err(TryLockError::WouldBlock) => {
+                        progress(Phase::Waiting);
+                        check_cancel(cancel)?;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                }
+            };
             progress(Phase::Segmenting);
             let grid = BiRefNet::load(models_dir)?.segment(&frame, cancel)?;
             let alpha = upsample(&grid, size);

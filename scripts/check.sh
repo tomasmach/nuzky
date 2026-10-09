@@ -39,8 +39,11 @@ without_avx2() (
   ulimit -c 0
   cargo build --locked -p nuzky-app -p nuzky-cli || return 1
   for program in nuzky-app nuzky; do
-    qemu-x86_64-static -cpu Nehalem "target/debug/$program" mcp 2>&1 | grep -q INVALID_ARGUMENTS || {
-      echo "$program does not start on a CPU without AVX2" >&2
+    # `mcp` without a project reaches main and refuses with INVALID_ARGUMENTS and exit code 1.
+    local said
+    said=$(qemu-x86_64-static -cpu Nehalem "target/debug/$program" mcp 2>&1)
+    [[ $said == *INVALID_ARGUMENTS* ]] || {
+      echo "$program does not start on a CPU without AVX2: $said" >&2
       return 1
     }
   done
