@@ -182,6 +182,7 @@ pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
         EditCmd::RemoveAsset { .. } => "Remove media",
         EditCmd::AddClip { .. } => "Add clip",
         EditCmd::AddText { .. } => "Add text",
+        EditCmd::AddPictureInPicture { .. } => "Picture in picture",
         EditCmd::MoveClip { .. } => "Move clip",
         EditCmd::TrimClip { .. } => "Trim clip",
         EditCmd::SplitClip { .. } => "Split",
