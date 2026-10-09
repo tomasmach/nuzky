@@ -1,8 +1,10 @@
+"use client";
+
 import Image from "next/image";
+import { useEffect, useState } from "react";
 import { Check, Sparkles, Undo2 } from "lucide-react";
 import { Fit } from "./Fit";
 import { AppleLogo, GitHubLogo } from "./Logos";
-import { Waves } from "./Waves";
 import { releases, repo } from "@/lib/site";
 
 const shadow = "drop-shadow(0 2px 8px rgb(0 0 0 / 0.7))";
@@ -17,10 +19,80 @@ function Reel({ src, w, opacity, children }: { src: string; w: number; opacity: 
   );
 }
 
-export function Hero() {
+type CaptionStyle = "Bold" | "Clean" | "Pop";
+
+const styles: [CaptionStyle, string][] = [
+  ["Bold", "text-caption-yellow"],
+  ["Clean", "text-fg"],
+  ["Pop", "text-accent"],
+];
+
+const lines = [
+  ["Okay", "this", "serum"],
+  ["actually", "works"],
+];
+const WORDS = 5;
+// The caption opens on "serum", the word the design and the server render show lit.
+const FIRST_SPOKEN = 2;
+
+// The spoken word walks through the caption the way it does in the app's preview, with a breath at the end.
+function useSpokenWord(on: boolean) {
+  const [spoken, setSpoken] = useState(FIRST_SPOKEN);
+  useEffect(() => {
+    if (!on || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let id = 0;
+    const next = (i: number) => {
+      setSpoken(i);
+      id = window.setTimeout(() => next((i + 1) % WORDS), i === WORDS - 1 ? 1300 : 380);
+    };
+    id = window.setTimeout(() => next(FIRST_SPOKEN + 1), 380);
+    return () => window.clearTimeout(id);
+  }, [on]);
+  return spoken;
+}
+
+function Caption({ style, highlight }: { style: CaptionStyle; highlight: boolean }) {
+  const spoken = useSpokenWord(highlight);
+  const loud = style !== "Clean";
+  const word = (w: string, i: number) => {
+    const lit = highlight && i === spoken;
+    const look =
+      style === "Bold"
+        ? lit && "text-caption-yellow"
+        : style === "Pop"
+          ? lit && "-rotate-2 rounded-[5px] bg-accent shadow-[0_0_0_4px_var(--color-accent)]"
+          : highlight && !lit && "text-white/55";
+    return (
+      <span key={w} className={`inline-block transition-[color,background-color,box-shadow,transform] duration-150 ${look || ""}`}>
+        {loud ? w.toUpperCase() : w}
+      </span>
+    );
+  };
+  let i = 0;
   return (
-    <section id="top" className="relative -mt-[72px] overflow-hidden pt-[72px]">
-      <Waves height={0.4} intensity={1.45} />
+    <div className="absolute inset-x-0 top-[318px] flex justify-center">
+      <div
+        className={`flex flex-col items-center gap-y-0.5 ${
+          loud ? "text-[25px] font-black leading-[1.12] tracking-[-0.015em]" : "rounded-[10px] bg-black/60 px-3 py-1.5 text-[22px] font-semibold leading-[1.2] tracking-[-0.01em]"
+        }`}
+        style={loud ? { filter: shadow } : undefined}
+      >
+        {lines.map((line) => (
+          <span key={line[0]} className="flex gap-x-[0.26em]">
+            {line.map((w) => word(w, i++))}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function Hero() {
+  const [style, setStyle] = useState<CaptionStyle>("Bold");
+  const [highlight, setHighlight] = useState(true);
+
+  return (
+    <section className="relative">
       <div className="relative z-10 flex flex-col items-center px-5 pt-16 text-center sm:pt-24">
         <h1 className="heading-xl">
           Make the reel.
@@ -29,7 +101,7 @@ export function Hero() {
         </h1>
         <p className="mt-7 max-w-xl text-[17px] text-muted sm:text-[20px]">A free, open source video editor with AI built in.</p>
 
-        <Fit width={1060} height={498} className="mt-14 sm:mt-16">
+        <Fit width={1060} height={498} waves="swell" className="mt-14 sm:mt-16">
           <div className="flex h-full items-center justify-center gap-5">
             <Reel src="/media/reel-hike.jpg" w={150} opacity={0.35} />
             <Reel src="/media/reel-skate.jpg" w={200} opacity={0.6}>
@@ -47,12 +119,7 @@ export function Hero() {
                   <Image src="/media/avatar.jpg" alt="" width={26} height={26} className="size-[26px] rounded-full object-cover ring-[1.5px] ring-white" />
                   <span className="text-[13px] font-semibold">@mia.skin</span>
                 </div>
-                <div className="absolute inset-x-0 top-[318px] flex flex-col items-center text-[25px] font-black leading-[1.12] tracking-[-0.015em]" style={{ filter: shadow }}>
-                  <span>
-                    OKAY THIS <span className="text-ok">SERUM</span>
-                  </span>
-                  <span>ACTUALLY WORKS</span>
-                </div>
+                <Caption style={style} highlight={highlight} />
               </div>
               <div className="pointer-events-none absolute inset-0 outline outline-[1.5px] outline-fg" />
               {[
@@ -88,7 +155,7 @@ export function Hero() {
                 Undo
               </span>
             </div>
-            {["Cut 14 filler words", "Removed 6 long pauses", "Added captions · Bold"].map((t) => (
+            {["Cut 14 filler words", "Removed 6 long pauses", `Added captions · ${style}`].map((t) => (
               <div key={t} className="flex items-center gap-2 text-[12px]">
                 <Check className="size-[13px] text-ok" />
                 {t}
@@ -97,26 +164,33 @@ export function Hero() {
           </div>
           <div className="glass absolute left-[754px] top-[156px] hidden w-[262px] flex-col gap-3 rounded-[22px] p-4 text-left md:flex">
             <span className="text-[13px] font-semibold">Caption style</span>
-            <div className="flex gap-2">
-              {[
-                ["Bold", "text-caption-yellow", true],
-                ["Clean", "text-fg", false],
-                ["Pop", "text-accent", false],
-              ].map(([n, c, on]) => (
-                <span
-                  key={n as string}
-                  className={`flex h-11 flex-1 items-center justify-center rounded-xl bg-black/35 text-[14px] font-extrabold ${c} ${on ? "ring-2 ring-accent" : "ring-1 ring-white/10"}`}
+            <div className="flex gap-2" role="group" aria-label="Caption style">
+              {styles.map(([n, c]) => (
+                <button
+                  key={n}
+                  type="button"
+                  aria-pressed={style === n}
+                  onClick={() => setStyle(n)}
+                  className={`flex h-11 flex-1 cursor-pointer items-center justify-center rounded-xl bg-black/35 text-[14px] font-extrabold transition-shadow ${c} ${
+                    style === n ? "ring-2 ring-accent" : "ring-1 ring-white/10 hover:ring-white/30"
+                  }`}
                 >
                   {n}
-                </span>
+                </button>
               ))}
             </div>
-            <div className="flex items-center justify-between">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={highlight}
+              onClick={() => setHighlight((h) => !h)}
+              className="flex cursor-pointer items-center justify-between rounded-md text-left"
+            >
               <span className="text-[12px] text-fg/85">Highlight the spoken word</span>
-              <span className="flex h-5 w-[34px] items-center justify-end rounded-full bg-accent-strong p-0.5">
-                <span className="size-4 rounded-full bg-white" />
+              <span className={`flex h-5 w-[34px] items-center rounded-full p-0.5 transition-colors ${highlight ? "bg-accent-strong" : "bg-white/20"}`}>
+                <span className={`size-4 rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.3)] transition-transform duration-200 ${highlight ? "translate-x-[14px]" : ""}`} />
               </span>
-            </div>
+            </button>
           </div>
         </Fit>
 

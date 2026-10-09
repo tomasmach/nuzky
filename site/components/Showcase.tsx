@@ -5,7 +5,6 @@ import { Captions, Plus, Scissors, Sparkles, Upload } from "lucide-react";
 import { AgentPanel } from "./AgentPanel";
 import { EditorMock, type EditorFocus } from "./EditorMock";
 import { Fit } from "./Fit";
-import { Waves } from "./Waves";
 
 // `side` places the tooltip where it covers nothing the tab is showing. Without it the
 // tooltip goes below the hotspot, or above it in the lower half.
@@ -21,8 +20,8 @@ const tabs: Tab[] = [
     summary: "A timeline, a live preview and an inspector, laid out the way you already know.",
     spots: [
       { x: 500, y: 656, title: "Magnetic timeline", text: "Clips snap together and every cut lands on the exact frame, even in phone video." },
-      { x: 306, y: 250, title: "Your media", text: "Drop in video, sound and images. Phone footage opens the right way up." },
-      { x: 934, y: 262, title: "Inspector", text: "Scale, opacity, volume and speed, each with a value you can type." },
+      { x: 306, y: 280, title: "Your media", text: "Drop in video, sound and images. Phone footage opens the right way up." },
+      { x: 934, y: 292, title: "Inspector", text: "Scale, opacity, volume and speed, each with a value you can type." },
     ],
   },
   {
@@ -31,9 +30,9 @@ const tabs: Tab[] = [
     icon: Captions,
     summary: "Whisper writes the captions on your computer. Pick a style, fix a word, done.",
     spots: [
-      { x: 724, y: 330, title: "Captions in one click", text: "Transcribed on your computer, with the spoken word lit as it plays.", side: "above" },
+      { x: 724, y: 344, title: "Captions in one click", text: "Transcribed on your computer, with the spoken word lit as it plays.", side: "above" },
       { x: 236, y: 573, title: "A clip per line", text: "Fix a word or move a line right on the timeline." },
-      { x: 934, y: 452, title: "Caption styles", text: "Bold, Clean or Pop, or make your own." },
+      { x: 934, y: 482, title: "Caption styles", text: "Bold, Clean or Pop, or make your own." },
     ],
   },
   {
@@ -42,8 +41,8 @@ const tabs: Tab[] = [
     icon: Sparkles,
     summary: "Claude Code or Codex edits live in the open app. One undo takes the whole run back.",
     spots: [
-      { x: 854, y: 130, title: "Your agent, in the app", text: "Connect Claude Code or Codex in one click, or any MCP client.", side: "left" },
-      { x: 854, y: 398, title: "One undo", text: "Every change the agent made goes back in one step.", side: "left" },
+      { x: 854, y: 110, title: "Your agent, in the app", text: "Connect Claude Code or Codex in one click, or any MCP client.", side: "left" },
+      { x: 854, y: 428, title: "One undo", text: "Every change the agent made goes back in one step.", side: "left" },
     ],
   },
   {
@@ -145,8 +144,7 @@ export function Showcase() {
   const current = tab.spots[spot];
 
   return (
-    <section id="editor" ref={section} className="relative overflow-hidden pb-10 pt-28 sm:pt-[150px]">
-      <Waves height={0.42} intensity={1.25} />
+    <section id="editor" ref={section} className="relative pb-10 pt-28 sm:pt-[150px]">
       <div className="relative z-10 mx-auto flex max-w-[1240px] flex-col items-center gap-7 px-5 text-center">
         <h2 className="heading-lg">
           Everything where you expect it.
@@ -183,11 +181,11 @@ export function Showcase() {
           onFocus={() => setPaused(true)}
           onBlur={() => setPaused(false)}
         >
-          <Fit width={1200} height={740} className="mx-auto">
+          <Fit width={1200} height={740} waves="glow" className="mx-auto">
             <div className="relative size-full rounded-[14px] shadow-[0_50px_140px_rgb(0_0_0/0.9),0_0_0_1px_rgb(255_255_255/0.08)]">
               <EditorMock focus={tab.id} />
               {tab.id === "agent" && (
-                <div className="absolute bottom-1.5 right-1.5 top-[54px] w-[340px] animate-[fade-up_240ms_ease-out] shadow-[0_30px_60px_rgb(0_0_0/0.55)]">
+                <div className="absolute bottom-1.5 right-1.5 top-[84px] w-[340px] animate-[fade-up_240ms_ease-out] shadow-[0_30px_60px_rgb(0_0_0/0.55)]">
                   <AgentPanel compact className="h-full ring-white/[0.12]" />
                 </div>
               )}
@@ -201,16 +199,22 @@ export function Showcase() {
                   onPointerEnter={() => setSpot(i)}
                   onFocus={() => setSpot(i)}
                   onClick={() => setSpot(i)}
-                  className="group absolute hidden size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full md:flex"
+                  className="group absolute hidden size-12 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full md:flex"
                   style={{ left: s.x, top: s.y }}
                 >
-                  {i === spot && <span className="absolute inset-0 rounded-full border-[1.5px] border-white/40 animate-[pulse-ring_1.8s_ease-out_infinite]" />}
+                  {/* Every hotspot breathes so it reads as something to point at; the open one stays still and blue. */}
+                  {i !== spot && (
+                    <span
+                      className="absolute inset-1 rounded-full bg-white/30 animate-[pulse-ring_2.2s_ease-out_infinite]"
+                      style={{ animationDelay: `${i * 0.5}s` }}
+                    />
+                  )}
                   <span
-                    className={`flex size-[30px] items-center justify-center rounded-full shadow-[0_4px_14px_rgb(0_0_0/0.5)] transition-colors ${
-                      i === spot ? "bg-fg text-bg" : "glass text-fg group-hover:bg-white/20"
+                    className={`relative flex size-8 items-center justify-center rounded-full shadow-[0_0_0_4px_rgb(0_0_0/0.25),0_6px_18px_rgb(0_0_0/0.55)] transition-[background-color,transform] duration-150 group-hover:scale-110 ${
+                      i === spot ? "bg-accent-strong text-white" : "bg-fg text-bg"
                     }`}
                   >
-                    <Plus className="size-[15px]" />
+                    <Plus className={`size-4 transition-transform duration-200 ${i === spot ? "rotate-45" : ""}`} strokeWidth={2.5} />
                   </span>
                 </button>
               ))}

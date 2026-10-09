@@ -6,14 +6,19 @@ import { Hero } from "@/components/Hero";
 import { Nav } from "@/components/Nav";
 import { Showcase } from "@/components/Showcase";
 import { Steps } from "@/components/Steps";
+import { Waves } from "@/components/Waves";
 
 export default function Home() {
   return (
     <>
       <Nav />
       <main>
-        <Hero />
-        <Showcase />
+        {/* One light surface behind the hero and the editor tour, so the two never meet in a seam. */}
+        <div id="top" className="relative -mt-[72px] overflow-hidden pt-[72px]">
+          <Waves swellAt="[data-waves=swell]" glowAt="[data-waves=glow]" height={0.75} intensity={1.4} />
+          <Hero />
+          <Showcase />
+        </div>
         <Steps />
         <Agent />
         <Features />
