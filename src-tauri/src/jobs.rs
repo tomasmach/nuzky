@@ -234,6 +234,7 @@ pub struct ExportRequest {
     pub quality: Quality,
     /// "reels" fixes the format and levels the sound; resolution and fps are then its own.
     #[serde(default)]
+    #[cfg_attr(test, ts(optional = nullable))]
     pub preset: Option<Delivery>,
 }
 

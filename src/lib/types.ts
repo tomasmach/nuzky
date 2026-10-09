@@ -357,7 +357,7 @@ export type ExportRequest = {
   /**
    * "reels" fixes the format and levels the sound; resolution and fps are then its own.
    */
-  preset: Delivery | null,
+  preset?: Delivery | null,
 };
 
 /**
