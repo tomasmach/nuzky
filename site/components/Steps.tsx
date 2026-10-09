@@ -20,7 +20,7 @@ export function Steps() {
     <section className="mx-auto w-full max-w-[1240px] px-5 pt-32 sm:pt-[180px]">
       <SectionHeading center first="From raw clips" second="to a finished cut." />
       <div className="mt-10 grid gap-4 md:grid-cols-3">
-        <Step n={1} title="Drop in your clips" text="Video from any phone or camera, including HEVC and variable frame rate.">
+        <Step n={1} title="Drop in your clips" text="Nuzky opens video from any phone or camera, including HEVC and variable frame rate.">
           <div className="grid grid-cols-3 gap-2">
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <div key={i} className="relative size-24 overflow-hidden rounded-[10px]">
@@ -29,7 +29,7 @@ export function Steps() {
             ))}
           </div>
         </Step>
-        <Step n={2} title="Caption it" text="Whisper writes the captions on your computer. Pick a style, fix a word, done.">
+        <Step n={2} title="Caption it" text="Whisper writes the captions on your computer. Pick a style and fix any word it misheard.">
           <div className="flex w-full flex-col gap-2.5">
             {[
               ["00:04", "and caught first light"],
@@ -43,7 +43,7 @@ export function Steps() {
             ))}
           </div>
         </Step>
-        <Step n={3} title="Export anywhere" text="One click for Reels and TikTok, or any size you need. It looks exactly like the preview.">
+        <Step n={3} title="Export anywhere" text="Choose Reels and TikTok or any size you need. The file matches the preview.">
           <div className="flex flex-col items-center gap-3.5">
             <div className="relative h-[196px] w-[110px] ring-1 ring-white/15">
               <Image src="/media/export-file.jpg" alt="" fill sizes="220px" className="object-cover" />
