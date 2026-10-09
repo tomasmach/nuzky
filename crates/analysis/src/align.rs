@@ -30,6 +30,8 @@ const CONTEXT: usize = 2 * RATE;
 const MAX_DISAGREEMENT: f32 = 1.0;
 /// A word whose letters the model hears less surely than this keeps Whisper's estimate.
 const MIN_WORD_PROBABILITY: f32 = 0.1;
+/// The least share of a gap an unmeasured word gets, whatever Whisper's estimate of its length.
+const MIN_SHARE_US: i64 = 100_000;
 /// Further than this from Whisper's estimate, the path found some other sound.
 const MAX_SHIFT_US: i64 = 1_500_000;
 
@@ -223,7 +225,9 @@ fn fill_between(words: &mut [Word], placed: &[bool]) {
         match (left, right) {
             (Some(from), Some(to)) => {
                 let to = to.max(from);
-                let lengths: Vec<i64> = words[run.clone()].iter().map(|w| (w.end_us - w.start_us).max(1)).collect();
+                // Whisper's durations, at least a short syllable each: it gives some words none.
+                let lengths: Vec<i64> =
+                    words[run.clone()].iter().map(|w| (w.end_us - w.start_us).max(MIN_SHARE_US)).collect();
                 let total: i64 = lengths.iter().sum();
                 let mut at = from;
                 let mut sum = 0;
@@ -539,6 +543,11 @@ mod tests {
         fill_between(&mut words, &[true, false, false, true]);
         assert_eq!((words[1].start_us, words[1].end_us), (1_000_000, 1_250_000));
         assert_eq!((words[2].start_us, words[2].end_us), (1_250_000, 2_000_000));
+        // A word Whisper gave no length still gets a share of the gap.
+        let mut words = vec![word(0.0, 1.0, "za"), word(1.2, 1.2, "10"), word(1.2, 1.6, "20"), word(2.0, 2.5, "a")];
+        fill_between(&mut words, &[true, false, false, true]);
+        assert_eq!((words[1].start_us, words[1].end_us), (1_000_000, 1_200_000));
+        assert_eq!((words[2].start_us, words[2].end_us), (1_200_000, 2_000_000));
         // At the edge of a stretch, Whisper's time stays, kept off the measured word.
         let mut words = vec![word(0.0, 0.5, "10"), word(0.3, 0.8, "minut"), word(0.9, 1.4, "pak")];
         fill_between(&mut words, &[false, true, false]);

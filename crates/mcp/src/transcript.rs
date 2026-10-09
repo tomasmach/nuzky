@@ -120,6 +120,8 @@ fn recognise_with(
     stage(Stage::Aligning);
     // Cuts are planned from these times, so they follow the sound, not Whisper's estimates.
     let measured = measure(&mut result.words, asset, cache, aligner.as_ref().map(|(a, _)| a), cancel)?;
+    // A stop asked for while the words were being refined still keeps nothing.
+    check_cancel(cancel)?;
     let record = Record {
         version: VERSION,
         fingerprint,

@@ -330,7 +330,7 @@ mod tests {
         let asset = nuzky_engine::media::probe(&root.join(file), "oracle".into()).unwrap();
         let cache = root.join("tmp-test/analysis").join(format!("oracle-{}", std::process::id()));
         let pcm = crate::audio::open_pcm(&asset, &cache, &|| false).unwrap();
-        pcm.samples().chunks(6).map(|s| s.iter().sum::<f32>() / s.len() as f32).collect()
+        crate::audio::speech_rate(pcm.samples())
     }
 
     /// Our model against what the official one computes on the same sound: the same most likely

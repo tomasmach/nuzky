@@ -29,6 +29,12 @@ impl Default for SilenceParams {
     }
 }
 
+/// 48 kHz stereo PCM as speech models hear it: three frames (six channel samples) averaged into one
+/// 16 kHz mono sample.
+pub(crate) fn speech_rate(samples: &[f32]) -> Vec<f32> {
+    samples.chunks(6).map(|s| s.iter().sum::<f32>() / s.len() as f32).collect()
+}
+
 pub(crate) fn open_pcm(asset: &Asset, cache: &Path, cancelled: &dyn Fn() -> bool) -> Result<Pcm> {
     ensure!(has_audio(asset), "Asset {} has no audio", asset.name);
     let path = ensure_pcm(cache, asset, |_| {

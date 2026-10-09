@@ -9,7 +9,10 @@ use whisper_rs::{
     WhisperVadParams,
 };
 
-use crate::{Range, audio::open_pcm};
+use crate::{
+    Range,
+    audio::{open_pcm, speech_rate},
+};
 
 const RATE: usize = 16_000;
 const CS: usize = RATE / 100;
@@ -69,8 +72,7 @@ pub fn transcribe_words_cancellable(
     let audio = match source {
         AudioSource::Asset { asset, cache } => {
             let pcm = open_pcm(asset, cache, &cancelled)?;
-            // Average three 48 kHz stereo frames (six channel samples) into one 16 kHz mono sample.
-            converted = pcm.samples().chunks(6).map(|s| s.iter().sum::<f32>() / s.len() as f32).collect::<Vec<_>>();
+            converted = speech_rate(pcm.samples());
             &converted
         }
     };
