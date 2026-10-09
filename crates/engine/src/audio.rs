@@ -12,7 +12,7 @@ use memmap2::Mmap;
 use crate::effects::transition_window;
 use crate::loudness::db_to_gain;
 use crate::media::extract_pcm_with_peaks;
-use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
+use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, Track, TrackKind};
 use crate::speech::is_heard;
 
 /// Short fades at clip edges with nothing to crossfade with, so they do not click.
@@ -219,10 +219,8 @@ impl Mixer {
                 let c1 = us_to_samples(clip.end_us());
                 let previous = index.checked_sub(1).map(|i| &track.clips[i]);
                 let next = track.clips.get(index + 1);
-                let transition =
-                    |clip: &Clip| if track.id == crate::edit::MAIN_TRACK { transition_window(clip) } else { None };
-                let transition_in = previous.and_then(|_| transition(clip));
-                let transition_out = next.and_then(transition);
+                let transition_in = previous.and_then(|_| transition_into(track, clip));
+                let transition_out = next.and_then(|next| transition_into(track, next));
                 // Cuts read the files, so only clips that can sound in this buffer look at theirs.
                 let reach = us_to_samples(CUT_FADE_US);
                 let earliest = transition_in.map_or(c0 - reach, |(a, _)| us_to_samples(a));
@@ -277,6 +275,11 @@ impl Mixer {
             *s = s.clamp(-1.0, 1.0);
         }
     }
+}
+
+/// Where a transition into `clip` plays; only the main track has them.
+fn transition_into(track: &Track, clip: &Clip) -> Option<(i64, i64)> {
+    if track.id == crate::edit::MAIN_TRACK { transition_window(clip) } else { None }
 }
 
 fn sample_at(samples: &[f32], position: f64, channel: usize) -> f32 {
@@ -421,12 +424,18 @@ impl Mixer {
         let last = (end + DUCK_ATTACK).div_euclid(SPEECH_BLOCK) + 1;
         let mut speech = vec![false; (last - first) as usize];
         for track in &project.tracks {
-            for clip in track.clips.iter().filter(|c| is_heard(project, track, c)) {
+            for (index, clip) in track.clips.iter().enumerate() {
                 // A clip that lowers itself is never speech.
                 let ClipContent::Media { asset_id, source_in_us, speed, duck_db: 0.0, .. } = &clip.content else {
                     continue;
                 };
-                let (c0, c1) = (us_to_samples(clip.start_us), us_to_samples(clip.end_us()));
+                if !is_heard(project, track, clip) {
+                    continue;
+                }
+                // Across a transition its sound starts early or plays on, as the mix has it.
+                let begin = (index > 0).then(|| transition_into(track, clip)).flatten().map_or(clip.start_us, |w| w.0);
+                let finish = track.clips.get(index + 1).and_then(|next| transition_into(track, next));
+                let (c0, c1) = (us_to_samples(begin), us_to_samples(finish.map_or(clip.end_us(), |w| w.1)));
                 let blocks = c0.div_euclid(SPEECH_BLOCK).max(first)..(c1.div_euclid(SPEECH_BLOCK) + 1).min(last);
                 if blocks.is_empty() {
                     continue;
@@ -439,21 +448,24 @@ impl Mixer {
                     self.speech.entry(path).or_insert_with(|| vec![0; pcm.frames().div_ceil(SPEECH_BLOCK as usize)]);
                 let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
+                let src = |t: i64| src0 + (t as f64 - origin) * *speed as f64;
                 for block in blocks {
-                    // The middle of the timeline block, and where it is in the file.
-                    let middle = block * SPEECH_BLOCK + SPEECH_BLOCK / 2;
-                    let src = src0 + (middle as f64 - origin) * *speed as f64;
-                    let b = (src / SPEECH_BLOCK as f64) as usize;
-                    let Some(level) = file.get_mut(b).filter(|_| (c0..c1).contains(&middle) && src >= 0.0) else {
+                    // The part of the timeline block the clip sounds in, and every block of the file it plays.
+                    let (a, b) = ((block * SPEECH_BLOCK).max(c0), ((block + 1) * SPEECH_BLOCK).min(c1));
+                    if a >= b || src(b - 1) < 0.0 {
                         continue;
-                    };
-                    if *level == 0 {
-                        let size = SPEECH_BLOCK as usize * CHANNELS;
-                        let part = &samples[b * size..((b + 1) * size).min(samples.len())];
-                        let rms = (part.iter().map(|s| s * s).sum::<f32>() / part.len().max(1) as f32).sqrt();
-                        *level = if rms > SPEECH_RMS { 2 } else { 1 };
                     }
-                    speech[(block - first) as usize] |= *level == 2;
+                    let (from, to) = (src(a).max(0.0) as i64 / SPEECH_BLOCK, src(b - 1) as i64 / SPEECH_BLOCK);
+                    for i in from as usize..=to as usize {
+                        let Some(level) = file.get_mut(i) else { break };
+                        if *level == 0 {
+                            let size = SPEECH_BLOCK as usize * CHANNELS;
+                            let part = &samples[i * size..((i + 1) * size).min(samples.len())];
+                            let rms = (part.iter().map(|s| s * s).sum::<f32>() / part.len().max(1) as f32).sqrt();
+                            *level = if rms > SPEECH_RMS { 2 } else { 1 };
+                        }
+                        speech[(block - first) as usize] |= *level == 2;
+                    }
                 }
             }
         }
@@ -1093,6 +1105,42 @@ mod tests {
         let mean = out.as_chunks::<CHANNELS>().0.iter().map(|f| f[0]).sum::<f32>() / 960.0;
         std::fs::remove_dir_all(cache).unwrap();
         assert!(mean.abs() < 0.02, "the deleted word sounds at the cut: offset {mean}");
+    }
+
+    /// Ducking hears speech wherever the mix plays it: in every block of a sped-up clip, and before a clip's
+    /// start or past its end where a transition plays its sound.
+    #[test]
+    fn ducking_hears_speech_sped_up_and_across_a_transition() {
+        use crate::edit::EditCmd;
+        let cache = std::env::temp_dir().join(format!("nuzky-audio-ducking-{}", crate::edit::new_id()));
+        std::fs::create_dir_all(cache.join("pcm")).unwrap();
+        let heard = |project: &Project, from: f64, to: f64| {
+            let (from, to) = ((from * 48_000.0) as i64, (to * 48_000.0) as i64);
+            Mixer::new(cache.clone()).ducking(project, from, to).into_iter().fold(0.0f32, f32::max)
+        };
+        let edit = |project: &mut Project, cmd: serde_json::Value| {
+            project.apply(serde_json::from_value::<EditCmd>(cmd).unwrap()).unwrap();
+        };
+        // A 10 ms sound at 0.92 s of the file played at 2x, at 0.46 s: in a block a reading at the middle of each
+        // timeline block would skip.
+        let mut fast = take(&cache, |t| if (0.92..0.93).contains(&t) { 0.5 } else { 0.0 });
+        let id = fast.tracks[0].clips[0].id.clone();
+        edit(&mut fast, serde_json::json!({"type": "updateClip", "clipId": id, "speed": 2.0}));
+        let fast_word = heard(&fast, 0.45, 0.47);
+        // Speech at 0.8–0.95 s of the file, cut out at 0.6–1.0 s: a 0.6 s dissolve plays it anyway, the first
+        // clip's sound going on to 0.9 s and the second's starting at 0.3 s, both silent where the clips are.
+        let mut cut = take(&cache, |t| if (0.8..0.95).contains(&t) { 0.5 } else { 0.0 });
+        self::cut(&mut cut, 600_000, 1_000_000);
+        let id = cut.tracks[0].clips[1].id.clone();
+        edit(
+            &mut cut,
+            serde_json::json!({"type": "setTransition", "clipId": id, "transition": {"kind": "dissolve", "durationUs": 600_000}}),
+        );
+        assert_eq!(transition_window(&cut.tracks[0].clips[1]), Some((300_000, 900_000)));
+        let (early, late) = (heard(&cut, 0.42, 0.53), heard(&cut, 0.81, 0.89));
+        std::fs::remove_dir_all(cache).unwrap();
+        assert_eq!(fast_word, 1.0, "speech played at 2x goes unheard");
+        assert_eq!((early, late), (1.0, 1.0), "speech in a transition goes unheard");
     }
 
     #[test]

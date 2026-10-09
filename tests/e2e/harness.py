@@ -270,6 +270,19 @@ def preview_brightness(r, screenshot, fraction):
     return ImageStat.Stat(band).mean[0]
 
 
+def export(r, name):
+    """Exports the timeline at 720p to `name` in the flow's folder and checks that the job finishes."""
+    target = r.work / name
+    started = r.s.call('window.__nuzky.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])',
+                       str(target), {'resolution': 720, 'fps': 30, 'quality': 'small'}, r.state()['epoch'], True)
+    if not started['ok']:
+        raise RuntimeError(f'export {name} did not start: {started}')
+    job = wait(lambda: (j := r.s.run("return window.__nuzky.store.getState().jobs[arguments[0]] ?? null", started['value']))
+               and j['status'] != 'running' and j, 180)
+    r.check(f'the export {name} finishes', job and job['status'] == 'done', job)
+    return target
+
+
 def ffprobe(path):
     out = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_name', '-of', 'json', path],
                          capture_output=True, text=True, check=True).stdout

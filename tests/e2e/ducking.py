@@ -3,13 +3,12 @@ typed, saved in the project file, and heard in the export as music 18 dB down wh
 full level in the long pause, then taken back with Ctrl+Z."""
 import array, json, math, statistics, subprocess
 
-from e2e.harness import FIXTURES, flow, wait
+from e2e.harness import FIXTURES, export, flow, wait
 
 SOURCE = FIXTURES / 'reel-1.mp4'
 RATE = 48_000
 WINDOW = RATE // 20  # 50 ms, 250 whole cycles of the tone
 TONE = 5000
-JOB = "return window.__nuzky.store.getState().jobs[arguments[0]] ?? null"
 MUSIC = ("return window.__nuzky.store.getState().snap.project.tracks.find((t) => t.kind === 'audio')"
          "?.clips[0]?.content.duckDb ?? 0")
 TYPE = """const el = document.querySelector(arguments[0]); el.focus();
@@ -18,17 +17,6 @@ el.dispatchEvent(new Event('input', {bubbles: true}));
 el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true})); return true;"""
 CHECKBOX = ("[...document.querySelectorAll('aside[aria-label=Inspector] label')]"
             ".find((l) => l.textContent === 'Lower under speech')?.querySelector('input')")
-
-
-def export(r, name):
-    target = r.work / name
-    started = r.s.call('window.__nuzky.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])',
-                       str(target), {'resolution': 720, 'fps': 30, 'quality': 'small'}, r.state()['epoch'], True)
-    if not started['ok']:
-        raise RuntimeError(f'export {name} did not start: {started}')
-    job = wait(lambda: (j := r.s.run(JOB, started['value'])) and j['status'] != 'running' and j, 180)
-    r.check(f'the export {name} finishes', job and job['status'] == 'done', job)
-    return target
 
 
 def decode(path, filters):
