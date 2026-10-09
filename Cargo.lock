@@ -585,6 +585,7 @@ dependencies = [
  "log",
  "png 0.18.1",
  "rtrb",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",

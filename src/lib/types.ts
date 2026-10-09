@@ -225,6 +225,9 @@ export interface Boot {
   engineError: string | null;
   /** Why the most recent project was not opened, when another one opened instead. */
   startupNotice: string | null;
+  version: string;
+  /** False when update checks are turned off for this installation. */
+  updateChecks: boolean;
 }
 
 export interface JobEvent {

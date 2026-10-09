@@ -27,6 +27,7 @@ import { Home } from "./components/home/Home";
 import { Launcher } from "./components/home/Launcher";
 import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
+import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
 
@@ -394,7 +395,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __capopen: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects },
+    __capopen: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
   });
 
 async function startEditor() {
@@ -404,6 +405,7 @@ async function startEditor() {
   if (boot.engineError) useEditor.setState({ engineError: boot.engineError });
   useEditor.getState().setSnap(boot.snapshot, true, true);
   useEditor.setState({ saveState: "saved" });
+  startUpdates(boot.version, boot.updateChecks);
   // A warning stays until dismissed, so the reason a different project opened is not missed.
   // Once per launch: StrictMode and Try again can start the editor more than once.
   if (boot.startupNotice && !startupNoticeShown) {

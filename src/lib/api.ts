@@ -77,6 +77,9 @@ export const api = {
   /** Punch-ins on inclusive word ranges of the view with `key`, as one undo step. */
   applyZooms: (key: string, zooms: { from: number; to: number; scale: number }[], epoch: Epoch) =>
     invoke<ZoomsApplied>("apply_zooms", { key, zooms, expectedEpoch: epoch }),
+  /** A newer released version, or null when this one is the latest. */
+  checkForUpdate: () => invoke<string | null>("check_for_update"),
+  openReleasePage: () => invoke<void>("open_release_page"),
 };
 
 /** The error as the backend sent it, "CODE: detail" included; code checks use this. */
