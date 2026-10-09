@@ -1,7 +1,7 @@
 """Update checks. The foot of the home sidebar says when a newer CapOpen was released, from a latest.json served
 here in place of GitHub's. The automatic check runs 10 s after start and at most once a day, also across launches,
 says nothing when it fails and can be turned off; Check for updates always answers in a toast."""
-import json, threading, time
+import gzip, json, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from e2e.harness import flow, wait, webdriver
@@ -15,6 +15,7 @@ CHOOSE = """const i = [...document.querySelectorAll('[role=menu][aria-label=Upda
 if (!i) return false; i.click(); return true;"""
 # A click without a pointer, as Enter or Space on the focused row sends it.
 OPEN_MENU = "const b = document.querySelector('[data-version]'); b.focus(); b.click();"
+IN_MENU = "return !!document.activeElement?.closest('[role=menu][aria-label=Updates]')"
 TOASTS = "return window.__capopen.store.getState().toasts.map((t) => ({kind: t.kind, text: t.text}));"
 RELOAD = "window.__oldPage = true; location.reload()"
 LOADED = "return !window.__oldPage && !!window.__capopen?.store.getState().snap"
@@ -23,7 +24,7 @@ LOADED = "return !window.__oldPage && !!window.__capopen?.store.getState().snap"
 class Server:
     """latest.json as the release would serve it, counting the requests."""
     def __init__(self):
-        self.status, self.body, self.requests = 200, b'', 0
+        self.status, self.body, self.requests, self.gzip = 200, b'', 0, False
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -31,6 +32,8 @@ class Server:
                 server.requests += 1
                 self.send_response(server.status)
                 self.send_header('Content-Type', 'application/json')
+                if server.gzip:
+                    self.send_header('Content-Encoding', 'gzip')
                 self.send_header('Content-Length', str(len(server.body)))
                 self.end_headers()
                 self.wfile.write(server.body)
@@ -42,12 +45,14 @@ class Server:
         threading.Thread(target=self.http.serve_forever, daemon=True).start()
         self.url = f'http://127.0.0.1:{self.http.server_port}/latest.json'
 
-    def serve(self, version, status=200, pad=0):
-        self.status = status
+    def serve(self, version, status=200, pad=0, packed=False):
+        """`packed`: gzip, so a large file travels in a few kilobytes."""
+        self.status, self.gzip = status, packed
         file = {'version': version, 'pub_date': '2026-10-09T00:00:00Z'}
         if pad:
             file['notes'] = 'x' * pad
-        self.body = json.dumps(file).encode() if status == 200 else b'Not Found'
+        body = json.dumps(file).encode() if status == 200 else b'Not Found'
+        self.body = gzip.compress(body) if packed else body
 
 
 def serve_releases(r):
@@ -95,8 +100,9 @@ def updates(r):
         r.check('its menu offers the download, a check and the automatic check, which is on',
                 menu == [{'label': 'Download CapOpen 99.0.0…', 'checked': None}, {'label': 'Check for updates', 'checked': None},
                          {'label': 'Check automatically', 'checked': 'true'}], menu)
+        r.check('opened from the keyboard, the menu has the focus', wait(lambda: r.s.run(IN_MENU), 3))
         r.shot('update-menu')
-        r.s.run("document.querySelector('[role=menu][aria-label=Updates]').dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
+        r.key('Escape')
         r.check('Esc closes the menu and focus returns to the row', wait(lambda: not r.s.run(MENU) and row(r).get('focused'), 3), row(r))
 
         webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
@@ -117,13 +123,18 @@ def updates(r):
         server.serve(version, status=404)
         answer = manual_check(r)
         r.check('when the release cannot be read, Check for updates says so and what to try',
-                answer == {'kind': 'error', 'text': "Couldn't check for updates. Check your internet connection and try again."}
+                answer == {'kind': 'error', 'text': "Couldn't check for updates. Check your internet connection or try again later."}
                 and row(r).get('text') == f'CapOpen {version}', (answer, row(r)))
 
         server.serve('99.0.0', pad=70_000)
         answer = manual_check(r)
         r.check('a file larger than latest.json can be is not read, even when it names a newer version',
                 (answer or {}).get('kind') == 'error' and row(r).get('text') == f'CapOpen {version}', (answer, row(r)))
+        server.serve('99.0.0', pad=20_000_000, packed=True)
+        answer = manual_check(r)
+        r.check('nor is one that arrives small and unpacks large',
+                len(server.body) < 65_536 and (answer or {}).get('kind') == 'error' and row(r).get('text') == f'CapOpen {version}',
+                (len(server.body), answer, row(r)))
         r.shot('check-failed')
 
         server.serve('99.0.0')
@@ -135,12 +146,16 @@ def updates(r):
                 (server.requests, asked, row(r)))
 
         r.s.run(OPEN_MENU)
-        wait(lambda: r.s.run(MENU), 3)
-        r.s.run(CHOOSE, 'Check automatically')
+        wait(lambda: r.s.run(IN_MENU), 3)
+        r.key('End')
+        r.key('Enter')
+        r.check('chosen from the keyboard, Check automatically turns off and focus returns to the row',
+                wait(lambda: not r.s.run(MENU) and row(r).get('focused'), 3)
+                and r.s.run('return window.__capopen.updates.getState().auto') is False, row(r))
         r.s.run(OPEN_MENU)
         menu = wait(lambda: r.s.run(MENU), 3)
-        r.check('Check automatically turns off', (menu or [{}])[-1].get('checked') == 'false', menu)
-        r.s.run("document.querySelector('[role=menu][aria-label=Updates]').dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
+        r.check('the menu shows it off', (menu or [{}])[-1].get('checked') == 'false', menu)
+        r.key('Escape')
         # A day passes.
         r.s.run("const s = JSON.parse(localStorage.getItem('capopen.updates')); s.checkedAt = Date.now() - 25 * 3600e3;"
                 "localStorage.setItem('capopen.updates', JSON.stringify(s));" + RELOAD)

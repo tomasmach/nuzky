@@ -1,5 +1,6 @@
 //! Whether a newer CapOpen was released. Only the version is read from `latest.json` on the newest
 //! published GitHub release; nothing is downloaded or run. Download opens the release page.
+use std::io::Read;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -51,7 +52,11 @@ fn fetch() -> Result<String> {
         .build()
         .into();
     let mut response = agent.get(test.as_deref().unwrap_or(LATEST_JSON)).call().context("Requesting latest.json")?;
-    Ok(response.body_mut().with_config().limit(MAX_BYTES).read_to_string()?)
+    // The limit counts bytes on the wire; a gzip body unpacks to far more, so the text is capped too.
+    let mut text = String::new();
+    response.body_mut().with_config().limit(MAX_BYTES).reader().take(MAX_BYTES + 1).read_to_string(&mut text)?;
+    ensure!(text.len() as u64 <= MAX_BYTES, "latest.json is too big");
+    Ok(text)
 }
 
 /// The newer version, or None when this one is the latest.

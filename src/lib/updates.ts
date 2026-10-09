@@ -80,7 +80,7 @@ export async function checkForUpdates(manual: boolean) {
     }
   } catch (e) {
     console.warn("Update check failed", errorText(e));
-    if (manual) useEditor.getState().toast({ kind: "error", text: "Couldn't check for updates. Check your internet connection and try again." });
+    if (manual) useEditor.getState().toast({ kind: "error", text: "Couldn't check for updates. Check your internet connection or try again later." });
   } finally {
     useUpdates.setState({ checking: null });
     save();
