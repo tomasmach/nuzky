@@ -16,6 +16,7 @@ use crate::model::{CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
 use crate::render::{Renderer, Wait};
 use crate::voice::ensure_voice_pcm;
 
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +37,7 @@ impl Quality {
 }
 
 /// A platform's delivery format, shared by the export dialog, MCP and the CLI.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]

@@ -23,13 +23,15 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::AppState;
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JobEvent {
     pub id: String,
+    #[cfg_attr(test, ts(type = r#""audio" | "export" | "captions" | "transcript""#))]
     pub kind: &'static str,
     pub label: String,
-    /// running | done | failed | cancelled
+    #[cfg_attr(test, ts(type = r#""running" | "done" | "failed" | "cancelled""#))]
     pub status: &'static str,
     pub progress: f32,
     pub phase: Option<String>,
@@ -221,6 +223,7 @@ fn ensure_voice(state: &AppState, project: &Project) {
     }
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportRequest {
@@ -293,6 +296,7 @@ pub fn start_export(
     Ok(id)
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechModel {

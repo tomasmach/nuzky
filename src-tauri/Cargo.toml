@@ -46,6 +46,11 @@ toml_edit = "0.25.15"
 trash = "5.2.9"
 unicode-normalization = "0.1.25"
 
+[dev-dependencies]
+ts-rs.workspace = true
+nuzky-engine = { workspace = true, features = ["ts"] }
+nuzky-mcp = { workspace = true, features = ["ts"] }
+
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
 nuzky-analysis = { workspace = true, features = ["gpu"] }

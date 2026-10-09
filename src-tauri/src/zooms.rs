@@ -13,6 +13,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::{AppState, CmdResult, Snapshot};
 
+/// A sentence said with emphasis, proposed for a punch-in.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestedZoom {
@@ -26,6 +28,7 @@ pub struct SuggestedZoom {
     scale: f64,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSuggestions {
@@ -34,6 +37,7 @@ pub struct ZoomSuggestions {
     zooms: Vec<SuggestedZoom>,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomsApplied {

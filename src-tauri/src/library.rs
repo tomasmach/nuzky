@@ -38,6 +38,7 @@ const CONTEXT_BEFORE: usize = 5;
 const CONTEXT_AFTER: usize = 6;
 const MAX_COLLECTION_NAME: usize = 60;
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Collection {
     pub id: String,
@@ -57,6 +58,9 @@ struct Index {
     external: Vec<String>,
 }
 
+/// A project on the home screen.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "LibraryProject"))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -64,17 +68,21 @@ pub struct Entry {
     name: String,
     modified_ms: u64,
     duration_us: i64,
+    /// Canvas size; 0 for a project that cannot be read.
     width: u32,
     height: u32,
     collection: Option<String>,
     /// `broken`: the file cannot be read. `busy`: another Nuzky window or an agent has it open.
     /// `missing`: some of its media files are gone. `empty`: nothing on the timeline.
+    #[cfg_attr(test, ts(type = r#""broken" | "busy" | "missing" | "empty" | null"#))]
     state: Option<&'static str>,
     missing: usize,
     /// Why a broken project cannot be read.
     error: Option<String>,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "Library"))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Listing {
@@ -84,6 +92,8 @@ pub struct Listing {
     notice: Option<String>,
 }
 
+/// What Undo needs to bring a deleted collection back.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletedCollection {
@@ -93,6 +103,8 @@ pub struct DeletedCollection {
     paths: Vec<String>,
 }
 
+/// Where words of a search were said: the project and its timeline time.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaidHit {
@@ -103,6 +115,7 @@ pub struct SaidHit {
     after: String,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Said {

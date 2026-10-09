@@ -10,6 +10,7 @@ pub const SAMPLE_RATE: u32 = 48_000;
 pub const CHANNELS: usize = 2;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -32,6 +33,7 @@ pub const MAX_CORRECTION_CHARS: usize = 100;
 /// starts at `source_start_us` with the `original` text: recognised again differently, the
 /// correction does nothing, and it never moves to another word.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WordCorrection {
@@ -44,6 +46,7 @@ pub struct WordCorrection {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Canvas {
@@ -64,6 +67,7 @@ const VERTICAL_MIN_RATIO: f32 = 1.7;
 /// Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of
 /// the top bar, the like and comment rail on the right and the caption and buttons at the bottom.
 /// Conservative values that suit both apps, from 250 / 180 / 500 / 60 px of 1080×1920.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct SafeArea {
     pub left: f32,
@@ -94,6 +98,7 @@ impl Canvas {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum AssetKind {
@@ -103,6 +108,7 @@ pub enum AssetKind {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
@@ -126,6 +132,7 @@ pub struct Asset {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TrackKind {
@@ -135,6 +142,7 @@ pub enum TrackKind {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Track {
@@ -163,6 +171,7 @@ impl Track {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Clip {
@@ -187,6 +196,7 @@ pub struct Clip {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimationKind {
@@ -203,6 +213,7 @@ pub enum AnimationKind {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Animation {
@@ -211,6 +222,7 @@ pub struct Animation {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Keyframe {
@@ -219,6 +231,7 @@ pub struct Keyframe {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TransitionKind {
@@ -236,6 +249,7 @@ pub enum TransitionKind {
 /// (holding its last frame when the source ends) and the incoming clip starts early
 /// (holding its first frame), so the timeline length does not change. Audio crossfades.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Transition {
@@ -245,6 +259,7 @@ pub struct Transition {
 
 /// Colour adjustments, all 0 by default (no change). Ranges are -1..=1 except fade and vignette 0..=1.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Adjust {
@@ -287,6 +302,7 @@ impl Clip {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ClipContent {
@@ -332,6 +348,7 @@ pub enum ClipContent {
 /// One spoken word of a caption. Times are relative to the clip start, like keyframes, so moving
 /// the clip keeps them; a trim may leave some outside the clip, where they never show.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptionWord {
@@ -362,6 +379,7 @@ pub fn spoken_word(text: &str, words: &[CaptionWord], t_us: i64) -> Option<std::
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Transform {
@@ -383,11 +401,13 @@ impl Default for Transform {
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TextStyle {
-    /// Font family name; `None` uses the default sans-serif.
+    /// Font family name; `None` uses the bundled default, Inter.
     #[serde(default)]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
     pub font_family: Option<String>,
     /// Pixels at canvas resolution.
     pub font_size: f32,
@@ -403,7 +423,8 @@ pub struct TextStyle {
     /// `#rrggbbaa` box behind the text.
     #[serde(default)]
     pub background: Option<String>,
-    /// Lines wrap at this width in canvas pixels; `None` wraps at 90% of the canvas width.
+    /// Lines wrap at this width in canvas pixels; `None` wraps at 90% of the canvas width. Generated captions on
+    /// vertical videos keep to the Reels and TikTok safe area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_width: Option<f32>,
     /// `#rrggbb` fill of the word being spoken (karaoke captions); `None` draws every word in `color`.

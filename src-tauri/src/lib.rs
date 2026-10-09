@@ -8,6 +8,8 @@ mod preview_server;
 mod store;
 mod thumbs;
 mod transcripts;
+#[cfg(test)]
+mod typescript;
 mod updates;
 mod zooms;
 
@@ -57,13 +59,16 @@ struct PreviewLock {
     lock: Arc<Mutex<()>>,
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    // ts-rs warns that it ignores this; `SnapshotCanvas` in typescript.rs adds the safe area to the TypeScript type.
     #[serde(serialize_with = "snapshot_project")]
     project: Project,
     revision: u64,
     session_epoch: String,
+    /// Label of the AI run editing the project.
     open_run_label: Option<String>,
     recovery: bool,
     can_undo: bool,
@@ -81,6 +86,7 @@ fn snapshot_project<S: serde::Serializer>(project: &Project, serializer: S) -> R
     value.serialize(serializer)
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Boot {
@@ -88,7 +94,9 @@ pub struct Boot {
     snapshot: Snapshot,
     preview_url: String,
     transport: Transport,
+    /// Why the preview could not start, when it failed before the UI listened.
     engine_error: Option<String>,
+    /// Why the most recent project was not opened, when another one opened instead.
     startup_notice: Option<String>,
     version: String,
     /// False when `NUZKY_NO_UPDATE_CHECK=1`: Nuzky then never asks whether a newer version exists.
@@ -600,6 +608,8 @@ async fn connect_agent(agent: connect::Agent) -> CmdResult<connect::Connection> 
     .map_err(err)?
 }
 
+/// Families the engine can draw: bundled ones ship with Nuzky, system ones are installed on this computer.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 pub struct FontFamilies {
     bundled: Vec<String>,
@@ -714,6 +724,7 @@ fn start_export(
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Filmstrip {
@@ -728,6 +739,7 @@ pub struct Filmstrip {
 
 /// Where a visual layer sits on the canvas at a given time, for selecting and dragging
 /// layers directly in the preview.
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayerBounds {

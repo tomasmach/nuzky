@@ -38,7 +38,7 @@ Pravidlo odsud, které bojuje s úkolem, neporušuj potichu. Řekni to nahlas.
 
 Nejčastější vada je změna, která funguje jen na cestě, kterou jsi zkoušel.
 
-- Nové pole modelu (`crates/engine/src/model.rs`): `#[serde(default)]`, typ v `src/lib/types.ts` (ruční kopie), validace v `crates/session/src/validate.rs`, MCP schéma a literály ve všech crates. Projdi náhled, miniatury (`src-tauri/src/thumbs.rs`), export i CLI `frame`.
+- Nové pole modelu (`crates/engine/src/model.rs`): `#[serde(default)]`, typ v `src/lib/types.ts` (generuje ho `NUZKY_WRITE_TYPES=1 cargo test -p nuzky-app typescript_types` a `cargo test` hlídá, že sedí), validace v `crates/session/src/validate.rs`, MCP schéma a literály ve všech crates. Projdi náhled, miniatury (`src-tauri/src/thumbs.rs`), export i CLI `frame`.
 - Nový `EditCmd`: validace, undo, MCP schéma a návod, frontend (`src/lib/api.ts`, `src/lib/store.ts`) a chování v `docs/INTERACTION.md`.
 - Nový MCP nástroj: řádek v `rules.rs`, popis v `crates/mcp/src/lib.rs`, návod v `SKILL.md` a test přes stdio v `crates/cli/tests/mcp_stdio.rs`.
 - Změnu chování nebo klávesy zapiš do `docs/INTERACTION.md` ve stejném PR, vizuál do `DESIGN.md`.

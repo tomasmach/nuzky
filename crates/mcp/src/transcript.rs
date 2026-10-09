@@ -526,6 +526,8 @@ fn without_slivers(
 
 /// A silence in speech longer than the pause length; shortening it cuts `start_us..end_us`
 /// out of the whole `gap_us`.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "TranscriptPause"))]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pause {
