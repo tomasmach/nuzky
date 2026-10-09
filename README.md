@@ -1,67 +1,54 @@
-<img src="assets/icon.png" width="64" height="64" alt="">
+<p align="center">
+  <img src="assets/icon.png" width="96" height="96" alt="">
+</p>
 
-# Nuzky
+<h1 align="center">Nuzky</h1>
 
-[nuzky.app](https://nuzky.app) · An open-source desktop video editor in the spirit of CapCut, with a native Rust engine. Free, GPLv3, runs locally.
+<p align="center">
+  A free, open-source video editor for your computer, in the spirit of CapCut.<br>
+  <a href="https://nuzky.app">nuzky.app</a> · <a href="#build-and-run">Build it</a> · <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-**Status: prototype.** Editing, playback, captions and export work on Linux. macOS and Windows builds are not tested yet.
+<img src="assets/readme/editor.webp" width="100%" alt="An illustration of the Nuzky editor from nuzky.app: imported clips on the left, a vertical video with captions in the middle, clip settings on the right and the timeline below">
+<p align="center"><sub>The editor as drawn on nuzky.app. The prototype differs in places.</sub></p>
 
-## What it does
+Cut a talking video by deleting words from its transcript, caption it with speech recognition that runs on your own machine, and let an AI agent do the tedious parts while you watch. Nuzky is licensed under GPLv3 and has a native Rust engine.
 
-- Vertical-first canvas (9:16) with 16:9, 1:1 and 4:5 formats
-- Import video, audio and images, including rotated and variable-frame-rate phone footage (HEVC/H.264)
-- Magnetic main track, overlay video tracks, audio tracks and text tracks
-- Move, trim, split and delete with snapping, undo and redo
-- Text clips with outline, background box, size, colour, position, rotation and opacity
-- Auto captions with Whisper running on your computer, with voice detection so music and silence stay uncaptioned
-- Real-time preview with sound; the sound card clock keeps picture and audio in sync
-- MP4 export (H.264 + AAC) using the same renderer as the preview, so the export matches what you saw; the Reels & TikTok preset writes 1080x1920 at 30 fps with the sound levelled to -14 LUFS (ITU-R BS.1770), true peak at most -1 dBTP
-- Automatic saving after every edit
-- Says on the home screen when a new version is out. It checks GitHub at most once a day, reading only the version number, and the check can be turned off there
-- AI agents edit through MCP, live in the open app with one undo per run; Connect agent sets up Claude Code and Codex in one click
-- Learns how a creator edits from their recordings and finished cuts into an editable `EDIT.md` that AI agents follow, and scores any cut of a recording against the creator's own
+**Nuzky is a prototype.** Editing, playback, captions and export work on Linux. macOS and Windows builds compile but have not been tested, and there is no published release yet, so for now you build it from source.
 
-## Architecture
+## What you can do
 
-```
-crates/engine   project model, edits + undo, FFmpeg decoding, wgpu compositor,
-                text rendering, audio mixing, MP4 export
-crates/analysis local speech recognition, caption grouping, silence and scene analysis,
-                learning a creator's style from their finished cuts
-crates/session  editing authority, undo runs, autosave, crash recovery and transcripts
-crates/mcp      agent tools, stdio bridge and live-app IPC
-crates/cli      `nuzky` headless CLI and MCP entry point
-src-tauri       desktop shell: preview thread, audio output, background jobs, session events
-src             React + TypeScript UI
-```
+- Transcribe the timeline, then delete words or remove every pause straight from the text. Cuts land between words, and captions and overlays stay in sync.
+- Generate captions with Whisper running on your computer. Voice detection keeps music and silence uncaptioned, and captions can highlight the word being spoken.
+- Import footage straight from your phone. Rotated, mirrored and variable-frame-rate HEVC or H.264 clips cut on the exact frame. The canvas starts vertical (9:16), with 16:9, 1:1 and 4:5 a click away.
+- Edit on a magnetic main track with overlay video, audio and text tracks. Move, trim, split and delete with snapping, undo and redo; Nuzky saves after every edit.
+- Style text with an outline, a background box, size, colour, position, rotation and opacity.
+- Export MP4 (H.264 and AAC) from the same renderer as the preview, so the file matches what you saw. The Reels & TikTok preset writes 1080×1920 at 30 fps with the sound levelled to −14 LUFS and true peak at most −1 dBTP.
+- Let any MCP-capable AI agent edit the open project while you watch; each run undoes as one step. Connect agent sets up Claude Code and Codex in one click, and the AI panel chats with your own Claude Code.
+- Teach Nuzky a creator's style from raw recordings and their finished cuts. It writes an `EDIT.md` that agents follow and scores any cut against the creator's own.
 
-- The engine renders every frame offscreen with wgpu. The preview streams those frames to the webview over a loopback WebSocket that only accepts the app's own origin and a per-launch secret. Export reuses the same renderer at full resolution.
-- Each video clip decodes on its own thread with exact seeking on real timestamps, so cuts and variable frame rates stay frame accurate.
-- Audio of each file is decoded once into a 48 kHz cache. Playback, export and captions all mix from it. Waveform peaks are written beside it while it decodes, and the timeline loads them in blocks around what is on screen.
-- The Rust side owns the project. The UI sends edit commands and receives the new project back.
-
-More detail: [docs/INTERACTION.md](docs/INTERACTION.md) (behaviour), [DESIGN.md](DESIGN.md) (visual tokens).
+Nuzky itself sends nothing you edit anywhere. It goes online only to download models with a pinned checksum and, at most once a day, to read the latest version number from GitHub; you can turn that check off on the home screen. An AI agent you connect runs under your own account and sends what it reads to its provider.
 
 ## Build and run
 
-Use current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. CI targets Linux x86_64, macOS Apple Silicon and Windows x64. See [docs/BUILDING.md](docs/BUILDING.md) for exact dependencies, installers, runtime libraries and release limitations.
+You need current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. [docs/BUILDING.md](docs/BUILDING.md) lists the exact dependencies for each system, the installers and the runtime libraries.
 
-Fedora / Nobara:
-
-```sh
-sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel vulkan-loader-devel vulkan-headers glslc
-```
-
-Without root on Fedora/Nobara, `bash scripts/setup-linux-deps.sh` downloads the FFmpeg and ALSA headers into `~/.cache/nuzky/deps` and writes a local `.cargo/config.toml`. The corresponding runtime libraries and WebKitGTK must already be installed. Install cmake with `pip install --user cmake` and put `~/.local/bin` on `PATH`.
+On Fedora or Nobara:
 
 ```sh
+sudo dnf install ffmpeg-free-devel alsa-lib-devel clang cmake webkit2gtk4.1-devel \
+  vulkan-loader-devel vulkan-headers glslc
 npm install
 npm run tauri dev
 ```
 
-For macOS and Windows, install the platform dependencies in [BUILDING.md](docs/BUILDING.md) before running the same commands. Pushing a matching `v*` version tag builds installers on all three systems and prepares a draft GitHub Release. Builds are unsigned previews until verified on each target OS.
+Without root on Fedora/Nobara, `bash scripts/setup-linux-deps.sh` downloads the FFmpeg and ALSA headers into `~/.cache/nuzky/deps` and writes a local `.cargo/config.toml`. The corresponding runtime libraries and WebKitGTK must already be installed. Install cmake with `pip install --user cmake` and put `~/.local/bin` on `PATH`.
 
-## CLI
+On Ubuntu, `bash scripts/setup-ubuntu-deps.sh` installs the packages CI uses. For macOS and Windows, install the dependencies from [BUILDING.md](docs/BUILDING.md) and run the same npm commands. Pushing a matching `v*` version tag builds installers on all three systems and prepares a draft GitHub Release; builds are unsigned previews until verified on each system.
+
+`npm run tauri dev` opens your own projects. To work on Nuzky without touching them, run it as [CONTRIBUTING.md](CONTRIBUTING.md) describes.
+
+## Command line
 
 ```sh
 cargo run -p nuzky-cli -- probe clip.mov
@@ -77,16 +64,34 @@ Projects are JSON files, so the same project renders identically in the app and 
 
 `style learn` writes the creator's `EDIT.md` into Nuzky's data folder (`--out` elsewhere, `--replace` to overwrite an existing one) from pairs of a raw recording and the finished cut made from it. `style compare` prints how much of the creator's cut a project keeps, word by word (recall and precision). Both recognise speech locally and nothing leaves the computer.
 
-## Tests
+## How it works
 
-```sh
-cargo test --workspace
-npm run typecheck
-scripts/check.sh            # full local gate before a merge or release
-python3 scripts/repro.py --list  # UI flows driven in the real app
+```
+crates/engine   project model, edits + undo, FFmpeg decoding, wgpu compositor,
+                text rendering, audio mixing, MP4 export
+crates/analysis local speech recognition, caption grouping, silence and scene analysis,
+                learning a creator's style from their finished cuts
+crates/vision   local face and subject models: frames worth a cover, where the person is
+crates/session  editing authority, undo runs, autosave, crash recovery and transcripts
+crates/mcp      agent tools, stdio bridge and live-app IPC
+crates/agent    runs the user's own Claude Code for the in-app AI panel
+crates/cli      `nuzky` headless CLI and MCP entry point
+src-tauri       desktop shell: preview thread, audio output, background jobs, session events
+src             React + TypeScript UI
 ```
 
-Rules for contributors and coding agents are in [AGENTS.md](AGENTS.md).
+Dependencies point one way. `engine` uses no other Nuzky crate, `analysis`, `vision` and `session` build on it, `mcp` builds on those four, and the CLI and the desktop app sit on top. `agent` stands alone; only the desktop app uses it.
+
+- The engine renders every frame offscreen with wgpu. The preview streams those frames to the webview over a loopback WebSocket that only accepts the app's own origin and a per-launch secret. Export reuses the same renderer at full resolution.
+- Each video clip decodes on its own thread with exact seeking on real timestamps, so cuts and variable frame rates stay frame accurate.
+- Audio of each file is decoded once into a 48 kHz cache. Playback, export and captions all mix from it. Waveform peaks are written beside it while it decodes, and the timeline loads them in blocks around what is on screen.
+- The Rust side owns the project. The UI sends edit commands and receives the new project back, and AI agents and the CLI go through the same editing authority.
+
+More detail: [docs/INTERACTION.md](docs/INTERACTION.md) (behaviour), [DESIGN.md](DESIGN.md) (look), [docs/AI-ARCHITECTURE.md](docs/AI-ARCHITECTURE.md) (agents).
+
+## Contributing
+
+Nuzky is young, so a bug report helps as much as a pull request. When something breaks on a clip from your phone, open an issue with the phone, the app it was recorded in and what you did; please do not attach a private video. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up a checkout, test your change and send a pull request, and [AGENTS.md](AGENTS.md) holds the rules for code changes, for people and coding agents alike. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 

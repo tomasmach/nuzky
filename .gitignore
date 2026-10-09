@@ -13,3 +13,9 @@
 .playwright-mcp/
 /tmp-test/
 __pycache__/
+# Core dumps can hold memory contents such as tokens.
+*.core
+core.[0-9]*
+/core
+/src-tauri/core
+/crates/*/core
