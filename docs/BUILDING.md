@@ -1,20 +1,18 @@
 # Building and distributing Nuzky
 
-Use current stable Rust (minimum 1.90), Node.js 22.12+ and the committed Cargo/npm lockfiles. CI runs `cargo test --workspace --locked`, `npm ci`, `npm run typecheck` and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
+Use current stable Rust (minimum 1.90), Node.js 22.12+ and the committed Cargo/npm lockfiles. Every pull request runs lint, types, the app and website builds, clippy and `cargo test --workspace --locked` on `ubuntu-24.04` (`.github/workflows/checks.yml`). A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
 
 ## Linux
 
 Ubuntu 24.04:
 
 ```sh
-sudo apt-get update
-sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev clang cmake pkg-config \
-  ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-  libswresample-dev libavfilter-dev libavdevice-dev libx264-dev \
-  patchelf libfuse2t64 librsvg2-bin libvulkan1 mesa-vulkan-drivers libvulkan-dev glslc
+bash scripts/setup-ubuntu-deps.sh
 npm ci
 npm run tauri dev
 ```
+
+The script installs the packages CI uses, so its list is the one known to work.
 
 Ubuntu 24.04 ships [FFmpeg 6.1](https://packages.ubuntu.com/noble/libavcodec-dev). `ffmpeg-next 9.0.0` supports older FFmpeg releases, including 6.1, through build-time version detection; its crate version does not require FFmpeg 9. CI deliberately uses distribution packages here. [Upstream build notes](https://github.com/zmwangx/rust-ffmpeg/wiki/Notes-on-building) describe the native-library requirement. Local Fedora/Nobara development uses FFmpeg 8. Both routes must keep headers and runtime SONAMEs matched.
 
