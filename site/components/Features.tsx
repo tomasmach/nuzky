@@ -4,6 +4,7 @@ import { Fit } from "./Fit";
 import { GitHubLogo } from "./Logos";
 import { SectionHeading } from "./SectionHeading";
 import { Waves } from "./Waves";
+import { fitSizes } from "@/lib/fit";
 import { license, repo } from "@/lib/site";
 
 function Tile({ title, text, wide = false, tall = false, backdrop, children }: { title: string; text: string; wide?: boolean; tall?: boolean; backdrop?: React.ReactNode; children: React.ReactNode }) {
@@ -42,7 +43,7 @@ function FrameAccurate() {
           ["clip-b", cut + 2, 680 - cut - 2, "rounded-l-[4px] rounded-r-[10px] ring-2 ring-accent"],
         ].map(([img, x, w, cls]) => (
           <div key={img as string} className={`absolute top-[76px] h-24 overflow-hidden ${cls}`} style={{ left: x as number, width: w as number }}>
-            <Image src={`/media/${img}.jpg`} alt="" fill sizes="680px" className="object-cover" />
+            <Image src={`/media/${img}.jpg`} alt="" fill sizes={fitSizes(340, 680, 88)} className="object-cover" />
             {Array.from({ length: 6 }, (_, k) => (
               <span key={k} className="absolute inset-y-0 w-px bg-black/40" style={{ left: (k + 1) * 56 }} />
             ))}
@@ -69,13 +70,13 @@ function Upright() {
     <>
       <div className="relative h-[210px] w-[300px]">
         <div className="absolute left-[37px] top-[29px] h-[150px] w-[84px] -rotate-90 overflow-hidden rounded-lg opacity-50 ring-1 ring-white/20">
-          <Image src="/media/selfie.jpg" alt="" fill sizes="168px" className="object-cover" />
+          <Image src="/media/selfie.jpg" alt="" fill sizes="84px" className="object-cover" />
         </div>
         <span className="absolute left-[150px] top-[90px] flex size-7 items-center justify-center rounded-full bg-white/[0.08]">
           <ArrowRight className="size-3.5" />
         </span>
         <div className="absolute left-[188px] top-[7px] h-[196px] w-[110px] overflow-hidden rounded-[10px] ring-1 ring-white/20">
-          <Image src="/media/selfie.jpg" alt="Selfie video shown the right way up" fill sizes="220px" className="object-cover" />
+          <Image src="/media/selfie.jpg" alt="Selfie video shown the right way up" fill sizes="110px" className="object-cover" />
         </div>
       </div>
       <div className="flex gap-1.5">
@@ -91,7 +92,7 @@ function SameRender() {
   const frame = (label: string) => (
     <div className="flex flex-col items-center gap-2.5">
       <div className="relative h-[150px] w-[84px] ring-1 ring-white/15">
-        <Image src="/media/ugc-small.jpg" alt="" fill sizes="168px" className="object-cover" />
+        <Image src="/media/ugc-small.jpg" alt="" fill sizes="84px" className="object-cover" />
         <span className="absolute inset-x-0 bottom-6 mx-auto flex w-fit flex-col items-center rounded bg-black/75 px-1.5 py-[3px] text-[9px] font-black leading-[1.15]">
           ACTUALLY
           <span className="text-ok">WORKS</span>

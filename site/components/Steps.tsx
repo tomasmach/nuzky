@@ -24,7 +24,7 @@ export function Steps() {
           <div className="grid grid-cols-3 gap-2">
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <div key={i} className="relative size-24 overflow-hidden rounded-[10px]">
-                <Image src={`/media/tile-${i}.jpg`} alt="" fill sizes="192px" className="object-cover" />
+                <Image src={`/media/tile-${i}.jpg`} alt="" fill sizes="96px" className="object-cover" />
               </div>
             ))}
           </div>
@@ -46,7 +46,7 @@ export function Steps() {
         <Step n={3} title="Export anywhere" text="Choose Reels and TikTok or any size you need. The file matches the preview.">
           <div className="flex flex-col items-center gap-3.5">
             <div className="relative h-[196px] w-[110px] ring-1 ring-white/15">
-              <Image src="/media/export-file.jpg" alt="" fill sizes="220px" className="object-cover" />
+              <Image src="/media/export-file.jpg" alt="" fill sizes="110px" className="object-cover" />
             </div>
             <span className="flex h-[30px] items-center gap-1.5 rounded-full bg-white/[0.075] px-3 text-[12px] font-medium">
               <CircleCheck className="size-3.5 text-ok" />
