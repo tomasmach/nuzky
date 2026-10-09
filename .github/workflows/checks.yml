@@ -52,4 +52,4 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: ONNX Runtime
         run: node scripts/fetch-onnxruntime.mjs
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast

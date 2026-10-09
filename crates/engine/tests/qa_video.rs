@@ -499,6 +499,12 @@ fn hlg_and_pq_sources_are_tone_mapped_like_libplacebo() {
         eprintln!("SKIP: ffmpeg without libx265 or libplacebo");
         return;
     }
+    // libplacebo makes the reference on a Vulkan GPU; a machine without one, like a CI runner, cannot.
+    let probe = ["-v", "error", "-f", "lavfi", "-i", "color=s=16x16:d=0.04", "-vf", "libplacebo", "-f", "null", "-"];
+    if !Command::new("ffmpeg").args(probe).output().is_ok_and(|o| o.status.success()) {
+        eprintln!("SKIP: libplacebo has no Vulkan device");
+        return;
+    }
     // HLG signal of a phone shot: greys from shadows to highlights, skin, a lit wall and a red that only
     // looks saturated once converted from BT.2020. Phones put faces and walls around and above HDR
     // reference white (75 %), which the old curve kept at full strength and clipped to white.
