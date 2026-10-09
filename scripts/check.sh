@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Local gate before every merge to main and every release. GitHub runs no tests on pull requests.
-# A pull request that changes only the website in site/ and no dependencies skips it (AGENTS.md).
+# Local gate before every merge to main and every release. GitHub runs the faster part of it on every pull
+# request (.github/workflows/checks.yml); the tests with media and models, the check without AVX2, the audits and
+# the UI flows run only here. A pull request that changes only the website in site/ and no dependencies skips it
+# (AGENTS.md).
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -55,7 +57,9 @@ without_avx2() (
 step "Own node_modules" own_node_modules
 step "npm install from the lockfile" npm ci --no-audit --no-fund
 step "Rust format" cargo fmt --all --check
+step "Frontend lint" npm run lint
 step "Frontend types and build" npm run build
+step "Website build" npm run site:build
 step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
 step "ONNX Runtime" node scripts/fetch-onnxruntime.mjs
 step "Rust tests" isolated cargo test --workspace --locked

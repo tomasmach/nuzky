@@ -1,0 +1,55 @@
+name: Checks
+
+# Lint, types, both builds and the Rust tests on Linux for every pull request. scripts/check.sh adds the
+# tests with media and models, the dependency audits and the UI flows, which need a desktop session.
+# Actions minutes are free on a public repository. While the repository is private they are capped, so a
+# pull request runs these checks only when it has the "ci" label: open it with the label, or add the
+# label and push. Drafts are checked once they are marked ready for review.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'ci') ||
+      !github.event.repository.private && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: checks-ffmpeg-v1
+      - name: Install Linux dependencies
+        run: bash scripts/setup-ubuntu-deps.sh
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run site:build
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: ONNX Runtime
+        run: node scripts/fetch-onnxruntime.mjs
+      - run: cargo test --workspace --locked
