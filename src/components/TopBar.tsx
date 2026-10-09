@@ -4,6 +4,7 @@ import { useAgent } from "../lib/agent";
 import { togglePanel, useDock } from "../lib/dock";
 import { AI_EDITING, openExport, projectDuration, stopAiRun, useAiLocked, useEditor } from "../lib/store";
 import { Button, IconButton, ProgressBar } from "./ui";
+import { UpdateButton } from "./Updates";
 
 function SaveStatus() {
   const saveState = useEditor((s) => s.saveState);
@@ -160,6 +161,7 @@ export function TopBar() {
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 px-1.5">
       <ProjectsButton />
+      <UpdateButton />
       {/* The name sits in the middle of the space the two sides leave, so a long AI label never covers it.
           The save state hangs off its right edge, so "Saving…" and "Saved" never move the name. */}
       <div className="flex min-w-0 flex-1 justify-center">

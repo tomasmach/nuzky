@@ -56,7 +56,7 @@ import { AiRunBar, JobIndicator } from "../TopBar";
 import { Button, IconButton, Menu, type MenuEntry } from "../ui";
 import { ProjectCard } from "./ProjectCard";
 import { Poster } from "./Poster";
-import { VersionRow } from "./VersionRow";
+import { VersionRow } from "../Updates";
 
 type MenuState = { items: MenuEntry[]; at: { x: number; y: number; align?: "start" | "end"; above?: boolean }; label: string; keyboard: boolean; back: HTMLElement | null; /** The card it acts on. */ target?: string };
 

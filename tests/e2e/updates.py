@@ -18,6 +18,8 @@ OPEN_MENU = "const b = document.querySelector('[data-version]'); b.focus(); b.cl
 IN_MENU = "return !!document.activeElement?.closest('[role=menu][aria-label=Updates]')"
 TOASTS = "return window.__capopen.store.getState().toasts.map((t) => ({kind: t.kind, text: t.text}));"
 RELOAD = "window.__oldPage = true; location.reload()"
+EDITOR_BUTTON = """const b = document.querySelector('[data-update-button]');
+return b && {label: b.getAttribute('aria-label'), focused: document.activeElement === b};"""
 LOADED = "return !window.__oldPage && !!window.__capopen?.store.getState().snap"
 
 
@@ -114,11 +116,27 @@ def updates(r):
             r.shot('update-available-small')
         webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
 
+        r.s.run("window.__capopen.store.setState({view: 'editor'})")
+        r.check('in the editor a small button next to Projects says so',
+                wait(lambda: r.s.run(EDITOR_BUTTON), 3) == {'label': 'CapOpen 99.0.0 is available', 'focused': False}, r.s.run(EDITOR_BUTTON))
+        r.shot('editor-update')
+        r.s.run("const b = document.querySelector('[data-update-button]'); b.focus(); b.click();")
+        menu = wait(lambda: r.s.run(MENU), 3)
+        r.check('it opens the same menu, with the focus in it',
+                (menu or [{}])[0].get('label') == 'Download CapOpen 99.0.0…' and wait(lambda: r.s.run(IN_MENU), 3), menu)
+        r.shot('editor-update-menu')
+        r.key('Escape')
+        r.check('Esc closes it and focus returns to the button', wait(lambda: not r.s.run(MENU) and (r.s.run(EDITOR_BUTTON) or {}).get('focused'), 3))
+        r.s.run("window.__capopen.store.setState({view: 'home'})")
+
         server.serve(version)
         answer = manual_check(r)
         r.check('Check for updates answers that this is the latest version, and the notice goes',
                 answer == {'kind': 'success', 'text': f'CapOpen {version} is the latest version.'}
                 and row(r).get('text') == f'CapOpen {version}' and server.requests == 2, (answer, row(r), server.requests))
+        r.s.run("window.__capopen.store.setState({view: 'editor'})")
+        r.check('and the editor shows no button', wait(lambda: r.s.run("return !document.querySelector('[data-update-button]') && !!document.querySelector('header')"), 3))
+        r.s.run("window.__capopen.store.setState({view: 'home'})")
 
         server.serve(version, status=404)
         answer = manual_check(r)
