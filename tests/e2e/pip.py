@@ -94,6 +94,8 @@ def pip(r):
     r.check('its top right corner is the top right corner of the safe area',
             placed and abs(placed['corners'][1][0] - area['right']) < 0.5 and abs(placed['corners'][1][1] - area['top']) < 0.5,
             placed and placed['corners'][1])
+    wait(lambda: r.s.run('return !!document.querySelector(\'[data-handle="rotate"]\')'), 5)
+    time.sleep(1)
     r.shot('pip-added-selected')
     select(r, [])
     after, redrawn = preview_redraw(r, 'pip-added', before)
@@ -121,6 +123,8 @@ def pip(r):
     squared = wait(lambda: abs(crop().get('left', 0) - 0.21875) < 1e-3 and crop(), 5)
     r.check('Circle crops the longer sides to a square', squared and abs(squared['right'] - 0.21875) < 1e-3, crop())
     r.check('Circle rounds the corners fully', pip_clip(r, wide)[1]['content']['shape']['radius'] == 1)
+    kept = wait(lambda: (b := bounds(r, clip['id'])) and abs(b['corners'][1][0] - area['right']) < 0.5 and b, 5)
+    r.check('the circle stays in the corner of the safe area', kept, kept or bounds(r, clip['id']))
     r.s.run(f"document.querySelector('{SECTION} input[aria-label=\"Border\"]').focus()")
     for _ in range(6):
         press('Right')

@@ -675,6 +675,15 @@ fn crop_circle_border_and_shadow_match_ffmpeg() {
         "{:?}",
         [grey(160, 136), grey(160, 43)]
     );
+
+    // The blurred background shows only what the crop keeps: the darker red left half, not the red right one.
+    p.canvas.background_blur = 1.0;
+    crop_and_shape(&mut p, Crop { right: 0.5, ..Crop::default() }, None);
+    let ClipContent::Media { transform, .. } = &mut p.tracks[0].clips[0].content else { unreachable!() };
+    transform.scale = 1.0;
+    let blurred = frame(&p, 320, 180);
+    let red = blurred[(90 * 320 + 310) * 4];
+    assert!(red < 140, "red {red} of the cut-off half shows in the background");
 }
 
 #[test]

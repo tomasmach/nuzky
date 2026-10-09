@@ -177,9 +177,8 @@ fn sub_quad(q: &Quad, rect: [f32; 4]) -> Quad {
     [at(left, top), at(right, top), at(right, bottom), at(left, bottom)]
 }
 
-/// The crop and edge of a layer drawn over `corners` (output pixels), or `None` when it shows whole
-/// with plain edges.
-fn layer_mask(project: &Project, clip: &Clip, transform: &Transform, corners: &Quad, k: f32) -> Option<Mask> {
+/// The crop and edge of a layer, or `None` when it shows whole with plain edges.
+fn layer_mask(project: &Project, clip: &Clip, transform: &Transform, k: f32) -> Option<Mask> {
     let shape = match &clip.content {
         ClipContent::Media { shape, .. } => shape.clone().unwrap_or_default(),
         ClipContent::Text { .. } => Default::default(),
@@ -188,15 +187,12 @@ fn layer_mask(project: &Project, clip: &Clip, transform: &Transform, corners: &Q
     if rect == WHOLE && !(shape.radius > 0.0 || shape.border_width > 0.0 || shape.shadow > 0.0) {
         return None;
     }
-    let side = |a: [f32; 2], b: [f32; 2]| (b[0] - a[0]).hypot(b[1] - a[1]);
-    let width = side(corners[0], corners[1]) * (rect[2] - rect[0]);
-    let height = side(corners[0], corners[3]) * (rect[3] - rect[1]);
     let canvas = &project.canvas;
     // Older project files can bypass session validation when rendered by the CLI.
     let bounded = |v: f32, max: f32| if v.is_finite() { v.clamp(0.0, max) } else { 0.0 };
     Some(Mask {
         rect,
-        radius: bounded(shape.radius, 1.0) * width.min(height) / 2.0,
+        radius: bounded(shape.radius, 1.0),
         border: bounded(shape.border_width, MAX_BORDER_WIDTH) * k,
         border_color: parse_color(&shape.border_color),
         shadow: bounded(shape.shadow, 1.0),
@@ -391,10 +387,28 @@ impl Renderer {
             .clone();
         let (iw, ih) =
             if layer.uv_rotation % 180 == 90 { (image.height, image.width) } else { (image.width, image.height) };
-        let cover = (w as f32 / iw as f32).max(h as f32 / ih as f32);
+        // A cropped layer's visible part covers the canvas, so nothing cut off shows behind it.
+        let rect = layer.mask.map_or(WHOLE, |mask| mask.rect);
+        let (sw, sh) = (iw as f32 * (rect[2] - rect[0]), ih as f32 * (rect[3] - rect[1]));
+        let cover = (w as f32 / sw).max(h as f32 / sh);
+        let size = (iw as f32 * cover, ih as f32 * cover);
+        // The whole picture moves so the middle of the visible part sits in the middle of the canvas.
+        let offset = Transform {
+            x: (0.5 - (rect[0] + rect[2]) / 2.0) * size.0 / w as f32,
+            y: (0.5 - (rect[1] + rect[3]) / 2.0) * size.1 / h as f32,
+            ..Transform::default()
+        };
+        let mask = (rect != WHOLE).then_some(Mask {
+            rect,
+            radius: 0.0,
+            border: 0.0,
+            border_color: [0.0; 4],
+            shadow: 0.0,
+            shadow_blur: 0.0,
+        });
         Layer {
             image,
-            corners: quad(&Transform::default(), (iw as f32 * cover, ih as f32 * cover), w as f32, h as f32, 1.0),
+            corners: quad(&offset, size, w as f32, h as f32, 1.0),
             uv_rotation: layer.uv_rotation,
             mirror: layer.mirror,
             opacity: layer.opacity,
@@ -402,7 +416,7 @@ impl Renderer {
             blur: 0.0,
             clip: layer.clip,
             transfer: layer.transfer,
-            mask: None,
+            mask,
         }
     }
 
@@ -494,7 +508,7 @@ impl Renderer {
             blur: 0.0,
             clip: None,
             transfer,
-            mask: layer_mask(project, clip, &place.transform, &corners, k),
+            mask: layer_mask(project, clip, &place.transform, k),
         }))
     }
 }

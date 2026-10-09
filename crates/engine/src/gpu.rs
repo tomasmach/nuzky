@@ -245,7 +245,7 @@ pub struct Layer {
 pub struct Mask {
     /// Left, top, right and bottom edges of the visible part, in 0..1 of the quad.
     pub rect: [f32; 4],
-    /// Output pixels.
+    /// Share of half the shorter visible side, 0 to 1; it scales with the quad, as in a zoom transition.
     pub radius: f32,
     /// Output pixels, outside the edge.
     pub border: f32,
@@ -533,7 +533,7 @@ impl Gpu {
                 let half = [((right - left) * size[0] / 2.0).max(1e-3), ((bottom - top) * size[1] / 2.0).max(1e-3)];
                 let [r, g, b, a] = mask.border_color;
                 (
-                    [half[0], half[1], mask.radius.min(half[0].min(half[1])).max(0.0), mask.border],
+                    [half[0], half[1], mask.radius.clamp(0.0, 1.0) * half[0].min(half[1]), mask.border],
                     [r * a, g * a, b * a, a],
                     [mask.shadow, mask.shadow_blur.max(1e-3), mask.shadow_blur * SHADOW_OFFSET, 0.0],
                 )

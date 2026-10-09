@@ -3,7 +3,7 @@ import { api } from "../../lib/api";
 import { followPointer } from "../../lib/drag";
 import { NO_CROP } from "../../lib/presets";
 import { findClip, setClipTransform, transformAtPlayhead, useAiLocked, useEditor } from "../../lib/store";
-import type { Crop, LayerBounds, Transform } from "../../lib/types";
+import type { Crop, LayerBounds, Project, Transform } from "../../lib/types";
 import { withEdge } from "../inspector/ShapeSection";
 
 type Pt = [number, number];
@@ -54,6 +54,22 @@ function alongQuad(q: Pt[], p: Pt): Pt {
     return ((p[0] - q[0][0]) * ex + (p[1] - q[0][1]) * ey) / Math.max(1e-6, ex * ex + ey * ey);
   };
   return [along(q[1]), along(q[3])];
+}
+
+/** The corner radius of a video or image, as a share of half its shorter visible side. */
+function shapeRadius(project: Project, clipId: string) {
+  const content = findClip(project, clipId)?.clip.content;
+  return content?.type === "media" ? (content.shape?.radius ?? 0) : 0;
+}
+
+/** Whether `p` is inside a quad with rounded corners, so a click beside a circle reaches the layer below. */
+function inRounded(p: Pt, q: Pt[], radius: number) {
+  if (radius <= 0) return true;
+  const [u, v] = alongQuad(q, p);
+  const [w, h] = [Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1])];
+  const r = (radius * Math.min(w, h)) / 2;
+  const [x, y] = [Math.max(0, Math.abs(u - 0.5) * w - w / 2 + r), Math.max(0, Math.abs(v - 0.5) * h - h / 2 + r)];
+  return Math.hypot(x, y) <= r;
 }
 
 function rotateAbout(p: Pt, c: Pt, deg: number): Pt {
@@ -142,21 +158,23 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       t.y = g.base.y + dy / canvas.height;
       corners = g.corners.map(([x, y]) => [x + dx, y + dy]);
     } else if (g.mode === "scale") {
-      const f = Math.hypot(p[0] - c[0], p[1] - c[1]) / Math.max(1, Math.hypot(g.start[0] - c[0], g.start[1] - c[1]));
+      const f = Math.hypot(p[0] - pivot[0], p[1] - pivot[1]) / Math.max(1, Math.hypot(g.start[0] - pivot[0], g.start[1] - pivot[1]));
       t.scale = Math.max(0.1, Math.min(10, g.base.scale * f));
       const ratio = t.scale / g.base.scale;
       corners = g.corners.map(([x, y]) => [pivot[0] + (x - pivot[0]) * ratio, pivot[1] + (y - pivot[1]) * ratio]);
     } else if (g.mode === "rotate") {
-      let rot = g.base.rotation + angleOf(c, p) - angleOf(c, g.start);
+      let rot = g.base.rotation + angleOf(pivot, p) - angleOf(pivot, g.start);
       rot = ((((rot + 180) % 360) + 360) % 360) - 180;
       if (shift) rot = Math.round(rot / 15) * 15;
       t.rotation = Math.round(rot * 10) / 10;
       corners = g.corners.map((q) => rotateAbout(q, pivot, t.rotation - g.base.rotation));
     } else {
-      // The dragged edge follows the pointer across the whole layer; the picture itself stays put.
-      const [u, v] = alongQuad(g.frame, p);
-      const at = { left: u, right: 1 - u, top: v, bottom: 1 - v }[g.mode];
-      t.crop = withEdge(g.base.crop ?? NO_CROP, g.mode, Math.round(at * 1000) / 1000);
+      // The dragged edge moves as far as the pointer, which may have grabbed a bar pinned to the edge of
+      // the preview area; the picture itself stays put.
+      const [[u, v], [u0, v0]] = [alongQuad(g.frame, p), alongQuad(g.frame, g.start)];
+      const crop = g.base.crop ?? NO_CROP;
+      const at = { left: crop.left + u - u0, right: crop.right - u + u0, top: crop.top + v - v0, bottom: crop.bottom - v + v0 }[g.mode];
+      t.crop = withEdge(crop, g.mode, Math.round(at * 1000) / 1000);
       corners = cropQuad(g.frame, t.crop);
     }
     const patch = g.mode === "move" ? { x: t.x, y: t.y } : g.mode === "scale" ? { scale: t.scale } : g.mode === "rotate" ? { rotation: t.rotation } : { crop: t.crop };
@@ -249,7 +267,8 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     setBounds(list);
     if (list.length === 0) return;
     const p = toCanvas(down.clientX, down.clientY);
-    const hit = [...list].reverse().find((b) => inQuad(p, b.corners as Pt[]));
+    const project = useEditor.getState().snap!.project;
+    const hit = [...list].reverse().find((b) => inQuad(p, b.corners as Pt[]) && inRounded(p, b.corners as Pt[], shapeRadius(project, b.clipId)));
     if (!hit) {
       useEditor.getState().select([]);
       return;
@@ -293,6 +312,8 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       const dir: Pt = [(top[0] - c[0]) / len, (top[1] - c[1]) / len];
       const out: Pt = [top[0] + dir[0] * ROTATE_GAP, top[1] + dir[1] * ROTATE_GAP];
       if (visible(out)) return out;
+      // Inside a small box the handle would cover the picture and catch the press meant to move it.
+      if (2 * len < 3 * ROTATE_GAP) return pin(out);
       const inside: Pt = [top[0] - dir[0] * ROTATE_GAP, top[1] - dir[1] * ROTATE_GAP];
       return visible(inside) ? inside : pin(inside);
     })();

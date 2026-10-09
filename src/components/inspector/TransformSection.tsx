@@ -120,7 +120,8 @@ function atPlayhead(clip: Clip, timeUs: number, fps: number): AtPlayhead {
   };
 }
 
-export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset }) {
+/** `children` sit right under the Transform section, above Zoom over clip. */
+export function TransformSection({ clip, asset, children }: { clip: Clip; asset?: Asset; children?: ReactNode }) {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   // Plain values, so playback re-renders the section only when a keyframed value moves or a keyframe is passed.
   const at = useEditor(useShallow((s) => atPlayhead(clip, readoutTime(s), canvas.fps)));
@@ -186,6 +187,7 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
         <Slider label="Rotation" value={transform.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => set({ rotation: v }, "rot")} />
         <Slider label="Opacity" value={transform.opacity * 100} min={0} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => set({ opacity: v / 100 }, "opacity")} />
       </Section>
+      {children}
       <ZoomOverClip clip={clip} scale={transform.scale} />
     </>
   );
