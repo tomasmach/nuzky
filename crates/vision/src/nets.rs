@@ -189,7 +189,7 @@ impl BiRefNet {
         let n = BIREFNET_SIDE;
         let small = frame.resized(n as u32, n as u32);
         let mut input = vec![0f32; 3 * n * n];
-        for (i, p) in small.rgba.chunks_exact(4).enumerate() {
+        for (i, p) in small.rgba.as_chunks::<4>().0.iter().enumerate() {
             for c in 0..3 {
                 input[c * n * n + i] = (p[c] as f32 / 255.0 - MEAN[c]) / STD[c];
             }
@@ -256,7 +256,9 @@ impl FaceMesh {
         }
         let points = points
             .data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|p| {
                 let [x, y] = to_frame(p[0], p[1]);
                 [x, y, p[2] * side / n]
@@ -379,7 +381,7 @@ impl Selfie {
         let n = SELFIE_SIDE;
         let small = frame.resized(n as u32, n as u32);
         let input: Vec<f32> =
-            small.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]].map(|c| c as f32 / 255.0)).collect();
+            small.rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]].map(|c| c as f32 / 255.0)).collect();
         let outputs = run(&mut self.0, &[1, n, n, 3], &input, cancel)?;
         let mask = &outputs.first().context("Person model gave no output")?.data;
         anyhow::ensure!(mask.len() == n * n, "Unexpected person mask size {}", mask.len());
@@ -412,7 +414,7 @@ mod tests {
         let mut rgb = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut rgb).unwrap();
         assert_eq!(info.color_type, png::ColorType::Rgb);
-        let rgba = rgb.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+        let rgba = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
         Frame { width: info.width, height: info.height, rgba }
     }
 

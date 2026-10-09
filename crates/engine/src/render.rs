@@ -619,10 +619,10 @@ mod tests {
         };
         let blurred = small_image(&image, 3);
         assert_eq!((blurred.width, blurred.height), (96, 54));
-        assert!(blurred.data.chunks_exact(4).all(|px| px == [108, 108, 108, 255]));
+        assert!(blurred.data.as_chunks::<4>().0.iter().all(|px| *px == [108, 108, 108, 255]));
         let transparent = Image { width: 2, height: 1, data: Arc::new(vec![255, 0, 0, 0, 0, 255, 0, 255]) };
         let blurred = small_image(&transparent, 3);
-        assert!(blurred.data.chunks_exact(4).all(|px| px[0] == 0 && px[1] == 217 && px[2] == 0 && px[3] > 0));
+        assert!(blurred.data.as_chunks::<4>().0.iter().all(|px| px[0] == 0 && px[1] == 217 && px[2] == 0 && px[3] > 0));
     }
 
     #[test]
@@ -827,7 +827,7 @@ mod tests {
             ClipContent::Text { text: "Soft edges".into(), style, transform, words: Vec::new() },
         ));
         let frame = Renderer::new().unwrap().render(&project, 0, 640, 360, Wait::Exact, false).unwrap();
-        let darkest = frame.chunks_exact(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
+        let darkest = frame.as_chunks::<4>().0.iter().map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
         assert!(darkest >= 253, "darkest pixel {darkest}");
     }
 
@@ -926,7 +926,7 @@ mod tests {
     /// Highlight yellow (#ffe14d, also where it fades into the black outline) and white text, by pixel index.
     fn karaoke_pixels(frame: &[u8]) -> (Vec<usize>, Vec<usize>) {
         let (mut yellow, mut white) = (Vec::new(), Vec::new());
-        for (i, p) in frame.chunks_exact(4).enumerate() {
+        for (i, p) in frame.as_chunks::<4>().0.iter().enumerate() {
             let [r, g, b] = [p[0], p[1], p[2]].map(f32::from);
             if r > 120.0 && g > 0.75 * r && b < 0.5 * r {
                 yellow.push(i);

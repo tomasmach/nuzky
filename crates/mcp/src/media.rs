@@ -36,7 +36,7 @@ pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_
         "RESULT_TOO_LARGE: contact sheet exceeds transport budget; use a smaller width or fewer times"
     );
     let mut pixels = vec![0u8; sheet_w as usize * sheet_h as usize * 4];
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = 255;
     }
     let mut renderer = Renderer::new().context("Starting frame renderer")?;

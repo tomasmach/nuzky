@@ -14,7 +14,9 @@ impl Frame {
     /// Rec. 709 luma in 0..1, one value per pixel.
     pub fn luma(&self) -> Vec<f32> {
         self.rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) / 255.0)
             .collect()
     }
@@ -83,7 +85,7 @@ impl Frame {
             line.fill(0.0);
             for (r, weight) in row_weights.iter().enumerate() {
                 let row = &self.rgba[(first_row + r) * stride..][..stride];
-                for (x, p) in row.chunks_exact(4).enumerate() {
+                for (x, p) in row.as_chunks::<4>().0.iter().enumerate() {
                     for c in 0..3 {
                         line[x * 3 + c] += p[c] as f32 * weight;
                     }
@@ -184,10 +186,13 @@ mod tests {
     fn shrinking_averages_instead_of_aliasing() {
         // A one-pixel checkerboard halved is flat grey; point sampling would keep black or white.
         let small = checker(64, 32, 1).resized(32, 16);
-        assert!(small.rgba.chunks_exact(4).all(|p| (126..=129).contains(&p[0])), "{:?}", &small.rgba[..8]);
+        assert!(small.rgba.as_chunks::<4>().0.iter().all(|p| (126..=129).contains(&p[0])), "{:?}", &small.rgba[..8]);
         // A third of a pixel: weights cover fractional source pixels too.
         let third = checker(96, 96, 32).resized(3, 3);
-        assert_eq!(third.rgba.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), [255, 0, 255, 0, 255, 0, 255, 0, 255]);
+        assert_eq!(
+            third.rgba.as_chunks::<4>().0.iter().map(|p| p[0]).collect::<Vec<_>>(),
+            [255, 0, 255, 0, 255, 0, 255, 0, 255]
+        );
     }
 
     #[test]

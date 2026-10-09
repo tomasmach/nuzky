@@ -757,7 +757,7 @@ pub fn orient(src: &[u8], w: u32, h: u32, asset: &Asset) -> (Vec<u8>, u32, u32) 
     let (mut out, w, h) = rotate(src, w, h, asset.rotation);
     if asset.mirror {
         for row in out.chunks_exact_mut(w as usize * 4) {
-            let pixels: Vec<[u8; 4]> = row.chunks_exact(4).rev().map(|p| [p[0], p[1], p[2], p[3]]).collect();
+            let pixels: Vec<[u8; 4]> = row.as_chunks::<4>().0.iter().rev().copied().collect();
             row.copy_from_slice(pixels.as_flattened());
         }
     }
@@ -799,7 +799,7 @@ mod tests {
             [(90, vec![3, 0, 4, 1, 5, 2]), (180, vec![5, 4, 3, 2, 1, 0]), (270, vec![2, 5, 1, 4, 0, 3])]
         {
             let (out, w, h) = rotate(&pixels, 3, 2, angle);
-            assert_eq!(out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), expected);
+            assert_eq!(out.as_chunks::<4>().0.iter().map(|p| p[0]).collect::<Vec<_>>(), expected);
             assert_eq!((w, h), if angle == 180 { (3, 2) } else { (2, 3) });
         }
     }
@@ -822,10 +822,13 @@ mod tests {
             mirror: true,
         };
         let (out, w, h) = orient(&pixels, 3, 2, &asset);
-        assert_eq!((out.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(), w, h), (vec![0, 3, 1, 4, 2, 5], 2, 3));
+        assert_eq!(
+            (out.as_chunks::<4>().0.iter().map(|p| p[0]).collect::<Vec<_>>(), w, h),
+            (vec![0, 3, 1, 4, 2, 5], 2, 3)
+        );
         asset.mirror = false;
         assert_eq!(
-            orient(&pixels, 3, 2, &asset).0.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            orient(&pixels, 3, 2, &asset).0.as_chunks::<4>().0.iter().map(|p| p[0]).collect::<Vec<_>>(),
             vec![3, 0, 4, 1, 5, 2]
         );
     }

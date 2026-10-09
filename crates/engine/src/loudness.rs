@@ -111,7 +111,7 @@ impl Meter {
     }
 
     pub fn push(&mut self, samples: &[f32]) {
-        for frame in samples.chunks_exact(CHANNELS) {
+        for frame in samples.as_chunks::<CHANNELS>().0 {
             for ([shelf, high_pass], &x) in self.weighting.iter_mut().zip(frame) {
                 let y = high_pass.run(shelf.run(x as f64));
                 self.step_power += y * y;
@@ -389,7 +389,7 @@ mod tests {
         let mut limiter = Limiter::new(db_to_gain(ceiling_db));
         let mut out = Vec::with_capacity(samples.len());
         let tail = std::iter::repeat_n([0.0; CHANNELS], Limiter::latency());
-        for frame in samples.chunks_exact(CHANNELS).map(|f| [f[0], f[1]]).chain(tail) {
+        for frame in samples.as_chunks::<CHANNELS>().0.iter().map(|f| [f[0], f[1]]).chain(tail) {
             if let Some(y) = limiter.push(frame) {
                 out.extend(y);
             }

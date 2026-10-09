@@ -776,7 +776,9 @@ mod tests {
         let mut out = vec![0.0; 1000 * CHANNELS];
         mixer.mix(&project, 47500, &mut out);
         let max_step = out
-            .chunks_exact(CHANNELS)
+            .as_chunks::<CHANNELS>()
+            .0
+            .iter()
             .map(|f| f[0])
             .collect::<Vec<_>>()
             .windows(2)
@@ -881,7 +883,7 @@ mod tests {
         let mix = |project: &Project| {
             let mut out = vec![0.0; 192_000 * CHANNELS];
             Mixer::new(cache.clone()).mix(project, 0, &mut out);
-            out.chunks_exact(CHANNELS).map(|f| f[0]).collect::<Vec<_>>()
+            out.as_chunks::<CHANNELS>().0.iter().map(|f| f[0]).collect::<Vec<_>>()
         };
         let whole = mix(&project);
         let mut split = project.clone();
@@ -950,7 +952,7 @@ mod tests {
         assert_eq!(mixer.cut_window(&project, &a, &b), Some((590_000, 610_000)));
         let mut out = vec![0.0; 57_600 * CHANNELS];
         mixer.mix(&project, 0, &mut out);
-        let left: Vec<f32> = out.chunks_exact(CHANNELS).map(|f| f[0]).collect();
+        let left: Vec<f32> = out.as_chunks::<CHANNELS>().0.iter().map(|f| f[0]).collect();
         let rms = |from: usize| (left[from..from + 96].iter().map(|s| s * s).sum::<f32>() / 96.0).sqrt();
         let steady = (26_400..27_360).step_by(96).map(rms).sum::<f32>() / 10.0;
         // 2 ms windows across the 20 ms crossfade around the cut at 0.6 s (sample 28 800).
@@ -978,7 +980,7 @@ mod tests {
         let mut out = vec![0.0; 960 * CHANNELS];
         mixer.mix(&project, 47_520, &mut out);
         // 20 ms around the cut: whole cycles of the tone, so any of the deleted level shows as an offset.
-        let mean = out.chunks_exact(CHANNELS).map(|f| f[0]).sum::<f32>() / 960.0;
+        let mean = out.as_chunks::<CHANNELS>().0.iter().map(|f| f[0]).sum::<f32>() / 960.0;
         std::fs::remove_dir_all(cache).unwrap();
         assert!(mean.abs() < 0.02, "the deleted word sounds at the cut: offset {mean}");
     }

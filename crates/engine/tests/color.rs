@@ -37,7 +37,7 @@ fn smooth_grey(frame: &[u8]) {
         let step = grey(frame, x + 1) - grey(frame, x);
         assert!((0..=3).contains(&step), "non-monotonic or abrupt ramp at {x}: {step}");
     }
-    assert!(frame.chunks_exact(4).all(|p| p[3] == 255));
+    assert!(frame.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }
 
 // Golden RGBA captured with the unmodified a18d535 CLI: frame ramp.json 0 ramp-head.png 256.

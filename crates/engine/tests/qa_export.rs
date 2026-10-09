@@ -104,7 +104,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
         .arg(&out)
         .args(["-f", "f32le", "-ac", "1", "-ar", "48000", "-"]))
     .stdout;
-    let samples: Vec<f32> = audio.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    let samples: Vec<f32> = audio.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect();
     let power = |center: usize, f: f64| {
         let mut re = 0.0;
         let mut im = 0.0;
@@ -341,7 +341,7 @@ fn decode(path: &Path) -> Vec<f32> {
         .args(["-v", "error", "-i"])
         .arg(path)
         .args(["-vn", "-f", "f32le", "-ac", "2", "-ar", "48000", "-"]));
-    out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+    out.stdout.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect()
 }
 
 /// Top-level MP4 boxes in file order.
@@ -465,7 +465,7 @@ fn reels_preset_keeps_silence_silent() {
 /// Where a click starts: the first sample above a third of the loudest one.
 fn onset(sound: &[f32]) -> usize {
     let loudest = sound.iter().fold(0f32, |m, x| m.max(x.abs()));
-    sound.chunks_exact(2).position(|f| f[0].abs() > loudest / 3.0).unwrap()
+    sound.as_chunks::<2>().0.iter().position(|f| f[0].abs() > loudest / 3.0).unwrap()
 }
 
 #[test]
@@ -518,7 +518,7 @@ fn reels_levelling_keeps_a_click_on_its_flash() {
     assert!(moved.abs() <= 48, "levelling moved the click by {moved} samples");
 
     let pixels = raw(&leveled, &["-vf", "scale=8:8"]);
-    let flash = pixels.chunks_exact(8 * 8 * 4).position(|f| f[4 * 27] > 200).unwrap();
+    let flash = pixels.as_chunks::<{ 8 * 8 * 4 }>().0.iter().position(|f| f[4 * 27] > 200).unwrap();
     let flash_sample = flash as i64 * 48_000 / 30;
     let click = onset(&after) as i64;
     eprintln!("QA reels sync: flash on frame {flash} ({flash_sample}), click at {click}");

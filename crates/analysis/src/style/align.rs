@@ -208,7 +208,7 @@ fn features(asset: &Asset, cache: &Path, cancelled: &dyn Fn() -> bool) -> Result
     for (band, &centre) in BANDS.iter().enumerate() {
         ensure!(!cancelled(), "CANCELLED: style analysis cancelled");
         let mut filter = Biquad::band_pass(centre, 16_000.0, 1.2);
-        for (frame, samples) in energy.iter_mut().zip(mono.chunks_exact(HOP)) {
+        for (frame, samples) in energy.iter_mut().zip(mono.as_chunks::<HOP>().0) {
             frame[band] = samples.iter().map(|&s| filter.run(s).powi(2)).sum::<f32>();
         }
     }

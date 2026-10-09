@@ -549,7 +549,7 @@ impl Leveled {
         };
         leveled.mixer.mix(project, 0, &mut leveled.input);
         leveled.read = Limiter::latency() as i64;
-        for frame in leveled.input.chunks_exact(CHANNELS) {
+        for frame in leveled.input.as_chunks::<CHANNELS>().0 {
             let early = leveled.limiter.push(std::array::from_fn(|c| frame[c] * leveled.gain));
             debug_assert!(early.is_none());
         }
@@ -561,7 +561,7 @@ impl Leveled {
         self.input.resize(out.len(), 0.0);
         self.mixer.mix(project, self.read, &mut self.input);
         self.read += (out.len() / CHANNELS) as i64;
-        for (out, frame) in out.chunks_exact_mut(CHANNELS).zip(self.input.chunks_exact(CHANNELS)) {
+        for (out, frame) in out.as_chunks_mut::<CHANNELS>().0.iter_mut().zip(self.input.as_chunks::<CHANNELS>().0) {
             let gain = self.gain;
             let leveled = self.limiter.push(std::array::from_fn(|c| frame[c] * gain));
             out.copy_from_slice(&leveled.expect("the look-ahead is read first"));

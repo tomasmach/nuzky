@@ -154,7 +154,7 @@ fn decode_cut(cut: &Asset, cancelled: &dyn Fn() -> bool) -> Result<CutFrames> {
 fn caption_mask(rgba: &[u8], height: usize) -> Vec<u64> {
     let bits = |test: &dyn Fn(&[u8]) -> bool| -> Vec<u64> {
         let mut out = vec![0u64; WORDS * height];
-        for (i, px) in rgba.chunks_exact(4).enumerate() {
+        for (i, px) in rgba.as_chunks::<4>().0.iter().enumerate() {
             if test(px) {
                 let (y, x) = (i / MASK_WIDTH, i % MASK_WIDTH);
                 out[y * WORDS + x / 64] |= 1 << (x % 64);
@@ -458,7 +458,7 @@ impl Gray {
     fn shrink(rgba: &[u8], w: usize, h: usize, to_w: usize, to_h: usize) -> Self {
         let mut sum = vec![0f32; to_w * to_h];
         let mut count = vec![0f32; to_w * to_h];
-        for (i, p) in rgba.chunks_exact(4).enumerate() {
+        for (i, p) in rgba.as_chunks::<4>().0.iter().enumerate() {
             let (x, y) = (i % w * to_w / w, i / w * to_h / h);
             sum[y * to_w + x] += 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32;
             count[y * to_w + x] += 1.0;

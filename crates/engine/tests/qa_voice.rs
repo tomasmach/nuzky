@@ -56,7 +56,7 @@ fn decode(path: &Path) -> Vec<f32> {
         .args(["-v", "error", "-i"])
         .arg(path)
         .args(["-vn", "-f", "f32le", "-ac", "2", "-ar", "48000", "-"]));
-    out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+    out.stdout.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect()
 }
 
 /// Level in dB of the left channel, and of 50 Hz hum and the 440 Hz tone in it: what AAC keeps,
