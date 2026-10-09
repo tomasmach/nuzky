@@ -10,7 +10,7 @@ MODEL = 'large-v3-turbo-q5_0'
 FPS = 30
 HIGHLIGHT = '#ffe14d'
 
-CAPTIONS = """const p = window.__capopen.store.getState().snap.project;
+CAPTIONS = """const p = window.__nuzky.store.getState().snap.project;
 const track = p.tracks.find((t) => t.kind === 'text' && t.name === 'Captions');
 return track ? track.clips.map((c) => ({id: c.id, startUs: c.startUs, durationUs: c.durationUs, text: c.content.text,
   highlight: c.content.style.highlight ?? null, words: c.content.words ?? []})) : [];"""
@@ -68,7 +68,7 @@ def export_frame(r, video, n, name):
 def karaoke(r):
     r.import_media(FIXTURES / 'reel-2.mp4')
     r.add_clip('reel-2.mp4')
-    r.s.run(f"window.__capopen.speech.setState({{model: '{MODEL}', language: 'cs'}})")
+    r.s.run(f"window.__nuzky.speech.setState({{model: '{MODEL}', language: 'cs'}})")
     tile = "return [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Karaoke')"
 
     def captions_tab():
@@ -111,7 +111,7 @@ def karaoke(r):
     # The preview, then the engine's own frame of the saved project at the same moment.
     rect = preview_rect(r)
     preview, engine = [], []
-    time.sleep(1.5)  # The edit is saved about a second later; `capopen frame` reads the saved file.
+    time.sleep(1.5)  # The edit is saved about a second later; `nuzky frame` reads the saved file.
     for (n, us), word, index in zip(moments, words, (1, 2)):
         r.seek(us)
         time.sleep(1.5)
@@ -136,7 +136,7 @@ def karaoke(r):
 
     # The export at 720p shows the same word lit on the same frames.
     target = r.work / 'karaoke.mp4'
-    started = r.s.call('window.__capopen.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])', str(target),
+    started = r.s.call('window.__nuzky.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])', str(target),
                        {'resolution': 720, 'fps': FPS, 'quality': 'recommended'}, r.state()['epoch'], False)
     r.check('the export starts', started['ok'], started)
     done = wait(lambda: next((j for j in r.state()['jobs'] if j['kind'] == 'export' and j['status'] != 'running'), None), 300, 1)
@@ -159,7 +159,7 @@ def karaoke(r):
             ".scrollIntoView({block: 'center'})")
     r.s.run(show)
     r.shot('inspector-caption')
-    retext = "window.__capopen.store.getState().edit({type: 'updateClip', clipId: arguments[0], text: arguments[1]})"
+    retext = "window.__nuzky.store.getState().edit({type: 'updateClip', clipId: arguments[0], text: arguments[1]})"
     note = "return document.body.innerText.includes('Words were added or removed, so none lights up')"
     tokens = caption['text'].split(' ')
     corrected = ' '.join([tokens[0] + 'y'] + tokens[1:])

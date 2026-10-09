@@ -1,4 +1,4 @@
-"""Connect your agent: one click puts CapOpen into Claude Code's and Codex's own settings, after a
+"""Connect your agent: one click puts Nuzky into Claude Code's and Codex's own settings, after a
 backup and without touching anything else there, and the agent those settings start edits the
 project open in the app, live."""
 import json, time
@@ -27,7 +27,7 @@ def click(r, label, scope='document'):
         if (!b) return false; b.focus(); b.click(); return true;""", label)
 
 
-@flow('connect', 'Connect an agent in a terminal (in the AI panel) writes only the capopen entry into Claude Code and Codex settings, after a backup, '
+@flow('connect', 'Connect an agent in a terminal (in the AI panel) writes only the nuzky entry into Claude Code and Codex settings, after a backup, '
       'and the agent they start edits the open project live', before=home)
 def connect(r):
     folder = r.work / 'home'
@@ -56,24 +56,24 @@ def connect(r):
 
     claude = (folder / '.claude.json').read_text()
     config = json.loads(claude)
-    entry = config['mcpServers'].pop('capopen')
+    entry = config['mcpServers'].pop('nuzky')
     r.check("Claude Code's other settings are untouched", config == json.loads(CLAUDE), config)
-    backups = sorted(folder.glob('.claude.json.capopen-backup-*'))
+    backups = sorted(folder.glob('.claude.json.nuzky-backup-*'))
     r.check("Claude Code's settings were backed up first", len(backups) == 1 and backups[0].read_text() == CLAUDE, backups)
     codex = (folder / '.codex/config.toml').read_text()
-    block = f'[mcp_servers.capopen]\ncommand = {json.dumps(entry["command"])}\nargs = ["mcp", "--current", "--allow-write"]\n\n'
+    block = f'[mcp_servers.nuzky]\ncommand = {json.dumps(entry["command"])}\nargs = ["mcp", "--current", "--allow-write"]\n\n'
     r.check("Codex gets the same command and keeps every comment and setting", block in codex and codex.replace(block, '') == CODEX,
             codex)
-    backups = sorted((folder / '.codex').glob('config.toml.capopen-backup-*'))
+    backups = sorted((folder / '.codex').glob('config.toml.nuzky-backup-*'))
     r.check("Codex's settings were backed up first", len(backups) == 1 and backups[0].read_text() == CODEX, backups)
     r.check('the entry runs this app attached to the open project', entry['args'] == ['mcp', '--current', '--allow-write']
-            and entry['command'].endswith('capopen-app'), entry)
+            and entry['command'].endswith('nuzky-app'), entry)
 
     # What Claude Code starts from that entry: an MCP server that edits the project open here.
     agent = Bridge(r, command=[entry['command'], *entry['args']])
     try:
         state = agent.call('get_state', {})
-        open_name = r.s.run('return window.__capopen.store.getState().snap.project.name')
+        open_name = r.s.run('return window.__nuzky.store.getState().snap.project.name')
         r.check('the agent sees the project open in the app', state['name'] == open_name, [state['name'], open_name])
         run = agent.call('begin_run', {'label': 'Connected agent'})
         r.check("the agent's run shows in the app", wait(lambda: r.state()['aiRun'], 10))

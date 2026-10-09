@@ -13,7 +13,7 @@ pub(crate) fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 
 /// Temporary JSON writes live beside their destination, inside its sidecar namespace.
 pub fn json_temp_path(path: &Path) -> PathBuf {
-    sidecar(path, &format!(".{}.tmp", capopen_engine::edit::new_id()))
+    sidecar(path, &format!(".{}.tmp", nuzky_engine::edit::new_id()))
 }
 
 pub fn save(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -57,7 +57,7 @@ pub fn lock_project(path: &Path, exclusive: bool) -> Result<File> {
     match result {
         Ok(()) => Ok(lock),
         Err(TryLockError::WouldBlock) => bail!(
-            "PROJECT_BUSY: This project is open in another CapOpen window or an AI agent is editing it. Close it there first."
+            "PROJECT_BUSY: This project is open in another Nuzky window or an AI agent is editing it. Close it there first."
         ),
         Err(TryLockError::Error(error)) => Err(error).context("Acquiring project lock"),
     }

@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use capopen_session::jobs::check_cancel;
+use nuzky_session::jobs::check_cancel;
 use sha2::{Digest, Sha256};
 
 use crate::store::sidecar;
@@ -197,7 +197,7 @@ fn request(url: &str, from: u64) -> Result<Receiver<Chunk>> {
     let (tx, rx) = mpsc::sync_channel(8);
     let url = url.to_owned();
     std::thread::Builder::new()
-        .name("capopen-model-download".into())
+        .name("nuzky-model-download".into())
         .spawn(move || {
             let agent: ureq::Agent = ureq::Agent::config_builder()
                 .timeout_resolve(Some(CONNECT_TIMEOUT))
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn download_rejects_same_size_corruption() {
-        let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("model.bin");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -320,7 +320,7 @@ mod tests {
             (&b"corrupt!"[..], 8, false, false),
             (&b"model-v1"[..], 8, true, true),
         ] {
-            let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+            let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("model.bin");
             std::fs::write(&path, b"old invalid file").unwrap();
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn silent_connections_cancel_promptly_and_the_next_attempt_resumes() {
         for sends_part in [false, true] {
-            let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+            let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("model.bin");
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn stalled_download_fails_and_keeps_its_part() {
-        let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("model.bin");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -473,7 +473,7 @@ mod tests {
                     vec![Box::new(resume), Box::new(resume)]
                 }
             };
-            let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+            let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("model.bin");
             std::fs::write(sidecar(&path, ".part"), partial).unwrap();
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn corrupt_installed_model_is_replaced_and_valid_model_is_reused_offline() {
-        let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"corrupt!").unwrap();
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn download_child() {
-        let Some(dir) = std::env::var_os("CAPOPEN_MODEL_DOWNLOAD_TEST") else { return };
+        let Some(dir) = std::env::var_os("NUZKY_MODEL_DOWNLOAD_TEST") else { return };
         let dir = PathBuf::from(dir);
         let url = std::fs::read_to_string(dir.join("url")).unwrap();
         std::fs::write(dir.join(format!("ready-{}", std::process::id())), b"").unwrap();
@@ -523,7 +523,7 @@ mod tests {
 
     #[test]
     fn downloads_serialize_across_processes_and_recheck_after_lock() {
-        let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("model.bin");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -543,7 +543,7 @@ mod tests {
                 Child(
                     std::process::Command::new(std::env::current_exe().unwrap())
                         .args(["--exact", "model_download::tests::download_child", "--nocapture"])
-                        .env("CAPOPEN_MODEL_DOWNLOAD_TEST", &dir)
+                        .env("NUZKY_MODEL_DOWNLOAD_TEST", &dir)
                         .spawn()
                         .unwrap(),
                 )
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn cancelling_while_waiting_for_model_lock_does_not_start_a_download() {
-        let dir = std::env::temp_dir().join(format!("capopen-download-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-download-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("model.bin");
         let lock = OpenOptions::new()

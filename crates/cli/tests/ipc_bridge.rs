@@ -6,12 +6,12 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use capopen_engine::{
+use nuzky_engine::{
     Project,
     edit::{EditCmd, new_id},
 };
-use capopen_mcp::ipc::Listener;
-use capopen_session::{Mode, ProjectSession, host::Host};
+use nuzky_mcp::ipc::Listener;
+use nuzky_session::{Mode, ProjectSession, host::Host};
 use serde_json::{Value, json};
 
 struct App {
@@ -24,15 +24,15 @@ struct App {
 impl App {
     fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("ipc-{}", new_id()));
-        std::fs::create_dir_all(dir.join("capopen")).unwrap();
-        std::fs::set_permissions(dir.join("capopen"), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let path = dir.join("project.capopen");
+        std::fs::create_dir_all(dir.join("nuzky")).unwrap();
+        std::fs::set_permissions(dir.join("nuzky"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.join("project.nuzky");
         let mut project = Project::new("Before");
         project
             .apply(EditCmd::AddText {
                 start_us: 0,
                 text: "IPC image".into(),
-                style: capopen_engine::model::TextStyle {
+                style: nuzky_engine::model::TextStyle {
                     font_family: None,
                     font_size: 64.0,
                     color: "#ffffff".into(),
@@ -48,14 +48,14 @@ impl App {
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
         let host =
             Arc::new(Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap());
-        let socket = dir.join("capopen").join(capopen_mcp::ipc::socket_path(&path).unwrap().file_name().unwrap());
+        let socket = dir.join("nuzky").join(nuzky_mcp::ipc::socket_path(&path).unwrap().file_name().unwrap());
         let listener = Some(Listener::at(host.clone(), socket.clone()).unwrap());
         Self { listener, host, dir, path, socket }
     }
     fn hello(&self, token: &str, version: u32) -> Value {
         let mut stream = UnixStream::connect(&self.socket).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-        writeln!(stream, "{}", json!({"capopen":version,"token":token,"client":"test","access":"write"})).unwrap();
+        writeln!(stream, "{}", json!({"nuzky":version,"token":token,"client":"test","access":"write"})).unwrap();
         let mut line = String::new();
         BufReader::new(stream).read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
@@ -84,7 +84,7 @@ impl Bridge {
         Self::with(app, &args)
     }
     fn with(app: &App, args: &[&str]) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_capopen"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_nuzky"));
         command.arg("mcp").args(args).env("XDG_RUNTIME_DIR", &app.dir);
         let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
         let input = child.stdin.take();
@@ -224,7 +224,7 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
             while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            capopen_session::jobs::check_cancel(&cancel)?;
+            nuzky_session::jobs::check_cancel(&cancel)?;
             Ok(json!({}))
         })
         .unwrap();
@@ -243,7 +243,7 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     writer.finish();
     wait(|| app.host.session.state().unwrap().open_run.is_none());
     assert_eq!(app.host.session.state().unwrap().project.name, "Kept");
-    assert!(!app.path.with_extension("capopen.checkpoint.json").exists());
+    assert!(!app.path.with_extension("nuzky.checkpoint.json").exists());
     app.host.session.undo_run(run.as_str().unwrap()).unwrap();
     assert_eq!(app.host.session.state().unwrap().project.name, "Before");
     let mut attached = Bridge::new(&app, true);
@@ -262,7 +262,7 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
 #[test]
 fn current_attaches_to_the_open_project_and_refuses_without_an_app() {
     let mut app = App::new();
-    let current = app.dir.join("capopen/current");
+    let current = app.dir.join("nuzky/current");
     assert_eq!(std::fs::read_to_string(&current).unwrap(), std::fs::canonicalize(&app.path).unwrap().to_string_lossy());
     assert_eq!(std::fs::metadata(&current).unwrap().permissions().mode() & 0o777, 0o600);
     let mut bridge = Bridge::with(&app, &["--current", "--allow-write"]);
@@ -274,7 +274,7 @@ fn current_attaches_to_the_open_project_and_refuses_without_an_app() {
     bridge.finish();
     app.listener.take();
     assert!(!current.exists(), "closing the project removes its name");
-    let refused = Command::new(env!("CARGO_BIN_EXE_capopen"))
+    let refused = Command::new(env!("CARGO_BIN_EXE_nuzky"))
         .args(["mcp", "--current", "--allow-write"])
         .env("XDG_RUNTIME_DIR", &app.dir)
         .stdin(Stdio::null())

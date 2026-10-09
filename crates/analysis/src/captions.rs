@@ -1,7 +1,7 @@
 //! Groups transcript words into short on-screen captions, the way reels show them.
 
-use capopen_engine::edit::CaptionSegment;
-use capopen_engine::model::CaptionWord;
+use nuzky_engine::edit::CaptionSegment;
+use nuzky_engine::model::CaptionWord;
 use serde::{Deserialize, Serialize};
 
 use crate::Word;

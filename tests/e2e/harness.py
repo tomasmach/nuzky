@@ -1,7 +1,7 @@
 """Shared parts of the end-to-end flows: the app under WebDriver, isolated directories, checks and proof.
 
 A flow is a function decorated with @flow in its own file under tests/e2e/. It gets a Run, drives the real
-app through the dev-only `window.__capopen` hook and the keyboard, and records what the user would see
+app through the dev-only `window.__nuzky` hook and the keyboard, and records what the user would see
 with r.check(...). Run flows with scripts/repro.py.
 """
 import base64, datetime, json, os, queue, shutil, signal, socket, subprocess, tempfile, threading, time
@@ -10,10 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / 'tmp-test'
-MODELS = FIXTURES / 'xdg/data/capopen/models'
+MODELS = FIXTURES / 'xdg/data/nuzky/models'
 OUT = ROOT / 'tmp-test/repro'
 TARGET = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target'))
-APP, CLI, ANALYZE = TARGET / 'debug/capopen-app', TARGET / 'debug/capopen', TARGET / 'debug/capopen-analyze'
+APP, CLI, ANALYZE = TARGET / 'debug/nuzky-app', TARGET / 'debug/nuzky', TARGET / 'debug/nuzky-analyze'
 WEBKIT_DRIVER = shutil.which('WebKitWebDriver') or '/usr/bin/WebKitWebDriver'
 AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
@@ -87,7 +87,7 @@ def wait(fn, timeout=30, step=0.2):
 
 # --- One flow: its directories, processes, checks and proof -------------------------------------------
 
-STATE = """const st = window.__capopen.store.getState(); const p = st.snap.project;
+STATE = """const st = window.__nuzky.store.getState(); const p = st.snap.project;
 return {
   assets: p.assets.map((a) => ({id: a.id, name: a.name})),
   tracks: p.tracks.map((t) => ({id: t.id, kind: t.kind, name: t.name, clips: [...t.clips]
@@ -106,11 +106,11 @@ class Run:
     def __init__(self, name, runtime):
         self.name, self.work = name, OUT / name
         shutil.rmtree(self.work, ignore_errors=True)
-        (self.work / 'data/capopen/projects').mkdir(parents=True)
+        (self.work / 'data/nuzky/projects').mkdir(parents=True)
         self.env = dict(os.environ, XDG_DATA_HOME=str(self.work / 'data'), XDG_CACHE_HOME=str(self.work / 'cache'),
                         XDG_RUNTIME_DIR=runtime, DBUS_SESSION_BUS_ADDRESS='disabled:', GDK_BACKEND='x11',
                         # Flows never ask GitHub for a new version; tests/e2e/updates.py serves its own.
-                        CAPOPEN_NO_UPDATE_CHECK='1',
+                        NUZKY_NO_UPDATE_CHECK='1',
                         PYTHONDONTWRITEBYTECODE='1')
         self.checks, self.shots, self.s = [], [], None
 
@@ -135,20 +135,20 @@ class Run:
 
     def focus_clip(self, clip_id):
         self.s.run("document.querySelector(`[data-clip-id='${arguments[0]}']`).focus();"
-                   "window.__capopen.store.getState().select([arguments[0]]);", clip_id)
+                   "window.__nuzky.store.getState().select([arguments[0]]);", clip_id)
 
     def seek(self, us):
-        self.s.run('window.__capopen.store.getState().seek(arguments[0])', us)
+        self.s.run('window.__nuzky.store.getState().seek(arguments[0])', us)
 
     def import_media(self, *paths):
         count = len(self.state()['assets']) + len(paths)
-        self.s.call('window.__capopen.importPaths(arguments[0])', [str(p) for p in paths])
+        self.s.call('window.__nuzky.importPaths(arguments[0])', [str(p) for p in paths])
         if not wait(lambda: len(self.state()['assets']) == count):
             raise RuntimeError(f'import did not finish: {self.state()["assets"]}')
 
     def add_clip(self, name):
         count = len(self.track())
-        added = self.s.call("""(() => { const st = window.__capopen.store.getState();
+        added = self.s.call("""(() => { const st = window.__nuzky.store.getState();
             const asset = st.snap.project.assets.find((a) => a.name === arguments[0]);
             return st.edit({type: 'addClip', trackId: 'main', assetId: asset.id, startUs: null}); })()""", name)
         if not added['ok'] or not wait(lambda: len(self.track()) == count + 1):
@@ -158,7 +158,7 @@ class Run:
         return [t['text'] for t in self.state()['toasts'] if t['kind'] == 'error']
 
     def saved_project(self):
-        return next((self.work / 'data/capopen/projects').glob('*.capopen'))
+        return next((self.work / 'data/nuzky/projects').glob('*.nuzky'))
 
 
 def start(command, log, env=None):
@@ -194,7 +194,7 @@ def port_busy(port):
 def run_flow(name):
     description, before, body = FLOWS[name]
     print(f'\n==> {name}: {description}', flush=True)
-    runtime = tempfile.mkdtemp(prefix='capopen-repro-')  # Unix socket paths must stay short.
+    runtime = tempfile.mkdtemp(prefix='nuzky-repro-')  # Unix socket paths must stay short.
     r = Run(name, runtime)
     error = driver = None
     try:
@@ -209,10 +209,10 @@ def run_flow(name):
         if not started(driver, 4444, 20):
             raise RuntimeError('WebKitWebDriver did not start, see driver.log')
         r.s = Session()
-        if not wait(lambda: r.s.run('return !!window.__capopen?.store.getState().snap', retries=3), 60):
+        if not wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60):
             raise RuntimeError('the app did not load a project')
         if not body.home:
-            r.s.run("window.__capopen.store.setState({view: 'editor'})")
+            r.s.run("window.__nuzky.store.setState({view: 'editor'})")
         time.sleep(1)
         body(r)
     except Exception:
@@ -309,7 +309,7 @@ def close_window(d=None):
     d = d or display.Display()
     protocols, delete = d.intern_atom('WM_PROTOCOLS'), d.intern_atom('WM_DELETE_WINDOW')
     for w, name in _windows(d):
-        if name == 'CapOpen':
+        if name == 'Nuzky':
             w.send_event(event.ClientMessage(window=w, client_type=protocols, data=(32, [delete, X.CurrentTime, 0, 0, 0])))
     d.sync()
     return d
@@ -321,7 +321,7 @@ def close_window_and_confirm(r):
     from Xlib.protocol import event
     d = close_window()
     windows = lambda: _windows(d)
-    dialog = wait(lambda: next((w for w, name in windows() if 'Quit CapOpen' in name), None), 5, 0.1)
+    dialog = wait(lambda: next((w for w, name in windows() if 'Quit Nuzky' in name), None), 5, 0.1)
     if not dialog:
         return False
     time.sleep(0.8)
@@ -339,10 +339,10 @@ def close_window_and_confirm(r):
 
 
 class Bridge:
-    """The agent's side: `capopen mcp` attached to the open app over its local socket."""
+    """The agent's side: `nuzky mcp` attached to the open app over its local socket."""
 
     def __init__(self, r, project=None, command=None):
-        """`command`: what an agent's config runs instead, such as `capopen-app mcp --current`."""
+        """`command`: what an agent's config runs instead, such as `nuzky-app mcp --current`."""
         command = command or [str(CLI), 'mcp', '--project', str(project), '--allow-write']
         self.process = subprocess.Popen(command, env=r.env,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(r.work / 'bridge.log', 'w'),
@@ -383,7 +383,7 @@ class Bridge:
 
 
 def link_models(r, names=('ggml-small.bin', 'ggml-silero-v5.1.2.bin')):
-    models = r.work / 'data/capopen/models'
+    models = r.work / 'data/nuzky/models'
     models.mkdir(parents=True)
     for name in names:
         try:

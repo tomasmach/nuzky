@@ -50,16 +50,16 @@ writeFileSync(configPath, JSON.stringify(config, null, 2));
 run(process.execPath, ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--bundles', bundles, '--config', configPath, '--', '--locked']);
 
 if (process.platform === 'darwin') {
-  const app = path.join(bundle, 'macos', 'CapOpen.app');
+  const app = path.join(bundle, 'macos', 'Nuzky.app');
   run('python3', ['scripts/bundle-macos-libs.py', app]);
   const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
   mkdirSync(path.join(bundle, 'dmg'), { recursive: true });
   const stage = mkdtempSync(path.join(target, 'dmg-stage-'));
   try {
-    run('ditto', [app, path.join(stage, 'CapOpen.app')]);
+    run('ditto', [app, path.join(stage, 'Nuzky.app')]);
     symlinkSync('/Applications', path.join(stage, 'Applications'));
-    run('hdiutil', ['create', '-ov', '-format', 'UDZO', '-volname', 'CapOpen', '-srcfolder', stage,
-      path.join(bundle, 'dmg', `CapOpen_${version}_aarch64.dmg`)]);
+    run('hdiutil', ['create', '-ov', '-format', 'UDZO', '-volname', 'Nuzky', '-srcfolder', stage,
+      path.join(bundle, 'dmg', `Nuzky_${version}_aarch64.dmg`)]);
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }

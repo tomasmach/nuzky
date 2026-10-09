@@ -113,7 +113,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   CANCELLED: "Cancelled.",
   AGENT_BUSY: (detail) => detail,
   NOT_INSTALLED: (detail) => sentence(detail.replace(/\.$/, "")) + ". Install it and sign in from a terminal.",
-  APP_CLOSED: "CapOpen is closing, so this stopped.",
+  APP_CLOSED: "Nuzky is closing, so this stopped.",
   JOB_FAILED: "The task stopped unexpectedly. Try again.",
   MODEL_INVALID: "The speech model did not download completely. Try again to download it anew.",
   STORE_UNREADABLE: "The saved transcripts could not be read. Transcribe the timeline again.",

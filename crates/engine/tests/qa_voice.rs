@@ -2,7 +2,7 @@
 //! cache of its file, sample for sample where the raw cache would be, and plays the raw cache while
 //! the cleaned one is not ready or the setting is off.
 mod qa_support;
-use capopen_engine::{
+use nuzky_engine::{
     audio::{Mixer, ensure_pcm, pcm_path},
     edit::{EditCmd, TimeRange},
     export::{ExportOptions, export},
@@ -79,7 +79,7 @@ fn clean_voice_plays_and_exports_the_cleaned_cache_and_raw_without_it() {
     if !available() {
         return;
     }
-    let d = dir(&format!("voice-{}", capopen_engine::edit::new_id()));
+    let d = dir(&format!("voice-{}", nuzky_engine::edit::new_id()));
     let source = d.join("take.mkv");
     noisy_source(&source);
     let cache = d.join("cache");

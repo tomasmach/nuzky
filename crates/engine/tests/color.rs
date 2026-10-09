@@ -1,5 +1,5 @@
-use capopen_engine::model::{Adjust, ClipContent};
-use capopen_engine::{Project, Renderer, Wait};
+use nuzky_engine::model::{Adjust, ClipContent};
+use nuzky_engine::{Project, Renderer, Wait};
 
 fn ramp(renderer: &mut Renderer, adjust: Adjust) -> Vec<u8> {
     let project: Project = serde_json::from_value(serde_json::json!({

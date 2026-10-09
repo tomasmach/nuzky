@@ -1,6 +1,6 @@
 use super::*;
-use capopen_engine::Project;
-use capopen_session::{Mode, ProjectSession};
+use nuzky_engine::Project;
+use nuzky_session::{Mode, ProjectSession};
 use std::os::unix::fs::symlink;
 
 struct Fixture {
@@ -21,7 +21,7 @@ impl Fixture {
         let dir = std::env::temp_dir().join(format!("ipc-hardening-{}", new_id()));
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, Permissions::from_mode(0o700)).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         fs::write(&path, serde_json::to_vec(&Project::new("fixture")).unwrap()).unwrap();
         let host =
             Arc::new(Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap());
@@ -31,7 +31,7 @@ impl Fixture {
         Listener::at(self.host.clone(), self.socket.clone()).unwrap()
     }
     fn hello(&self) -> Value {
-        json!({"capopen":1,"token":fs::read_to_string(self.socket.with_extension("token")).unwrap(),"client":"test","access":"write"})
+        json!({"nuzky":1,"token":fs::read_to_string(self.socket.with_extension("token")).unwrap(),"client":"test","access":"write"})
     }
 }
 impl Drop for Fixture {
@@ -204,12 +204,12 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
 
 #[test]
 fn cancelled_transcription_never_loads_models() {
-    let missing = Path::new("/nonexistent-capopen-model");
-    let asset = capopen_engine::model::Asset {
+    let missing = Path::new("/nonexistent-nuzky-model");
+    let asset = nuzky_engine::model::Asset {
         id: "cancelled".into(),
         name: "cancelled".into(),
-        path: "/nonexistent-capopen-source".into(),
-        kind: capopen_engine::model::AssetKind::Audio,
+        path: "/nonexistent-nuzky-source".into(),
+        kind: nuzky_engine::model::AssetKind::Audio,
         duration_us: 1,
         width: 0,
         height: 0,
@@ -218,8 +218,8 @@ fn cancelled_transcription_never_loads_models() {
         rotation: 0,
         mirror: false,
     };
-    let error = capopen_analysis::transcribe_words_cancellable(
-        capopen_analysis::AudioSource::Asset { asset: &asset, cache: missing },
+    let error = nuzky_analysis::transcribe_words_cancellable(
+        nuzky_analysis::AudioSource::Asset { asset: &asset, cache: missing },
         missing,
         missing,
         "auto",

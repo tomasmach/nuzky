@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::media::{VideoDecoder, orient};
-use capopen_engine::model::{Asset, AssetKind};
+use nuzky_engine::media::{VideoDecoder, orient};
+use nuzky_engine::model::{Asset, AssetKind};
 use serde::Serialize;
 
 use super::{Alignment, Piece};
@@ -36,7 +36,7 @@ pub struct Caption {
     pub words: usize,
 }
 
-/// How a moment of the recording is framed in the cut, in CapOpen transform terms: scale 1
+/// How a moment of the recording is framed in the cut, in Nuzky transform terms: scale 1
 /// fits the recording inside the frame, x and y move its centre by fractions of the frame.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Framing {
@@ -588,7 +588,7 @@ struct SourceFrames {
     decoder: VideoDecoder,
     asset: Asset,
     size: (usize, usize),
-    frames: [Option<capopen_engine::media::DecodedFrame>; 2],
+    frames: [Option<nuzky_engine::media::DecodedFrame>; 2],
     position: Option<i64>,
 }
 

@@ -1,5 +1,5 @@
 mod qa_support;
-use capopen_engine::{
+use nuzky_engine::{
     export::{Delivery, ExportOptions, ExportPhase, export},
     loudness::Meter,
     media::probe,
@@ -59,7 +59,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
     // Recreate only this test's caches: input IDs are intentionally stable for reproduction.
     let cache = d.join("cache");
     for a in &p.assets {
-        let f = capopen_engine::audio::pcm_path(&cache, a);
+        let f = nuzky_engine::audio::pcm_path(&cache, a);
         if f.exists() {
             std::fs::remove_file(f).unwrap();
         }
@@ -120,7 +120,7 @@ fn export_odd_canvas_duration_and_av_cut_match_timeline() {
     if (switch as i64 - 28800).abs() > 1024 {
         failures.push(format!("tone switch sample={switch}, expected=28800"));
     }
-    assert!(!out.with_extension("capopen-part.mp4").exists());
+    assert!(!out.with_extension("nuzky-part.mp4").exists());
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 #[test]
@@ -148,7 +148,7 @@ fn export_cancellation_is_prompt_and_preserves_destination() {
     assert!(now.elapsed().as_secs_f64() < 5.0, "cancellation took {:?}", now.elapsed());
     assert_eq!(last, 2);
     assert_eq!(std::fs::read(&out).unwrap(), b"existing destination");
-    assert!(!out.with_extension("capopen-part.mp4").exists());
+    assert!(!out.with_extension("nuzky-part.mp4").exists());
 }
 #[test]
 fn export_refuses_to_overwrite_source() {
@@ -170,7 +170,7 @@ fn export_temp_path_must_not_destroy_a_source() {
         return;
     }
     let d = dir("export-temp-source");
-    let input = d.join("result.capopen-part.mp4");
+    let input = d.join("result.nuzky-part.mp4");
     source(&input);
     let before = std::fs::read(&input).unwrap();
     let p = project(&input, 200_000);
@@ -194,12 +194,12 @@ fn failed_final_rename_leaves_no_temporary_export() {
     std::fs::create_dir_all(&out).unwrap();
     let result = export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {});
     assert!(result.is_err());
-    assert!(!out.with_extension("capopen-part.mp4").exists(), "complete temporary export remains after failed rename");
+    assert!(!out.with_extension("nuzky-part.mp4").exists(), "complete temporary export remains after failed rename");
 }
 
 #[test]
 fn missing_image_fails_exact_render_and_export_but_preview_survives() {
-    let d = dir(&format!("missing-image-{}", capopen_engine::edit::new_id()));
+    let d = dir(&format!("missing-image-{}", nuzky_engine::edit::new_id()));
     let path = d.join("deleted-image.ppm");
     std::fs::write(&path, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
     let mut project = Project::new("missing image");
@@ -208,10 +208,10 @@ fn missing_image_fails_exact_render_and_export_but_preview_survives() {
     project.assets.push(probe(&path, "image".into()).unwrap());
     project.tracks[0].clips.push(clip("clip", "image", 0, 100_000));
     std::fs::remove_file(&path).unwrap();
-    let mut renderer = capopen_engine::Renderer::new().unwrap();
-    let error = renderer.render(&project, 0, 64, 64, capopen_engine::Wait::Exact, false).unwrap_err();
+    let mut renderer = nuzky_engine::Renderer::new().unwrap();
+    let error = renderer.render(&project, 0, 64, 64, nuzky_engine::Wait::Exact, false).unwrap_err();
     assert!(error.to_string().contains("deleted-image.ppm"), "{error}");
-    renderer.render(&project, 0, 64, 64, capopen_engine::Wait::Ready, false).unwrap();
+    renderer.render(&project, 0, 64, 64, nuzky_engine::Wait::Ready, false).unwrap();
     let out = d.join("export.mp4");
     let error = export(&project, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap_err();
     assert!(error.to_string().contains("deleted-image.ppm"), "{error}");
@@ -222,7 +222,7 @@ fn missing_image_fails_exact_render_and_export_but_preview_survives() {
 
 #[test]
 fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
-    let d = dir(&format!("unused-audio-{}", capopen_engine::edit::new_id()));
+    let d = dir(&format!("unused-audio-{}", nuzky_engine::edit::new_id()));
     let image = d.join("image.ppm");
     std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
     let mut p = Project::new("used audio only");
@@ -531,7 +531,7 @@ fn reels_preset_refuses_what_it_cannot_deliver() {
     if !available() {
         return;
     }
-    let d = dir(&format!("reels-refuse-{}", capopen_engine::edit::new_id()));
+    let d = dir(&format!("reels-refuse-{}", nuzky_engine::edit::new_id()));
     let input = d.join("wide.mkv");
     ff(&["-f", "lavfi", "-i", "color=c=gray:s=192x108:r=30:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p"], &input);
     let out = d.join("reel.mp4");
@@ -585,7 +585,7 @@ fn reels_loudness_passes_stop_within_a_second_of_cancel() {
     assert!(seen.windows(2).all(|w| w[0].1 <= w[1].1), "progress went back");
     assert_eq!(std::fs::read(&out).unwrap(), b"existing destination");
     let left: Vec<_> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name()).collect();
-    assert!(left.iter().all(|n| !n.to_string_lossy().starts_with(".capopen-part")), "{left:?}");
+    assert!(left.iter().all(|n| !n.to_string_lossy().starts_with(".nuzky-part")), "{left:?}");
 }
 
 /// The loudness meter reads what FFmpeg's EBU R128 meter reads: K-weighting, gating and the

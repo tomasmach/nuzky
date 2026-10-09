@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Result, ensure};
-use capopen_engine::model::Asset;
+use nuzky_engine::model::Asset;
 use serde::Serialize;
 
 use crate::{Range, Word, audio::open_pcm};

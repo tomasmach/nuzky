@@ -23,7 +23,7 @@ const QUALITIES: { id: ExportRequest["quality"]; label: string; bitsPerPixel: nu
   { id: "small", label: "Smaller file", bitsPerPixel: 0.035 },
 ];
 const AUDIO_BPS = 192_000;
-const STORAGE_KEY = "capopen.export";
+const STORAGE_KEY = "nuzky.export";
 const PRESETS: { id: "custom" | "reels"; label: string }[] = [
   { id: "custom", label: "Custom" },
   { id: "reels", label: "Reels & TikTok" },
@@ -160,7 +160,7 @@ export function ExportDialog() {
 
   const pickAndRun = async () => {
     const epoch = currentEpoch();
-    const safe = project.name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "CapOpen export";
+    const safe = project.name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Nuzky export";
     let defaultPath = `${safe}.mp4`;
     try {
       defaultPath = await join(await videoDir(), defaultPath);

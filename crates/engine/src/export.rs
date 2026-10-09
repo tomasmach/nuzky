@@ -175,7 +175,7 @@ pub fn export(
     }
     // Reserve beside the destination so rename stays on the same filesystem.
     let tmp = loop {
-        let path = out.with_file_name(format!(".capopen-part-{}.mp4", uuid::Uuid::new_v4()));
+        let path = out.with_file_name(format!(".nuzky-part-{}.mp4", uuid::Uuid::new_v4()));
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(_) => break path,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn publish_refuses_late_collision_unless_replace_was_confirmed() {
-        let dir = std::env::temp_dir().join(format!("capopen-publish-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("nuzky-publish-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let tmp = dir.join("rendered.mp4");
         let out = dir.join("out.mp4");
@@ -698,7 +698,7 @@ mod tests {
     fn publish_without_hard_links_claims_the_name_and_never_replaces() {
         // EPERM, what Linux returns for a hard link on FAT32 and exFAT.
         let no_links = |_: &Path, _: &Path| Err(std::io::Error::from_raw_os_error(1));
-        let dir = std::env::temp_dir().join(format!("capopen-publish-fat-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("nuzky-publish-fat-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let tmp = dir.join("rendered.mp4");
         let out = dir.join("out.mp4");
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn publish_honors_cancel_after_rendering_in_both_modes() {
-        let dir = std::env::temp_dir().join(format!("capopen-cancel-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("nuzky-cancel-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let tmp = dir.join("rendered.mp4");
         let out = dir.join("out.mp4");

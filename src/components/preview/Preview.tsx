@@ -9,7 +9,7 @@ import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
 
 const HEADER = 24;
-const SAFE_ZONE_KEY = "capopen.safeZone";
+const SAFE_ZONE_KEY = "nuzky.safeZone";
 
 /** The parts of the frame Reels and TikTok cover with their interface, dimmed, around the free area. */
 function SafeZone({ area, width, height }: { area: SafeArea; width: number; height: number }) {

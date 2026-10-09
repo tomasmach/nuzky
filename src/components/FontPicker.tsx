@@ -8,7 +8,7 @@ const MENU_H = 340;
 
 /**
  * Font chooser: a button showing the current family in its own face, opening a searchable list.
- * Fonts that ship with CapOpen come first and preview in their face; installed ones follow.
+ * Fonts that ship with Nuzky come first and preview in their face; installed ones follow.
  * `mixed` shows "—" for a selection whose clips use different fonts.
  */
 export function FontPicker({

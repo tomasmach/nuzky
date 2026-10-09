@@ -2,12 +2,12 @@
 //! and applied exactly as for agents (`analyze(kind: "emphasis")`, `apply_zooms`).
 
 use anyhow::Result;
-use capopen_engine::edit::EditCmd;
-use capopen_mcp::{
+use nuzky_engine::edit::EditCmd;
+use nuzky_mcp::{
     transcript,
     zooms::{self, WordZoom},
 };
-use capopen_session::{Expect, host::Host};
+use nuzky_session::{Expect, host::Host};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
@@ -117,14 +117,14 @@ pub async fn apply_zooms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::{
+    use nuzky_engine::{
         Project,
         audio::pcm_path,
         edit::new_id,
         model::{Asset, AssetKind, CHANNELS, ClipContent},
         speech,
     };
-    use capopen_session::{
+    use nuzky_session::{
         Mode, ProjectSession,
         transcripts::{Record, TranscriptStore, VERSION},
     };
@@ -171,7 +171,7 @@ mod tests {
         let mut project = Project::new("zooms");
         project.apply(EditCmd::AddAssets { assets: vec![asset.clone()] }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None }).unwrap();
-        let file = dir.join("project.capopen");
+        let file = dir.join("project.nuzky");
         std::fs::write(&file, serde_json::to_vec(&project).unwrap()).unwrap();
         let store = TranscriptStore::at(dir.join("transcripts")).unwrap();
         let record = Record {

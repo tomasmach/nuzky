@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::model::Asset;
-pub use capopen_engine::speech::Word;
+use nuzky_engine::model::Asset;
+pub use nuzky_engine::speech::Word;
 use serde::{Deserialize, Serialize};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams,
@@ -385,9 +385,9 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires the small model in tmp-test/xdg/data/capopen/models"]
+    #[ignore = "requires the small model in tmp-test/xdg/data/nuzky/models"]
     fn a_stop_request_ends_recognition_inside_whisper() {
-        let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test/xdg/data/capopen/models/ggml-small.bin");
+        let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test/xdg/data/nuzky/models/ggml-small.bin");
         let context = WhisperContext::new_with_params(&model, WhisperContextParameters::default()).unwrap();
         let mut state = context.create_state().unwrap();
         let tone: Vec<f32> = (0..16_000 * 5).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();

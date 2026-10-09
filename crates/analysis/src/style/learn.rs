@@ -181,7 +181,7 @@ pub fn learn(sources: &[Source]) -> String {
     let _ = writeln!(doc, "# Editing style\n");
     let _ = writeln!(
         doc,
-        "CapOpen measured how these recordings became their finished cuts. An agent editing through CapOpen follows the rules and numbers here instead of the general defaults in capopen://guide, and keeps the defaults for anything this file does not cover. Edit this file by hand to change the style; delete it to go back to the defaults.\n"
+        "Nuzky measured how these recordings became their finished cuts. An agent editing through Nuzky follows the rules and numbers here instead of the general defaults in nuzky://guide, and keeps the defaults for anything this file does not cover. Edit this file by hand to change the style; delete it to go back to the defaults.\n"
     );
     let _ = writeln!(doc, "| Recording | Language | Length | Finished cut | Length |\n|---|---|---|---|---|");
     for s in sources {
@@ -886,7 +886,7 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
         })
         .collect();
     let mut out = String::from(
-        "## Zoom\n\nCapOpen transform: scale 1 fits the recording, x and y move it by fractions of the frame. Times in the examples are in the finished cut.",
+        "## Zoom\n\nNuzky transform: scale 1 fits the recording, x and y move it by fractions of the frame. Times in the examples are in the finished cut.",
     );
     let mut settings = Vec::new();
     if base.len() >= MIN_EXAMPLES {

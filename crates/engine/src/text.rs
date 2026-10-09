@@ -619,7 +619,7 @@ mod tests {
         let inter = renderer.render("Příliš žluťoučký kůň", &style("Inter"), 1.0, 2000.0).image;
         let anton = renderer.render("Příliš žluťoučký kůň", &style("Anton"), 1.0, 2000.0).image;
         assert_ne!(inter.data, anton.data);
-        let missing = renderer.render("Ahoj", &style("CapOpen nonexistent font"), 1.0, 1000.0).image;
+        let missing = renderer.render("Ahoj", &style("Nuzky nonexistent font"), 1.0, 1000.0).image;
         let mut default = style("Inter");
         default.font_family = None;
         let fallback = renderer.render("Ahoj", &default, 1.0, 1000.0).image;

@@ -19,7 +19,7 @@ export function SwitchChoice({ pending, dialog = false }: { pending: PendingSwit
         Stop the AI edit and {pending.what}?
       </h2>
       <p id="switch-description" className="text-[13px] leading-[18px] text-muted">
-        AI is editing “{name}”. Choose what happens to its changes; after you switch they can't be undone. Your agent will need to reconnect to CapOpen.
+        AI is editing “{name}”. Choose what happens to its changes; after you switch they can't be undone. Your agent will need to reconnect to Nuzky.
       </p>
       <div className="mt-2 flex justify-end gap-2">
         <Button variant="ghost" pill onClick={() => void resolveSwitch("cancel")}>

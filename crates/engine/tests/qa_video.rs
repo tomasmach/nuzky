@@ -1,5 +1,5 @@
 mod qa_support;
-use capopen_engine::{
+use nuzky_engine::{
     Renderer, Wait,
     media::{VideoDecoder, decode_size, probe},
     model::*,
@@ -536,7 +536,7 @@ fn hlg_and_pq_sources_are_tone_mapped_like_libplacebo() {
         }
         std::fs::write(&source, ppm).unwrap();
         let path = d.join(format!("{transfer}.mp4"));
-        // PQ declares a 1000 nit peak like phone HDR10, so libplacebo assumes the peak CapOpen does.
+        // PQ declares a 1000 nit peak like phone HDR10, so libplacebo assumes the peak Nuzky does.
         let metadata = if pq {
             ":master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):max-cll=1000,400"
         } else {
@@ -561,12 +561,12 @@ fn hlg_and_pq_sources_are_tone_mapped_like_libplacebo() {
         };
         let ours: Vec<_> = (0..PATCHES.len()).map(|i| patch(&frame, i)).collect();
         let theirs: Vec<_> = (0..PATCHES.len()).map(|i| patch(&reference, i)).collect();
-        eprintln!("QA HDR {transfer}: CapOpen {ours:.0?}\n  libplacebo {theirs:.0?}");
+        eprintln!("QA HDR {transfer}: Nuzky {ours:.0?}\n  libplacebo {theirs:.0?}");
         // The old curve showed the 75 % grey at 246 and the wall at (255, 235, 198) against libplacebo's
         // 179 and (221, 203, 172). Saturated red is left out: libplacebo also remaps the gamut.
         for i in 0..7 {
             let off = (0..3).map(|c| (ours[i][c] - theirs[i][c]).abs()).fold(0.0, f64::max);
-            assert!(off <= 12.0, "{transfer} patch {i}: CapOpen {:?}, libplacebo {:?}", ours[i], theirs[i]);
+            assert!(off <= 12.0, "{transfer} patch {i}: Nuzky {:?}, libplacebo {:?}", ours[i], theirs[i]);
         }
         // Highlights above reference white keep their steps instead of all clipping to white.
         assert!(ours[4][1] - ours[3][1] > 20.0, "{transfer}: highlights {:?} {:?}", ours[3], ours[4]);

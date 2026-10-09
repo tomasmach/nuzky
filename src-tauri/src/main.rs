@@ -8,12 +8,12 @@ fn main() {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "mcp") {
-        let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen");
-        if let Err(error) = capopen_mcp::bridge::run_args(&args[1..], cache) {
+        let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("nuzky");
+        if let Err(error) = nuzky_mcp::bridge::run_args(&args[1..], cache) {
             eprintln!("{error:#}");
             std::process::exit(1);
         }
         return;
     }
-    capopen_app::run();
+    nuzky_app::run();
 }

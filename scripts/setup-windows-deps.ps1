@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $tag = 'autobuild-2026-09-30-13-08'
 $name = 'ffmpeg-n8.1.3-9-g29e619e767-win64-gpl-shared-8.1'
 $sha256 = 'dfe81c3aa0a546ee81980b1b824486dd0fe0a1d452f00cb55135379a74be7bcf'
-$deps = Join-Path $env:LOCALAPPDATA 'CapOpen/build-deps'
+$deps = Join-Path $env:LOCALAPPDATA 'Nuzky/build-deps'
 New-Item -ItemType Directory -Force $deps | Out-Null
 $archive = Join-Path $deps "$name.zip"
 $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$tag/$name.zip"

@@ -1,4 +1,4 @@
-//! Connect your agent: writes the `capopen` MCP server into Claude Code's and Codex's own
+//! Connect your agent: writes the `nuzky` MCP server into Claude Code's and Codex's own
 //! configuration, after a backup, and changes nothing else in those files. The entry runs this
 //! app's `mcp --current`, so the agent edits whichever project is open here, live.
 
@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 
-pub const NAME: &str = "capopen";
+pub const NAME: &str = "nuzky";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,7 +38,7 @@ impl Agent {
     }
 }
 
-/// What the agent runs to reach CapOpen.
+/// What the agent runs to reach Nuzky.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
     pub program: String,
@@ -48,7 +48,7 @@ pub struct Command {
 impl Command {
     /// This app's own executable; an AppImage runs from a temporary mount, so the AppImage itself.
     pub fn this_app() -> Result<Self> {
-        let exe = std::env::current_exe().context("Finding the CapOpen executable")?;
+        let exe = std::env::current_exe().context("Finding the Nuzky executable")?;
         let var = |name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
         let program = app_image(&exe, var("APPDIR"), var("APPIMAGE")).unwrap_or(exe);
         Ok(Self {
@@ -69,9 +69,9 @@ fn app_image(exe: &Path, dir: Option<PathBuf>, image: Option<PathBuf>) -> Option
 pub enum State {
     /// The entry runs this app.
     Connected,
-    /// A `capopen` entry runs something else, such as another copy of CapOpen.
+    /// A `nuzky` entry runs something else, such as another copy of Nuzky.
     Other,
-    /// No `capopen` entry.
+    /// No `nuzky` entry.
     Missing,
     /// The file is not valid; connecting would not touch it.
     Unreadable,
@@ -125,7 +125,7 @@ pub fn connect(agent: Agent, path: &Path, command: &Command, stamp: u64) -> Resu
     match connection.state {
         State::Connected => return Ok(connection),
         State::Unreadable => bail!(
-            "{} is not valid, so CapOpen left it alone: {}",
+            "{} is not valid, so Nuzky left it alone: {}",
             path.display(),
             connection.problem.as_deref().unwrap_or_default()
         ),
@@ -138,7 +138,7 @@ pub fn connect(agent: Agent, path: &Path, command: &Command, stamp: u64) -> Resu
     let backup = match &before {
         Some(_) => {
             let backup = path.with_file_name(format!(
-                "{}.capopen-backup-{stamp}",
+                "{}.nuzky-backup-{stamp}",
                 path.file_name().context("Config has no file name")?.to_string_lossy()
             ));
             std::fs::copy(&path, &backup).with_context(|| format!("Backing up {}", path.display()))?;
@@ -148,7 +148,7 @@ pub fn connect(agent: Agent, path: &Path, command: &Command, stamp: u64) -> Resu
     };
     replace(&path, text.as_bytes())?;
     connection = status(agent, &path, command);
-    ensure!(connection.state == State::Connected, "{} did not take the CapOpen entry", path.display());
+    ensure!(connection.state == State::Connected, "{} did not take the Nuzky entry", path.display());
     connection.backup = backup.map(|b| b.display().to_string());
     Ok(connection)
 }
@@ -176,7 +176,7 @@ fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     let directory = path.parent().context("Config has no folder")?;
     std::fs::create_dir_all(directory).with_context(|| format!("Creating {}", directory.display()))?;
     let part = directory.join(format!(
-        ".{}.capopen-{}",
+        ".{}.nuzky-{}",
         path.file_name().unwrap_or_default().to_string_lossy(),
         std::process::id()
     ));
@@ -326,13 +326,13 @@ mod tests {
 
     fn command() -> Command {
         Command {
-            program: "/opt/CapOpen/capopen-app".into(),
+            program: "/opt/Nuzky/nuzky-app".into(),
             args: vec!["mcp".into(), "--current".into(), "--allow-write".into()],
         }
     }
 
     fn dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("capopen-connect-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-connect-{}", nuzky_engine::edit::new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -340,14 +340,14 @@ mod tests {
     const CLAUDE: &str = "{\n  \"numStartups\": 42,\n  \"projects\": {\n    \"/home/me\": {\n      \"allowedTools\": []\n    }\n  },\n  \"mcpServers\": {\n    \"other\": {\n      \"type\": \"stdio\",\n      \"command\": \"other-server\"\n    }\n  },\n  \"theme\": \"dark\"\n}\n";
 
     #[test]
-    fn claude_code_gets_only_the_capopen_entry_and_keeps_every_other_byte() {
+    fn claude_code_gets_only_the_nuzky_entry_and_keeps_every_other_byte() {
         let dir = dir();
         let path = dir.join(".claude.json");
         std::fs::write(&path, CLAUDE).unwrap();
         assert_eq!(status(Agent::ClaudeCode, &path, &command()).state, State::Missing);
         let done = connect(Agent::ClaudeCode, &path, &command(), 7).unwrap();
         assert_eq!(done.state, State::Connected);
-        assert_eq!(std::fs::read_to_string(dir.join(".claude.json.capopen-backup-7")).unwrap(), CLAUDE);
+        assert_eq!(std::fs::read_to_string(dir.join(".claude.json.nuzky-backup-7")).unwrap(), CLAUDE);
         let text = std::fs::read_to_string(&path).unwrap();
         // Everything before the new entry is the same text, and so is everything after it.
         let (head, tail) = CLAUDE.split_once("\n  },\n  \"theme\"").unwrap();
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(config["numStartups"], 42);
         // Connecting again changes nothing and makes no backup.
         let again = connect(Agent::ClaudeCode, &path, &command(), 8).unwrap();
-        assert!(again.backup.is_none() && !dir.join(".claude.json.capopen-backup-8").exists());
+        assert!(again.backup.is_none() && !dir.join(".claude.json.nuzky-backup-8").exists());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -366,7 +366,7 @@ mod tests {
     const CODEX: &str = "# my settings\nmodel = \"gpt-6.1-sol\" # the best\n\n[mcp_servers.other]\ncommand = \"other\"\nargs = [\"--x\"]\n\n[profiles.fast]\nmodel_reasoning_effort = \"low\"\n";
 
     #[test]
-    fn codex_gets_only_the_capopen_table_and_keeps_comments() {
+    fn codex_gets_only_the_nuzky_table_and_keeps_comments() {
         let dir = dir();
         let path = dir.join("config.toml");
         std::fs::write(&path, CODEX).unwrap();
@@ -374,19 +374,18 @@ mod tests {
         assert_eq!((done.state, done.backup.is_some()), (State::Connected, true));
         let text = std::fs::read_to_string(&path).unwrap();
         // Without the new table the file is exactly what it was, comments included.
-        let ours = "[mcp_servers.capopen]\ncommand = \"/opt/CapOpen/capopen-app\"\nargs = [\"mcp\", \"--current\", \"--allow-write\"]\n\n";
+        let ours = "[mcp_servers.nuzky]\ncommand = \"/opt/Nuzky/nuzky-app\"\nargs = [\"mcp\", \"--current\", \"--allow-write\"]\n\n";
         assert!(text.contains(ours), "{text}");
         assert_eq!(text.replace(ours, ""), CODEX);
-        // Another CapOpen entry is replaced, after a new backup.
-        let moved = Command { program: "/new/capopen-app".into(), ..command() };
+        // Another Nuzky entry is replaced, after a new backup.
+        let moved = Command { program: "/new/nuzky-app".into(), ..command() };
         assert_eq!(status(Agent::Codex, &path, &moved).state, State::Other);
         connect(Agent::Codex, &path, &moved, 4).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(text.matches("[mcp_servers.capopen]").count(), 1);
-        assert!(text.contains("/new/capopen-app") && !text.contains("/opt/CapOpen"));
+        assert_eq!(text.matches("[mcp_servers.nuzky]").count(), 1);
+        assert!(text.contains("/new/nuzky-app") && !text.contains("/opt/Nuzky"));
         // An entry turned off in Codex runs nothing, so it is turned back on by connecting again.
-        std::fs::write(&path, text.replace("[mcp_servers.capopen]\n", "[mcp_servers.capopen]\nenabled = false\n"))
-            .unwrap();
+        std::fs::write(&path, text.replace("[mcp_servers.nuzky]\n", "[mcp_servers.nuzky]\nenabled = false\n")).unwrap();
         assert_eq!(status(Agent::Codex, &path, &moved).state, State::Other);
         assert_eq!(connect(Agent::Codex, &path, &moved, 5).unwrap().state, State::Connected);
         assert!(!std::fs::read_to_string(&path).unwrap().contains("enabled"));
@@ -401,28 +400,28 @@ mod tests {
         let codex = dir.join("codex/config.toml");
         connect(Agent::Codex, &codex, &command(), 1).unwrap();
         assert_eq!(std::fs::metadata(&codex).unwrap().permissions().mode() & 0o777, 0o600);
-        assert!(std::fs::read_to_string(&codex).unwrap().starts_with("[mcp_servers.capopen]"));
+        assert!(std::fs::read_to_string(&codex).unwrap().starts_with("[mcp_servers.nuzky]"));
         let claude = dir.join(".claude.json");
         connect(Agent::ClaudeCode, &claude, &command(), 1).unwrap();
         let config: Value = serde_json::from_str(&std::fs::read_to_string(&claude).unwrap()).unwrap();
-        assert_eq!(config["mcpServers"][NAME]["command"], "/opt/CapOpen/capopen-app");
+        assert_eq!(config["mcpServers"][NAME]["command"], "/opt/Nuzky/nuzky-app");
         std::fs::write(&claude, "{ not json").unwrap();
         assert_eq!(status(Agent::ClaudeCode, &claude, &command()).state, State::Unreadable);
         assert!(connect(Agent::ClaudeCode, &claude, &command(), 2).is_err());
         assert_eq!(std::fs::read_to_string(&claude).unwrap(), "{ not json");
-        assert!(!dir.join(".claude.json.capopen-backup-2").exists());
+        assert!(!dir.join(".claude.json.nuzky-backup-2").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn only_an_executable_inside_its_appimage_names_the_appimage() {
-        let image = Some(PathBuf::from("/home/me/CapOpen.AppImage"));
-        let mount = Some(PathBuf::from("/tmp/.mount_CapOpe1"));
-        let inside = Path::new("/tmp/.mount_CapOpe1/usr/bin/capopen-app");
+        let image = Some(PathBuf::from("/home/me/Nuzky.AppImage"));
+        let mount = Some(PathBuf::from("/tmp/.mount_Nuzky.Ab12Cd"));
+        let inside = Path::new("/tmp/.mount_Nuzky.Ab12Cd/usr/bin/nuzky-app");
         assert_eq!(app_image(inside, mount.clone(), image.clone()), image);
         // A dev build started from another AppImage's terminal inherits its variables.
         let other = Some(PathBuf::from("/tmp/.mount_T3-Cod"));
-        assert_eq!(app_image(Path::new("/src/target/debug/capopen-app"), other, image.clone()), None);
+        assert_eq!(app_image(Path::new("/src/target/debug/nuzky-app"), other, image.clone()), None);
         assert_eq!(app_image(inside, None, image), None);
     }
 

@@ -63,7 +63,7 @@ jobs:
         run: bash scripts/verify-linux-bundle.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: capopen-${{ matrix.os }}
+          name: nuzky-${{ matrix.os }}
           path: |
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/deb/*.deb

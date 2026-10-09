@@ -82,7 +82,7 @@ interface AgentState {
   frame: boolean;
 }
 
-const AGENT_KEY = "capopen.aiAgent";
+const AGENT_KEY = "nuzky.aiAgent";
 
 /** Agents the panel can run so far; Codex there comes next, in a terminal it works today. */
 export const READY: AgentId[] = ["claude"];
@@ -111,8 +111,8 @@ const agentApi = {
   stop: (turn: string) => invoke<void>("agent_stop", { turn }),
 };
 
-/** Tool names as the agent reports them: `mcp__capopen__get_state` (Claude) or `capopen.get_state` (Codex). */
-const toolName = (raw: string) => raw.replace(/^mcp__capopen__/, "").replace(/^capopen[./]/, "");
+/** Tool names as the agent reports them: `mcp__nuzky__get_state` (Claude) or `nuzky.get_state` (Codex). */
+const toolName = (raw: string) => raw.replace(/^mcp__nuzky__/, "").replace(/^nuzky[./]/, "");
 
 /** Bookkeeping calls the user does not need to see as steps. */
 const HIDDEN = new Set(["begin_run", "end_run", "job"]);

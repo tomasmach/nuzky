@@ -13,7 +13,7 @@ const BUNDLED = new Set(FACES.map((face) => face.family));
 
 // Registered under a prefix so the bundled faces never replace the UI font. The browser
 // only downloads a face once something is drawn with it.
-const cssName = (family: string) => `CapOpen ${family}`;
+const cssName = (family: string) => `Nuzky ${family}`;
 if (typeof document !== "undefined" && "fonts" in document) {
   for (const { family, url, weight } of FACES) document.fonts.add(new FontFace(cssName(family), `url("${url}")`, { weight }));
 }

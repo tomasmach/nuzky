@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, Prefix};
 
 use anyhow::{Result, ensure};
-use capopen_engine::{
+use nuzky_engine::{
     Project,
     model::{
         AssetKind, Clip, ClipContent, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO, MAX_TEXT_WIDTH_RATIO,
@@ -170,7 +170,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             );
             ensure!(*fade_in_us >= 0 && *fade_out_us >= 0, "INVALID_PROJECT: negative fade");
             ensure!(
-                !clean_voice || capopen_engine::audio::has_audio(asset),
+                !clean_voice || nuzky_engine::audio::has_audio(asset),
                 "INVALID_PROJECT: clip {} cleans the voice of media without sound",
                 clip.id
             );
@@ -245,14 +245,14 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::{
+    use nuzky_engine::{
         edit::EditCmd,
         model::{Adjust, Asset},
     };
 
     #[test]
     fn text_styles_require_finite_canvas_relative_bounds() {
-        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+        let style: nuzky_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
             "fontSize":95.0,"color":"#ffffff","strokeWidth":7.5
         }))
         .unwrap();
@@ -291,13 +291,13 @@ mod tests {
 
     #[test]
     fn caption_words_need_ordered_times_but_may_differ_from_the_text() {
-        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+        let style: nuzky_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
             "fontSize":95.0,"color":"#ffffff","highlight":"#ffe14d"
         }))
         .unwrap();
         let mut project = Project::new("words");
         project.apply(EditCmd::AddText { start_us: 0, text: "Ahoj".into(), style }).unwrap();
-        let word = |start_us, end_us| capopen_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us };
+        let word = |start_us, end_us| nuzky_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us };
         for (words, valid) in [
             (vec![word(0, 0), word(-500, 100)], true),
             (vec![word(i64::MIN, i64::MAX)], true),
@@ -343,7 +343,7 @@ mod tests {
             assert!(error.starts_with("INVALID_ASSET_PATH:"), "{path:?}: {error}");
         }
         let before = Project::new("edit");
-        let mut editor = capopen_engine::edit::Editor::new(before.clone());
+        let mut editor = nuzky_engine::edit::Editor::new(before.clone());
         let assets = project.assets.clone();
         assert!(editor.apply_batch_checked(vec![EditCmd::AddAssets { assets }], None, validate).is_err());
         assert_eq!(editor.project, before);
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn every_color_field_requires_ascii_hex() {
-        let style: capopen_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
+        let style: nuzky_engine::model::TextStyle = serde_json::from_value(serde_json::json!({
             "fontSize":95.0,"color":"#ffffff","strokeWidth":7.5,"background":"#00000080"
         }))
         .unwrap();
@@ -388,7 +388,7 @@ mod tests {
                 }
             }
         }
-        let mut editor = capopen_engine::edit::Editor::new(project.clone());
+        let mut editor = nuzky_engine::edit::Editor::new(project.clone());
         let set =
             EditCmd::SetCanvas { width: 1080, height: 1920, background: Some("#€".into()), background_blur: None };
         let error = editor.apply_batch_checked(vec![set], None, validate).unwrap_err();
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn word_corrections_are_one_line_of_bounded_text_once_per_word() {
-        use capopen_engine::model::WordCorrection;
+        use nuzky_engine::model::WordCorrection;
         let fix = |original: &str, text: &str| WordCorrection {
             asset_id: "clip".into(),
             source_start_us: 500_000,
@@ -439,7 +439,7 @@ mod tests {
             rotation: 0,
             mirror: false,
         });
-        let mut editor = capopen_engine::edit::Editor::new(project.clone());
+        let mut editor = nuzky_engine::edit::Editor::new(project.clone());
         let correct = |text: &str| vec![EditCmd::CorrectWords { corrections: vec![fix("word", text)] }];
         let error = editor.apply_batch_checked(correct("two\nlines"), None, validate).unwrap_err().to_string();
         assert!(error.contains("one line"), "{error}");

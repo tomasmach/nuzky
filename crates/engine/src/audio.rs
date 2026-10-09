@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn pcm_cache_child() {
-        let Some(dir) = std::env::var_os("CAPOPEN_PCM_LOCK_TEST") else { return };
+        let Some(dir) = std::env::var_os("NUZKY_PCM_LOCK_TEST") else { return };
         let dir = PathBuf::from(dir);
         let asset: Asset = serde_json::from_slice(&std::fs::read(dir.join("asset.json")).unwrap()).unwrap();
         let id = std::process::id();
@@ -458,7 +458,7 @@ mod tests {
             .map(|_| {
                 std::process::Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", "audio::tests::pcm_cache_child", "--nocapture"])
-                    .env("CAPOPEN_PCM_LOCK_TEST", &dir)
+                    .env("NUZKY_PCM_LOCK_TEST", &dir)
                     .spawn()
                     .unwrap()
             })
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn transition_without_source_handles_has_no_sample_step() {
         use crate::model::{Clip, Transform, Transition, TransitionKind};
-        let cache = std::env::temp_dir().join(format!("capopen-audio-edges-{}", std::process::id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-audio-edges-{}", std::process::id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let mut project = Project::new("source edges");
         for (id, value, speed, start) in [("a", 0.2f32, 2.0, 0), ("b", 0.4, 0.5, 1_000_000)] {
@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn cuts_ramp_without_clicks_and_split_halves_play_on_seamlessly() {
         use crate::edit::{EditCmd, TimeRange};
-        let cache = std::env::temp_dir().join(format!("capopen-audio-cuts-{}", crate::edit::new_id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-audio-cuts-{}", crate::edit::new_id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let asset = Asset {
             id: "m".into(),
@@ -793,7 +793,7 @@ mod tests {
     /// of the file, the edge ramps stay.
     #[test]
     fn a_cut_in_a_pause_crossfades_without_a_dip_and_edges_without_sound_to_spare_still_ramp() {
-        let cache = std::env::temp_dir().join(format!("capopen-audio-crossfade-{}", crate::edit::new_id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-audio-crossfade-{}", crate::edit::new_id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let mut state = 0x9e37_79b9_u32;
         let mut noise = move || {
@@ -826,7 +826,7 @@ mod tests {
     /// so nothing of it is read into the crossfade; the cut keeps the edge ramps instead.
     #[test]
     fn a_crossfade_never_brings_back_a_deleted_word() {
-        let cache = std::env::temp_dir().join(format!("capopen-audio-deleted-{}", crate::edit::new_id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-audio-deleted-{}", crate::edit::new_id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         // Kept speech is a 200 Hz tone; the deleted word, 1.0–1.3 s, a loud steady level.
         let tone = |t: f64| 0.2 * (t * 2.0 * std::f64::consts::PI * 200.0).sin() as f32;

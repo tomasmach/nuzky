@@ -1,5 +1,5 @@
 mod qa_support;
-use capopen_engine::{
+use nuzky_engine::{
     edit::{CaptionSegment, EditCmd, Editor},
     model::*,
 };

@@ -4,7 +4,7 @@ from e2e.harness import AI_EDITING, CLI, FIXTURES, Bridge, flow, wait
 
 
 def agent_project(r):
-    project = r.work / 'data/capopen/projects/agent.capopen'
+    project = r.work / 'data/nuzky/projects/agent.nuzky'
     subprocess.run([str(CLI), 'new', str(project), str(FIXTURES / 'talk.mp4')], env=r.env, check=True, capture_output=True)
 
 

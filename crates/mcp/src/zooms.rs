@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use anyhow::{Result, ensure};
-use capopen_engine::{
+use nuzky_engine::{
     Project,
     edit::{MAIN_TRACK, ZoomRange},
     speech::TimelineWord,
@@ -28,13 +28,13 @@ pub struct WordZoom {
 }
 
 /// Sentences of the timeline to punch in on, from the stored words and the sound of the files.
-pub fn suggest(project: &Project, derived: &Derived, cache: &Path) -> Result<Vec<capopen_analysis::Zoom>> {
+pub fn suggest(project: &Project, derived: &Derived, cache: &Path) -> Result<Vec<nuzky_analysis::Zoom>> {
     ensure!(
         derived.untranscribed.is_empty(),
         "TRANSCRIPT_MISSING: transcribe every heard asset first, untranscribed: {}",
         derived.untranscribed.join(", ")
     );
-    capopen_analysis::emphasis(project, &derived.words, &derived.sources, cache)
+    nuzky_analysis::emphasis(project, &derived.words, &derived.sources, cache)
 }
 
 /// Timeline ranges of word zooms. Each starts midway into the silence before its first word and
@@ -83,7 +83,7 @@ pub fn ranges(project: &Project, words: &[TimelineWord], zooms: &[WordZoom]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::speech::map_words;
+    use nuzky_engine::speech::map_words;
 
     #[test]
     fn edges_sit_midway_into_the_silence_and_at_most_150_ms_out() {
@@ -128,7 +128,7 @@ mod tests {
             pauses(project, derived, 500_000).unwrap().iter().map(|p| p.gap_us).collect::<Vec<_>>()
         };
         let kept = gaps(&project, &before);
-        project.apply(capopen_engine::edit::EditCmd::ZoomRanges { ranges: found }).unwrap();
+        project.apply(nuzky_engine::edit::EditCmd::ZoomRanges { ranges: found }).unwrap();
         assert_eq!(project.tracks[0].clips.len(), 3);
         assert_eq!(gaps(&project, &derived(&project)), kept);
     }

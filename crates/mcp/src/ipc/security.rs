@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn reject_symlink_token_wrong_modes_and_foreign_directory() {
-        let dir = std::env::temp_dir().join(format!("ipc-trust-{}", capopen_engine::edit::new_id()));
+        let dir = std::env::temp_dir().join(format!("ipc-trust-{}", nuzky_engine::edit::new_id()));
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         directory(&dir).unwrap();

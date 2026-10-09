@@ -25,7 +25,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::{
+use nuzky_engine::{
     Project,
     edit::{EditCmd, Editor, new_id},
     speech::speech_layout_key,
@@ -296,7 +296,7 @@ fn spawn_idle_worker(
 ) -> Result<JoinHandle<()>> {
     let (inner, stop) = (Arc::downgrade(inner), stop.clone());
     std::thread::Builder::new()
-        .name("capopen-session-idle".into())
+        .name("nuzky-session-idle".into())
         .spawn(move || {
             let (flag, wake) = &*stop;
             loop {

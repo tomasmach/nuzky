@@ -1,4 +1,4 @@
-//! Headless CapOpen: inspect media, render single frames and export projects.
+//! Headless Nuzky: inspect media, render single frames and export projects.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -6,20 +6,20 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
-use capopen_engine::edit::{EditCmd, new_id};
-use capopen_engine::export::{Delivery, ExportOptions, check_source_path, export};
-use capopen_engine::media::probe;
-use capopen_engine::{Project, Renderer, Wait};
+use nuzky_engine::edit::{EditCmd, new_id};
+use nuzky_engine::export::{Delivery, ExportOptions, check_source_path, export};
+use nuzky_engine::media::probe;
+use nuzky_engine::{Project, Renderer, Wait};
 
 mod style;
 
 const USAGE: &str = "Usage:
-  capopen mcp (--project <path> | --current) [--allow-write] [--cache <dir>]
-  capopen probe <media>
-  capopen new <project.json> <media>...     main-track project from media files
-  capopen frame <project.json> <seconds> <out.png> [width]
-  capopen bench <project.json> [width] [seconds]
-  capopen render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
+  nuzky mcp (--project <path> | --current) [--allow-write] [--cache <dir>]
+  nuzky probe <media>
+  nuzky new <project.json> <media>...     main-track project from media files
+  nuzky frame <project.json> <seconds> <out.png> [width]
+  nuzky bench <project.json> [width] [seconds]
+  nuzky render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
       reels: Instagram Reels and TikTok, 1080x1920 at 30 fps, sound levelled to -14 LUFS (9:16 only)
 ";
 
@@ -51,13 +51,13 @@ fn render_options(rest: &[&str]) -> Result<ExportOptions> {
 }
 
 fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("capopen")
+    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("nuzky")
 }
 
 fn load(path: &str) -> Result<Project> {
     let json = std::fs::read_to_string(path).with_context(|| format!("Cannot read {path}"))?;
     let project = serde_json::from_str(&json).with_context(|| format!("{path} is not a valid project"))?;
-    capopen_session::validate(&project).with_context(|| format!("{path} is not a valid project"))?;
+    nuzky_session::validate(&project).with_context(|| format!("{path} is not a valid project"))?;
     Ok(project)
 }
 
@@ -76,7 +76,7 @@ fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
     enc.set_color(png::ColorType::Rgba);
     enc.write_header()?.write_image_data(rgba)?;
     // Renaming over the destination leaves a hard-linked source file untouched.
-    let tmp = path.with_file_name(format!(".capopen-frame-{}.png", new_id()));
+    let tmp = path.with_file_name(format!(".nuzky-frame-{}.png", new_id()));
     let result = std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -138,7 +138,7 @@ fn check_render_output(project: &Path, out: &Path) -> Result<()> {
 }
 
 fn publish_new_project(out: &Path, project: &Project) -> Result<()> {
-    let tmp = capopen_session::json_temp_path(out);
+    let tmp = nuzky_session::json_temp_path(out);
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
         file.write_all(&serde_json::to_vec_pretty(project)?)?;
@@ -173,13 +173,13 @@ fn main() -> Result<()> {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["mcp", ..] => capopen_mcp::bridge::run_args(&args[1..], cache_dir())?,
+        ["mcp", ..] => nuzky_mcp::bridge::run_args(&args[1..], cache_dir())?,
         ["probe", media] => {
             println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
         }
         ["new", out, media @ ..] if !media.is_empty() => {
             let out = Path::new(out);
-            let _lock = capopen_session::lock_project(out, true)?;
+            let _lock = nuzky_session::lock_project(out, true)?;
             if out.symlink_metadata().is_ok() {
                 bail!("Project already exists: {}", out.display());
             }

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use capopen_engine::{Project, Renderer, Wait, model::ClipContent};
+use nuzky_engine::{Project, Renderer, Wait, model::ClipContent};
 
 const DEFAULT_WIDTH: u32 = 320;
 const MAX_FRAMES: usize = 16;
@@ -107,7 +107,7 @@ fn label(pixels: &mut [u8], stride: u32, x: u32, y: u32, text: &str, available: 
     }
 }
 
-fn shade_unsafe(pixels: &mut [u8], width: u32, height: u32, canvas: &capopen_engine::model::Canvas) {
+fn shade_unsafe(pixels: &mut [u8], width: u32, height: u32, canvas: &nuzky_engine::model::Canvas) {
     let Some(area) = canvas.safe_area() else { return };
     for y in 0..height {
         for x in 0..width {

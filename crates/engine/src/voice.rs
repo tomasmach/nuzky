@@ -94,7 +94,7 @@ pub fn ensure_voice_pcm(
 
 fn clean_file(raw: &Path, out: &Path, progress: impl FnMut(f32) -> Result<()>) -> Result<()> {
     let pcm = Pcm::open(raw).with_context(|| format!("Reading {}", raw.display()))?;
-    let tmp = out.with_file_name(format!(".capopen-voice-{}.part", crate::edit::new_id()));
+    let tmp = out.with_file_name(format!(".nuzky-voice-{}.part", crate::edit::new_id()));
     let file = File::options().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
         let mut writer = BufWriter::with_capacity(1 << 20, file);
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn waiting_for_another_cleaning_stays_cancellable() {
         use crate::model::AssetKind;
-        let cache = std::env::temp_dir().join(format!("capopen-voice-wait-{}", crate::edit::new_id()));
+        let cache = std::env::temp_dir().join(format!("nuzky-voice-wait-{}", crate::edit::new_id()));
         std::fs::create_dir_all(cache.join("pcm")).unwrap();
         let asset = Asset {
             id: "take".into(),

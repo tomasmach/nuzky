@@ -13,7 +13,7 @@ def run(*args):
 
 
 app = Path(sys.argv[1]).resolve()
-binary = app / 'Contents/MacOS/capopen-app'
+binary = app / 'Contents/MacOS/nuzky-app'
 frameworks = app / 'Contents/Frameworks'
 frameworks.mkdir(parents=True, exist_ok=True)
 

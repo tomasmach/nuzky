@@ -7,14 +7,14 @@ use std::sync::{
 
 use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
-use capopen_analysis::{SceneParams, SilenceParams};
-use capopen_engine::{
+use nuzky_analysis::{SceneParams, SilenceParams};
+use nuzky_engine::{
     Project,
     edit::{EditCmd, new_id},
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
 };
-use capopen_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel};
+use nuzky_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -25,7 +25,7 @@ const PREVIEW_CHARS: usize = 400;
 
 struct PreparedImport {
     paths: Vec<String>,
-    assets: Vec<capopen_engine::model::Asset>,
+    assets: Vec<nuzky_engine::model::Asset>,
     expect: Expect,
 }
 
@@ -99,7 +99,7 @@ impl Backend {
         if let Some(run) = self.host.session.state()?.open_run
             && runs.contains(&run.run_id)
         {
-            self.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep)?;
+            self.host.session.end_run(&run.run_id, nuzky_session::EndAction::Keep)?;
         }
         Ok(())
     }
@@ -169,8 +169,8 @@ impl Backend {
             "resolve_recovery" => {
                 let a: Recovery = parse(arguments)?;
                 let action = match a.action {
-                    RecoveryAction::Keep => capopen_session::RecoveryAction::Keep,
-                    RecoveryAction::Restore => capopen_session::RecoveryAction::Restore,
+                    RecoveryAction::Keep => nuzky_session::RecoveryAction::Keep,
+                    RecoveryAction::Restore => nuzky_session::RecoveryAction::Restore,
                 };
                 Ok(serde_json::to_value(self.host.session.resolve_recovery(action)?)?)
             }
@@ -187,8 +187,8 @@ impl Backend {
             "end_run" => {
                 let a: End = parse(arguments)?;
                 let action = match a.action {
-                    EndAction::Keep => capopen_session::EndAction::Keep,
-                    EndAction::Discard => capopen_session::EndAction::Discard,
+                    EndAction::Keep => nuzky_session::EndAction::Keep,
+                    EndAction::Discard => nuzky_session::EndAction::Discard,
                 };
                 Ok(serde_json::to_value(self.host.session.end_run(&a.run_id, action)?)?)
             }
@@ -312,7 +312,7 @@ impl Backend {
                 "TRANSCRIPT_MISSING: transcribe every heard asset first, untranscribed: {}",
                 derived.untranscribed.join(", ")
             );
-            let mut result = serde_json::to_value(capopen_analysis::retakes(&derived.words))?;
+            let mut result = serde_json::to_value(nuzky_analysis::retakes(&derived.words))?;
             result["time_basis"] = json!("timeline");
             result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
             return Ok(result);
@@ -340,7 +340,7 @@ impl Backend {
         let transcript = if matches!(args.kind, AnalysisKind::Fillers) {
             let record =
                 self.host.transcripts.get(&asset)?.context("TRANSCRIPT_MISSING: transcribe this asset first")?;
-            Some(capopen_analysis::Transcript { language: record.language, words: record.words, segments: vec![] })
+            Some(nuzky_analysis::Transcript { language: record.language, words: record.words, segments: vec![] })
         } else {
             None
         };
@@ -350,15 +350,15 @@ impl Backend {
             progress.set("analyzing", None);
             let p = args.params;
             let result = match args.kind {
-                AnalysisKind::Silences => json!({"ranges": capopen_analysis::silences_cancellable(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) }, || cancel.load(Ordering::Relaxed))?}),
+                AnalysisKind::Silences => json!({"ranges": nuzky_analysis::silences_cancellable(&asset, &cache, SilenceParams { threshold_db: p.threshold_db, min_silence_us: p.min_silence_us.unwrap_or(400_000), pad_us: p.pad_us.unwrap_or(120_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Loudness => {
                     let cancelled = || cancel.load(Ordering::Relaxed);
-                    let program = capopen_analysis::program_loudness_cancellable(&asset, &cache, cancelled)?;
-                    json!({"window_us": window, "dbfs": capopen_analysis::loudness_cancellable(&asset, &cache, window, cancelled)?,
+                    let program = nuzky_analysis::program_loudness_cancellable(&asset, &cache, cancelled)?;
+                    json!({"window_us": window, "dbfs": nuzky_analysis::loudness_cancellable(&asset, &cache, window, cancelled)?,
                         "integrated_lufs": program.integrated_lufs, "true_peak_dbtp": program.true_peak_dbtp})
                 }
-                AnalysisKind::Scenes => json!({"cuts": capopen_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
-                AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": capopen_analysis::filler_words(&t, &t.language)}) },
+                AnalysisKind::Scenes => json!({"cuts": nuzky_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
+                AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": nuzky_analysis::filler_words(&t, &t.language)}) },
                 AnalysisKind::Retakes | AnalysisKind::Emphasis => anyhow::bail!("This kind is answered without a job"),
             };
             check_cancel(&cancel)?;
@@ -374,7 +374,7 @@ impl Backend {
             .assets
             .iter()
             .filter(|a| derived.sources.contains_key(&a.id))
-            .filter(|a| capopen_engine::audio::has_audio(a) && !capopen_engine::audio::pcm_path(&cache, a).exists())
+            .filter(|a| nuzky_engine::audio::has_audio(a) && !nuzky_engine::audio::pcm_path(&cache, a).exists())
             .cloned()
             .collect();
         if missing.is_empty() {
@@ -389,7 +389,7 @@ impl Backend {
             move |cancel, progress| {
                 for (i, asset) in missing.iter().enumerate() {
                     progress.set("preparing_audio", Some(i as f32 / missing.len() as f32));
-                    capopen_engine::audio::ensure_pcm(&cache, asset, |_| check_cancel(&cancel))?;
+                    nuzky_engine::audio::ensure_pcm(&cache, asset, |_| check_cancel(&cancel))?;
                 }
                 Ok(json!({"prepared": missing.iter().map(|a| &a.id).collect::<Vec<_>>()}))
             },
@@ -406,7 +406,7 @@ impl Backend {
         if let Some(ids) = args.asset_ids {
             for id in ids {
                 let asset = project.asset(&id).with_context(|| format!("UNKNOWN_ASSET: {id}"))?;
-                if !assets.iter().any(|a: &capopen_engine::model::Asset| a.id == id) {
+                if !assets.iter().any(|a: &nuzky_engine::model::Asset| a.id == id) {
                     assets.push(asset.clone());
                 }
             }
@@ -551,7 +551,7 @@ impl Backend {
         for edit in plan.edits.clone() {
             preview.apply(edit).context("EDIT_REJECTED: preview failed")?;
         }
-        capopen_session::validate(&preview)?;
+        nuzky_session::validate(&preview)?;
         let after = transcript::derive(&preview, &self.host.transcripts)?;
         let words: Vec<_> =
             plan.words.iter().map(|(i, from, to)| json!({"i": i, "before": from, "after": to})).collect();
@@ -604,7 +604,7 @@ impl Backend {
         let edit = EditCmd::ZoomRanges { ranges: ranges.clone() };
         let mut preview = state.project.clone();
         let outcome = preview.apply(edit.clone()).map_err(|e| anyhow!("EDIT_REJECTED: {e:#}"))?;
-        let words = capopen_engine::speech::map_words(&preview, &derived.sources);
+        let words = nuzky_engine::speech::map_words(&preview, &derived.sources);
         let prepared = requests.entry(key).or_insert(PreparedTranscriptEdit {
             arguments,
             edits: vec![edit],
@@ -705,7 +705,7 @@ fn check_new_assets(edits: &[EditCmd]) -> Result<()> {
     for edit in edits {
         if let EditCmd::AddAssets { assets } = edit {
             for asset in assets {
-                capopen_session::local_media_path(&asset.path)?;
+                nuzky_session::local_media_path(&asset.path)?;
                 ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
             }
         }
@@ -755,7 +755,7 @@ fn caption_stats(project: &Project) -> Value {
     let captions =
         project.tracks.iter().filter(|track| track.is_captions()).flat_map(|track| &track.clips).filter_map(|clip| {
             match &clip.content {
-                capopen_engine::model::ClipContent::Text { text, .. } => Some(text),
+                nuzky_engine::model::ClipContent::Text { text, .. } => Some(text),
                 _ => None,
             }
         });
@@ -777,7 +777,7 @@ mod tests {
         let mut project = Project::new("missing image");
         project.apply(EditCmd::AddAssets { assets: vec![probe(&image, "image".into()).unwrap()] }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "image".into(), start_us: None, track_id: None }).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
         std::fs::remove_file(image).unwrap();
         let backend = Backend::open(&path, false, dir.join("cache")).unwrap();
@@ -793,12 +793,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let image = dir.join("still.ppm");
         std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("assets")).unwrap()).unwrap();
         let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
         let run = backend.call("begin_run", json!({"label":"assets"})).unwrap().structured_content.unwrap();
         let mut asset = probe(&image, "still".into()).unwrap();
-        let add = |asset: &capopen_engine::model::Asset, request: &str| {
+        let add = |asset: &nuzky_engine::model::Asset, request: &str| {
             backend.call(
                 "apply_edits",
                 json!({"run_id":run["run_id"],"request_id":request,"edits":[{"type":"addAssets","assets":[asset]}]}),
@@ -808,7 +808,7 @@ mod tests {
             ("http://127.0.0.1:9/x.mp4", "INVALID_ASSET_PATH"),
             ("concat:/a.mp4|/b.mp4", "INVALID_ASSET_PATH"),
             ("still.ppm", "INVALID_ASSET_PATH"),
-            ("/nonexistent-capopen-asset.mp4", "MEDIA_MISSING"),
+            ("/nonexistent-nuzky-asset.mp4", "MEDIA_MISSING"),
         ] {
             let mut bad = asset.clone();
             bad.path = path.into();
@@ -827,7 +827,7 @@ mod tests {
     fn other_clients_reads_do_not_keep_an_idle_run_open() {
         let dir = std::env::temp_dir().join(format!("idle-clients-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("idle")).unwrap()).unwrap();
         let timeout = std::time::Duration::from_millis(300);
         let session = ProjectSession::open_with_idle_timeout(&path, Mode::Write, timeout, None).unwrap();
@@ -859,7 +859,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let image = dir.join("still.ppm");
         std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&Project::new("import")).unwrap()).unwrap();
         let backend = Backend::open(&path, true, dir.join("cache")).unwrap();
         let run = backend.call("begin_run", json!({"label":"import"})).unwrap().structured_content.unwrap();
@@ -889,7 +889,7 @@ mod tests {
     fn export_video_takes_the_reels_preset_or_explicit_settings() {
         let dir = std::env::temp_dir().join(format!("export-args-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         let mut wide = Project::new("wide");
         (wide.canvas.width, wide.canvas.height) = (1920, 1080);
         std::fs::write(&path, serde_json::to_vec(&wide).unwrap()).unwrap();
@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn caption_stats_count_unicode_characters_and_exclude_titles() {
         let mut project = Project::new("stats");
-        let style = capopen_engine::model::TextStyle {
+        let style = nuzky_engine::model::TextStyle {
             font_family: None,
             font_size: 64.0,
             color: "#fff".into(),
@@ -948,7 +948,7 @@ mod tests {
             .unwrap();
         project
             .apply(EditCmd::AddCaptions {
-                segments: vec![capopen_engine::edit::CaptionSegment {
+                segments: vec![nuzky_engine::edit::CaptionSegment {
                     start_us: 0,
                     end_us: 1_000_000,
                     text: "Příliš žluťoučký".into(),
@@ -964,7 +964,7 @@ mod tests {
 #[cfg(test)]
 mod transcript_tests {
     use super::*;
-    use capopen_session::transcripts::{Record, VERSION};
+    use nuzky_session::transcripts::{Record, VERSION};
 
     fn fixture() -> (PathBuf, Backend, Project) {
         let dir = std::env::temp_dir().join(format!("transcript-tools-{}", new_id()));
@@ -975,9 +975,9 @@ mod transcript_tests {
         project.assets[0].path = asset_path.to_string_lossy().into();
         let clip = project.tracks[0].clips[0].id.clone();
         project.apply(EditCmd::SplitClip { clip_id: clip, at_us: 5_000_000 }).unwrap();
-        let path = dir.join("project.capopen");
+        let path = dir.join("project.nuzky");
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-        let store = capopen_session::transcripts::TranscriptStore::at(dir.join("transcripts")).unwrap();
+        let store = nuzky_session::transcripts::TranscriptStore::at(dir.join("transcripts")).unwrap();
         store
             .put(
                 &project.assets[0],
@@ -1036,7 +1036,7 @@ mod transcript_tests {
         );
         let transcript = backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap();
         assert_eq!(transcript["words"].as_array().unwrap().len(), 5);
-        backend.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep).unwrap();
+        backend.host.session.end_run(&run.run_id, nuzky_session::EndAction::Keep).unwrap();
         backend.host.session.undo_run(&run.run_id).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, project);
         let mut record = backend.host.transcripts.get(&project.assets[0]).unwrap().unwrap();
@@ -1078,7 +1078,7 @@ mod transcript_tests {
         assert!(
             backend.dispatch("edit_transcript", conflict, &live).unwrap_err().to_string().contains("REQUEST_CONFLICT")
         );
-        backend.host.session.end_run(&run.run_id, capopen_session::EndAction::Keep).unwrap();
+        backend.host.session.end_run(&run.run_id, nuzky_session::EndAction::Keep).unwrap();
         backend.host.session.undo_run(&run.run_id).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, before);
         drop(backend);
@@ -1136,7 +1136,7 @@ mod transcript_tests {
                 .filter(|t| t.is_captions())
                 .flat_map(|t| &t.clips)
                 .map(|c| match &c.content {
-                    capopen_engine::model::ClipContent::Text { text, .. } => text.clone(),
+                    nuzky_engine::model::ClipContent::Text { text, .. } => text.clone(),
                     _ => unreachable!(),
                 })
                 .collect::<Vec<_>>()

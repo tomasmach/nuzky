@@ -28,8 +28,8 @@ impl AgentId {
     /// Points the panel at another executable, such as the fake agent of the E2E tests.
     fn override_var(self) -> &'static str {
         match self {
-            AgentId::Claude => "CAPOPEN_AGENT_CLAUDE",
-            AgentId::Codex => "CAPOPEN_AGENT_CODEX",
+            AgentId::Claude => "NUZKY_AGENT_CLAUDE",
+            AgentId::Codex => "NUZKY_AGENT_CODEX",
         }
     }
 }

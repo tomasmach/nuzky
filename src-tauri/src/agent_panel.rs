@@ -1,8 +1,8 @@
-//! The AI panel: runs the user's own agent for one message at a time, with CapOpen's MCP bridge
+//! The AI panel: runs the user's own agent for one message at a time, with Nuzky's MCP bridge
 //! as its only tools, and streams what it does to the UI as `agent` events.
 
 use crate::{AppState, CmdResult, connect, err};
-use capopen_agent::{AgentEvent, AgentId, AgentInfo, McpServer, Turn, TurnRequest};
+use nuzky_agent::{AgentEvent, AgentId, AgentInfo, McpServer, Turn, TurnRequest};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -63,34 +63,34 @@ fn timecode(us: i64) -> String {
 }
 
 /// The message as the agent gets it: the user's words, then what they had selected.
-fn prompt(text: &str, context: &PromptContext, project: &capopen_engine::Project) -> String {
+fn prompt(text: &str, context: &PromptContext, project: &nuzky_engine::Project) -> String {
     let mut lines = Vec::new();
     if let Some(ids) = context.selection.as_ref().filter(|ids| !ids.is_empty()) {
         let clips: Vec<_> = project.tracks.iter().flat_map(|t| &t.clips).filter(|c| ids.contains(&c.id)).collect();
         let range = clips.iter().map(|c| c.start_us).min().zip(clips.iter().map(|c| c.end_us()).max());
         let range =
             range.map_or(String::new(), |(a, b)| format!(" covering {}–{} ({a}–{b} µs)", timecode(a), timecode(b)));
-        lines.push(format!("[CapOpen] Selected clips: {}{range}.", ids.join(", ")));
+        lines.push(format!("[Nuzky] Selected clips: {}{range}.", ids.join(", ")));
     }
     if let Some(at) = context.playhead_us {
-        lines.push(format!("[CapOpen] Playhead: {} ({at} µs).", timecode(at)));
+        lines.push(format!("[Nuzky] Playhead: {} ({at} µs).", timecode(at)));
         if context.frame {
             lines.push(format!(
-                "[CapOpen] The user points at the frame at the playhead: look at it with inspect_frames at {at} µs."
+                "[Nuzky] The user points at the frame at the playhead: look at it with inspect_frames at {at} µs."
             ));
         }
     }
     if lines.is_empty() { text.to_owned() } else { format!("{text}\n\n{}", lines.join("\n")) }
 }
 
-/// An empty folder of CapOpen's own outside the home folder, so no CLAUDE.md, AGENTS.md or
+/// An empty folder of Nuzky's own outside the home folder, so no CLAUDE.md, AGENTS.md or
 /// project settings above it load into the agent.
 fn work_dir() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .filter(|d| d.is_dir())
         .unwrap_or_else(std::env::temp_dir)
-        .join("capopen-agent")
+        .join("nuzky-agent")
 }
 
 fn new_id() -> String {
@@ -99,7 +99,7 @@ fn new_id() -> String {
 
 #[tauri::command]
 pub async fn agent_list() -> CmdResult<Vec<AgentInfo>> {
-    tauri::async_runtime::spawn_blocking(|| [AgentId::Claude, AgentId::Codex].map(capopen_agent::find).to_vec())
+    tauri::async_runtime::spawn_blocking(|| [AgentId::Claude, AgentId::Codex].map(nuzky_agent::find).to_vec())
         .await
         .map_err(err)
 }
@@ -147,10 +147,10 @@ fn send(
         }
         (session.project, current.path.clone())
     };
-    let info = capopen_agent::find(agent);
+    let info = nuzky_agent::find(agent);
     let exe = info.path.ok_or_else(|| format!("NOT_INSTALLED: {} is not installed.", agent.name()))?;
     // The bridge attaches to this window's project by its path: `--current` names whatever project
-    // the window opened last made current, which may be another CapOpen window's.
+    // the window opened last made current, which may be another Nuzky window's.
     let bridge = connect::Command::this_app().map_err(err)?;
     let args = vec!["mcp".into(), "--project".into(), path.to_string_lossy().into_owned(), "--allow-write".into()];
     let env = std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
@@ -202,7 +202,7 @@ fn send(
     Ok(())
 }
 
-/// Stops the agent: CapOpen ends the run first, so the editor unlocks at once whatever the agent does.
+/// Stops the agent: Nuzky ends the run first, so the editor unlocks at once whatever the agent does.
 /// A message still starting is stopped as soon as it runs.
 #[tauri::command]
 pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, turn: String) -> CmdResult<()> {
@@ -226,14 +226,14 @@ pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, turn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capopen_engine::Project;
+    use nuzky_engine::Project;
 
     #[test]
     fn the_prompt_carries_what_was_selected_when_sent() {
         let project = Project::new("t");
         let context = PromptContext { selection: None, playhead_us: Some(7_200_000), frame: true };
         let text = prompt("Zkrať to", &context, &project);
-        assert!(text.starts_with("Zkrať to\n\n[CapOpen] Playhead: 00:07.20 (7200000 µs)."), "{text}");
+        assert!(text.starts_with("Zkrať to\n\n[Nuzky] Playhead: 00:07.20 (7200000 µs)."), "{text}");
         assert!(text.contains("inspect_frames at 7200000 µs"));
         let none = PromptContext { selection: Some(Vec::new()), playhead_us: None, frame: true };
         assert_eq!(prompt("Ahoj", &none, &project), "Ahoj");

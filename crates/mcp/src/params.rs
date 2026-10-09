@@ -1,4 +1,4 @@
-use capopen_engine::{
+use nuzky_engine::{
     edit::{EditCmd, TimeRange},
     export::{Delivery, Quality},
     model::TextStyle,
@@ -63,7 +63,7 @@ pub struct Import {
     /// Reuse this id with the same paths to retry a failed save without importing twice.
     pub request_id: Option<String>,
 }
-/// Choices offered to the user; the CapOpen AI panel shows them as buttons.
+/// Choices offered to the user; the Nuzky AI panel shows them as buttons.
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SuggestOptions {
@@ -223,22 +223,20 @@ impl Captions {
         match (&self.style, &self.style_preset) {
             (Some(_), Some(_)) => anyhow::bail!("INVALID_ARGUMENTS: give style or style_preset, not both"),
             (Some(style), None) => Ok(style.clone()),
-            (None, Some(name)) => {
-                capopen_engine::edit::caption_preset(name).map(|p| p.style.clone()).ok_or_else(|| {
-                    let names: Vec<_> = capopen_engine::edit::caption_presets()
-                        .iter()
-                        .map(|p| p.name.to_lowercase().replace(' ', "_"))
-                        .collect();
-                    anyhow::anyhow!("INVALID_ARGUMENTS: unknown style_preset {name:?}; use one of {}", names.join(", "))
-                })
-            }
+            (None, Some(name)) => nuzky_engine::edit::caption_preset(name).map(|p| p.style.clone()).ok_or_else(|| {
+                let names: Vec<_> = nuzky_engine::edit::caption_presets()
+                    .iter()
+                    .map(|p| p.name.to_lowercase().replace(' ', "_"))
+                    .collect();
+                anyhow::anyhow!("INVALID_ARGUMENTS: unknown style_preset {name:?}; use one of {}", names.join(", "))
+            }),
             (None, None) => Ok(reel_style()),
         }
     }
 
-    pub fn grouping(&self) -> capopen_analysis::CaptionGrouping {
-        let defaults = capopen_analysis::CaptionGrouping::default();
-        capopen_analysis::CaptionGrouping {
+    pub fn grouping(&self) -> nuzky_analysis::CaptionGrouping {
+        let defaults = nuzky_analysis::CaptionGrouping::default();
+        nuzky_analysis::CaptionGrouping {
             max_words: self.max_words.unwrap_or(defaults.max_words),
             max_chars: self.max_chars.unwrap_or(defaults.max_chars),
             ..defaults
@@ -246,8 +244,8 @@ impl Captions {
     }
 }
 
-pub fn reel_style() -> capopen_engine::model::TextStyle {
-    capopen_engine::edit::caption_presets()[0].style.clone()
+pub fn reel_style() -> nuzky_engine::model::TextStyle {
+    nuzky_engine::edit::caption_presets()[0].style.clone()
 }
 
 #[cfg(test)]
@@ -260,7 +258,7 @@ mod tests {
             "run_id": "run"
         }))
         .unwrap();
-        let defaults = capopen_analysis::CaptionGrouping::default();
+        let defaults = nuzky_analysis::CaptionGrouping::default();
         assert_eq!(args.grouping().max_words, defaults.max_words);
         assert_eq!(args.grouping().max_chars, defaults.max_chars);
         let style = args.style().unwrap();

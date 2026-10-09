@@ -1,4 +1,4 @@
-//! `capopen style` over the real binary: a spoken recording with retakes, a filler, a side remark
+//! `nuzky style` over the real binary: a spoken recording with retakes, a filler, a side remark
 //! and a call to action, and a "creator's" cut of it made with FFmpeg that drops those, shortens
 //! pauses, zooms every other piece, makes one piece quieter and burns in two-word captions.
 use std::path::{Path, PathBuf};
@@ -147,8 +147,8 @@ fn data() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test/xdg/data")
 }
 
-fn capopen(fixture: &Fixture, args: &[&Path]) -> Output {
-    run(Command::new(env!("CARGO_BIN_EXE_capopen"))
+fn nuzky(fixture: &Fixture, args: &[&Path]) -> Output {
+    run(Command::new(env!("CARGO_BIN_EXE_nuzky"))
         .args(args)
         .env("XDG_DATA_HOME", data())
         .env("XDG_CACHE_HOME", fixture.dir.join("cache")))
@@ -157,7 +157,7 @@ fn capopen(fixture: &Fixture, args: &[&Path]) -> Output {
 /// A project with the recording as one main-track clip per piece, or one clip for all of it.
 fn project(fixture: &Fixture, name: &str, pieces: Option<&[(f64, f64)]>) -> PathBuf {
     let path = fixture.dir.join(name);
-    capopen(fixture, &[Path::new("new"), &path, &fixture.recording]);
+    nuzky(fixture, &[Path::new("new"), &path, &fixture.recording]);
     let mut project: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     if let Some(pieces) = pieces {
         let template = project["tracks"][0]["clips"][0].clone();
@@ -183,7 +183,7 @@ fn project(fixture: &Fixture, name: &str, pieces: Option<&[(f64, f64)]>) -> Path
 }
 
 #[test]
-#[ignore = "Recognises speech: needs ffmpeg, espeak-ng and the models in tmp-test/xdg/data/capopen/models (scripts/fixtures.sh)"]
+#[ignore = "Recognises speech: needs ffmpeg, espeak-ng and the models in tmp-test/xdg/data/nuzky/models (scripts/fixtures.sh)"]
 fn learns_the_creators_style_and_scores_cuts_against_it() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let dir = root.join("tmp-test/style-tests").join(std::process::id().to_string());
@@ -192,17 +192,17 @@ fn learns_the_creators_style_and_scores_cuts_against_it() {
 
     // Learning the same pair twice gives the same EDIT.md, byte for byte.
     let (first, second) = (dir.join("EDIT.md"), dir.join("again.md"));
-    capopen(
+    nuzky(
         &fixture,
         &[Path::new("style"), Path::new("learn"), Path::new("--out"), &first, &fixture.recording, &fixture.cut],
     );
-    capopen(
+    nuzky(
         &fixture,
         &[Path::new("style"), Path::new("learn"), Path::new("--out"), &second, &fixture.recording, &fixture.cut],
     );
     let style = std::fs::read_to_string(&first).unwrap();
     assert_eq!(style, std::fs::read_to_string(&second).unwrap());
-    let refused = Command::new(env!("CARGO_BIN_EXE_capopen"))
+    let refused = Command::new(env!("CARGO_BIN_EXE_nuzky"))
         .args([Path::new("style"), Path::new("learn"), Path::new("--out"), &first, &fixture.recording, &fixture.cut])
         .env("XDG_DATA_HOME", data())
         .output()
@@ -239,15 +239,15 @@ fn learns_the_creators_style_and_scores_cuts_against_it() {
     // but far more besides. The same input always scores the same.
     let score = |project: &Path| -> Value {
         let out =
-            capopen(&fixture, &[Path::new("style"), Path::new("compare"), &fixture.recording, &fixture.cut, project]);
+            nuzky(&fixture, &[Path::new("style"), Path::new("compare"), &fixture.recording, &fixture.cut, project]);
         let again =
-            capopen(&fixture, &[Path::new("style"), Path::new("compare"), &fixture.recording, &fixture.cut, project]);
+            nuzky(&fixture, &[Path::new("style"), Path::new("compare"), &fixture.recording, &fixture.cut, project]);
         assert_eq!(out.stdout, again.stdout);
         serde_json::from_slice::<Value>(&out.stdout).unwrap()["score"].clone()
     };
-    let same = score(&project(&fixture, "same.capopen", Some(&fixture.pieces)));
+    let same = score(&project(&fixture, "same.nuzky", Some(&fixture.pieces)));
     assert_eq!((same["recall"].as_f64(), same["precision"].as_f64()), (Some(1.0), Some(1.0)), "{same}");
-    let all = score(&project(&fixture, "all.capopen", None));
+    let all = score(&project(&fixture, "all.nuzky", None));
     let expected = all["creator_kept"].as_f64().unwrap() / all["words"].as_f64().unwrap();
     assert_eq!(all["recall"], 1.0, "{all}");
     assert!((all["precision"].as_f64().unwrap() - expected).abs() < 1e-9 && expected < 0.85, "{all}");
@@ -261,9 +261,9 @@ fn a_sound_file_is_refused_before_any_recognition() {
     std::fs::create_dir_all(&dir).unwrap();
     let sound = dir.join("memo.m4a");
     ffmpeg(&["-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "aac", sound.to_str().unwrap()]);
-    let out = Command::new(env!("CARGO_BIN_EXE_capopen"))
+    let out = Command::new(env!("CARGO_BIN_EXE_nuzky"))
         .args(["style", "compare"])
-        .args([&sound, &sound, &dir.join("project.capopen")])
+        .args([&sound, &sound, &dir.join("project.nuzky")])
         .env("XDG_DATA_HOME", dir.join("data"))
         .env("XDG_CACHE_HOME", dir.join("cache"))
         .output()

@@ -25,8 +25,8 @@ own_node_modules() {
   fi
 }
 
-# Tests must not touch the user's CapOpen transcripts, caches or the socket of their running app.
-runtime=$(mktemp -d "${TMPDIR:-/tmp}/capopen-check.XXXXXX")
+# Tests must not touch the user's Nuzky transcripts, caches or the socket of their running app.
+runtime=$(mktemp -d "${TMPDIR:-/tmp}/nuzky-check.XXXXXX")
 trap 'rm -rf "$runtime"' EXIT
 isolated() {
   env XDG_DATA_HOME="$PWD/tmp-test/xdg/data" XDG_CACHE_HOME="$PWD/tmp-test/xdg/cache" XDG_RUNTIME_DIR="$runtime" "$@"

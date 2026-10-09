@@ -2,9 +2,9 @@
 
 Desk research by GPT-6.1 Sol from public docs and source; neither product was run. Claims as reported with sources.
 
-## Lessons for CapOpen
+## Lessons for Nuzky
 
-- Keep the `.capopen` JSON as the shared document; publish a versioned schema, examples, microsecond timing rules and asset path conventions.
+- Keep the `.nuzky` JSON as the shared document; publish a versioned schema, examples, microsecond timing rules and asset path conventions.
 - One editing backend with CLI and MCP entry points: `get_state`, `apply_edits`, `analyze_audio`, `transcribe`, `frame`, `render`, job status and cancel, all through existing `EditCmd` validation. A stdio MCP bridge talks to the running app when it is open and works headless otherwise (the pen.dev pattern).
 - Ship the workflows, not just access: speech/silence intervals and word transcripts so "cut silences and add captions" works end to end; today the CLI exposes neither.
 - Agent changes are visible and reversible: one undoable transaction per request, affected regions shown, a checkpoint kept. External JSON writes need validation, revision checks and coordinated reload so autosave never overwrites them.
@@ -39,4 +39,4 @@ Apache-2.0 HTML-based video framework: compositions are HTML/CSS/media with seek
 | External AI | Local stdio MCP into the editor | Skills + CLI; separate hosted MCP |
 | In-app subscription AI | Claude/ChatGPT plans or keys | Local Claude Code/Codex accounts |
 | Strongest lesson | Agent access to live editor state | Shared source, visual verification, per-run Undo |
-| For CapOpen | MCP over Rust edit commands | Skills + CLI + coordinated live reload |
+| For Nuzky | MCP over Rust edit commands | Skills + CLI + coordinated live reload |

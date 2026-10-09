@@ -8,7 +8,7 @@ from e2e.harness import FIXTURES, flow, wait
 SOURCE = FIXTURES / 'voice.mp4'
 RATE = 48_000
 WINDOW = RATE // 20  # 50 ms
-JOB = "return window.__capopen.store.getState().jobs[arguments[0]] ?? null"
+JOB = "return window.__nuzky.store.getState().jobs[arguments[0]] ?? null"
 
 
 def press(key):
@@ -25,7 +25,7 @@ def press(key):
             stack.extend(window.query_tree().children)
         except Exception:
             continue
-        if name in ('CapOpen', b'CapOpen'):
+        if name in ('Nuzky', b'Nuzky'):
             window.set_input_focus(X.RevertToParent, X.CurrentTime)
     code = d.keysym_to_keycode(XK.string_to_keysym(key))
     for kind in (X.KeyPress, X.KeyRelease):
@@ -36,7 +36,7 @@ def press(key):
 
 def export(r, name):
     target = r.work / name
-    started = r.s.call('window.__capopen.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])',
+    started = r.s.call('window.__nuzky.api.startExport(arguments[0], arguments[1], arguments[2], arguments[3])',
                        str(target), {'resolution': 720, 'fps': 30, 'quality': 'small'}, r.state()['epoch'], True)
     if not started['ok']:
         raise RuntimeError(f'export {name} did not start: {started}')
@@ -98,7 +98,7 @@ def voice(r):
     focused = wait(lambda: r.s.run(focus) == 'Clean voice', 3, 0.05) or r.s.run(focus)
     r.check('Tab from Fade out reaches the Clean voice checkbox', focused is True, focused)
     press('space')
-    clean = "return window.__capopen.store.getState().snap.project.tracks[0].clips[0].content.cleanVoice"
+    clean = "return window.__nuzky.store.getState().snap.project.tracks[0].clips[0].content.cleanVoice"
     r.check('Space turns Clean voice on', wait(lambda: r.s.run(clean), 5), r.s.run(clean))
     job = wait(lambda: (j := r.s.run(JOB, f"voice:{clip['assetId']}")) and j['status'] != 'running' and j, 60)
     r.check('the cleaned voice is prepared in the background', job and job['status'] == 'done', job)
@@ -107,8 +107,8 @@ def voice(r):
     r.shot('inspector-clean-voice')
     saved = lambda: json.loads(r.saved_project().read_text())['tracks'][0]['clips'][0]['content'].get('cleanVoice')
     r.check('the project file on disk has Clean voice on', wait(lambda: saved() is True, 10), saved())
-    caches = list((r.work / 'cache').glob('capopen/voice/*.f32'))
-    r.check('the cleaned sound is a second cache beside the raw one', len(caches) == 1 and list((r.work / 'cache').glob('capopen/pcm/*.f32')),
+    caches = list((r.work / 'cache').glob('nuzky/voice/*.f32'))
+    r.check('the cleaned sound is a second cache beside the raw one', len(caches) == 1 and list((r.work / 'cache').glob('nuzky/pcm/*.f32')),
             [p.name for p in caches])
     on = export(r, 'on.mp4')
 
@@ -129,7 +129,7 @@ def voice(r):
     # event of a running preparation is replayed into the store.
     row = ("return [...document.querySelectorAll('aside[aria-label=Inspector] [role=status]')].map((e) => e.textContent)"
            ".find((t) => t.startsWith('Cleaning voice')) ?? null")
-    replay = ("const st = window.__capopen.store, id = arguments[0], job = st.getState().jobs[id];"
+    replay = ("const st = window.__nuzky.store, id = arguments[0], job = st.getState().jobs[id];"
               "st.setState({jobs: {...st.getState().jobs, [id]: {...job, status: arguments[1], progress: arguments[2]}}});")
     r.s.run(replay, f"voice:{clip['assetId']}", 'running', 0.42)
     r.check('a running preparation shows its progress under the toggle', wait(lambda: r.s.run(row) == 'Cleaning voice · 42%', 5),
@@ -150,13 +150,13 @@ def stops_when_turned_off(r):
                     '-ac', '2', '-c:a', 'aac', str(long)], check=True)
     r.import_media(long)
     asset = next(a['id'] for a in r.state()['assets'] if a['name'] == 'long.m4a')
-    added = r.s.call("window.__capopen.store.getState().edit({type: 'addClip', assetId: arguments[0], startUs: 0, trackId: null})", asset)
-    clip_of = "return window.__capopen.store.getState().snap.project.tracks.flatMap((t) => t.clips).find((c) => c.content.assetId === arguments[0])?.id ?? null"
+    added = r.s.call("window.__nuzky.store.getState().edit({type: 'addClip', assetId: arguments[0], startUs: 0, trackId: null})", asset)
+    clip_of = "return window.__nuzky.store.getState().snap.project.tracks.flatMap((t) => t.clips).find((c) => c.content.assetId === arguments[0])?.id ?? null"
     clip = wait(lambda: r.s.run(clip_of, asset), 10)
     raw = wait(lambda: (j := r.s.run(JOB, f'audio:{asset}')) and j['status'] != 'running' and j, 60)
     if not (added['ok'] and clip and raw and raw['status'] == 'done'):
         raise RuntimeError(f'the long recording was not placed and prepared: {added} {clip} {raw}')
-    turn = "window.__capopen.store.getState().edit({type: 'updateClip', clipId: arguments[0], cleanVoice: arguments[1]})"
+    turn = "window.__nuzky.store.getState().edit({type: 'updateClip', clipId: arguments[0], cleanVoice: arguments[1]})"
     r.s.call(turn, clip, True)
     running = wait(lambda: (j := r.s.run(JOB, f'voice:{asset}')) and j['status'] == 'running', 10, 0.05)
     r.s.call(turn, clip, False)
@@ -165,6 +165,6 @@ def stops_when_turned_off(r):
     seconds = time.time() - started
     r.check('turning Clean voice off stops the preparation of an 8-minute recording within 2 s',
             running and job and job['status'] == 'cancelled' and seconds < 2, f"{job and job['status']} after {seconds:.2f} s")
-    voice = r.work / 'cache/capopen/voice'
-    left = [p.name for p in [*voice.glob(f'{asset}.*.f32'), *voice.glob('.capopen-voice-*')]]
+    voice = r.work / 'cache/nuzky/voice'
+    left = [p.name for p in [*voice.glob(f'{asset}.*.f32'), *voice.glob('.nuzky-voice-*')]]
     r.check('a stopped preparation leaves no cleaned cache or partial file', not left, left)

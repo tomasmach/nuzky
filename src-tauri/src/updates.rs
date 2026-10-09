@@ -1,4 +1,4 @@
-//! Whether a newer CapOpen was released. Only the version is read from `latest.json` on the newest
+//! Whether a newer Nuzky was released. Only the version is read from `latest.json` on the newest
 //! published GitHub release; nothing is downloaded or run. Download opens the release page.
 use std::io::Read;
 use std::time::Duration;
@@ -13,18 +13,18 @@ use crate::{CmdResult, err};
 
 /// GitHub serves this from the newest release that is neither a draft nor a prerelease, so
 /// publishing a draft is what tells installed copies about it.
-const LATEST_JSON: &str = "https://github.com/tomasmach/capopen/releases/latest/download/latest.json";
+const LATEST_JSON: &str = "https://github.com/tomasmach/nuzky/releases/latest/download/latest.json";
 /// Download opens this fixed page, never an address from the file.
-const RELEASE_PAGE: &str = "https://github.com/tomasmach/capopen/releases/latest";
-/// Tests serve the file locally through `CAPOPEN_UPDATE_URL`; no other address replaces GitHub.
+const RELEASE_PAGE: &str = "https://github.com/tomasmach/nuzky/releases/latest";
+/// Tests serve the file locally through `NUZKY_UPDATE_URL`; no other address replaces GitHub.
 const TEST_SERVER: &str = "http://127.0.0.1:";
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// The file holds a version and a date; anything this big is not it.
 const MAX_BYTES: u64 = 64 * 1024;
 
-/// `CAPOPEN_NO_UPDATE_CHECK=1` keeps update checks off the network, for tests and packagers.
+/// `NUZKY_NO_UPDATE_CHECK=1` keeps update checks off the network, for tests and packagers.
 pub fn enabled() -> bool {
-    std::env::var("CAPOPEN_NO_UPDATE_CHECK").as_deref() != Ok("1")
+    std::env::var("NUZKY_NO_UPDATE_CHECK").as_deref() != Ok("1")
 }
 
 #[derive(Deserialize)]
@@ -43,12 +43,12 @@ fn newer(json: &str, current: &Version) -> Result<Option<Version>> {
 }
 
 fn fetch() -> Result<String> {
-    let test = std::env::var("CAPOPEN_UPDATE_URL").ok().filter(|url| url.starts_with(TEST_SERVER));
+    let test = std::env::var("NUZKY_UPDATE_URL").ok().filter(|url| url.starts_with(TEST_SERVER));
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .https_only(test.is_none())
         .max_redirects(5)
         .timeout_global(Some(TIMEOUT))
-        .user_agent(concat!("CapOpen/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("Nuzky/", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
     let mut response = agent.get(test.as_deref().unwrap_or(LATEST_JSON)).call().context("Requesting latest.json")?;

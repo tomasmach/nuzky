@@ -236,14 +236,14 @@ function useBackendEvents() {
         if (p.type !== "drop" || useEditor.getState().snap?.recovery) return;
         // On the home screen a dropped project opens, and dropped videos start a new project.
         if (useEditor.getState().view === "home") {
-          const project = p.paths.find((path) => path.toLowerCase().endsWith(".capopen"));
+          const project = p.paths.find((path) => path.toLowerCase().endsWith(".nuzky"));
           const media = p.paths.filter(isMedia);
-          if (project) return openProject({ path: project, name: project.split(/[\\/]/).pop()?.replace(/\.capopen$/i, "") ?? "project" });
+          if (project) return openProject({ path: project, name: project.split(/[\\/]/).pop()?.replace(/\.nuzky$/i, "") ?? "project" });
           if (media.length > 0) return newProjectFromMedia(media);
         }
         const paths = p.paths.filter(isMedia);
         if (paths.length === 0) {
-          useEditor.getState().toast({ kind: "error", text: "Those files are not video, audio or images CapOpen can open." });
+          useEditor.getState().toast({ kind: "error", text: "Those files are not video, audio or images Nuzky can open." });
           return;
         }
         const target = dropResolver?.(p.position.x / dpr, p.position.y / dpr) ?? undefined;
@@ -321,7 +321,7 @@ function RecoveryDialog() {
   );
 }
 
-const TIMELINE_KEY = "capopen.timelineHeight";
+const TIMELINE_KEY = "nuzky.timelineHeight";
 const TIMELINE_DEFAULT = 300;
 const TIMELINE_MIN = 160;
 /** Space kept for the top bar, a usable preview and the gaps around the timeline. */
@@ -395,7 +395,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __capopen: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
+    __nuzky: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
   });
 
 async function startEditor() {
@@ -439,14 +439,14 @@ function BootScreen() {
   if (error === null)
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-muted" role="status">
-        Starting CapOpen…
+        Starting Nuzky…
       </div>
     );
   return (
     <div className="flex h-full items-center justify-center p-6">
       <div className="flex w-[440px] flex-col gap-4">
         <div role="alert" className="flex flex-col gap-2">
-          <h1 className="text-[17px] font-semibold text-fg">CapOpen could not start</h1>
+          <h1 className="text-[17px] font-semibold text-fg">Nuzky could not start</h1>
           <p className="flex items-start gap-2 text-[13px] text-danger">
             <AlertCircle size={16} className="mt-px shrink-0" />
             {error}

@@ -20,7 +20,7 @@ impl Workers {
         ensure!(self.0.len() < MAX_IN_FLIGHT, "REQUEST_LIMIT: at most four requests may be in flight");
         self.0.push(
             std::thread::Builder::new()
-                .name("capopen-ipc-request".into())
+                .name("nuzky-ipc-request".into())
                 .spawn(work)
                 .context("IPC_UNAVAILABLE: starting request worker")?,
         );

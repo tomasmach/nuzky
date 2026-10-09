@@ -1,27 +1,27 @@
 [package]
-name = "capopen-app"
+name = "nuzky-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CapOpen desktop video editor"
+description = "Nuzky desktop video editor"
 
 [lib]
-name = "capopen_app"
+name = "nuzky_app"
 path = "src/lib.rs"
 
 [[bin]]
-name = "capopen-app"
+name = "nuzky-app"
 path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
-capopen-engine.workspace = true
-capopen-session.workspace = true
-capopen-mcp.workspace = true
-capopen-agent.workspace = true
-capopen-analysis.workspace = true
+nuzky-engine.workspace = true
+nuzky-session.workspace = true
+nuzky-mcp.workspace = true
+nuzky-agent.workspace = true
+nuzky-analysis.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
@@ -47,4 +47,4 @@ unicode-normalization = "0.1.25"
 
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
-capopen-analysis = { workspace = true, features = ["gpu"] }
+nuzky-analysis = { workspace = true, features = ["gpu"] }

@@ -1,5 +1,5 @@
 [package]
-name = "capopen-analysis"
+name = "nuzky-analysis"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 gpu = ["whisper-rs/vulkan"]
 
 [dependencies]
-capopen-engine.workspace = true
+nuzky-engine.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -16,5 +16,5 @@ dirs = "6"
 whisper-rs = "0.16.0"
 
 [[bin]]
-name = "capopen-analyze"
+name = "nuzky-analyze"
 path = "src/main.rs"

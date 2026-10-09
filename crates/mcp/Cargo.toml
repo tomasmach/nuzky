@@ -1,13 +1,13 @@
 [package]
-name = "capopen-mcp"
+name = "nuzky-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-capopen-engine = { workspace = true, features = ["schema"] }
-capopen-session.workspace = true
-capopen-analysis.workspace = true
+nuzky-engine = { workspace = true, features = ["schema"] }
+nuzky-session.workspace = true
+nuzky-analysis.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

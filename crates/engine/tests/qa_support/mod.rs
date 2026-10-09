@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use capopen_engine::{media::probe, model::*};
+use nuzky_engine::{media::probe, model::*};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},

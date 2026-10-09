@@ -503,7 +503,7 @@ pub fn extract_pcm(path: &Path, out: &Path, mut progress: impl FnMut(f32) -> Res
     let origin = origin_us(&input);
     let mut decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().audio()?;
 
-    let tmp = out.with_file_name(format!(".capopen-pcm-{}.part", crate::edit::new_id()));
+    let tmp = out.with_file_name(format!(".nuzky-pcm-{}.part", crate::edit::new_id()));
     let file = File::options().write(true).create_new(true).open(&tmp)?;
     let result = (|| {
         let mut sink = PcmSink {
@@ -798,7 +798,7 @@ mod tests {
 
     #[test]
     fn seek_before_keyframe_respects_container_start_offset() {
-        let path = std::env::temp_dir().join(format!("capopen-seek-{}.mp4", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("nuzky-seek-{}.mp4", uuid::Uuid::new_v4()));
         let encoded = std::process::Command::new("ffmpeg")
             .args([
                 "-v",
@@ -861,7 +861,7 @@ mod tests {
     /// FFmpeg 8 image2 returns no packets once seeked, so a .jpg never reached the preview.
     #[test]
     fn still_jpeg_decodes_after_every_seek() {
-        let path = std::env::temp_dir().join(format!("capopen-still-{}.jpg", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("nuzky-still-{}.jpg", uuid::Uuid::new_v4()));
         let encoded = std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=96x64", "-frames:v", "1"])
             .arg(&path)
@@ -896,7 +896,7 @@ mod tests {
     /// Recorders that drop audio leave timestamp gaps; joined files can step back and overlap.
     #[test]
     fn pcm_places_samples_by_timestamp() {
-        let dir = std::env::temp_dir().join(format!("capopen-pcm-gap-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("nuzky-pcm-gap-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let ffmpeg = |args: &[&str], out: &Path| {
             std::process::Command::new("ffmpeg")
@@ -944,7 +944,7 @@ mod tests {
     /// Audio without video keeps a real pause late in a long recording.
     #[test]
     fn pcm_keeps_late_pauses_of_long_audio() {
-        let dir = std::env::temp_dir().join(format!("capopen-pcm-late-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("nuzky-pcm-late-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let ffmpeg = |filter: &str, out: &Path| {
             std::process::Command::new("ffmpeg")
@@ -978,7 +978,7 @@ mod tests {
     /// was full. FFmpeg smooths such jumps when encoding, so the sink gets them directly.
     #[test]
     fn an_absurd_timestamp_jump_writes_no_silence() {
-        let path = std::env::temp_dir().join(format!("capopen-pcm-jump-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("nuzky-pcm-jump-{}", uuid::Uuid::new_v4()));
         let writer = BufWriter::new(File::create(&path).unwrap());
         let mut sink =
             PcmSink { writer, written: 0, resampler: None, mono: false, shift: None, skip: 0, audio: 0, gaps: 0 };
@@ -997,7 +997,7 @@ mod tests {
     /// Upsampled sources used to lose their tail; mono sources came out 3 dB quieter.
     #[test]
     fn pcm_keeps_full_length_and_level_when_upsampling() {
-        let dir = std::env::temp_dir().join(format!("capopen-pcm-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("nuzky-pcm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for (rate, layout) in [(22_050, "mono"), (44_100, "stereo")] {
             let src = dir.join(format!("tone_{rate}.wav"));

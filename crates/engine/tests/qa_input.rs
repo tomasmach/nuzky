@@ -1,5 +1,5 @@
 mod qa_support;
-use capopen_engine::media::{VideoDecoder, extract_pcm, probe};
+use nuzky_engine::media::{VideoDecoder, extract_pcm, probe};
 use qa_support::*;
 use std::io::ErrorKind;
 use std::net::TcpListener;

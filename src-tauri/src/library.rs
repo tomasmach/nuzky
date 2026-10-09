@@ -11,12 +11,12 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine as _;
-use capopen_engine::Project;
-use capopen_engine::edit::{EditCmd, new_id};
-use capopen_engine::render::{Renderer, Wait};
-use capopen_session::Expect;
-use capopen_session::hash::{FNV_OFFSET, hash_bytes};
-use capopen_session::transcripts::TranscriptStore;
+use nuzky_engine::Project;
+use nuzky_engine::edit::{EditCmd, new_id};
+use nuzky_engine::render::{Renderer, Wait};
+use nuzky_session::Expect;
+use nuzky_session::hash::{FNV_OFFSET, hash_bytes};
+use nuzky_session::transcripts::TranscriptStore;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use unicode_normalization::UnicodeNormalization;
@@ -67,7 +67,7 @@ pub struct Entry {
     width: u32,
     height: u32,
     collection: Option<String>,
-    /// `broken`: the file cannot be read. `busy`: another CapOpen window or an agent has it open.
+    /// `broken`: the file cannot be read. `busy`: another Nuzky window or an agent has it open.
     /// `missing`: some of its media files are gone. `empty`: nothing on the timeline.
     state: Option<&'static str>,
     missing: usize,
@@ -178,7 +178,7 @@ fn pristine(project: &Project) -> bool {
 }
 
 fn busy(path: &Path) -> bool {
-    capopen_session::lock_project(path, false).is_err_and(|e| e.to_string().starts_with("PROJECT_BUSY"))
+    nuzky_session::lock_project(path, false).is_err_and(|e| e.to_string().starts_with("PROJECT_BUSY"))
 }
 
 impl Library {
@@ -221,8 +221,8 @@ impl Library {
         let _guard = self.index.lock().unwrap();
         let (mut index, _) = self.read_index()?;
         let value = change(&mut index)?;
-        std::fs::create_dir_all(store::data_dir()).context("Creating the CapOpen data folder")?;
-        capopen_session::write_json_atomic(&index_path(), &index).context("Saving your collections")?;
+        std::fs::create_dir_all(store::data_dir()).context("Creating the Nuzky data folder")?;
+        nuzky_session::write_json_atomic(&index_path(), &index).context("Saving your collections")?;
         Ok(value)
     }
 
@@ -253,7 +253,7 @@ impl Library {
             let modified_ms = (modified(&meta) / 1_000_000) as u64;
             let collection =
                 index.members.get(&path_key).filter(|c| index.collections.iter().any(|x| &x.id == *c)).cloned();
-            let project = store::load(&path).and_then(|p| capopen_session::validate(&p).map(|()| p));
+            let project = store::load(&path).and_then(|p| nuzky_session::validate(&p).map(|()| p));
             let project = match project {
                 Ok(project) => project,
                 Err(error) => {
@@ -310,7 +310,7 @@ impl Library {
 
     /// Deletes an empty untitled project nobody has open; there is nothing in it to lose.
     fn remove_pristine(&self, path: &Path) -> bool {
-        let Ok(lock) = capopen_session::lock_project(path, true) else { return false };
+        let Ok(lock) = nuzky_session::lock_project(path, true) else { return false };
         // Read again under the lock: it may have changed since it was listed.
         if !store::load(path).is_ok_and(|p| pristine(&p)) || sidecar(path, ".checkpoint.json").exists() {
             return false;
@@ -354,7 +354,7 @@ impl Library {
             Some(project) => project,
             None => {
                 let project = store::load(path)?;
-                capopen_session::validate(&project)?;
+                nuzky_session::validate(&project)?;
                 project
             }
         };
@@ -385,7 +385,7 @@ impl Library {
         self.pending_trash.lock().unwrap().extend(paths.iter().map(|p| (p.clone(), move_id)));
         let library = self.clone();
         std::thread::Builder::new()
-            .name("capopen-trash".into())
+            .name("nuzky-trash".into())
             .spawn(move || {
                 std::thread::sleep(TRASH_DELAY);
                 for message in library.commit_trash(&paths, Some(move_id)) {
@@ -429,7 +429,7 @@ impl Library {
                 log::error!("Cannot move {path} to the Trash: {error:#}");
                 let name = store::load(Path::new(path)).map(|p| p.name).unwrap_or_else(|_| "A project".into());
                 failed.push(if error.to_string().starts_with("PROJECT_BUSY") {
-                    format!("“{name}” was opened in another CapOpen window or by an AI agent, so it was not moved to the Trash.")
+                    format!("“{name}” was opened in another Nuzky window or by an AI agent, so it was not moved to the Trash.")
                 } else {
                     format!("“{name}” could not be moved to the Trash ({error:#}). It is back in your projects.")
                 });
@@ -440,7 +440,7 @@ impl Library {
 
     fn move_to_trash(&self, path: &Path) -> Result<()> {
         // Nobody may be editing it: another window or an agent could have opened it meanwhile.
-        let lock = capopen_session::lock_project(path, true)?;
+        let lock = nuzky_session::lock_project(path, true)?;
         trash::delete(path).context("Moving the project to the Trash")?;
         let checkpoint = sidecar(path, ".checkpoint.json");
         if checkpoint.exists() {
@@ -533,8 +533,8 @@ impl Library {
             return Some(hit.clone());
         }
         let project = store::load(path).ok()?;
-        capopen_session::validate(&project).ok()?;
-        let heard = capopen_mcp::transcript::heard_assets(&project);
+        nuzky_session::validate(&project).ok()?;
+        let heard = nuzky_mcp::transcript::heard_assets(&project);
         let mut sources = HashMap::new();
         let mut untranscribed = Vec::new();
         if let Some(store) = self.transcripts() {
@@ -549,7 +549,7 @@ impl Library {
                 }
             }
         }
-        let derived = capopen_mcp::transcript::Derived::new(&project, sources, untranscribed);
+        let derived = nuzky_mcp::transcript::Derived::new(&project, sources, untranscribed);
         let words = derived
             .words
             .iter()
@@ -637,7 +637,7 @@ impl Library {
             return Ok(None);
         }
         let project = store::load(path)?;
-        capopen_session::validate(&project)?;
+        nuzky_session::validate(&project)?;
         if project.duration_us() == 0 {
             return Ok(None);
         }
@@ -696,7 +696,7 @@ fn collection_name(index: &Index, name: &str, renaming: Option<&str>) -> Result<
 
 fn spawn_poster_worker() -> Sender<PosterRequest> {
     let (tx, rx) = mpsc::channel::<PosterRequest>();
-    let spawned = std::thread::Builder::new().name("capopen-posters".into()).spawn(move || {
+    let spawned = std::thread::Builder::new().name("nuzky-posters".into()).spawn(move || {
         let mut renderer: Option<Renderer> = None;
         loop {
             let request = match rx.recv_timeout(Duration::from_secs(20)) {

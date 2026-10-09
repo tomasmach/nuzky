@@ -1,4 +1,4 @@
-"""The home screen and the launcher. CapOpen starts on every project, with the last one open behind it: pictures
+"""The home screen and the launcher. Nuzky starts on every project, with the last one open behind it: pictures
 rendered like the export, collections, Rename, Duplicate, the Trash with Undo, and search through names and
 through what was said. Over the editor, the launcher opens recent projects, starts new ones and searches the
 same way. Opening another project while an agent edits asks whether to keep or undo its changes."""
@@ -30,11 +30,11 @@ CLICK_TEXT = """const scope = arguments[1] ? document.querySelector(arguments[1]
 const el = [...scope.querySelectorAll('button, [role=menuitem], [role=menuitemradio], [role=option]')]
   .find((b) => b.textContent.trim().startsWith(arguments[0]));
 if (!el) return false; el.click(); return true;"""
-VIEW = "const s = window.__capopen.store.getState(); return {view: s.view, launcher: s.launcherOpen, name: s.snap.project.name, path: s.snap.path, timeUs: s.timeUs, tab: s.panelTab, aiRun: s.aiRun, canvas: [s.snap.project.canvas.width, s.snap.project.canvas.height]};"
+VIEW = "const s = window.__nuzky.store.getState(); return {view: s.view, launcher: s.launcherOpen, name: s.snap.project.name, path: s.snap.path, timeUs: s.timeUs, tab: s.panelTab, aiRun: s.aiRun, canvas: [s.snap.project.canvas.width, s.snap.project.canvas.height]};"
 
 
 def projects_dir(r):
-    return r.work / 'data/capopen/projects'
+    return r.work / 'data/nuzky/projects'
 
 
 def make(r, file, name, media, age_days):
@@ -51,12 +51,12 @@ def make(r, file, name, media, age_days):
 
 def seed(r):
     link_models(r)
-    make(r, 'talk.capopen', 'Talk to camera', [FIXTURES / 'talk.mp4'], 0)
-    make(r, 'croatia.capopen', 'Croatia day 2', [FIXTURES / 'wide.mp4'], 3)
-    make(r, 'reel.capopen', 'Morning reel', [FIXTURES / 'portrait.mp4'], 40)
-    broken = projects_dir(r) / 'broken.capopen'
+    make(r, 'talk.nuzky', 'Talk to camera', [FIXTURES / 'talk.mp4'], 0)
+    make(r, 'croatia.nuzky', 'Croatia day 2', [FIXTURES / 'wide.mp4'], 3)
+    make(r, 'reel.nuzky', 'Morning reel', [FIXTURES / 'portrait.mp4'], 40)
+    broken = projects_dir(r) / 'broken.nuzky'
     broken.write_text('{"name": "half a proj')
-    empty = projects_dir(r) / 'empty.capopen'
+    empty = projects_dir(r) / 'empty.nuzky'
     empty.write_text(json.dumps({'version': 1, 'name': 'Untitled project', 'canvas': {'width': 1080, 'height': 1920, 'fps': 30, 'background': '#000000'},
                                  'assets': [], 'tracks': [{'id': 'main', 'kind': 'video', 'name': 'Main', 'muted': False, 'hidden': False, 'clips': []}]}))
     for path, days in ((broken, 60), (empty, 20)):
@@ -104,19 +104,19 @@ def wait_library(r):
     return wait(lambda: len(cards(r)) > 0, 20)
 
 
-@flow('home', 'CapOpen starts on the home screen: every project with its picture, collections, rename, duplicate, the '
+@flow('home', 'Nuzky starts on the home screen: every project with its picture, collections, rename, duplicate, the '
       'Trash with Undo and search through names and through what was said', before=seed, home=True)
 def home(r):
-    r.check('CapOpen starts on the home screen, the newest project open behind it',
+    r.check('Nuzky starts on the home screen, the newest project open behind it',
             wait(lambda: view(r)['view'] == 'home', 10) and view(r)['name'] == 'Talk to camera', view(r))
     r.check('the back button names the open project',
             r.s.run("return [...document.querySelectorAll('header button')].some((b) => b.textContent.includes('Talk to camera'))"))
     wait_library(r)
     names = sorted(c['name'] for c in cards(r))
-    r.check('every project shows, the damaged one by its file name', names == ['Croatia day 2', 'Morning reel', 'Talk to camera', 'broken.capopen'], names)
-    r.check('an empty untitled project nobody has open is cleared away', not (projects_dir(r) / 'empty.capopen').exists())
-    r.check('the damaged project says why and cannot open', (card(r, 'broken.capopen') or {}).get('meta') == 'Damaged file'
-            and card(r, 'broken.capopen')['disabled'], card(r, 'broken.capopen'))
+    r.check('every project shows, the damaged one by its file name', names == ['Croatia day 2', 'Morning reel', 'Talk to camera', 'broken.nuzky'], names)
+    r.check('an empty untitled project nobody has open is cleared away', not (projects_dir(r) / 'empty.nuzky').exists())
+    r.check('the damaged project says why and cannot open', (card(r, 'broken.nuzky') or {}).get('meta') == 'Damaged file'
+            and card(r, 'broken.nuzky')['disabled'], card(r, 'broken.nuzky'))
     r.check('the open project says so', (card(r, 'Talk to camera') or {}).get('meta') == 'Open now', card(r, 'Talk to camera'))
     sections = r.s.run(SECTIONS)
     order = [c['name'] for c in cards(r)]
@@ -161,7 +161,7 @@ def home(r):
     wait(lambda: len(r.s.run("return [...document.querySelectorAll('[role=menu]')]")) == 2, 3)
     r.s.run("[...document.querySelectorAll('[role=menu]')][1].querySelectorAll('[role=menuitemradio]').forEach((i) => i.textContent.includes('Client work') && i.click())")
     croatia = card(r, 'Croatia day 2')['path']
-    library = r.work / 'data/capopen/library.json'
+    library = r.work / 'data/nuzky/library.json'
     r.check('the project is in the collection, saved in library.json',
             wait(lambda: library.exists() and croatia in json.loads(library.read_text())['members'], 5)
             and wait(lambda: 'Client work' in card(r, 'Croatia day 2')['meta'], 5), card(r, 'Croatia day 2'))
@@ -175,7 +175,7 @@ def home(r):
     r.s.run(TYPE, "input[aria-label='Project name']", 'Croatia day two')
     press(r, 'Enter', "input[aria-label='Project name']")
     r.check('the new name is saved in the project file',
-            wait(lambda: json.loads((projects_dir(r) / 'croatia.capopen').read_text())['name'] == 'Croatia day two', 5)
+            wait(lambda: json.loads((projects_dir(r) / 'croatia.nuzky').read_text())['name'] == 'Croatia day two', 5)
             and wait(lambda: card(r, 'Croatia day two'), 5))
     focus_card(r, 'Croatia day two')
     r.key('d', ctrlKey=True)
@@ -202,17 +202,17 @@ def home(r):
     reel = card(r, 'Morning reel')['path']
     r.s.run("document.querySelector(`[data-path=\"${CSS.escape(arguments[0])}\"]`).focus()", reel)
     r.key('Delete')
-    agent = Bridge(r, projects_dir(r) / 'reel.capopen')
+    agent = Bridge(r, projects_dir(r) / 'reel.nuzky')
     try:
         time.sleep(max(0, first_move + 33 - time.time()))
         r.check('30 s after the first move, the copy moved again is still waiting for Undo', os.path.exists(copy['path'])
                 and not card(r, 'Croatia day two copy'))
         trashed = r.work / 'data/Trash/files'
         r.check('30 s after the second move the copy is in the system Trash and gone from the projects',
-                wait(lambda: trashed.exists() and any(p.suffix == '.capopen' for p in trashed.iterdir()), max(5, moved + 45 - time.time()))
+                wait(lambda: trashed.exists() and any(p.suffix == '.nuzky' for p in trashed.iterdir()), max(5, moved + 45 - time.time()))
                 and not os.path.exists(copy['path']), sorted(os.listdir(trashed)) if trashed.exists() else None)
         r.check('a project an agent opened meanwhile stays, and a toast says why',
-                wait(lambda: any('“Morning reel” was opened in another CapOpen window or by an AI agent' in t for t in toast_texts(r)), 10)
+                wait(lambda: any('“Morning reel” was opened in another Nuzky window or by an AI agent' in t for t in toast_texts(r)), 10)
                 and os.path.exists(reel) and wait(lambda: card(r, 'Morning reel'), 5), toast_texts(r))
     finally:
         agent.close()
@@ -224,9 +224,9 @@ def home(r):
             wait(lambda: any('Open another project first' in t for t in toast_texts(r)), 3) and os.path.exists(open_card), toast_texts(r))
 
     # Search: names at once, then what was said once the project is transcribed.
-    models = r.s.call('window.__capopen.api.speechModels().then((m) => JSON.stringify(m))')
+    models = r.s.call('window.__nuzky.api.speechModels().then((m) => JSON.stringify(m))')
     small = next(m['id'] for m in json.loads(models['value']) if 'small' in m['id'] and m['downloaded'])
-    job = r.s.call("window.__capopen.api.startTranscript(arguments[0], 'en', false, window.__capopen.store.getState().snap.sessionEpoch)", small)
+    job = r.s.call("window.__nuzky.api.startTranscript(arguments[0], 'en', false, window.__nuzky.store.getState().snap.sessionEpoch)", small)
     r.check('the open project is transcribed', job['ok'] and wait(lambda: any(j['kind'] == 'transcript' and j['status'] == 'done' for j in r.state()['jobs']), 240),
             r.state()['jobs'])
     r.s.run(TYPE, 'main input[type=search]', 'croatia')
@@ -244,11 +244,11 @@ def home(r):
 
     # In a collection, what was said in its projects is found even when ten newer projects elsewhere,
     # each saying "the" more than three times, fill the limit on results.
-    talk = r.s.run("return window.__capopen.library.getState().projects.find((p) => p.name === 'Talk to camera').path")
+    talk = r.s.run("return window.__nuzky.library.getState().projects.find((p) => p.name === 'Talk to camera').path")
     for i in range(10):
-        make(r, f'again-{i}.capopen', f'Talk again {i}', [FIXTURES / 'talk.mp4'], -0.01)
-    client = r.s.run("return window.__capopen.library.getState().collections.find((c) => c.name === 'Client work').id")
-    r.s.call('window.__capopen.api.setCollection([arguments[0]], arguments[1]).then(() => window.__capopen.refreshLibrary())', talk, client)
+        make(r, f'again-{i}.nuzky', f'Talk again {i}', [FIXTURES / 'talk.mp4'], -0.01)
+    client = r.s.run("return window.__nuzky.library.getState().collections.find((c) => c.name === 'Client work').id")
+    r.s.call('window.__nuzky.api.setCollection([arguments[0]], arguments[1]).then(() => window.__nuzky.refreshLibrary())', talk, client)
     click(r, 'Client work', 'nav[aria-label=Collections]')
     r.s.run(TYPE, 'main input[type=search]', 'the')
     hits = wait(lambda: (r.s.run(quote) or None), 20)
@@ -264,21 +264,21 @@ def home(r):
     r.check('no other error toast', not unexpected, unexpected)
 
     # Collections that cannot be read are never written over.
-    index = r.work / 'data/capopen/library.json'
+    index = r.work / 'data/nuzky/library.json'
     before, mode = index.read_bytes(), index.stat().st_mode & 0o777
     os.chmod(index, 0)
     try:
-        made = r.s.call("window.__capopen.api.createCollection('Lost')")
+        made = r.s.call("window.__nuzky.api.createCollection('Lost')")
     finally:
         os.chmod(index, mode)
     r.check('a new collection is refused while the collections cannot be read, and they stay as they were',
             not made['ok'] and index.read_bytes() == before, made)
 
     # A list that was on its way when a project went to the Trash does not bring it back.
-    names = "return Object.fromEntries(window.__capopen.library.getState().projects.map((p) => [p.name, p.path]))"
+    names = "return Object.fromEntries(window.__nuzky.library.getState().projects.map((p) => [p.name, p.path]))"
     croatia = r.s.run(names)['Croatia day two']
     r.s.call("""(async () => {
-        const c = window.__capopen, real = c.api.library;
+        const c = window.__nuzky, real = c.api.library;
         let release;
         const gate = new Promise((ok) => (release = ok));
         c.api.library = () => real().then((list) => gate.then(() => list));
@@ -291,20 +291,20 @@ def home(r):
     })()""", croatia)
     shown = r.s.run(names)
     r.check('a list on its way when a project goes to the Trash does not bring it back', 'Croatia day two' not in shown, sorted(shown))
-    r.s.call('window.__capopen.api.restoreProjects([arguments[0]]).then(() => window.__capopen.refreshLibrary())', croatia)
+    r.s.call('window.__nuzky.api.restoreProjects([arguments[0]]).then(() => window.__nuzky.refreshLibrary())', croatia)
 
     # Closing the window moves what waits for the Trash. A project an agent opened meanwhile stays,
     # and the window stays open to say why.
-    r.s.run("window.__capopen.store.setState({view: 'home', toasts: []})")
+    r.s.run("window.__nuzky.store.setState({view: 'home', toasts: []})")
     reel = r.s.run(names)['Morning reel']
-    r.s.call('window.__capopen.trashProjects([arguments[0]])', reel)
+    r.s.call('window.__nuzky.trashProjects([arguments[0]])', reel)
     agent = Bridge(r, Path(reel))
     try:
         close_window()
 
         def told():
             try:
-                return any('“Morning reel” was opened in another CapOpen window or by an AI agent' in t for t in toast_texts(r))
+                return any('“Morning reel” was opened in another Nuzky window or by an AI agent' in t for t in toast_texts(r))
             except Exception:
                 return False
         r.check('closing the window while an agent holds a project waiting for the Trash: the window stays open and says why',
@@ -314,9 +314,9 @@ def home(r):
 
 
 def launcher_seed(r):
-    make(r, 'talk.capopen', 'Talk to camera', [FIXTURES / 'talk.mp4'], 0)
-    make(r, 'reel.capopen', 'Morning reel', [FIXTURES / 'portrait.mp4'], 1)
-    make(r, 'croatia.capopen', 'Croatia day 2', [FIXTURES / 'wide.mp4'], 2)
+    make(r, 'talk.nuzky', 'Talk to camera', [FIXTURES / 'talk.mp4'], 0)
+    make(r, 'reel.nuzky', 'Morning reel', [FIXTURES / 'portrait.mp4'], 1)
+    make(r, 'croatia.nuzky', 'Croatia day 2', [FIXTURES / 'wide.mp4'], 2)
 
 
 @flow('launcher', 'Over the editor, Projects or Ctrl+K opens the launcher: open, start or find a project. Switching '
@@ -344,21 +344,21 @@ def launcher(r):
     press(r, 'Enter', '[role=combobox]')
     r.check('Enter opens it in the editor', wait(lambda: view(r)['name'] == 'Croatia day 2' and not view(r)['launcher'], 10), view(r))
     r.check('opening a project counts as opening it: it is first in the list next time',
-            wait(lambda: r.s.call('window.__capopen.api.library().then((l) => l.projects[0].name)')['value'] == 'Croatia day 2', 5))
+            wait(lambda: r.s.call('window.__nuzky.api.library().then((l) => l.projects[0].name)')['value'] == 'Croatia day 2', 5))
 
     # An agent edits the open project; opening another one asks what happens to its changes.
-    croatia = r.work / 'data/capopen/projects/croatia.capopen'
+    croatia = r.work / 'data/nuzky/projects/croatia.nuzky'
     bridge = Bridge(r, croatia)
     try:
         # The user's own change, then the agent's. Undo changes while the new project cannot start
         # takes back only the agent's, and its toast offers no Undo that would take the user's.
-        r.s.call("window.__capopen.store.getState().edit({type: 'renameProject', name: 'Croatia, day 2'})")
+        r.s.call("window.__nuzky.store.getState().edit({type: 'renameProject', name: 'Croatia, day 2'})")
         wait(lambda: view(r)['name'] == 'Croatia, day 2', 5)
         run = bridge.call('begin_run', {'label': 'Split for a look'})
         wait(lambda: view(r)['aiRun'], 10)
         bridge.call('apply_edits', {'run_id': run['run_id'], 'request_id': 'look', 'edits': [{'type': 'splitClip', 'clipId': r.track()[0]['id'], 'atUs': 1_000_000}]})
         wait(lambda: len(r.track()) == 2, 10)
-        r.s.call('window.__capopen.newProjectFromMedia(arguments[0])', [str(r.work / 'missing.mp4')])
+        r.s.call('window.__nuzky.newProjectFromMedia(arguments[0])', [str(r.work / 'missing.mp4')])
         wait(lambda: r.s.run("return document.getElementById('switch-title')?.textContent"), 5)
         click(r, 'Undo changes and start')
         stayed = wait(lambda: any('None of those files could be opened' in e for e in r.errors()) and len(r.track()) == 1 and view(r), 10)
@@ -375,8 +375,8 @@ def launcher(r):
         wait(lambda: view(r)['aiRun'], 10)
         bridge.call('apply_edits', {'run_id': run['run_id'], 'request_id': 'more', 'edits': [{'type': 'splitClip', 'clipId': r.track()[0]['id'], 'atUs': 3_000_000}]})
         wait(lambda: len(r.track()) == 2, 10)
-        r.s.run("window.__capopen.store.setState({toasts: []})")
-        r.s.call('window.__capopen.newProjectFromMedia(arguments[0])', [str(r.work / 'missing.mp4')])
+        r.s.run("window.__nuzky.store.setState({toasts: []})")
+        r.s.call('window.__nuzky.newProjectFromMedia(arguments[0])', [str(r.work / 'missing.mp4')])
         wait(lambda: r.s.run("return document.getElementById('switch-title')?.textContent"), 5)
         mode = projects_dir(r).stat().st_mode & 0o777
         os.chmod(projects_dir(r), 0o555)
@@ -393,7 +393,7 @@ def launcher(r):
         r.check('Stop and edit afterwards still takes the AI edit back, and offers no Undo of the change before it',
                 ended and all('Undid the AI edit' in t['text'] and not t['undo'] for t in ended) and len(r.track()) == 1
                 and view(r)['name'] == 'Croatia, day 2', ended)
-        r.s.run("window.__capopen.store.setState({toasts: []})")
+        r.s.run("window.__nuzky.store.setState({toasts: []})")
 
         run = bridge.call('begin_run', {'label': 'Trim the start'})
         r.check('the AI run shows', wait(lambda: view(r)['aiRun'], 10))
@@ -419,7 +419,7 @@ def launcher(r):
         bridge.close()
 
     # An agent holding a project that is not open here: the home screen shows it busy and does not open it.
-    talk = r.work / 'data/capopen/projects/talk.capopen'
+    talk = r.work / 'data/nuzky/projects/talk.nuzky'
     holder = Bridge(r, talk)
     try:
         holder.call('get_state', {})
@@ -434,7 +434,7 @@ def launcher(r):
         holder.close()
 
     # New project in a format, and from videos in the first video's format.
-    count = len(list(projects_dir(r).glob('*.capopen')))
+    count = len(list(projects_dir(r).glob('*.nuzky')))
     r.s.run("document.querySelector('[data-new-project]').click()")
     wait(lambda: r.s.run("return !!document.querySelector('[role=menu]')"), 3)
     time.sleep(0.2)
@@ -442,17 +442,17 @@ def launcher(r):
     click(r, '16:9', '[role=menu]')
     v = wait(lambda: view(r)['view'] == 'editor' and view(r)['name'] == 'Untitled project' and view(r), 10)
     r.check('New project, 16:9, opens an empty 16:9 project', v and v['canvas'] == [1920, 1080], v)
-    r.check('it is a new file', len(list(projects_dir(r).glob('*.capopen'))) == count + 1)
-    r.s.call('window.__capopen.newProjectFromMedia(arguments[0])', [str(FIXTURES / 'portrait.mp4')])
+    r.check('it is a new file', len(list(projects_dir(r).glob('*.nuzky'))) == count + 1)
+    r.s.call('window.__nuzky.newProjectFromMedia(arguments[0])', [str(FIXTURES / 'portrait.mp4')])
     v = wait(lambda: view(r)['canvas'] == [1080, 1920] and len(r.track()) == 1 and view(r), 15)
     r.check('a new project from a portrait video is 9:16 with the video on the timeline', v, view(r))
     r.check('the empty project left behind is cleared away once the list is shown again',
-            r.s.call('window.__capopen.api.library().then((l) => l.projects.filter((p) => p.state === "empty").length)')['value'] == 0
-            and len(list(projects_dir(r).glob('*.capopen'))) == count + 1)
+            r.s.call('window.__nuzky.api.library().then((l) => l.projects.filter((p) => p.state === "empty").length)')['value'] == 0
+            and len(list(projects_dir(r).glob('*.nuzky'))) == count + 1)
 
     # Asked one after the other while the first is still reading its videos: the one asked last stays open.
-    reel = str(projects_dir(r) / 'reel.capopen')
-    r.s.run("window.__capopen.newProjectFromMedia(arguments[0]); window.__capopen.openProject({path: arguments[1], name: 'Morning reel'});",
+    reel = str(projects_dir(r) / 'reel.nuzky')
+    r.s.run("window.__nuzky.newProjectFromMedia(arguments[0]); window.__nuzky.openProject({path: arguments[1], name: 'Morning reel'});",
             [str(FIXTURES / name) for name in ('talk.mp4', 'wide.mp4', 'portrait.mp4') * 3], reel)
     opened = wait(lambda: view(r)['name'] == 'Morning reel', 15)
     time.sleep(3)
@@ -462,7 +462,7 @@ def launcher(r):
     r.check('no other error toast', not unexpected, unexpected)
 
 
-@flow('first-run', 'The first start offers the formats to begin with; choosing one shapes the project CapOpen made '
+@flow('first-run', 'The first start offers the formats to begin with; choosing one shapes the project Nuzky made '
       'instead of leaving a second empty file', home=True)
 def first_run(r):
     r.check('the first start shows Start your first project',
@@ -471,5 +471,5 @@ def first_run(r):
     click(r, '16:9', 'main')
     v = wait(lambda: view(r)['view'] == 'editor' and view(r), 5)
     r.check('a format opens the editor with that format', v and v['canvas'] == [1920, 1080], v)
-    r.check('no second project file', wait(lambda: len(list(projects_dir(r).glob('*.capopen'))) == 1, 3),
+    r.check('no second project file', wait(lambda: len(list(projects_dir(r).glob('*.nuzky'))) == 1, 3),
             sorted(p.name for p in projects_dir(r).iterdir()))

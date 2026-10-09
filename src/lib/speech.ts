@@ -25,7 +25,7 @@ export const SPEECH_LANGUAGES: [string, string][] = [
   ["uk", "Ukrainian"],
 ];
 
-const LANGUAGE_KEY = "capopen.speechLanguage";
+const LANGUAGE_KEY = "nuzky.speechLanguage";
 
 /** The language picked last, else the computer's language when it is offered, else detection. */
 function initialLanguage(): string {

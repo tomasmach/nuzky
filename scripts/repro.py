@@ -8,7 +8,7 @@ and result.json under tmp-test/repro/<flow>/.
 
 A new flow is a file in tests/e2e/ with a function decorated with @flow; this script finds it.
 Each flow gets fresh data, cache and runtime directories, so the app never opens the user's projects or
-joins their running CapOpen. It runs inside headless gamescope with D-Bus switched off, so no window,
+joins their running Nuzky. It runs inside headless gamescope with D-Bus switched off, so no window,
 dialog or notification reaches the desktop. Media and models come from scripts/fixtures.sh.
 
 Needs gamescope, WebKitWebDriver, Pillow and python-xlib. Vite takes port 1420 (the app's dev URL) and
@@ -38,7 +38,7 @@ def preflight(names):
             problems.append(f'Python package {package} is missing')
     if (not (FIXTURES / 'talk.mp4').exists() or ('captions' in names and not (MODELS / 'ggml-small.bin').exists())
             or ('reel' in names and not all((FIXTURES / f).exists() for f in (
-                'reel-1.mp4', 'reel-2.mp4', 'reel-3.mp4', 'xdg/data/capopen/models/ggml-large-v3-turbo-q5_0.bin')))):
+                'reel-1.mp4', 'reel-2.mp4', 'reel-3.mp4', 'xdg/data/nuzky/models/ggml-large-v3-turbo-q5_0.bin')))):
         problems.append('test media or models are missing: run scripts/fixtures.sh')
     problems += [f'port {port} is in use by another session' for port in (1420, 4444) if port_busy(port)]
     return problems
@@ -58,7 +58,7 @@ def main(args):
     # A stop request (Ctrl+C in a terminal, SIGTERM from a timeout) unwinds through the cleanup below, so Vite,
     # WebKitWebDriver and the app do not keep running and holding their ports.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    if os.environ.get('CAPOPEN_REPRO_INNER') == '1':
+    if os.environ.get('NUZKY_REPRO_INNER') == '1':
         OUT.mkdir(parents=True, exist_ok=True)
         # Checked again here: the port may have been taken while the app was building.
         if port_busy(1420):
@@ -78,8 +78,8 @@ def main(args):
     if problems:
         print('repro cannot run:\n  ' + '\n  '.join(problems), file=sys.stderr)
         return 1
-    # capopen-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too.
-    subprocess.run(['cargo', 'build', '--locked', '-p', 'capopen-app', '-p', 'capopen-cli', '-p', 'capopen-analysis'], cwd=ROOT,
+    # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too.
+    subprocess.run(['cargo', 'build', '--locked', '-p', 'nuzky-app', '-p', 'nuzky-cli', '-p', 'nuzky-analysis'], cwd=ROOT,
                    check=True)
     for name in names:
         (OUT / name / 'result.json').unlink(missing_ok=True)
@@ -87,7 +87,7 @@ def main(args):
     print(f'Running {", ".join(names)} in headless gamescope; its output goes to tmp-test/repro/gamescope.log', flush=True)
     with open(OUT / 'gamescope.log', 'w') as log:
         gamescope = subprocess.Popen(['gamescope', '--backend', 'headless', '-W', '1440', '-H', '900', '--', sys.executable,
-                                      __file__, *names], cwd=ROOT, env=dict(os.environ, CAPOPEN_REPRO_INNER='1'), stdout=log,
+                                      __file__, *names], cwd=ROOT, env=dict(os.environ, NUZKY_REPRO_INNER='1'), stdout=log,
                                      stderr=subprocess.STDOUT, start_new_session=True)
         try:
             gamescope.wait()

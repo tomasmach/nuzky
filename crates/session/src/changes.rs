@@ -1,5 +1,5 @@
 use crate::ClipChange;
-use capopen_engine::{Project, edit::EditOutcome};
+use nuzky_engine::{Project, edit::EditOutcome};
 use std::collections::HashMap;
 
 pub(crate) fn changes(before: &Project, after: &Project, outcome: &EditOutcome) -> (Vec<String>, Vec<ClipChange>) {
