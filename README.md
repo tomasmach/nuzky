@@ -9,7 +9,8 @@
   <a href="https://nuzky.app">nuzky.app</a> · <a href="#build-and-run">Build it</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-<img src="assets/readme/editor.webp" width="100%" alt="The Nuzky editor: imported clips on the left, a vertical video with captions in the middle, clip settings on the right and the timeline below">
+<img src="assets/readme/editor.webp" width="100%" alt="An illustration of the Nuzky editor from nuzky.app: imported clips on the left, a vertical video with captions in the middle, clip settings on the right and the timeline below">
+<p align="center"><sub>The editor as drawn on nuzky.app. The prototype differs in places.</sub></p>
 
 Cut a talking video by deleting words from its transcript, caption it with speech recognition that runs on your own machine, and let an AI agent do the tedious parts while you watch. Nuzky is licensed under GPLv3 and has a native Rust engine.
 
