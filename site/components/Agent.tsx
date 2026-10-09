@@ -4,14 +4,16 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { CircleCheck, Loader, Terminal } from "lucide-react";
 import { AgentPanel, Run, doneStage, exchanges } from "./AgentPanel";
+import { ClaudeCodeLogo, OpenAILogo } from "./Logos";
 import { SectionHeading } from "./SectionHeading";
 
 const strip = [1, 2, 3, 4, 5, 6, 7];
 const TYPING = -1;
 
 // Plays the exchanges forever while the section is on screen: the user types, the agent replies,
-// works through its steps and reports, then the next request. It starts on a finished first run,
-// which is also what the server renders and what reduced motion keeps.
+// works through its steps and reports, then the next request after a short look at the result. It
+// starts on a finished first run, which is also what the server renders and what reduced motion keeps,
+// and moves on from it almost at once so the panel is never idle for long.
 function useAgentLoop(active: boolean) {
   const [n, setN] = useState(0);
   const [stage, setStage] = useState(doneStage(exchanges[0]));
@@ -32,10 +34,13 @@ function useAgentLoop(active: boolean) {
     } else if (stage < doneStage(x)) {
       id = window.setTimeout(() => setStage((s) => s + 1), stage === 0 ? 700 : 850);
     } else {
-      id = window.setTimeout(() => {
-        setN((k) => k + 1);
-        setStage(TYPING);
-      }, 3200);
+      id = window.setTimeout(
+        () => {
+          setN((k) => k + 1);
+          setStage(TYPING);
+        },
+        n === 0 ? 600 : 1600,
+      );
     }
     return () => window.clearTimeout(id);
   }, [active, n, stage, typed]);
@@ -106,13 +111,14 @@ export function Agent() {
             <span className="text-[15px] font-semibold">Connect agent</span>
             <div className="grid gap-3 sm:grid-cols-3">
               {[
-                ["Claude Code", true],
-                ["Codex", true],
-                ["Any MCP client", false],
-              ].map(([name, ready]) => (
-                <div key={name as string} className="flex h-12 items-center justify-between rounded-[10px] bg-raised px-3.5 text-[13px] font-medium">
-                  {name}
-                  {ready ? <CircleCheck className="size-4 text-ok" /> : <Terminal className="size-4 text-muted" />}
+                { name: "Claude Code", logo: <ClaudeCodeLogo className="size-[18px] text-claude" />, ready: true },
+                { name: "Codex", logo: <OpenAILogo className="size-[18px]" />, ready: true },
+                { name: "Any MCP client", logo: <Terminal className="size-[18px] text-muted" />, ready: false },
+              ].map(({ name, logo, ready }) => (
+                <div key={name} className="flex h-12 items-center gap-2.5 rounded-[10px] bg-raised px-3.5 text-[13px] font-medium">
+                  {logo}
+                  <span className="flex-1">{name}</span>
+                  {ready && <CircleCheck className="size-4 text-ok" />}
                 </div>
               ))}
             </div>

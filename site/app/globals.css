@@ -16,6 +16,8 @@
   --color-ok: #30d158;
   --color-warn: #ff9f0a;
   --color-caption-yellow: #ffd60a;
+  /* Claude Code's brand orange, only on its logo. */
+  --color-claude: #d97757;
   --color-clip-video: #20466d;
   --color-clip-audio: #144a31;
   --color-clip-title: #6a4314;

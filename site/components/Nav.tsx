@@ -28,9 +28,13 @@ export function Nav() {
           <GitHubLogo className="size-4" />
           GitHub
         </a>
-        <a href="#download" className="btn-light flex h-[34px] items-center rounded-full px-4 text-[13px] font-semibold">
+        <span
+          aria-disabled="true"
+          role="link"
+          className="btn-light pointer-events-none flex h-[34px] select-none items-center rounded-full px-4 text-[13px] font-semibold opacity-40"
+        >
           Download
-        </a>
+        </span>
       </div>
     </header>
   );

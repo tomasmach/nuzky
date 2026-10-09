@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Check, Sparkles, Undo2 } from "lucide-react";
 import { Fit } from "./Fit";
 import { AppleLogo, GitHubLogo } from "./Logos";
-import { releases, repo } from "@/lib/site";
+import { repo } from "@/lib/site";
 
 const shadow = "drop-shadow(0 2px 8px rgb(0 0 0 / 0.7))";
 
@@ -198,16 +198,17 @@ export function Hero() {
 
         <div className="mt-14 flex flex-col items-center gap-3.5 sm:mt-16">
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <a href={releases} className="btn-light flex h-12 items-center gap-2 rounded-full px-6 text-[15px] font-semibold">
+            {/* Not released yet: the button keeps its place but stays dim and inert until the first build ships. */}
+            <span aria-disabled="true" role="link" className="btn-light pointer-events-none flex h-12 select-none items-center gap-2 rounded-full px-6 text-[15px] font-semibold opacity-40">
               <AppleLogo className="size-[17px] -translate-y-px" />
               Download for macOS
-            </a>
+            </span>
             <a href={repo} className="glass flex h-12 items-center gap-2 rounded-full px-[22px] text-[15px] font-semibold transition-colors hover:bg-white/10">
               <GitHubLogo className="size-[17px]" />
               Star on GitHub
             </a>
           </div>
-          <p className="text-[14px] text-muted">Also for Windows and Linux. No account, no watermark.</p>
+          <p className="text-[14px] text-muted">Coming soon for macOS, Windows and Linux. No account, no watermark.</p>
         </div>
       </div>
     </section>
