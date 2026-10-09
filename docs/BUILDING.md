@@ -162,7 +162,7 @@ ONNX Runtime is MIT, © Microsoft; the installers carry its `LICENSE` and `Third
 
 ### Downloaded models
 
-Models are not bundled. The app and `nuzky vision-models` download them on request from pinned commits, and a file is used only when its size and SHA-256 match (`crates/vision/src/models.rs`). They can be redistributed under these licences:
+Models are not bundled. The app and `nuzky vision-models` download them on request from pinned commits or releases, and a file is used only when its size and SHA-256 match (`crates/vision/src/models.rs`). They can be redistributed under these licences:
 
 | File | Model | Licence | Source |
 |---|---|---|---|
@@ -170,6 +170,6 @@ Models are not bundled. The app and `nuzky vision-models` download them on reque
 | `face-landmarks-v2.onnx` | MediaPipe Face Mesh V2 | Apache-2.0, © Google | converted from `face_landmarker.task` float16/1 by `scripts/convert-mediapipe.py`, published with the licence and a NOTICE of the changes at [tomasmach/nuzky-models @ a4f7e3c](https://github.com/tomasmach/nuzky-models/tree/a4f7e3c99e0b1b971d69595a1c3efb64fbc18730) |
 | `face-blendshapes-v2.onnx` | MediaPipe Blendshape V2 | Apache-2.0, © Google | as above |
 | `selfie-segmenter.onnx` | MediaPipe Selfie Segmenter, 256×256 | Apache-2.0, © Google | as above, from `selfie_segmenter.tflite` float16/1 |
-| `birefnet-lite.onnx` | BiRefNet_lite, full precision | MIT, © ZhengPeng | [onnx-community/BiRefNet_lite-ONNX @ de15b22](https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/tree/de15b22ba131738a16dff04aab8bdf8dc32e3ac1) |
+| `birefnet-lite.onnx` | BiRefNet_lite with native `DeformConv` | MIT, © ZhengPeng | exported from [ZhengPeng7/BiRefNet_lite @ aa62cd8](https://huggingface.co/ZhengPeng7/BiRefNet_lite/tree/aa62cd87eafb9cc43056d08ef3615a14628b831d) by `scripts/convert-birefnet.py`, published with the licence and NOTICE as the release asset [nuzky-models `birefnet-lite-1`](https://github.com/tomasmach/nuzky-models/releases/tag/birefnet-lite-1) |
 
 The model cards state the MediaPipe licences: [Face Mesh V2](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf), [Blendshape V2](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20Blendshape%20V2.pdf), [Selfie Segmentation](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfie%20Segmentation.pdf). Models under non-commercial, research-only or AGPL terms are not used, among them RMBG-1.4 and RMBG-2.0, SCRFD and the other InsightFace models, dlib's 68-point predictor and the pyiqa quality models.

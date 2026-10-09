@@ -66,14 +66,15 @@ pub const SELFIE: Model = Model {
     sha256: "7759b1df460279b03bb39813ee1cec7bc3a1a4be38006e98ddd48294c92bd9f4",
 };
 
-/// BiRefNet_lite, MIT, the onnx-community export at full precision: on the CPU it runs faster
-/// than the half-precision file that is half the size.
+/// BiRefNet_lite, MIT, exported by scripts/convert-birefnet.py with native `DeformConv`: the
+/// onnx-community export needed 6-7 GB and 7 s a frame, this one about 2 GB and 2 s. Too large for
+/// a file in git, so it is a release asset of the models repository.
 pub const BIREFNET: Model = Model {
     file: "birefnet-lite.onnx",
     label: "subject mask",
-    url: "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model.onnx",
-    size: 224_005_088,
-    sha256: "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333",
+    url: "https://github.com/tomasmach/nuzky-models/releases/download/birefnet-lite-1/birefnet-lite.onnx",
+    size: 188_145_755,
+    sha256: "8fd304fd859a8dc999a4a93f1fb58f4c9a6bf575de64d95c2a78027e7964d7be",
 };
 
 /// What choosing thumbnail frames reads.

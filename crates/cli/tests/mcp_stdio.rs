@@ -840,12 +840,13 @@ fn cover_frames_and_subject_mask_of_a_face_over_stdio() {
 
     // A second mask waits for the first instead of adding up in memory.
     let job = c.call("segment_subject", json!({"time_us": 1_500_000}));
-    wait_job(&mut c, &job, Duration::from_secs(30), |s| s["phase"] == "segmenting");
+    wait_job(&mut c, &job, Duration::from_secs(30), |s| s["phase"] == "loading_model");
     let second = c.call("segment_subject", json!({"time_us": 4_500_000}));
     let waiting = wait_job(&mut c, &second, Duration::from_secs(10), |s| s["phase"] == "waiting_for_other_mask");
     assert_eq!(waiting["phase"], "waiting_for_other_mask", "{waiting}");
     // Stopped in the middle of the mask model, the job ends within a few seconds.
-    std::thread::sleep(Duration::from_millis(2500));
+    wait_job(&mut c, &job, Duration::from_secs(30), |s| s["phase"] == "segmenting");
+    std::thread::sleep(Duration::from_millis(300));
     let asked = std::time::Instant::now();
     c.call("job", json!({"job_id": job["job_id"], "action": "cancel"}));
     c.call("job", json!({"job_id": second["job_id"], "action": "cancel"}));
@@ -853,7 +854,8 @@ fn cover_frames_and_subject_mask_of_a_face_over_stdio() {
         let stopped = wait_job(&mut c, job, Duration::from_secs(10), |_| false);
         assert_eq!(stopped["status"], "cancelled", "{stopped}");
     }
-    assert!(asked.elapsed() < Duration::from_secs(3), "cancelling took {:?}", asked.elapsed());
+    // The model runs for over 2 s; stopping it mid-run takes a fraction of that.
+    assert!(asked.elapsed() < Duration::from_secs(1), "cancelling took {:?}", asked.elapsed());
 
     let job = c.call("segment_subject", json!({"time_us": 7_500_000}));
     let done = wait_job(&mut c, &job, Duration::from_secs(120), |_| false);

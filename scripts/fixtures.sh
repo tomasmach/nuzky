@@ -138,8 +138,8 @@ model face-blendshapes-v2.onnx 74029fcef4076695dd1129d9c45a3d766532745868bd1eb3c
   $vision_models/face-blendshapes-v2.onnx
 model selfie-segmenter.onnx 7759b1df460279b03bb39813ee1cec7bc3a1a4be38006e98ddd48294c92bd9f4 \
   $vision_models/selfie-segmenter.onnx
-model birefnet-lite.onnx 5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333 \
-  https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model.onnx
+model birefnet-lite.onnx 8fd304fd859a8dc999a4a93f1fb58f4c9a6bf575de64d95c2a78027e7964d7be \
+  https://github.com/tomasmach/nuzky-models/releases/download/birefnet-lite-1/birefnet-lite.onnx
 
 # Real Czech connected speech for the word timing test (crates/analysis/tests/alignment.rs): 25 s of chapter 2
 # of Krysař by Viktor Dyk, read for LibriVox and released into the public domain. Its word boundaries were

@@ -165,8 +165,21 @@ pub struct BiRefNet(Session);
 pub const BIREFNET_SIDE: usize = 1024;
 
 impl BiRefNet {
+    /// Without ONNX Runtime's memory arena and preplanned buffers its peak stays near 1.8 GB
+    /// instead of 2.1 GB, for about a tenth more time; it runs inside the app.
     pub fn load(dir: &Path) -> Result<Self> {
-        Ok(Self(session(&crate::models::BIREFNET.path(dir), 0)?))
+        crate::runtime::require()?;
+        let path = crate::models::BIREFNET.path(dir);
+        let session = Session::builder()
+            .map_err(ort_error)?
+            .with_memory_pattern(false)
+            .map_err(ort_error)?
+            .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+            .map_err(ort_error)?
+            .commit_from_file(&path)
+            .map_err(ort_error)
+            .with_context(|| format!("Loading {}", path.display()))?;
+        Ok(Self(session))
     }
 
     /// Foreground probability per pixel of a 1024×1024 grid over the frame.

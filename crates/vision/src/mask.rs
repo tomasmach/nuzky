@@ -24,6 +24,8 @@ pub enum Phase {
     Rendering,
     /// Another mask is being made; one at a time, since each takes a lot of memory.
     Waiting,
+    Loading,
+    /// The model is running.
     Segmenting,
 }
 
@@ -84,8 +86,10 @@ pub fn segment_subject(
                     }
                 }
             };
+            progress(Phase::Loading);
+            let mut model = BiRefNet::load(models_dir)?;
             progress(Phase::Segmenting);
-            let grid = BiRefNet::load(models_dir)?.segment(&frame, cancel)?;
+            let grid = model.segment(&frame, cancel)?;
             let alpha = upsample(&grid, size);
             write_png(&path, size, &alpha)?;
             (alpha, false)

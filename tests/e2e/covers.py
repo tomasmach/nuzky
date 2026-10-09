@@ -34,7 +34,7 @@ def poll(bridge, job, timeout):
       before=face_project)
 def covers(r):
     status = invoke(r, 'vision_models')
-    r.check('without models the app says what the download is', status == {'sizeMb': 232, 'downloaded': False, 'unavailable': None}, status)
+    r.check('without models the app says what the download is', status == {'sizeMb': 196, 'downloaded': False, 'unavailable': None}, status)
     models = r.work / 'data/nuzky/models'
     models.mkdir(parents=True, exist_ok=True)
     for name in VISION:
