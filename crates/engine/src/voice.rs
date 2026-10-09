@@ -136,7 +136,7 @@ pub fn clean(
 ) -> Result<()> {
     let frames = input.len() / CHANNELS;
     // Phone video is often mono stored as two equal channels; it is cleaned once.
-    let mono = input.chunks_exact(CHANNELS).all(|f| f.iter().all(|&s| s == f[0]));
+    let mono = input.as_chunks::<CHANNELS>().0.iter().all(|f| f.iter().all(|&s| s == f[0]));
     let mut channels: Vec<Channel> = (0..if mono { 1 } else { CHANNELS }).map(|_| Channel::new()).collect();
     let mut block = vec![[0f32; FRAME]; channels.len()];
     let mut cleaned = vec![[0f32; FRAME]; channels.len()];
@@ -345,7 +345,7 @@ mod tests {
         let input: Vec<f32> = signal.iter().flat_map(|&s| [s as f32; CHANNELS]).collect();
         let out = cleaned(&input);
         assert_eq!(out.len(), input.len());
-        out.chunks_exact(CHANNELS).map(|f| f[0] as f64).collect()
+        out.as_chunks::<CHANNELS>().0.iter().map(|f| f[0] as f64).collect()
     }
 
     fn rms_db(x: &[f64]) -> f64 {

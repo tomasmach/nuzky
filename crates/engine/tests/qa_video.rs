@@ -449,7 +449,7 @@ fn panorama_zoomed_past_the_gpu_texture_limit_renders_downscaled() {
     let mut renderer = Renderer::new().unwrap();
     assert!(renderer.max_texture_dimension() < 12_800);
     let frame = renderer.render(&p, 0, 1080, 1920, Wait::Exact, false).unwrap();
-    assert!(frame.chunks_exact(4).all(|px| px[0] > 250 && px[1] < 5 && px[2] < 5), "not filled with red");
+    assert!(frame.as_chunks::<4>().0.iter().all(|px| px[0] > 250 && px[1] < 5 && px[2] < 5), "not filled with red");
 }
 
 #[test]

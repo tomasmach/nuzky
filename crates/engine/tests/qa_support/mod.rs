@@ -99,7 +99,7 @@ pub fn mae(a: &[u8], b: &[u8]) -> f64 {
     a.iter().zip(b).map(|(&x, &y)| (x as f64 - y as f64).abs()).sum::<f64>() / a.len() as f64
 }
 pub fn pcm(path: &Path) -> Vec<f32> {
-    std::fs::read(path).unwrap().chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+    std::fs::read(path).unwrap().as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect()
 }
 pub struct Rng(pub u64);
 impl Rng {

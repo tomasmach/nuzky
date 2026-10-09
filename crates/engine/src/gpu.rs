@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(gpu.transitions[0].bind_group, group);
         let resized = gpu.render(4, 4, [0.0; 4], &draws).unwrap();
         assert_ne!(gpu.transitions[0].bind_group, group);
-        assert!(resized.chunks_exact(4).all(|p| p == &first[..4]));
+        assert!(resized.as_chunks::<4>().0.iter().all(|p| p == &first[..4]));
         let max = gpu.max_texture_dimension();
         assert_eq!(
             gpu.render(max + 1, 2, [0.0; 4], &[]).unwrap_err().to_string(),
@@ -659,7 +659,7 @@ mod tests {
         for adjust in [false, true] {
             layer.adjust.contrast = if adjust { 0.2 } else { 0.0 };
             let out = gpu.render(64, 2, [1.0; 4], &[Draw::Layer(layer.clone())]).unwrap();
-            let darkest = out.chunks_exact(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
+            let darkest = out.as_chunks::<4>().0.iter().map(|p| p[0].min(p[1]).min(p[2])).min().unwrap();
             assert!(darkest >= 254, "adjust={adjust}: darkest edge pixel {darkest}");
         }
         // Half-covered texels keep their straight colour through adjustments.
@@ -736,7 +736,7 @@ mod tests {
         let mut grey = layer;
         grey.adjust.saturation = -1.0;
         let output = gpu.render(2, 2, [0.0; 4], &[Draw::Layer(grey)]).unwrap();
-        for pixel in output.chunks_exact(4) {
+        for pixel in output.as_chunks::<4>().0 {
             assert_eq!(pixel[0], pixel[1]);
             assert_eq!(pixel[1], pixel[2]);
         }

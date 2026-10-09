@@ -28,8 +28,7 @@ fn pcm_rates_layouts_length_level_and_reference_samples() {
                 cmd.args(["-af", "pan=stereo|c0=c0|c1=c0"]);
             }
             let reference = run(cmd.args(["-ar", "48000", "-ac", "2", "-f", "f32le", "-"])).stdout;
-            let reference: Vec<f32> =
-                reference.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+            let reference: Vec<f32> = reference.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect();
             let max_error = samples.iter().zip(&reference).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
             let peak = samples.iter().copied().map(f32::abs).fold(0.0, f32::max);
             eprintln!("QA PCM {rate}/{channels}: {frames} frames, peak {peak:.6}, reference max error {max_error}");
@@ -76,7 +75,7 @@ fn aac_priming_and_nonzero_container_origin_preserve_alignment() {
         let out = d.join(format!("offset-{offset}.f32"));
         let n = extract_pcm(&source, &out, |_| Ok(())).unwrap();
         let samples = pcm(&out);
-        let onset = samples.chunks_exact(2).position(|s| s[0].abs() > 0.02).unwrap();
+        let onset = samples.as_chunks::<2>().0.iter().position(|s| s[0].abs() > 0.02).unwrap();
         // The container's origin can include the encoder priming packet at nonzero offset.
         let j = info(&source);
         let origin = j["format"]["start_time"].as_str().unwrap().parse::<f64>().unwrap();
@@ -129,7 +128,7 @@ fn late_audio_is_padded_to_video_container_origin() {
     }
     let out = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
     let samples = pcm(&out);
-    let onset = samples.chunks_exact(2).position(|s| s[0].abs() > 0.02).unwrap();
+    let onset = samples.as_chunks::<2>().0.iter().position(|s| s[0].abs() > 0.02).unwrap();
     eprintln!("QA late audio onset={onset}, frames={}", samples.len() / 2);
     assert!((onset as i64 - 24000).abs() <= 1024, "onset={onset}");
     assert!((samples.len() as i64 / 2 - 72000).abs() <= 1024, "length={}", samples.len() / 2);

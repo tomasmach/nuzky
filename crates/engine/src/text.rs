@@ -561,7 +561,7 @@ mod tests {
         }
         for family in BUNDLED_FONT_FAMILIES.iter().copied() {
             let image = renderer.render("Příliš žluťoučký kůň", &style(family), 1.0, 1080.0).image;
-            assert!(image.data.chunks_exact(4).any(|pixel| pixel[3] != 0), "Empty {family}");
+            assert!(image.data.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0), "Empty {family}");
             let mut buffer = Buffer::new(&mut renderer.fonts, Metrics::new(95.0, 114.0));
             buffer.set_size(Some(4000.0), None);
             buffer.set_text(CZECH, &Attrs::new().family(Family::Name(family)), Shaping::Advanced, None);
@@ -585,7 +585,7 @@ mod tests {
             let regular = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).image;
             style.bold = true;
             let bold = renderer.render("Příliš žluťoučký kůň", &style, 1.0, 2000.0).image;
-            let coverage = |image: &Image| image.data.chunks_exact(4).map(|p| u64::from(p[3])).sum::<u64>();
+            let coverage = |image: &Image| image.data.as_chunks::<4>().0.iter().map(|p| u64::from(p[3])).sum::<u64>();
             assert!(coverage(&bold) > coverage(&regular), "Bold did not increase ink coverage in {family}");
         }
     }

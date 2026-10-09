@@ -128,7 +128,7 @@ fn reference(width: u32, height: u32) -> Vec<bool> {
             .map(|((x0, y0), (x1, y1))| x0 + (cy - y0) / (y1 - y0) * (x1 - x0))
             .collect();
         xs.sort_by(f32::total_cmp);
-        for pair in xs.chunks_exact(2) {
+        for pair in xs.as_chunks::<2>().0 {
             for x in 0..width {
                 let cx = x as f32 + 0.5;
                 if cx >= pair[0] && cx < pair[1] {
