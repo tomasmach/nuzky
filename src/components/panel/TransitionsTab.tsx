@@ -102,7 +102,7 @@ function TransitionEditor({ cut }: { cut: Cut }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
         <PresetTile label="None" selected={!cut.transition} onClick={() => apply(null)} title="No transition (hard cut)">
           <span className="absolute inset-0 flex items-center justify-center text-muted">
             <Ban size={18} />

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
+import { PANE_MIN, PREVIEW_MIN } from "./layout";
 
 /** Where the AI panel sits: a full-height column at either edge, the inspector's place, or floating. */
 export type DockMode = "right" | "left" | "inspector" | "float";
@@ -12,8 +13,8 @@ const FLOAT_MIN_W = 300;
 const FLOAT_MIN_H = 320;
 const TOP_BAR = 48;
 const GAP = 6;
-/** The editor beside a docked panel: library, inspector, a 300 px preview, and the gaps. */
-const EDITOR_MIN = 360 + 300 + 300 + 4 * GAP;
+/** The editor beside a docked panel: library, inspector, the narrowest preview, and the gaps. */
+const EDITOR_MIN = PANE_MIN.library + PANE_MIN.inspector + PREVIEW_MIN + 4 * GAP;
 
 type Saved = { open: boolean; mode: DockMode; width: number; float: Rect };
 const KEY = "nuzky.aiPanel";
@@ -60,7 +61,7 @@ export function clampFloat(r: Rect, windowW = window.innerWidth, windowH = windo
   return { x, y, w, h };
 }
 
-function useWindowSize() {
+export function useWindowSize() {
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
   useEffect(() => {
     const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight });
@@ -73,13 +74,14 @@ function useWindowSize() {
 /**
  * Where the panel actually shows in this window. A column that no longer fits beside the editor
  * takes the inspector's place instead; the chosen place comes back once the window is wide enough.
+ * In the inspector's place it is as wide as the inspector, not `width`.
  */
 export function useDockLayout() {
   const { open, mode, width, float } = useDock();
   const { w, h } = useWindowSize();
   const sideFits = dockMax(w) !== null;
   const shown: DockMode = (mode === "left" || mode === "right") && !sideFits ? "inspector" : mode;
-  return { open, mode: shown, width: shown === "inspector" ? 300 : clampWidth(width, w), float: clampFloat(float, w, h), sideFits };
+  return { open, mode: shown, width: clampWidth(width, w), float: clampFloat(float, w, h), sideFits };
 }
 
 export const DOCK_LABELS: Record<DockMode, string> = {

@@ -43,7 +43,7 @@ export function FiltersTab() {
           <Palette size={14} className="shrink-0" /> Select a video or image clip to apply a filter.
         </p>
       )}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-2">
         {FILTERS.map((f) => (
           <PresetTile
             key={f.id}

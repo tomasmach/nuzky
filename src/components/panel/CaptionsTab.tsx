@@ -54,7 +54,7 @@ export function CaptionsTab() {
       </div>
       <div className="flex flex-col gap-1.5">
         <span className="text-[12px] text-muted">Style</span>
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-2">
           {CAPTION_STYLES.map((s, i) => (
             <button
               key={s.name}

@@ -1,7 +1,9 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { create } from "zustand";
 import { followPointer } from "../../lib/drag";
 import { DOCK_DEFAULT, DOCK_LABELS, DOCK_MIN, clampFloat, clampWidth, dockMax, useDock, type DockMode, type Rect } from "../../lib/dock";
+import { PANE_MIN, setPane } from "../../lib/layout";
+import { Splitter } from "../ui";
 import { AiPanel } from "./AiPanel";
 
 const TOP_BAR = 48;
@@ -91,53 +93,29 @@ export function DockDragLayer() {
   );
 }
 
-/** The 6 px gap beside a docked column: drag it to resize, double-click to reset, ←/→ when focused. */
-function ColumnResizer({ side, width }: { side: "left" | "right"; width: number }) {
-  const [active, setActive] = useState(false);
-  const set = (w: number) => useDock.setState({ width: clampWidth(w, window.innerWidth) });
-  // The panel grows towards the editor: leftwards for a right column.
-  const grow = side === "right" ? -1 : 1;
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize AI panel"
-      aria-valuenow={width}
-      aria-valuemin={DOCK_MIN}
-      aria-valuemax={dockMax(window.innerWidth) ?? DOCK_MIN}
-      tabIndex={0}
-      title="Drag to resize the AI panel. Double-click to reset."
-      onPointerDown={(e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        const sx = e.clientX;
-        setActive(true);
-        followPointer({ move: (ev) => set(width + grow * (ev.clientX - sx)), up: () => setActive(false), cancel: () => setActive(false) });
-      }}
-      onDoubleClick={() => set(DOCK_DEFAULT)}
-      onKeyDown={(e) => {
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-        e.preventDefault();
-        e.stopPropagation();
-        set(width + grow * (e.key === "ArrowLeft" ? -24 : 24));
-      }}
-      className={`group absolute bottom-1.5 top-0 z-30 w-2.5 cursor-col-resize rounded-full ${side === "right" ? "-left-2" : "-right-2"}`}
-    >
-      <div className={`absolute left-1/2 top-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-[120ms] ${active ? "bg-accent" : "group-hover:bg-white/30"}`} />
-    </div>
-  );
-}
-
 /**
  * A full-height column at the left or right edge, beside the whole editor. In the inspector's place
- * it is the right column as wide as the inspector, which it replaces, and keeps that width.
+ * it is the right column as wide as the inspector, which it replaces, and resizing it resizes the
+ * inspector; `inspectorMax` is then the most the inspector may take.
  */
-export function DockedAiPanel({ side, width, inspector = false }: { side: "left" | "right"; width: number; inspector?: boolean }) {
+export function DockedAiPanel({ side, width, inspectorMax }: { side: "left" | "right"; width: number; inspectorMax?: number }) {
   const panel = useRef<HTMLElement>(null);
+  const inspector = inspectorMax !== undefined;
   return (
     <div className={`relative flex shrink-0 flex-col pb-1.5 ${side === "right" ? "pr-1.5" : "pl-1.5"}`} style={{ width: width + GAP }}>
       <AiPanel panelRef={panel} className="min-h-0 flex-1" />
-      {!inspector && <ColumnResizer side={side} width={width} />}
+      {/* The 6 px gap between the editor and the column; the panel grows towards the editor. */}
+      <Splitter
+        what="AI panel"
+        axis="x"
+        grow={side === "right" ? -1 : 1}
+        size={width}
+        min={inspector ? PANE_MIN.inspector : DOCK_MIN}
+        max={inspector ? inspectorMax : (dockMax(window.innerWidth) ?? DOCK_MIN)}
+        onResize={(w) => (inspector ? setPane("inspector", w) : useDock.setState({ width: w }))}
+        onReset={() => (inspector ? setPane("inspector", null) : useDock.setState({ width: DOCK_DEFAULT }))}
+        className={`absolute bottom-1.5 top-0 ${side === "right" ? "-left-2" : "-right-2"}`}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight, Minus } from "lucide-react";
+import { followPointer } from "../lib/drag";
 import { fontCss } from "../lib/fonts";
 import { AI_EDITING, useAiLocked } from "../lib/store";
 import type { TextStyle } from "../lib/types";
@@ -603,6 +604,77 @@ export function PresetTile({
       </span>
       <span className={`truncate text-[11px] ${selected ? "font-medium text-fg" : "text-muted"}`}>{label}</span>
     </button>
+  );
+}
+
+const SPLITTER_KEYS: Record<string, number> = { ArrowLeft: -24, ArrowRight: 24, ArrowUp: -24, ArrowDown: 24 };
+
+/**
+ * The 6 px gap between two panes, which resizes the pane on one side: drag it, double-click to
+ * reset, or ←/→ (↑/↓ across a horizontal gap) by 24 px while it has focus. A short grip shows on
+ * hover, and in `accent` while dragging or focused from the keyboard, in place of a focus ring
+ * that would run along the edges of the panes. `grow` is 1 when moving the gap right or down enlarges the pane, -1
+ * when moving it left or up does. `className` places it: `relative` with a negative margin in a
+ * row or column of panes, `absolute` over a gap it does not own.
+ */
+export function Splitter({
+  what,
+  axis,
+  size,
+  min,
+  max,
+  grow,
+  onResize,
+  onReset,
+  className,
+}: {
+  /** The pane it resizes, as in "Resize the timeline". */
+  what: string;
+  /** "x" for a gap between panes side by side. */
+  axis: "x" | "y";
+  size: number;
+  min: number;
+  max: number;
+  grow: 1 | -1;
+  onResize: (size: number) => void;
+  onReset: () => void;
+  className: string;
+}) {
+  const [active, setActive] = useState(false);
+  const x = axis === "x";
+  const set = (v: number) => onResize(Math.round(Math.max(min, Math.min(max, v))));
+  return (
+    <div
+      role="separator"
+      aria-orientation={x ? "vertical" : "horizontal"}
+      aria-label={`Resize ${what}`}
+      aria-valuenow={size}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      title={`Drag to resize the ${what}. Double-click to reset.`}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const start = x ? e.clientX : e.clientY;
+        setActive(true);
+        // A cancelled drag keeps the size reached so far.
+        followPointer({ move: (ev) => set(size + grow * ((x ? ev.clientX : ev.clientY) - start)), up: () => setActive(false), cancel: () => setActive(false) });
+      }}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        const step = SPLITTER_KEYS[e.key];
+        if (!step || x !== (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        set(size + grow * step);
+      }}
+      className={`group z-30 shrink-0 rounded-full focus-visible:outline-none ${x ? "w-2.5 cursor-col-resize" : "h-2.5 cursor-row-resize"} ${className}`}
+    >
+      <div
+        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-[120ms] ${x ? "h-10 w-1" : "h-1 w-10"} ${active ? "bg-accent" : "group-hover:bg-white/30 group-focus-visible:bg-accent"}`}
+      />
+    </div>
   );
 }
 

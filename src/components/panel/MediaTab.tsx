@@ -104,7 +104,7 @@ export function MediaTab() {
       ) : (
         <>
           <ImportTile label="Import media" hint="Ctrl+I" shortcut="Control+I" onClick={() => pickAndImport()} className="mx-3.5" />
-          <div className="grid min-h-0 grid-cols-3 content-start gap-x-2 gap-y-3 overflow-y-auto px-3.5 pb-3.5">
+          <div className="grid min-h-0 grid-cols-[repeat(auto-fill,minmax(100px,1fr))] content-start gap-x-2 gap-y-3 overflow-y-auto px-3.5 pb-3.5">
             {assets.map((a) => (
               <MediaItem key={a.id} asset={a} />
             ))}
