@@ -41,7 +41,7 @@ export const exchanges: Exchange[] = [
     ask: "Put Sunrise under the whole video, quietly.",
     reply: "Adding it under everything at −18 dB, with a fade at the end.",
     steps: [
-      ["Import Sunrise — ambient", "0.3 s"],
+      ["Import Sunrise.m4a", "0.3 s"],
       ["Set the volume to −18 dB", "0.1 s"],
       ["Fade out over 2 s", "0.1 s"],
     ],
