@@ -62,8 +62,12 @@ function motionCentre(canvas: Canvas, kind: MotionKind): [number, number] {
   return [(kind === "kenBurns" ? right : (left + right) / 2) / w - 0.5, (top + bottom) / 2 / h - 0.5];
 }
 
+const near = (a: number, b: number) => Math.abs(a - b) < 1e-4;
+/** The same transform, crop included, so a keyframe edited by hand never passes for a preset. */
 const close = (a: Transform, b: Transform) =>
-  (["x", "y", "scale", "rotation", "opacity"] as const).every((k) => Math.abs(a[k] - b[k]) < 1e-4);
+  (["x", "y", "scale", "rotation", "opacity"] as const).every((k) => near(a[k], b[k])) &&
+  !a.crop === !b.crop &&
+  (!a.crop || !b.crop || (["left", "top", "right", "bottom"] as const).every((k) => near(a.crop![k], b.crop![k])));
 
 /**
  * The motion preset the clip's keyframes are, with its strength, or null for none or keyframes of
