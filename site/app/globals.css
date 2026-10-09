@@ -118,12 +118,14 @@
   }
 
   .heading-xl {
+    text-wrap: balance;
     font-size: clamp(2.75rem, 7.4vw, 6rem);
     line-height: 1;
     letter-spacing: -0.042em;
     font-weight: 600;
   }
   .heading-lg {
+    text-wrap: balance;
     font-size: clamp(2rem, 4.2vw, 3rem);
     line-height: 1.08;
     letter-spacing: -0.034em;

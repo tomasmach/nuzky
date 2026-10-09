@@ -1,12 +1,14 @@
 // The pages as plain Markdown for AI agents and LLM search (https://llmstxt.org), built from the same copy as
 // the HTML so the two never disagree.
 
-import { capcutChecked, comparison, faq, features, pickCapcut, pickNuzky } from "./content";
+import { type Faq, capcutChecked, capcutFaq, capcutSources, comparison, faq, features, fromCapcut, pickCapcut, pickNuzky } from "./content";
 import { buildFromSource, license, releaseNotes, repo, url, version } from "./site";
 
 const raw = repo.replace("github.com", "raw.githubusercontent.com") + "/main";
 const abs = (href: string) => (href.startsWith("/") ? url + href : href);
 const list = (items: string[]) => items.map((i) => `- ${i}`).join("\n");
+const qa = (items: Faq[]) =>
+  items.map((f) => `### ${f.q}\n\n${f.a}${f.link ? ` [${f.link.label}](${abs(f.link.href)}.md)` : ""}`).join("\n\n");
 
 const summary =
   "Nuzky is a free, open source desktop video editor in the spirit of CapCut, made for Reels, TikTok and Shorts. It runs on your computer, writes captions locally with Whisper and lets an AI agent such as Claude Code or Codex edit the open project while you watch.";
@@ -20,7 +22,7 @@ export function homeMarkdown() {
 
 ${status}
 
-No account, no watermark, no subscription. Your videos never leave your computer.
+No account, no watermark, no subscription. Editing, captions and export run on your computer; an AI agent you connect sees the transcript and the frames it checks.
 
 ## Features
 
@@ -34,11 +36,11 @@ ${list(features)}
 
 ## Or let an agent cut it
 
-Connect Claude Code or Codex in one click, or any MCP client, and ask for an edit in plain words: cut the ums and long pauses, add captions, put music under the video, export for Reels. The agent edits the project open in the app. Every change goes through the same undo as yours, your controls lock while it works with a Stop button, and one undo takes the whole run back.
+Connect Claude Code or Codex in one click, or any MCP client, and ask for an edit in plain words. It runs on your own Claude Code or Codex plan: cut the ums and long pauses, add captions, put music under the video, export for Reels. The agent edits the project open in the app. Every change goes through the same undo as yours, your controls lock while it works with a Stop button, and one undo takes the whole run back. Live editing in the app does not work on Windows yet.
 
 ## Questions
 
-${faq.map((f) => `### ${f.q}\n\n${f.a}${f.link ? ` [${f.link.label}](${abs(f.link.href)}.md)` : ""}`).join("\n\n")}
+${qa(faq)}
 
 ## Links
 
@@ -55,11 +57,11 @@ export function alternativeMarkdown() {
   const cell = (s: string) => s.replace(/\|/g, "\\|");
   return `# Nuzky vs CapCut: the open source CapCut alternative
 
-> Nuzky is a free, open source video editor for macOS, Windows and Linux. It covers what most people use CapCut for on a computer (a timeline, auto captions, caption styles and an export for Reels and TikTok) without a subscription, an account or uploading your footage. It does not have CapCut's template library or a phone app.
+> Nuzky is a free, open source video editor, built and tested on Linux first, with macOS and Windows builds coming. It has a timeline, auto captions that run on your computer and an export made for Reels and TikTok, with no subscription, no account and no watermark. It does not have CapCut's template library or a phone app.
 
 ${status}
 
-## At a glance
+## Nuzky and CapCut, side by side
 
 | | Nuzky | CapCut |
 | --- | --- | --- |
@@ -73,9 +75,17 @@ ${list(pickNuzky)}
 
 ${list(pickCapcut)}
 
+## Coming from CapCut
+
+${list(fromCapcut.map((f) => `${f.title}: ${f.text}`))}
+
+## Questions from CapCut users
+
+${qa(capcutFaq)}
+
 ## Notes
 
-What this page says about CapCut was checked against capcut.com in ${capcutChecked}. CapCut's plans and features change, so check its pricing page for the current details. CapCut is a trademark of ByteDance. Nuzky is an independent project and is not affiliated with ByteDance or CapCut.
+What this page says about CapCut was checked in ${capcutChecked} against ${capcutSources.map((s) => `[${s.label}](${s.href})`).join(", ")}. CapCut's plans change, so check them for the current details. CapCut is a trademark of ByteDance. Nuzky is an independent project and is not affiliated with ByteDance or CapCut.
 
 - [Nuzky home page](${url})
 - [Source code on GitHub](${repo})
@@ -89,7 +99,7 @@ export function llmsTxt() {
 
 ${status}
 
-No account, no watermark, no subscription, and footage never leaves the computer. It is an alternative to CapCut for people who edit on a computer, including Linux, where CapCut has no app. Agents edit video in Nuzky through its MCP server; the agent guide under Source is the one that server serves.
+No account, no watermark, no subscription. Editing, captions and export run on the computer; an AI agent the user connects sees the transcript and the frames it inspects. It is an alternative to CapCut for people who edit on a computer, including Linux, where CapCut has no app. Agents edit video in Nuzky through its MCP server; the agent guide under Source is the one that server serves.
 
 ## Pages
 
