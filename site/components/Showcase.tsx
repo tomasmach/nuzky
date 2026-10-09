@@ -31,7 +31,7 @@ const tabs: Tab[] = [
     icon: Captions,
     summary: "Whisper writes the captions on your computer and puts each line on the timeline as a clip.",
     spots: [
-      { x: 724, y: 344, title: "Captions in one click", text: "One click transcribes the speech. The spoken word lights up as it plays.", side: "above" },
+      { x: 680, y: 344, title: "Captions in one click", text: "One click transcribes the speech. The spoken word lights up as it plays.", side: "above" },
       { x: 236, y: 573, title: "A clip per line", text: "Fix a word or move a line right on the timeline." },
       { x: 934, y: 482, title: "Caption styles", text: "Bold, Clean or Pop, or make your own." },
     ],
