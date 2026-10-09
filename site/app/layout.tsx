@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { description, url } from "@/lib/site";
 import "./globals.css";
 
@@ -26,7 +27,11 @@ export const viewport: Viewport = { themeColor: "#08080a", colorScheme: "dark" }
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${mono.variable}`}>
-      <body className="min-h-dvh overflow-x-hidden bg-site">{children}</body>
+      <body className="min-h-dvh overflow-x-hidden bg-site">
+        {children}
+        {/* Vercel Web Analytics counts visits without cookies, so the site needs no consent banner. */}
+        <Analytics />
+      </body>
     </html>
   );
 }
