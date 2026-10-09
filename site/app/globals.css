@@ -145,11 +145,11 @@
 
 @keyframes pulse-ring {
   0% {
-    transform: scale(0.85);
-    opacity: 0.7;
+    transform: scale(0.8);
+    opacity: 0.9;
   }
   100% {
-    transform: scale(1.5);
+    transform: scale(2);
     opacity: 0;
   }
 }
