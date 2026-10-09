@@ -16,6 +16,9 @@ rmcp = { version = "3.5.1", default-features = false, features = ["server", "tra
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "time", "sync"] }
 base64 = "0.23.1"
 png = "0.18.1"
+log = "0.4"
+ureq = "3.4.2"
+sha2 = "0.11.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.190"

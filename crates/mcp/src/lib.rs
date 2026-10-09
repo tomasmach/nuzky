@@ -4,6 +4,7 @@ pub mod bridge;
 pub mod ipc;
 mod limits;
 mod media;
+pub mod model_download;
 mod params;
 mod rules;
 mod tools;
@@ -98,7 +99,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Transcribe>(
             "transcribe",
-            "Recognise source files locally and store reusable word timestamps. Omit asset_ids to recognise every heard asset lacking a stored transcript (includes detached sound). Supply asset_ids to re-recognise them. language defaults to auto. model defaults to installed large-v3-turbo-q5_0, else small; an absolute local model path is accepted. No model download. Returns job_id; poll job with pauses. Result assets lists asset_id, words count, language. Then use get_transcript.",
+            "Recognise source files locally and store reusable word timestamps. Omit asset_ids to recognise every heard asset lacking a stored transcript (includes detached sound). Supply asset_ids to re-recognise them. language defaults to auto. model defaults to installed large-v3-turbo-q5_0, else small; an absolute local model path is accepted. Whisper models are never downloaded here; the word timing model of the recognised language (Czech, English) is downloaded once, then word times are measured in the sound; without it they are Whisper's estimates aligned to pauses. Returns job_id; poll job with pauses (phases transcribing, downloading_word_timing_model, measuring_word_times). Result assets lists asset_id, words count, language and word_times: measured or estimated. Then use get_transcript.",
         )?,
         tool::<params::GetTranscript>(
             "get_transcript",

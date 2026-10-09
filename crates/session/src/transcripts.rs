@@ -15,7 +15,10 @@ const INTERIOR_CHUNKS: u64 = 32;
 const CHUNK_BYTES: u64 = 64 * 1024;
 const DURATION_TOLERANCE_US: u64 = 1_000;
 use crate::hash::{FNV_OFFSET, hash_bytes};
-pub const VERSION: u32 = 2;
+/// Version 3 records how word times were measured; version 2 records, made before, still read as
+/// Whisper's estimates aligned to pauses, so a project and its word corrections keep their words.
+pub const VERSION: u32 = 3;
+const READABLE: [u32; 2] = [2, VERSION];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Segment {
@@ -33,6 +36,10 @@ pub struct Record {
     pub language: String,
     pub words: Vec<Word>,
     pub segments: Vec<Segment>,
+    /// The word timing model that measured the words, None when they are Whisper's estimates
+    /// aligned to pauses.
+    #[serde(default)]
+    pub alignment: Option<String>,
 }
 
 struct CachedFingerprint {
@@ -106,12 +113,12 @@ impl TranscriptStore {
             version: u32,
         }
         let header: Header = serde_json::from_slice(&bytes).context("INVALID_TRANSCRIPT: parsing version")?;
-        if header.version != VERSION {
+        if !READABLE.contains(&header.version) {
             return Ok(None);
         }
         let record: Record = serde_json::from_slice(&bytes).context("INVALID_TRANSCRIPT: parsing record")?;
         ensure!(
-            record.version == VERSION && record.fingerprint == fingerprint,
+            READABLE.contains(&record.version) && record.fingerprint == fingerprint,
             "INVALID_TRANSCRIPT: version or fingerprint mismatch"
         );
         if record.duration_us.abs_diff(asset.duration_us) > DURATION_TOLERANCE_US {
@@ -181,6 +188,7 @@ mod tests {
             language: "cs".into(),
             words: vec![],
             segments: vec![],
+            alignment: None,
         };
         store.put(&asset, &record).unwrap();
         let copy = dir.join("copy");
@@ -233,6 +241,7 @@ mod tests {
             language: "en".into(),
             words: vec![],
             segments: vec![],
+            alignment: None,
         };
         store.put(&asset, &record).unwrap();
         asset.path = copy.to_string_lossy().into();
@@ -245,6 +254,13 @@ mod tests {
         assert!(store.get(&asset).unwrap().is_none());
         asset.duration_us = record.duration_us - 1_001;
         assert!(store.get(&asset).unwrap().is_none());
+        // A version 2 record, made before words were measured, still reads.
+        let mut older = serde_json::to_value(&record).unwrap();
+        older["version"] = serde_json::json!(2);
+        older.as_object_mut().unwrap().remove("alignment");
+        fs::write(store.directory.join(format!("{fingerprint}.json")), serde_json::to_vec(&older).unwrap()).unwrap();
+        asset.duration_us = record.duration_us;
+        assert_eq!(store.get(&asset).unwrap(), Some(Record { version: 2, ..record.clone() }));
         let mut old = serde_json::to_value(record).unwrap();
         old["version"] = serde_json::json!(1);
         old.as_object_mut().unwrap().remove("duration_us");

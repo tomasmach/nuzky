@@ -442,12 +442,22 @@ impl Backend {
                     }
                     let models = model_paths.as_ref().context("MODEL_MISSING: transcription model")?;
                     let fraction = Some(i as f32 / count as f32);
-                    let wait = |waiting| {
-                        progress.set(if waiting { "waiting_for_other_transcription" } else { "transcribing" }, fraction)
+                    let stage = |stage| match stage {
+                        transcript::Stage::Waiting => progress.set("waiting_for_other_transcription", fraction),
+                        transcript::Stage::Recognising => progress.set("transcribing", fraction),
+                        transcript::Stage::DownloadingAligner(done) => {
+                            progress.set("downloading_word_timing_model", Some(done))
+                        }
+                        transcript::Stage::Aligning => progress.set("measuring_word_times", fraction),
                     };
                     let record =
-                        transcript::recognise(&store, &asset, &cache, &name, models, &language, &cancel, wait)?;
-                    recognised.push(json!({"asset_id":asset.id,"words":record.words.len(),"language":record.language}));
+                        transcript::recognise(&store, &asset, &cache, &name, models, &language, &cancel, stage)?;
+                    recognised.push(json!({
+                        "asset_id": asset.id,
+                        "words": record.words.len(),
+                        "language": record.language,
+                        "word_times": if record.alignment.is_some() { "measured" } else { "estimated" },
+                    }));
                 }
                 Ok(json!({"assets":recognised}))
             },
@@ -989,6 +999,7 @@ mod transcript_tests {
                     language: "en".into(),
                     words: sources["talk"].clone(),
                     segments: vec![],
+                    alignment: None,
                 },
             )
             .unwrap();

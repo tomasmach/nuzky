@@ -55,8 +55,21 @@ pub fn best_model() -> &'static str {
     }
 }
 
+/// What recognition is doing, for its job's progress.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stage {
+    /// Another recognition holds the slot.
+    Waiting,
+    Recognising,
+    /// The word timing model of the recognised language is downloading, 0..1.
+    DownloadingAligner(f32),
+    /// Measuring word times in the sound.
+    Aligning,
+}
+
 /// Recognises the whole file in its own time and stores its words, replacing an older record.
-/// `waiting(true)` reports that another recognition holds the slot, `waiting(false)` that it was freed.
+/// Word times are measured with the word timing model of the recognised language, downloaded on
+/// first use; without it, offline, or when it fails, they are Whisper's estimates aligned to pauses.
 #[allow(clippy::too_many_arguments)]
 pub fn recognise(
     store: &TranscriptStore,
@@ -66,9 +79,34 @@ pub fn recognise(
     (model_path, vad): &(PathBuf, PathBuf),
     language: &str,
     cancel: &AtomicBool,
-    waiting: impl FnMut(bool),
+    stage: impl FnMut(Stage),
 ) -> Result<Record> {
-    let _slot = recognition_slot(&nuzky_analysis::models_dir().join(".recognition.lock"), cancel, waiting)?;
+    let source = |language: &str, stage: &mut dyn FnMut(Stage)| {
+        let Some(model) = nuzky_analysis::align_model(language) else { return Ok(None) };
+        Ok(aligner(model, &nuzky_analysis::models_dir(), cancel, stage)?.map(|aligner| (aligner, model)))
+    };
+    recognise_with(store, asset, cache, model, (model_path, vad), language, cancel, stage, &source)
+}
+
+type AlignerSource<'a> = dyn Fn(&str, &mut dyn FnMut(Stage)) -> Result<Option<(nuzky_analysis::Aligner, &'static nuzky_analysis::AlignModel)>>
+    + 'a;
+
+/// [`recognise`] with the word timing model for the recognised language from `aligner`.
+#[allow(clippy::too_many_arguments)]
+fn recognise_with(
+    store: &TranscriptStore,
+    asset: &Asset,
+    cache: &Path,
+    model: &str,
+    (model_path, vad): (&PathBuf, &PathBuf),
+    language: &str,
+    cancel: &AtomicBool,
+    mut stage: impl FnMut(Stage),
+    aligner: &AlignerSource<'_>,
+) -> Result<Record> {
+    let _slot = recognition_slot(&nuzky_analysis::models_dir().join(".recognition.lock"), cancel, |waiting| {
+        stage(if waiting { Stage::Waiting } else { Stage::Recognising })
+    })?;
     let fingerprint = store.fingerprint(asset)?;
     let mut result = nuzky_analysis::transcribe_words_cancellable(
         AudioSource::Asset { asset, cache },
@@ -78,8 +116,10 @@ pub fn recognise(
         || cancel.load(Ordering::Relaxed),
     )?;
     check_cancel(cancel)?;
+    let aligner = aligner(&result.language, &mut stage)?;
+    stage(Stage::Aligning);
     // Cuts are planned from these times, so they follow the sound, not Whisper's estimates.
-    nuzky_analysis::align_to_sound(&mut result.words, asset, cache, || cancel.load(Ordering::Relaxed))?;
+    let measured = measure(&mut result.words, asset, cache, aligner.as_ref().map(|(a, _)| a), cancel)?;
     let record = Record {
         version: VERSION,
         fingerprint,
@@ -92,9 +132,67 @@ pub fn recognise(
             .into_iter()
             .map(|s| Segment { start_us: s.start_us, end_us: s.end_us, text: s.text })
             .collect(),
+        alignment: aligner.filter(|_| measured).map(|(_, m)| m.id.to_owned()),
     };
     store.put(asset, &record)?;
     Ok(record)
+}
+
+/// The word timing `model` in `dir`, downloaded if it is missing. None when it cannot be had:
+/// recognition then goes on as before, only a stop ends it.
+fn aligner(
+    model: &nuzky_analysis::AlignModel,
+    dir: &Path,
+    cancel: &AtomicBool,
+    stage: &mut dyn FnMut(Stage),
+) -> Result<Option<nuzky_analysis::Aligner>> {
+    let integrity = crate::model_download::Integrity { size: model.size, sha256: model.sha256 };
+    let loaded = crate::model_download::download(model.url, &dir.join(model.file), integrity, cancel, |done| {
+        stage(Stage::DownloadingAligner(done))
+    })
+    .and_then(|path| {
+        std::panic::catch_unwind(|| nuzky_analysis::Aligner::load(&path))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the word timing model crashed while loading")))
+    });
+    match loaded {
+        Ok(aligner) => Ok(Some(aligner)),
+        Err(error) => {
+            check_cancel(cancel)?;
+            log::warn!("Word times stay Whisper's estimates: {error:#}");
+            Ok(None)
+        }
+    }
+}
+
+/// Measures `words` in the sound, with `aligner` when there is one; true when it measured any.
+/// A failing model leaves Whisper's estimates aligned to pauses; only a stop ends recognition.
+fn measure(
+    words: &mut [Word],
+    asset: &Asset,
+    cache: &Path,
+    aligner: Option<&nuzky_analysis::Aligner>,
+    cancel: &AtomicBool,
+) -> Result<bool> {
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    if aligner.is_some() {
+        let mut measured = words.to_vec();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            nuzky_analysis::align_to_sound(&mut measured, asset, cache, aligner, cancelled)
+        }))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("the word timing model crashed")));
+        match result {
+            Ok(any) => {
+                words.clone_from_slice(&measured);
+                return Ok(any);
+            }
+            Err(error) => {
+                check_cancel(cancel)?;
+                log::warn!("Word times stay Whisper's estimates: {error:#}");
+            }
+        }
+    }
+    nuzky_analysis::align_to_sound(words, asset, cache, None, cancelled)?;
+    Ok(false)
 }
 
 /// One speech recognition at a time on this computer: the app and agents, attached or headless,
@@ -1514,5 +1612,67 @@ pub(crate) mod tests {
         assert!(error.starts_with("INVALID_WORD_INDEX"), "{error}");
         assert!(correct(&mut project, &sources, &[]).unwrap_err().to_string().starts_with("INVALID_ARGUMENTS"));
         assert!(project.word_corrections.is_empty());
+    }
+
+    #[test]
+    fn a_word_timing_model_that_cannot_be_had_leaves_recognition_going_and_a_stop_ends_it() {
+        let dir = std::env::temp_dir().join(format!("nuzky-aligner-{}", nuzky_engine::edit::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url: &'static str =
+            Box::leak(format!("http://{}/model.gguf", server.local_addr().unwrap()).into_boxed_str());
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for mut stream in server.incoming().flatten() {
+                let _ = stream.read(&mut [0; 4096]);
+                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let model = nuzky_analysis::AlignModel {
+            language: "cs",
+            id: "test",
+            file: "model.gguf",
+            url,
+            size: 1024,
+            sha256: "00",
+        };
+        let missing = aligner(&model, &dir, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert!(missing.is_none());
+        let stopped = aligner(&model, &dir, &AtomicBool::new(true), &mut |_| {}).map(|a| a.is_some()).unwrap_err();
+        assert!(stopped.to_string().starts_with("CANCELLED"), "{stopped}");
+        // A file that is not a word timing model, though its checksum matched once, is no model either.
+        std::fs::write(dir.join("broken.gguf"), b"not a model").unwrap();
+        assert!(nuzky_analysis::Aligner::load(&dir.join("broken.gguf")).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs tmp-test/speech.wav and the small + Silero models from scripts/fixtures.sh"]
+    fn without_a_word_timing_model_recognition_gives_the_words_it_gave_before() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let models = root.join("tmp-test/xdg/data/nuzky/models");
+        let dir = root.join("tmp-test/mcp-tests").join(format!("no-aligner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = TranscriptStore::at(dir.join("transcripts")).unwrap();
+        let cache = dir.join("cache");
+        let asset = nuzky_engine::media::probe(&root.join("tmp-test/speech.wav"), "speech".into()).unwrap();
+        let (whisper, vad) = (models.join("ggml-small.bin"), models.join(VAD_MODEL));
+        let cancel = AtomicBool::new(false);
+        let record =
+            recognise_with(&store, &asset, &cache, "small", (&whisper, &vad), "en", &cancel, |_| {}, &|_, _| Ok(None))
+                .unwrap();
+        // What recognition stored before word timing models: Whisper's words aligned to pauses.
+        let mut before =
+            nuzky_analysis::transcribe_words(AudioSource::Asset { asset: &asset, cache: &cache }, &whisper, &vad, "en")
+                .unwrap()
+                .words;
+        let pcm = nuzky_engine::audio::Pcm::open(&nuzky_engine::audio::ensure_pcm(&cache, &asset, |_| Ok(())).unwrap())
+            .unwrap();
+        nuzky_analysis::align_words(&mut before, pcm.samples());
+        assert!(before.len() > 10);
+        assert_eq!(record.words, before);
+        assert_eq!((record.version, record.alignment.as_deref()), (VERSION, None));
+        assert_eq!(store.get(&asset).unwrap(), Some(record));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

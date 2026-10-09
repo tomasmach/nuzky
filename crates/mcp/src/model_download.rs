@@ -11,7 +11,16 @@ use anyhow::{Context, Result, bail, ensure};
 use nuzky_session::jobs::check_cancel;
 use sha2::{Digest, Sha256};
 
-use crate::store::sidecar;
+/// `path` with `suffix` appended to its file name.
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// A spawned child shares this process's open files, download locks included, until it execs.
+#[cfg(test)]
+static CHILD_SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -537,7 +546,7 @@ mod tests {
             .open(sidecar(&path, ".lock"))
             .unwrap();
         lock.lock().unwrap();
-        let spawning = crate::CHILD_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let spawning = CHILD_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut children: Vec<_> = (0..2)
             .map(|_| {
                 Child(

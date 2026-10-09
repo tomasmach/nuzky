@@ -1,0 +1,134 @@
+# Word boundaries of tmp-test/krysar-cs.wav (scripts/fixtures.sh): 25 s of chapter 2 of Krysař by Viktor Dyk,
+# read for LibriVox (public domain). Checked by hand on 1 ms wideband spectrograms and the level curve.
+# word<TAB>index<TAB>text: what is said, in order.
+# onset/offset<TAB>word<TAB>from_s<TAB>to_s<TAB>class: where a word after or before a pause starts or ends.
+# join<TAB>word<TAB>from_s<TAB>to_s<TAB>class: between word-1 and word in connected speech, where a cut clips
+#   neither: a stop closure, the onset of a fricative, a glottal stop before a vowel.
+# class sharp: the sound shows the boundary within the range. soft: vowel, glide or nasal transitions read
+#   with the help of the model's own boundaries, so they are reported, not trusted.
+word	0	Slunce
+word	1	a
+word	2	světlo
+word	3	ji
+word	4	lekalo.
+word	5	Prchala
+word	6	před
+word	7	ním
+word	8	jako
+word	9	noční
+word	10	pták.
+word	11	Ale
+word	12	Agnes
+word	13	nezdálo
+word	14	se
+word	15	nic
+word	16	lekati.
+word	17	Hleděla
+word	18	s
+word	19	důvěřivým
+word	20	úsměvem
+word	21	do
+word	22	příštích
+word	23	dnů.
+word	24	A
+word	25	krysař
+word	26	stále
+word	27	pobýval
+word	28	v
+word	29	Hameln.
+word	30	Vyháněl
+word	31	krysy.
+word	32	Byla
+word	33	to
+word	34	událost
+word	35	pro
+word	36	Hameln.
+word	37	Děti
+word	38	a
+word	39	staří
+word	40	provázeli
+word	41	ho
+word	42	na
+word	43	jeho
+word	44	cestách.
+word	45	Děti
+word	46	a
+word	47	staří
+word	48	divili
+word	49	se
+word	50	krysám,
+word	51	které
+word	52	šly
+word	53	za
+word	54	ním
+word	55	slepě
+word	56	do
+word	57	záhuby.
+onset	0	0.440	0.455	sharp
+join	1	0.850	0.880	soft
+join	2	0.930	0.950	sharp
+join	3	1.190	1.230	soft
+join	4	1.310	1.360	soft
+offset	4	1.770	1.800	sharp
+onset	5	2.490	2.505	sharp
+join	6	2.845	2.900	sharp
+join	7	3.050	3.090	soft
+join	8	3.330	3.380	soft
+join	9	3.540	3.620	soft
+join	10	3.940	3.995	sharp
+offset	10	4.360	4.390	sharp
+onset	11	5.475	5.495	sharp
+join	12	5.630	5.685	sharp
+join	13	6.085	6.120	sharp
+join	14	6.505	6.525	sharp
+join	15	6.595	6.620	sharp
+join	16	6.840	6.875	sharp
+offset	16	7.360	7.390	sharp
+onset	17	7.890	7.920	sharp
+join	18	8.220	8.245	sharp
+join	19	8.290	8.330	sharp
+join	20	8.870	8.950	sharp
+join	21	9.450	9.490	sharp
+join	22	9.565	9.630	sharp
+join	23	10.070	10.125	sharp
+offset	23	10.420	10.450	sharp
+onset	24	11.390	11.415	sharp
+join	25	11.515	11.550	sharp
+join	26	12.000	12.100	sharp
+join	27	12.475	12.530	sharp
+join	28	12.950	12.990	soft
+join	29	12.995	13.020	sharp
+offset	29	13.470	13.500	sharp
+onset	30	14.045	14.060	sharp
+join	31	14.485	14.560	sharp
+offset	31	14.890	14.930	sharp
+onset	32	15.665	15.680	sharp
+join	33	15.825	15.880	sharp
+join	34	15.930	15.970	sharp
+join	35	16.480	16.550	sharp
+join	36	16.625	16.660	soft
+offset	36	17.110	17.140	sharp
+onset	37	17.880	17.900	sharp
+join	38	18.165	18.200	sharp
+join	39	18.265	18.285	sharp
+join	40	18.780	18.825	sharp
+join	41	19.280	19.370	soft
+join	42	19.400	19.490	soft
+join	43	19.510	19.590	soft
+join	44	19.735	19.775	sharp
+offset	44	20.320	20.360	sharp
+onset	45	21.075	21.095	sharp
+join	46	21.345	21.375	sharp
+join	47	21.425	21.445	sharp
+offset	47	21.970	22.000	sharp
+onset	48	22.125	22.140	sharp
+join	49	22.375	22.395	sharp
+join	50	22.525	22.565	sharp
+join	51	23.060	23.100	sharp
+join	52	23.385	23.405	sharp
+join	53	23.545	23.565	sharp
+join	54	23.620	23.660	soft
+join	55	23.830	23.860	sharp
+join	56	24.160	24.200	sharp
+join	57	24.285	24.320	sharp
+offset	57	24.750	24.780	sharp

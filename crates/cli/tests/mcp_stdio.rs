@@ -346,6 +346,7 @@ fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
         language: "cs".into(),
         words,
         segments: vec![],
+        alignment: None,
     };
     store.put(&asset, &record).unwrap();
 
@@ -456,6 +457,7 @@ fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
         language: "cs".into(),
         words: serde_json::from_value(json!(words)).unwrap(),
         segments: vec![],
+        alignment: None,
     };
     store.put(&asset, &record).unwrap();
 
@@ -535,6 +537,8 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     loop {
         let status = c.call("job", json!({"job_id":job["job_id"],"action":"get"}));
         if status["status"] == "done" {
+            // The English word timing model from scripts/fixtures.sh measured the words.
+            assert_eq!(status["result"]["assets"][0]["word_times"], "measured", "{status}");
             break;
         }
         assert_eq!(status["status"], "running", "{status}");
@@ -578,8 +582,17 @@ fn retakes_of_three_czech_takes_over_stdio() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
     let model = root.join("tmp-test/xdg/data/nuzky/models/ggml-large-v3-turbo-q5_0.bin");
     let takes: Vec<PathBuf> = (1..=3).map(|n| root.join(format!("tmp-test/reel-{n}.mp4"))).collect();
-    // Its own data directory, so no transcript stored by an earlier run is found.
+    // Its own data directory, so no transcript stored by an earlier run is found, with the
+    // Czech word timing model of scripts/fixtures.sh so recognition does not download it.
     let mut c = Client::start(true, None, Some(None));
+    let models = c.dir.join("data/nuzky/models");
+    std::fs::create_dir_all(&models).unwrap();
+    let aligner = "wav2vec2-xls-r-300m-cs-250-q8_0.gguf";
+    std::fs::hard_link(root.join("tmp-test/xdg/data/nuzky/models").join(aligner), models.join(aligner))
+        .or_else(|_| {
+            std::fs::copy(root.join("tmp-test/xdg/data/nuzky/models").join(aligner), models.join(aligner)).map(|_| ())
+        })
+        .unwrap();
     let run = c.call("begin_run", json!({"label":"takes"}));
     let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":takes}))["asset_ids"].clone();
     let place: Vec<Value> = ids.as_array().unwrap().iter().map(|id| json!({"type":"addClip","assetId":id})).collect();

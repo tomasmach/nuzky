@@ -182,6 +182,7 @@ mod tests {
             language: "cs".into(),
             words,
             segments: vec![],
+            alignment: None,
         };
         store.put(&asset, &record).unwrap();
         let session = ProjectSession::open(&file, Mode::Write, None).unwrap();

@@ -173,6 +173,8 @@ def rough_cut(r, bridge, truths):
     started = time.time()
     job = poll(bridge, bridge.call('transcribe', {'language': 'cs', 'model': MODEL}), 600)
     r.check('Czech speech in all three takes is recognised', job['status'] == 'done', job)
+    timed = [a.get('word_times') for a in job.get('result', {}).get('assets', [])]
+    r.check('word times are measured in the sound of every take, not estimated', timed == ['measured'] * 3, job)
     print(f'  recognition took {time.time() - started:.0f} s', flush=True)
     transcript = bridge.call('get_transcript', {})
     r.check('no take is left untranscribed', not transcript['untranscribed'], transcript['untranscribed'])
