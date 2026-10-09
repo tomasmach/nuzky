@@ -52,6 +52,7 @@ impl ProjectSession {
         ensure!(inner.run.is_none(), "RUN_BUSY: a run is already open");
         inner.recovered()?;
         let run_id = new_id();
+        inner.record();
         inner.editor.seal();
         // The project file must hold the user's debounced edits before "keep" can mean it.
         inner.flush()?;
@@ -143,8 +144,11 @@ impl ProjectSession {
             inner.editor.last_key() == Some(run_key(run_id).as_str()),
             "UNDO_UNAVAILABLE: run is not the last history entry"
         );
+        inner.record();
         inner.editor.undo();
         inner.changed(Origin::Undo);
+        inner.history.tip = Some(Tip::user(inner.undo_label(run_id)));
+        inner.record();
         inner.flush()?;
         Ok(RunResult { run_id: run_id.into(), stamp: inner.stamp() })
     }
@@ -187,7 +191,11 @@ impl Inner {
         let action = *run.ending.get_or_insert(action);
         if matches!(action, EndAction::Discard) && self.editor.drop_last(&run_key(&run.info.run_id)) {
             self.changed(self.run_origin()?);
+            // Back to how the run found the project, which is the newest version.
+            self.history.tip = None;
         }
+        // A kept run is a version.
+        self.record();
         self.editor.seal();
         self.flush()?;
         // On failure leave the marker and the run available for another finish attempt.

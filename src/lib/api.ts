@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, Said, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, ProjectVersion, Said, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -18,6 +18,10 @@ export const api = {
   applyEdits: (cmds: EditCmd[], coalesce: string | null, epoch: Epoch) => invoke<Snapshot>("apply_edits", { cmds, coalesce, expectedEpoch: epoch }),
   undo: (epoch: Epoch) => invoke<Snapshot>("undo", { expectedEpoch: epoch }),
   redo: (epoch: Epoch) => invoke<Snapshot>("redo", { expectedEpoch: epoch }),
+  /** The newest kept versions of the open project, newest first. */
+  listVersions: (limit: number) => invoke<ProjectVersion[]>("list_versions", { limit }),
+  /** Restores a kept version as one undo step. */
+  restoreVersion: (index: number, epoch: Epoch) => invoke<Snapshot>("restore_version", { index, expectedEpoch: epoch }),
   importMedia: (paths: string[], epoch: Epoch) =>
     invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("import_media", { paths, expectedEpoch: epoch }),
   thumbnail: (assetId: string) => invoke<string | null>("thumbnail", { assetId }),
@@ -111,6 +115,8 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   NO_WORDS: "Transcribe the timeline first, then try again.",
   OUTPUT_EXISTS: "A file with that name appeared while exporting. Export again to replace it or choose another name.",
   DESTINATION_EXISTS: "A file with that name already exists.",
+  UNKNOWN_VERSION: "That version is no longer kept. Open the list of versions again.",
+  HISTORY_CORRUPT: "That version could not be read, so the project is unchanged.",
   CANCELLED: "Cancelled.",
   AGENT_BUSY: (detail) => detail,
   NOT_INSTALLED: (detail) => sentence(detail.replace(/\.$/, "")) + ". Install it and sign in from a terminal.",

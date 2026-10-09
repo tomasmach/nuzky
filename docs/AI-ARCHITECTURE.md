@@ -35,6 +35,8 @@ A run groups one agent turn. There is one linear history: a run is one entry in 
 - `end_run(run_id, keep | discard)`: keep seals the entry; discard drops it without a redo entry. A run also ends with keep when its client disconnects or after 2 minutes without calls from that client; reads by the UI or other clients do not keep it open.
 - Stop in the UI revokes the run first (late calls get `RUN_STOPPED`), cancels its jobs, then ends it with keep. Ctrl+Z then undoes the whole run and Ctrl+Shift+Z brings it back.
 - `undo_run(run_id)` works only while that run is the last history entry.
+- Versions outlive the session. Each kept run, each user step (one undo entry), undo, redo, restore and the project as it opened becomes a version: the project's compact JSON, its SHA-256, a label, the time and the run id. A step with a coalesce key (a drag, a typing burst) becomes one when the next step starts or the list is read; an open run when it ends; a discarded run never. The writer thread appends them to `<project>.history.jsonl`, one JSON line each, after the saves before them; a line whose project an earlier line holds leaves it out. The newest 200 versions and 32 MiB of distinct project JSON are kept, and once the file holds twice that it is written again atomically with only those. A torn or unreadable line is skipped and the next write replaces the file. A project that opens different from its newest version (an older project, or a save that never reached the file) becomes the version "Opened".
+- `list_history(limit)` lists the versions newest first with the current hash. `undo_to(index | hash prefix)` checks the stored JSON against its hash, validates the project and replaces it as one undo step; it needs no open run (`RUN_ACTIVE`), like Undo in the app.
 - Every result carries `revision` and `session_epoch`; mutations may pass `expected_revision` to fail fast on stale state.
 - User edits are saved shortly after they stop; run batches are saved before they are acknowledged.
 - On open, a leftover checkpoint means a run did not finish: the app asks to keep the AI changes or restore the version before, as an undoable edit. Headless mode refuses writes until that is resolved.
@@ -57,6 +59,7 @@ All times are integer microseconds on the timeline unless a field says `source`.
 |---|---|
 | `get_state(range?, clip_ids?)` | Project, tracks, clips with ids and times, the user's selection and playhead, revision, open run |
 | `begin_run(label)` / `end_run(run_id, action)` / `undo_run(run_id)` | Run lifecycle |
+| `list_history(limit?)` / `undo_to(index \| hash)` | Kept versions of the project, and restoring one as a new undo step |
 | `apply_edits(run_id, request_id, edits[], expected_revision?)` | Atomic batch of `EditCmd` |
 | `import_media(run_id, paths[], request_id?)` | Probe local files and add them as assets; a repeated `request_id` never adds them twice |
 | `inspect_frames(times_us[] or sample: "changes", width?, safe_area?)` | Rendered frames as one image (contact sheet with timestamps); fails if media is missing. `sample: "changes"` picks the frames itself: it looks at up to 120 candidates of a range, compares their difference hashes and keeps only frames unlike the last four kept, at most 16 per page, with the number skipped and a `next` cursor that carries those hashes, so the next page repeats nothing |

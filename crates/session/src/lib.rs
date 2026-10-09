@@ -6,6 +6,7 @@ pub mod summary;
 pub mod transcripts;
 
 mod changes;
+mod history;
 mod recovery;
 mod run;
 mod storage;
@@ -13,6 +14,7 @@ mod types;
 mod validate;
 mod writer;
 
+pub use history::{HISTORY_SUFFIX, HistoryList, MAX_VERSIONS, Restored, Target, VersionInfo};
 pub use storage::{json_temp_path, lock_project, save as write_json_atomic};
 pub use types::*;
 pub use validate::{local_media_path, validate};
@@ -33,6 +35,7 @@ use nuzky_engine::{
 use serde_json::Value;
 
 use changes::changes;
+use history::{History, Tip};
 use run::Run;
 use writer::Writer;
 
@@ -63,6 +66,7 @@ struct Inner {
     editor: Editor,
     epoch: String,
     run: Option<Run>,
+    history: History,
     stopped_runs: HashSet<String>,
     requests: HashMap<(String, String), Request>,
     recovery: Option<PathBuf>,
@@ -93,8 +97,15 @@ impl ProjectSession {
         let lock = if mode == Mode::Write { Some(lock_project(&path, true)?) } else { None };
         let project = load(&path)?;
         let checkpoint = storage::sidecar(&path, ".checkpoint.json");
-        let writer = if mode == Mode::Write { Some(Writer::start(path.clone(), events.clone())?) } else { None };
-        let inner = Arc::new(Mutex::new(Inner {
+        let mut history = History::default();
+        let mut writer = None;
+        if mode == Mode::Write {
+            history = History::load(&storage::sidecar(&path, HISTORY_SUFFIX));
+            // The project as it opens is a version, unless it already is the newest one.
+            history.tip = Some(Tip::user("Opened"));
+            writer = Some(Writer::start(path.clone(), events.clone(), history.broken.clone())?);
+        }
+        let mut inner = Inner {
             writer,
             _lock: lock,
             path,
@@ -102,13 +113,16 @@ impl ProjectSession {
             editor: Editor::new(project),
             epoch: format!("{}{}", new_id(), new_id()),
             run: None,
+            history,
             stopped_runs: HashSet::new(),
             requests: HashMap::new(),
             recovery: checkpoint.exists().then_some(checkpoint),
             ui: UiContext::default(),
             timeout,
             events,
-        }));
+        };
+        inner.record();
+        let inner = Arc::new(Mutex::new(inner));
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
         let worker = if mode == Mode::Write { Some(spawn_idle_worker(&inner, &stop, timeout)?) } else { None };
         Ok(Self { inner, stop, worker })
@@ -117,15 +131,7 @@ impl ProjectSession {
     /// Reading never postpones an open run's idle auto-keep; only its owner does, with `touch_run`.
     pub fn state(&self) -> Result<SessionState> {
         let mut inner = self.inner.lock().unwrap();
-        if inner.mode == Mode::ReadOnly {
-            let project = load(&inner.path)?;
-            if inner.editor.project != project {
-                inner.editor.project = project;
-                inner.editor.revision += 1;
-            }
-            let checkpoint = storage::sidecar(&inner.path, ".checkpoint.json");
-            inner.recovery = checkpoint.exists().then_some(checkpoint);
-        }
+        inner.refresh()?;
         Ok(SessionState {
             project: inner.editor.project.clone(),
             speech_layout_key: speech_layout_key(&inner.editor.project),
@@ -183,9 +189,12 @@ impl ProjectSession {
     fn history(&self, redo: bool) -> Result<Stamp> {
         let mut inner = self.inner.lock().unwrap();
         inner.user_editable()?;
+        inner.record();
         let changed = if redo { inner.editor.redo() } else { inner.editor.undo() };
         if changed {
             inner.changed(if redo { Origin::Redo } else { Origin::Undo });
+            inner.history.tip = Some(Tip::user(if redo { "Redo" } else { "Undo" }));
+            inner.record();
             inner.schedule()?;
         }
         Ok(inner.stamp())
@@ -204,6 +213,7 @@ impl ProjectSession {
         if inner.run.is_some() {
             inner.finish(EndAction::Keep)?;
         } else if inner.mode == Mode::Write {
+            inner.record();
             inner.flush()?;
         }
         Ok(())
@@ -223,6 +233,20 @@ impl Inner {
 
     fn changed(&self, origin: Origin) {
         self.emit(SessionEvent::Changed { revision: self.editor.revision, origin });
+    }
+
+    /// A read-only session follows the project file another session writes.
+    fn refresh(&mut self) -> Result<()> {
+        if self.mode == Mode::ReadOnly {
+            let project = load(&self.path)?;
+            if self.editor.project != project {
+                self.editor.project = project;
+                self.editor.revision += 1;
+            }
+            let checkpoint = storage::sidecar(&self.path, ".checkpoint.json");
+            self.recovery = checkpoint.exists().then_some(checkpoint);
+        }
+        Ok(())
     }
 
     fn writable(&self) -> Result<()> {
@@ -260,6 +284,16 @@ impl Inner {
     }
 
     fn apply(&mut self, cmds: Vec<EditCmd>, coalesce: Option<String>, origin: Origin) -> Result<EditResult> {
+        // An edit that starts a new undo step ends the one before, which becomes a version.
+        let continues = coalesce.is_some() && self.editor.coalescing() == coalesce.as_deref();
+        let keyed = coalesce.is_some();
+        if !continues {
+            self.record();
+        }
+        let tip = match &origin {
+            Origin::Run { run_id, label } => Tip { label: label.clone(), run_id: Some(run_id.clone()) },
+            _ => Tip::user(history::label(&cmds)),
+        };
         let before = self.editor.project.clone();
         let mut outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.editor.apply_batch_checked(cmds, coalesce, validate)
@@ -270,6 +304,13 @@ impl Inner {
         let (changed, clips) = changes(&before, &self.editor.project, &outcome);
         if self.editor.project != before {
             self.changed(origin);
+            if !continues || self.history.tip.is_none() {
+                self.history.tip = Some(tip);
+            }
+            // Without a key the step cannot grow, so it is a version at once.
+            if !keyed {
+                self.record();
+            }
         }
         Ok(EditResult { stamp: self.stamp(), outcome, changed, clips })
     }

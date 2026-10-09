@@ -14,7 +14,7 @@ use nuzky_engine::{
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
 };
-use nuzky_session::{Expect, Mode, ProjectSession, SessionState, host::Host, jobs::check_cancel};
+use nuzky_session::{Expect, Mode, ProjectSession, SessionState, Target, host::Host, jobs::check_cancel};
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -193,6 +193,21 @@ impl Backend {
             "undo_run" => {
                 let a: Undo = parse(arguments)?;
                 Ok(serde_json::to_value(self.host.session.undo_run(&a.run_id)?)?)
+            }
+            "list_history" => {
+                let a: ListHistory = parse(arguments)?;
+                let limit = a.limit.unwrap_or(20);
+                ensure!((1..=nuzky_session::MAX_VERSIONS).contains(&limit), "INVALID_ARGUMENTS: limit is 1 to 200");
+                Ok(serde_json::to_value(self.host.session.list_history(limit)?)?)
+            }
+            "undo_to" => {
+                let a: UndoTo = parse(arguments)?;
+                let target = match (a.index, a.hash) {
+                    (Some(index), None) => Target::Index(index),
+                    (None, Some(hash)) => Target::Hash(hash),
+                    _ => anyhow::bail!("INVALID_ARGUMENTS: give index or hash"),
+                };
+                Ok(serde_json::to_value(self.host.session.undo_to(target)?)?)
             }
             "suggest_options" => {
                 let a: SuggestOptions = parse(arguments)?;

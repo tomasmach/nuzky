@@ -86,6 +86,14 @@ fn catalog() -> Result<Vec<Tool>> {
             "undo_run",
             "Undo this whole run only if it is the LAST entry in the shared user/run history and no run is open. Saves the restored project. The UI can redo the whole run. History belongs to this session epoch. Revision increments only if the project changes.",
         )?,
+        tool::<params::ListHistory>(
+            "list_history",
+            "List the kept versions of the project, newest first: index (stays with the version), hash (first 12 hex digits of the SHA-256 of the project's compact JSON), label, at_ms (Unix time in ms) and run_id for a version an agent's run made (none for the user's own steps). A version is the project after each kept run, each of the user's steps, each undo, redo and restore, and as it was opened; current_hash is the project now, so the version with that hash is the current one, and older counts versions kept but not listed. Versions outlive restarts, up to the newest 200. Read-only; works while a run is open, but an open run becomes a version only when it ends.",
+        )?,
+        tool::<params::UndoTo>(
+            "undo_to",
+            "Restore a kept version from list_history by index or hash prefix (4+ hex digits) as ONE new undo step, so Undo in the app or undo_to the version before takes it back; versions after it stay listed, nothing is lost. Requires --allow-write and no open run (RUN_ACTIVE). The project then has exactly that version's hash. Saves before returning. changed is false and revision stays when the project already is that version. UNKNOWN_VERSION when no kept version matches or a prefix matches several.",
+        )?,
         tool::<params::Import>(
             "import_media",
             "Probe existing local file paths and add assets through the owning run. Relative paths resolve beside the project. Optional request_id: reuse it with the same paths after a save failure to finish the original import without adding the assets twice. Returns asset_ids; follow with addClip edits to place them. No uploads, downloads or automatic insertion.",

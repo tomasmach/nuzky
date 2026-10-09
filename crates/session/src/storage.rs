@@ -17,7 +17,10 @@ pub fn json_temp_path(path: &Path) -> PathBuf {
 }
 
 pub fn save(path: &Path, value: &impl Serialize) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(value).context("Serializing project state")?;
+    save_bytes(path, &serde_json::to_vec_pretty(value).context("Serializing project state")?)
+}
+
+pub(crate) fn save_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = json_temp_path(path);
     let result = (|| {
         let mut file = OpenOptions::new()
@@ -25,7 +28,7 @@ pub fn save(path: &Path, value: &impl Serialize) -> Result<()> {
             .create_new(true)
             .open(&tmp)
             .with_context(|| format!("Creating {}", tmp.display()))?;
-        file.write_all(&bytes).context("Writing project state")?;
+        file.write_all(bytes).context("Writing project state")?;
         file.sync_all().context("Syncing project state")?;
         fs::rename(&tmp, path).with_context(|| format!("Saving {}", path.display()))?;
         Ok(())

@@ -437,6 +437,53 @@ fn redo(state: State<'_, AppState>, expected_epoch: Option<String>) -> CmdResult
     current.snapshot(Vec::new())
 }
 
+/// A kept version of the open project, for the list of versions in the top bar.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVersion {
+    /// Stays with the version across restarts.
+    index: u64,
+    label: String,
+    /// Unix time in milliseconds.
+    at_ms: u64,
+    /// Made by an AI agent's run.
+    ai: bool,
+    /// The project is this version now; only the newest version with its contents says so.
+    current: bool,
+}
+
+/// The newest `limit` versions, newest first.
+#[tauri::command]
+fn list_versions(state: State<'_, AppState>, limit: usize) -> CmdResult<Vec<ProjectVersion>> {
+    let current = state.session.lock().unwrap();
+    let list = current.host.session.list_history(limit.clamp(1, nuzky_session::MAX_VERSIONS)).map_err(err)?;
+    let mut found = false;
+    Ok(list
+        .versions
+        .into_iter()
+        .map(|version| {
+            let current = !found && version.hash == list.current_hash;
+            found |= current;
+            ProjectVersion {
+                index: version.index,
+                label: version.label,
+                at_ms: version.at_ms,
+                ai: version.run_id.is_some(),
+                current,
+            }
+        })
+        .collect())
+}
+
+/// Restores a kept version as one undo step.
+#[tauri::command]
+fn restore_version(state: State<'_, AppState>, index: u64, expected_epoch: Option<String>) -> CmdResult<Snapshot> {
+    let current = lock_session(&state.session, expected_epoch.as_deref())?;
+    current.host.session.undo_to(nuzky_session::Target::Index(index)).map_err(err)?;
+    current.snapshot(Vec::new())
+}
+
 #[tauri::command]
 fn set_ui_context(state: State<'_, AppState>, selection: Vec<String>, playhead_us: i64) {
     state.session.lock().unwrap().host.session.set_ui_context(selection, playhead_us);
@@ -885,6 +932,8 @@ pub fn run() {
             apply_edits,
             undo,
             redo,
+            list_versions,
+            restore_version,
             import_media,
             thumbnail,
             waveform,

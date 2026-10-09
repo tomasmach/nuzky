@@ -332,6 +332,7 @@ impl Library {
             log::warn!("Cannot remove empty project {}: {error}", path.display());
             return false;
         }
+        let _ = std::fs::remove_file(sidecar(path, nuzky_session::HISTORY_SUFFIX));
         drop(lock);
         let _ = std::fs::remove_file(sidecar(path, ".lock"));
         true
@@ -458,6 +459,10 @@ impl Library {
         let checkpoint = sidecar(path, ".checkpoint.json");
         if checkpoint.exists() {
             trash::delete(&checkpoint).context("Moving the unfinished AI edit to the Trash")?;
+        }
+        let versions = sidecar(path, nuzky_session::HISTORY_SUFFIX);
+        if versions.exists() {
+            trash::delete(&versions).context("Moving the project's versions to the Trash")?;
         }
         drop(lock);
         let _ = std::fs::remove_file(sidecar(path, ".lock"));

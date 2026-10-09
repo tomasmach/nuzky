@@ -1016,3 +1016,79 @@ fn oversized_agent_text_is_rejected_without_changing_state_or_history() {
     assert_eq!(before.stamp.revision, after.stamp.revision);
     assert_eq!(f.disk(), before.project);
 }
+
+fn labels(s: &ProjectSession) -> Vec<String> {
+    s.list_history(MAX_VERSIONS).unwrap().versions.into_iter().map(|v| v.label).collect()
+}
+
+#[test]
+fn versions_follow_steps_and_runs_and_survive_a_torn_file() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("Typed"), None, Expect::default()).unwrap();
+    // One typing burst is one undo step, so one version.
+    for name in ["B", "Bu", "Burst"] {
+        s.edit(rename(name), Some("typing".into()), Expect::default()).unwrap();
+    }
+    // The next gesture ends it, so it stays a version of its own.
+    for name in ["Dragged", "Dragged on"] {
+        s.edit(rename(name), Some("drag".into()), Expect::default()).unwrap();
+    }
+    let run = s.begin_run("Tighten".into()).unwrap().run_id;
+    apply(&s, &run, "Run 1");
+    apply(&s, &run, "Run 2");
+    assert_eq!(s.list_history(10).unwrap().versions.len(), 4, "an open run is a version only once it ends");
+    s.end_run(&run, EndAction::Keep).unwrap();
+    let discarded = s.begin_run("Thrown away".into()).unwrap().run_id;
+    apply(&s, &discarded, "Never kept");
+    s.end_run(&discarded, EndAction::Discard).unwrap();
+    s.undo().unwrap();
+    assert_eq!(labels(&s), ["Undo", "Tighten", "Rename project", "Rename project", "Rename project", "Opened"]);
+    let list = s.list_history(10).unwrap();
+    assert_eq!(list.versions[1].run_id.as_deref(), Some(run.as_str()));
+    assert_eq!(list.current_hash, list.versions[0].hash);
+    assert_eq!(list.versions[0].hash, list.versions[2].hash, "the undo is back at the drag");
+    drop(s);
+
+    let file = storage::sidecar(&f.0, HISTORY_SUFFIX);
+    let mut torn = fs::read_to_string(&file).unwrap();
+    torn.push_str("{\"index\":9,\"hash\":\"ab");
+    fs::write(&file, torn).unwrap();
+    let s = f.open();
+    assert_eq!(labels(&s), ["Undo", "Tighten", "Rename project", "Rename project", "Rename project", "Opened"]);
+    s.edit(rename("After"), None, Expect::default()).unwrap();
+    drop(s);
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.lines().all(|line| serde_json::from_str::<Value>(line).is_ok()), "the torn line was replaced");
+    assert_eq!(labels(&f.open())[..2], ["Rename project", "Undo"]);
+}
+
+#[test]
+fn versions_stay_bounded_and_a_tampered_one_is_refused() {
+    let f = Fixture::new();
+    let s = f.open();
+    for i in 0..MAX_VERSIONS + 30 {
+        s.edit(rename(&format!("Name {i}")), None, Expect::default()).unwrap();
+    }
+    let list = s.list_history(MAX_VERSIONS).unwrap();
+    assert_eq!((list.versions.len(), list.older), (MAX_VERSIONS, 0));
+    assert_eq!(list.versions[0].index, MAX_VERSIONS as u64 + 30, "indices stay as older versions go");
+    let oldest = list.versions.last().unwrap().index;
+    assert!(s.undo_to(Target::Index(oldest - 1)).unwrap_err().to_string().starts_with("UNKNOWN_VERSION"));
+    drop(s);
+    let file = storage::sidecar(&f.0, HISTORY_SUFFIX);
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.lines().count() <= 2 * MAX_VERSIONS, "the file is written again once it holds twice what is kept");
+    let s = f.open();
+    assert_eq!(s.list_history(MAX_VERSIONS).unwrap().versions.len(), MAX_VERSIONS);
+    drop(s);
+
+    // A version whose project was changed in the file no longer matches its hash.
+    fs::write(&file, text.replace("\"name\":\"Name 100\"", "\"name\":\"Forged\"")).unwrap();
+    let s = f.open();
+    let error = s.undo_to(Target::Index(101)).unwrap_err().to_string();
+    assert!(error.starts_with("HISTORY_CORRUPT"), "{error}");
+    assert_eq!(s.state().unwrap().project.name, format!("Name {}", MAX_VERSIONS + 29));
+    s.undo_to(Target::Index(102)).unwrap();
+    assert_eq!(s.state().unwrap().project.name, "Name 101");
+}

@@ -833,7 +833,7 @@ export function Menu({
               <span className={`flex w-4 shrink-0 justify-center ${item.danger ? "text-danger" : item.checked ? "text-accent" : "text-muted"}`}>
                 {item.checked ? <Check size={15} /> : item.icon}
               </span>
-              <span className="flex-1 whitespace-nowrap">{item.label}</span>
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap">{item.label}</span>
               {item.shortcut && <span className="min-w-0 truncate pl-4 text-[12px] text-muted">{item.shortcut}</span>}
               {item.submenu && <ChevronRight size={14} className="shrink-0 text-muted" />}
             </div>

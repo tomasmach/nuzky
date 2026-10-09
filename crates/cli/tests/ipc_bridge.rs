@@ -20,6 +20,8 @@ struct App {
     dir: PathBuf,
     path: PathBuf,
     socket: PathBuf,
+    /// False while the app restarts, so its files stay.
+    remove: bool,
 }
 impl App {
     fn new() -> Self {
@@ -46,11 +48,27 @@ impl App {
             })
             .unwrap();
         std::fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
-        let host =
-            Arc::new(Host::new(ProjectSession::open(&path, Mode::Write, None).unwrap(), dir.join("cache")).unwrap());
+        let session = ProjectSession::open(&path, Mode::Write, None).unwrap();
+        Self::open(dir, path, session)
+    }
+    fn open(dir: PathBuf, path: PathBuf, session: ProjectSession) -> Self {
+        let host = Arc::new(Host::new(session, dir.join("cache")).unwrap());
         let socket = dir.join("nuzky").join(nuzky_mcp::ipc::socket_path(&path).unwrap().file_name().unwrap());
         let listener = Some(Listener::at(host.clone(), socket.clone()).unwrap());
-        Self { listener, host, dir, path, socket }
+        Self { listener, host, dir, path, socket, remove: true }
+    }
+    /// Closes the project as quitting the app does, then opens it again.
+    fn restart(mut self) -> Self {
+        self.remove = false;
+        let (dir, path) = (self.dir.clone(), self.path.clone());
+        drop(self);
+        // The listener lets go of the project off this thread, as in the app.
+        let mut session = None;
+        wait(|| {
+            session = ProjectSession::open(&path, Mode::Write, None).ok();
+            session.is_some()
+        });
+        Self::open(dir, path, session.unwrap())
     }
     fn hello(&self, token: &str, version: u32) -> Value {
         let mut stream = UnixStream::connect(&self.socket).unwrap();
@@ -64,7 +82,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         self.listener.take();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if self.remove {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -283,4 +303,67 @@ fn current_attaches_to_the_open_project_and_refuses_without_an_app() {
         .unwrap();
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("APP_NOT_RUNNING"), "{refused:?}");
+}
+
+/// Three agent runs and an edit in the app are versions that outlive the app. undo_to over stdio
+/// brings back exactly the project after the first run as one step, Undo in the app takes it back,
+/// and after a restart every version is still there.
+#[test]
+fn versions_restore_an_earlier_run_and_outlive_a_restart() {
+    let app = App::new();
+    let mut agent = Bridge::new(&app, true);
+    let mut runs = Vec::new();
+    for name in ["First run", "Second run", "Third run"] {
+        let run = agent.call("begin_run", json!({"label": name}))["run_id"].clone();
+        let edit = json!({"run_id":run,"request_id":"rename","edits":[{"type":"renameProject","name":name}]});
+        agent.call("apply_edits", edit);
+        agent.call("end_run", json!({"run_id":run,"action":"keep"}));
+        runs.push(run);
+    }
+    app.host.session.edit(vec![EditCmd::RenameProject { name: "By hand".into() }], None, Default::default()).unwrap();
+    let before = agent.call("list_history", json!({}));
+    let labels = |list: &Value| -> Vec<String> {
+        list["versions"].as_array().unwrap().iter().map(|v| v["label"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(labels(&before), ["Rename project", "Third run", "Second run", "First run", "Opened"]);
+    let first = before["versions"][3].clone();
+    assert_eq!(first["run_id"], runs[0]);
+    assert!(before["versions"][0]["run_id"].is_null(), "the edit in the app is the user's");
+    assert_eq!(before["current_hash"], before["versions"][0]["hash"]);
+
+    // The jump waits for a run to end, with the code the app already explains.
+    let open = agent.call("begin_run", json!({"label":"open"}))["run_id"].clone();
+    agent.error("undo_to", json!({"index":first["index"]}), "RUN_ACTIVE");
+    agent.call("end_run", json!({"run_id":open,"action":"keep"}));
+    agent.error("undo_to", json!({"index":999}), "UNKNOWN_VERSION");
+    let prefix = &first["hash"].as_str().unwrap()[..6];
+    let restored = agent.call("undo_to", json!({"hash":prefix}));
+    assert_eq!(
+        (restored["changed"].clone(), restored["restored"]["index"].clone()),
+        (json!(true), first["index"].clone())
+    );
+    assert_eq!(app.host.session.state().unwrap().project.name, "First run");
+    let jumped = agent.call("list_history", json!({}));
+    assert_eq!(jumped["current_hash"], first["hash"], "the project is exactly the version after the first run");
+    assert_eq!(jumped["versions"][0]["label"], "Restore: First run");
+    assert_eq!(jumped["versions"][0]["hash"], first["hash"]);
+    assert_eq!(labels(&jumped)[1..], labels(&before), "the versions after it stay");
+
+    app.host.session.undo().unwrap();
+    assert_eq!(app.host.session.state().unwrap().project.name, "By hand");
+    let undone = agent.call("list_history", json!({}));
+    assert_eq!(undone["current_hash"], before["current_hash"], "Undo in the app takes the jump back");
+    agent.finish();
+
+    let app = app.restart();
+    let mut agent = Bridge::new(&app, false);
+    let reopened = agent.call("list_history", json!({"limit":200}));
+    assert_eq!(reopened["versions"], undone["versions"], "every version outlives the restart");
+    assert_eq!(reopened["current_hash"], undone["current_hash"]);
+    agent.error("undo_to", json!({"index":first["index"]}), "READ_ONLY");
+    agent.finish();
+    let mut agent = Bridge::new(&app, true);
+    agent.call("undo_to", json!({"index":first["index"]}));
+    assert_eq!(app.host.session.state().unwrap().project.name, "First run");
+    agent.finish();
 }

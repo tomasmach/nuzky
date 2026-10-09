@@ -39,9 +39,19 @@ impl Client {
             )
             .unwrap();
         }
+        Self::spawn(dir, write, style)
+    }
+    /// An agent started again on the same project once this one quit.
+    fn restart(mut self, write: bool) -> Self {
+        self.finish();
+        let dir = std::mem::take(&mut self.dir);
+        drop(self);
+        Self::spawn(dir, write, None)
+    }
+    fn spawn(dir: PathBuf, write: bool, style: Option<Option<&str>>) -> Self {
         let binary = env!("CARGO_BIN_EXE_nuzky");
         let mut command = Command::new(binary);
-        command.arg("mcp").arg("--project").arg(path).arg("--cache").arg(dir.join("cache"));
+        command.arg("mcp").arg("--project").arg(dir.join("project.nuzky")).arg("--cache").arg(dir.join("cache"));
         if write {
             command.arg("--allow-write");
         }
@@ -130,7 +140,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 22);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -201,6 +211,37 @@ fn picture_in_picture_over_a_phrase_with_crop_and_shape_over_stdio() {
     let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
     let content = &disk["tracks"][1]["clips"][0]["content"];
     assert_eq!((&content["shape"], &content["transform"]["crop"]["left"]), (&round, &json!(0.25)), "{content}");
+}
+
+/// Headless, without the app: runs are versions that outlive the agent, a read-only agent lists them,
+/// and undo_to brings one back as one step, which undo_to the version before takes back.
+#[test]
+fn versions_outlive_a_headless_agent_and_restore_over_stdio() {
+    let mut c = Client::new(true);
+    for name in ["One", "Two"] {
+        let run = c.call("begin_run", json!({"label": name}));
+        let edit = json!({"run_id":run["run_id"],"request_id":"r","edits":[{"type":"renameProject","name":name}]});
+        c.call("apply_edits", edit);
+        c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    }
+    let mut c = c.restart(false);
+    let list = c.call("list_history", json!({"limit": 2}));
+    let labels: Vec<_> = list["versions"].as_array().unwrap().iter().map(|v| v["label"].clone()).collect();
+    assert_eq!((labels, list["older"].clone()), (vec![json!("Two"), json!("One")], json!(1)));
+    assert!(c.error("undo_to", json!({"index": 1})).contains("READ_ONLY"));
+    assert!(c.error("list_history", json!({"limit": 0})).contains("INVALID_ARGUMENTS"));
+    let mut c = c.restart(true);
+    let one = list["versions"][1].clone();
+    assert!(c.error("undo_to", json!({"index": 1, "hash": one["hash"]})).contains("INVALID_ARGUMENTS"));
+    assert_eq!(c.call("undo_to", json!({"index": one["index"]}))["changed"], true);
+    assert_eq!(c.call("get_state", json!({}))["name"], "One");
+    let again = c.call("undo_to", json!({"index": one["index"]}));
+    assert_eq!(again["changed"], false, "restoring the current version changes nothing");
+    let back = c.call("undo_to", json!({"hash": list["versions"][0]["hash"]}));
+    assert_eq!(back["changed"], true);
+    assert_eq!(c.call("get_state", json!({}))["name"], "Two");
+    assert_eq!(c.call("list_history", json!({}))["current_hash"], list["current_hash"]);
+    c.finish();
 }
 
 #[test]
