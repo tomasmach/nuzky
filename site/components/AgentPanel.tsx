@@ -24,7 +24,7 @@ export const exchanges: Exchange[] = [
     changes: [
       ["Cut “um” at", "00:09.4"],
       ["Cut pause at", "00:12.1"],
-      ["Added 9 captions", "00:00–00:31"],
+      ["Added 5 captions", "00:00–00:22"],
     ],
   },
   {
@@ -48,7 +48,7 @@ export const exchanges: Exchange[] = [
     result: "3 changes",
     changes: [
       ["Added music at", "00:00"],
-      ["Fade out from", "00:27.0"],
+      ["Fade out from", "00:28.0"],
     ],
   },
   {
@@ -66,7 +66,7 @@ export const exchanges: Exchange[] = [
     reply: "Exporting 1080 × 1920 at 30 fps.",
     steps: [
       ["Level the sound to −14 LUFS", "1.1 s"],
-      ["Render 0:29 of video", "9 s"],
+      ["Render 0:30 of video", "9 s"],
       ["Save morning-run.mp4", "0.1 s"],
     ],
     result: "Exported · 12.4 MB",
