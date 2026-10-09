@@ -1343,6 +1343,11 @@ impl Editor {
         self.coalesce = None;
     }
 
+    /// The key an edit needs to merge into the newest undo step; none after a seal, undo or redo.
+    pub fn coalescing(&self) -> Option<&str> {
+        self.coalesce.as_deref()
+    }
+
     /// The coalesce key of the newest undo step.
     pub fn last_key(&self) -> Option<&str> {
         self.undo.last().and_then(|step| step.key.as_deref())

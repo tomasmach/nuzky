@@ -120,6 +120,7 @@ fn generate() -> String {
     types.visit::<SnapshotCanvas>();
     types.visit::<EditCmd>();
     types.visit::<Filmstrip>();
+    types.visit::<crate::ProjectVersion>();
     types.visit::<LayerBounds>();
     types.visit::<FontFamilies>();
     types.visit::<crate::jobs::JobEvent>();

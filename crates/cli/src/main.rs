@@ -131,7 +131,7 @@ fn check_render_output(project: &Path, out: &Path) -> Result<()> {
             }
         }
         // Preserve protection of existing sidecars whose own symlinks point outside that namespace.
-        for suffix in [".lock", ".checkpoint.json", ".tmp"] {
+        for suffix in [".lock", ".checkpoint.json", nuzky_session::HISTORY_SUFFIX, ".tmp"] {
             let mut path = base.as_os_str().to_os_string();
             path.push(suffix);
             if targets.contains(&resolved_path(Path::new(&path))?) {

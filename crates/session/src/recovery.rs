@@ -17,6 +17,7 @@ impl ProjectSession {
             let checkpoint: RecoveryCheckpoint =
                 serde_json::from_slice(&fs::read(&path).context("Reading recovery checkpoint")?)
                     .context("Parsing recovery checkpoint")?;
+            inner.record();
             let revision = inner.editor.revision;
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 inner.editor.replace_project_checked(checkpoint.project, None, validate)
@@ -26,6 +27,8 @@ impl ProjectSession {
             })??;
             if inner.editor.revision != revision {
                 inner.changed(Origin::Recovery);
+                inner.history.tip = Some(Tip::user("Restore previous version"));
+                inner.record();
             }
         }
         inner.flush()?;

@@ -57,6 +57,20 @@ pub struct Undo {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ListHistory {
+    /// How many versions to list, newest first: 1 to 200, default 20.
+    pub limit: Option<usize>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UndoTo {
+    /// The version's index from list_history. Give index or hash.
+    pub index: Option<u64>,
+    /// 4 or more hex digits from the start of the version's hash.
+    pub hash: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Import {
     pub run_id: String,
     pub paths: Vec<String>,

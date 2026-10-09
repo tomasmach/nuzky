@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { AlertCircle, Check, Download, FolderOpen, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
+import { AlertCircle, Check, Download, FolderOpen, History, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { useAgent } from "../lib/agent";
+import { api, errorText } from "../lib/api";
 import { togglePanel, useDock } from "../lib/dock";
-import { AI_EDITING, openExport, projectDuration, stopAiRun, useAiLocked, useEditor } from "../lib/store";
-import { Button, IconButton, ProgressBar } from "./ui";
+import { AI_EDITING, openExport, projectDuration, restoreVersion, stopAiRun, useAiLocked, useEditor, whenIdle } from "../lib/store";
+import type { ProjectVersion } from "../lib/types";
+import { Button, IconButton, Menu, ProgressBar } from "./ui";
 import { UpdateButton } from "./Updates";
 
 function SaveStatus() {
@@ -153,6 +155,68 @@ export function AiRunBar() {
   );
 }
 
+/** Versions listed in the menu, so it fits the smallest window. */
+const VERSIONS_SHOWN = 20;
+
+/** The time of day, with the date when it was not today. */
+function when(ms: number) {
+  const at = new Date(ms);
+  const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}
+
+/** The kept versions of the project, newest first; choosing one restores it as one undo step. */
+function VersionsButton() {
+  const aiRun = useEditor((s) => s.aiRun);
+  const [menu, setMenu] = useState<{ versions: ProjectVersion[]; at: { x: number; y: number; align: "end" }; keyboard: boolean; back: HTMLElement } | null>(null);
+  return (
+    <>
+      <IconButton
+        round
+        aria-haspopup="menu"
+        aria-expanded={!!menu}
+        label={aiRun ? "Versions are available when the AI is done" : "Versions"}
+        disabled={!!aiRun}
+        onClick={async (e) => {
+          const back = e.currentTarget;
+          const keyboard = e.detail === 0;
+          try {
+            // The list then holds the edits made just before.
+            await whenIdle();
+            const versions = await api.listVersions(VERSIONS_SHOWN);
+            const r = back.getBoundingClientRect();
+            setMenu({ versions, at: { x: r.right, y: r.bottom + 6, align: "end" }, keyboard, back });
+          } catch (error) {
+            useEditor.getState().toast({ kind: "error", text: errorText(error) });
+          }
+        }}
+      >
+        <History size={16} />
+      </IconButton>
+      {menu && (
+        <Menu
+          label="Versions"
+          minWidth={280}
+          at={menu.at}
+          keyboard={menu.keyboard}
+          items={menu.versions.map((version) => ({
+            label: version.label,
+            icon: version.ai ? <Sparkles size={14} /> : undefined,
+            shortcut: when(version.atMs),
+            checked: version.current,
+            run: version.current ? undefined : () => void restoreVersion(version),
+          }))}
+          onClose={(chose) => {
+            const back = menu.back;
+            setMenu(null);
+            if (!chose) back.focus();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 export function TopBar() {
   const snap = useEditor((s) => s.snap);
   const { undo, redo } = useEditor.getState();
@@ -182,6 +246,7 @@ export function TopBar() {
         <IconButton round label={aiRun ? "Redo is available when the AI is done" : "Redo (Ctrl+Shift+Z)"} disabled={!snap?.canRedo || !!aiRun} onClick={redo}>
           <Redo2 size={16} />
         </IconButton>
+        <VersionsButton />
       </div>
       <Button variant="primary" pill disabled={empty} disabledReason="Add a clip to the timeline to export" title="Export video (Ctrl+E)" onClick={openExport}>
         <Download size={15} /> Export

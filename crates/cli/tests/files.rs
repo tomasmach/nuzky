@@ -25,7 +25,7 @@ fn write_output(command: &str, project: &Path, out: &Path) -> std::process::Outp
 fn render_and_frame_refuse_project_and_sidecars_including_symlinks() {
     let (dir, project, bytes) = fixture();
     for command in ["render", "frame"] {
-        for suffix in ["", ".lock", ".checkpoint.json", ".tmp"] {
+        for suffix in ["", ".lock", ".checkpoint.json", ".history.jsonl", ".tmp"] {
             let out = dir.join(format!("project.nuzky{suffix}"));
             let result = write_output(command, &project, &out);
             assert!(!result.status.success(), "{command} {suffix}");

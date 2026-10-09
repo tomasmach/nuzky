@@ -32,6 +32,10 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("apply_edits", Never, true, true, false),
     rules("end_run", Never, true, false, false),
     rules("undo_run", Never, true, false, false),
+    // Keeps the user's last step as a version; the project is not touched.
+    rules("list_history", Always, false, true, false),
+    // Restoring the same version again changes nothing more.
+    rules("undo_to", Never, true, true, false),
     rules("import_media", Never, false, false, false),
     rules("inspect_frames", Always, false, true, false),
     // Only renders and mixes the timeline; preparing missing sound runs as a job.
@@ -92,7 +96,15 @@ mod tests {
         let set = |names: &[&'static str]| names.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(
             names(|r| matches!(r.reads, Always)),
-            set(&["get_state", "get_transcript", "inspect_frames", "activity", "segment_subject", "suggest_options"])
+            set(&[
+                "get_state",
+                "get_transcript",
+                "inspect_frames",
+                "activity",
+                "segment_subject",
+                "suggest_options",
+                "list_history"
+            ])
         );
         assert_eq!(
             names(|r| r.destructive),
@@ -101,6 +113,7 @@ mod tests {
                 "edit_transcript",
                 "end_run",
                 "undo_run",
+                "undo_to",
                 "build_captions",
                 "apply_zooms",
                 "resolve_recovery"
@@ -115,7 +128,9 @@ mod tests {
                 "activity",
                 "segment_subject",
                 "apply_edits",
-                "suggest_options"
+                "suggest_options",
+                "list_history",
+                "undo_to"
             ])
         );
         assert_eq!(

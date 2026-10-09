@@ -82,10 +82,15 @@ pub struct Expect {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
     User,
-    Run { run_id: String, label: String },
+    Run {
+        run_id: String,
+        label: String,
+    },
     Undo,
     Redo,
     Recovery,
+    /// A version from the history, through `undo_to`.
+    Restore,
 }
 
 #[derive(Clone, Debug)]

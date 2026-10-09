@@ -523,6 +523,29 @@ export type ProjectSummary = {
   durationUs: number,
 };
 
+/**
+ * A kept version of the open project, for the list of versions in the top bar.
+ */
+export type ProjectVersion = {
+  /**
+   * Stays with the version across restarts.
+   */
+  index: number,
+  label: string,
+  /**
+   * Unix time in milliseconds.
+   */
+  atMs: number,
+  /**
+   * Made by an AI agent's run.
+   */
+  ai: boolean,
+  /**
+   * The project is this version now; only the newest version with its contents says so.
+   */
+  current: boolean,
+};
+
 export type Quality = "high" | "recommended" | "small";
 
 /**

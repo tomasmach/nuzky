@@ -325,13 +325,16 @@ impl Library {
     fn remove_pristine(&self, path: &Path) -> bool {
         let Ok(lock) = nuzky_session::lock_project(path, true) else { return false };
         // Read again under the lock: it may have changed since it was listed.
-        if !store::load(path).is_ok_and(|p| pristine(&p)) || sidecar(path, ".checkpoint.json").exists() {
+        // Its versions may hold what it had before it was emptied.
+        let Some(project) = store::load(path).ok().filter(pristine) else { return false };
+        if sidecar(path, ".checkpoint.json").exists() || nuzky_session::other_versions(path, &project) {
             return false;
         }
         if let Err(error) = std::fs::remove_file(path) {
             log::warn!("Cannot remove empty project {}: {error}", path.display());
             return false;
         }
+        let _ = std::fs::remove_file(sidecar(path, nuzky_session::HISTORY_SUFFIX));
         drop(lock);
         let _ = std::fs::remove_file(sidecar(path, ".lock"));
         true
@@ -458,6 +461,10 @@ impl Library {
         let checkpoint = sidecar(path, ".checkpoint.json");
         if checkpoint.exists() {
             trash::delete(&checkpoint).context("Moving the unfinished AI edit to the Trash")?;
+        }
+        let versions = sidecar(path, nuzky_session::HISTORY_SUFFIX);
+        if versions.exists() {
+            trash::delete(&versions).context("Moving the project's versions to the Trash")?;
         }
         drop(lock);
         let _ = std::fs::remove_file(sidecar(path, ".lock"));
@@ -879,6 +886,35 @@ mod tests {
         assert_eq!(fold("SUNSET!"), "sunset");
         assert_eq!(fold("—"), "");
         assert_eq!(fold("Ščřž"), "scrz");
+    }
+
+    /// An untitled project emptied after it had clips still has them in its versions, so it stays.
+    #[test]
+    fn an_emptied_project_with_earlier_versions_is_not_cleared_away() {
+        let dir = std::env::temp_dir().join(format!("library-pristine-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (fresh, emptied) = (dir.join("fresh.nuzky"), dir.join("emptied.nuzky"));
+        for path in [&fresh, &emptied] {
+            store::create(path, &Project::new(UNTITLED)).unwrap();
+            drop(store::open(path, None).unwrap());
+        }
+        let session = store::open(&emptied, None).unwrap();
+        session.edit(vec![EditCmd::RenameProject { name: "Holiday".into() }], None, Default::default()).unwrap();
+        session.edit(vec![EditCmd::RenameProject { name: UNTITLED.into() }], None, Default::default()).unwrap();
+        drop(session);
+        // An older project with only one version, as it opened with its clips, emptied without a
+        // version: a write of the versions failed, for example.
+        let older = dir.join("older.nuzky");
+        store::create(&older, &Project::new("Holiday")).unwrap();
+        drop(store::open(&older, None).unwrap());
+        store::save(&older, &Project::new(UNTITLED)).unwrap();
+        let library = Library::default();
+        assert!(library.remove_pristine(&fresh), "a project that never had anything goes");
+        assert!(!fresh.exists() && !sidecar(&fresh, nuzky_session::HISTORY_SUFFIX).exists());
+        assert!(!library.remove_pristine(&emptied));
+        assert!(!library.remove_pristine(&older));
+        assert!(emptied.exists() && older.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

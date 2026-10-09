@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
+import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
 
 export interface Toast {
   id: number;
@@ -264,6 +264,13 @@ export function undoStep(snap: Snapshot): Promise<boolean> {
   if (aiLocked()) return Promise.resolve(false);
   // Checked again when its turn in the queue comes, after any edit made before it.
   return enqueue(async (epoch) => (isNewest(snap) ? api.undo(epoch) : null)).then((done) => !!done);
+}
+
+/** Restores a kept version as one undo step, after the edits queued before it; a toast offers Undo. */
+export async function restoreVersion(version: ProjectVersion) {
+  if (aiLocked()) return;
+  const snap = await enqueue((epoch) => api.restoreVersion(version.index, epoch));
+  if (snap) useEditor.getState().toast({ kind: "info", text: `Restored “${version.label}”`, action: undoAction(snap) });
 }
 
 /** Why editing is locked while an agent's run is open. */
