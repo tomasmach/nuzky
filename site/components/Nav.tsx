@@ -9,16 +9,18 @@ const links = [
   ["Download", "#download"],
 ] as const;
 
-export function Nav() {
+// `base` is "/" on other pages, so the section links lead back to the home page. On the home page they stay
+// bare fragments, which scroll without reloading even when the address carries a query string.
+export function Nav({ base = "" }: { base?: string }) {
   return (
     <header className="relative z-20 mx-auto flex h-[72px] w-full max-w-[1440px] items-center justify-between px-5 sm:px-10">
-      <a href="#top" className="flex w-60 items-center gap-2.5 rounded-lg" aria-label="Nuzky home">
+      <a href={`${base}#top`} className="flex w-60 items-center gap-2.5 rounded-lg" aria-label="Nuzky home">
         <Image src="/media/icon.png" alt="" width={34} height={34} loading="eager" />
         <span className="text-[16px] font-semibold tracking-[-0.01em]">Nuzky</span>
       </a>
       <nav aria-label="Sections" className="hidden items-center gap-8 md:flex">
         {links.map(([label, href]) => (
-          <a key={href} href={href} className="text-[14px] text-muted transition-colors hover:text-fg">
+          <a key={href} href={base + href} className="text-[14px] text-muted transition-colors hover:text-fg">
             {label}
           </a>
         ))}
