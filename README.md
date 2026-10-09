@@ -1,12 +1,17 @@
-<img src="assets/icon.png" width="72" height="72" alt="">
+<p align="center">
+  <img src="assets/icon.png" width="96" height="96" alt="">
+</p>
 
-# Nuzky
+<h1 align="center">Nuzky</h1>
 
-A free video editor for your computer, in the spirit of CapCut. Cut a talking video by deleting words from its transcript, caption it with speech recognition that runs on your own machine, and let an AI agent do the tedious parts while you watch. Open source under GPLv3, with a native Rust engine.
-
-[nuzky.app](https://nuzky.app) · [Build it](#build-and-run) · [Contribute](CONTRIBUTING.md)
+<p align="center">
+  A free, open-source video editor for your computer, in the spirit of CapCut.<br>
+  <a href="https://nuzky.app">nuzky.app</a> · <a href="#build-and-run">Build it</a> · <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
 <img src="assets/readme/editor.webp" width="100%" alt="The Nuzky editor: imported clips on the left, a vertical video with captions in the middle, clip settings on the right and the timeline below">
+
+Cut a talking video by deleting words from its transcript, caption it with speech recognition that runs on your own machine, and let an AI agent do the tedious parts while you watch. Nuzky is licensed under GPLv3 and has a native Rust engine.
 
 **Nuzky is a prototype.** Editing, playback, captions and export work on Linux. macOS and Windows builds compile but have not been tested, and there is no published release yet, so for now you build it from source.
 
