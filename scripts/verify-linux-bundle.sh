@@ -27,4 +27,15 @@ fi
 for lib in avcodec avformat avutil swscale swresample; do
   find "$extract/squashfs-root" -name "lib$lib.so.*" -print -quit | grep -q .
 done
+# ONNX Runtime, which the app opens from its resource directory when covers run.
+ort="$extract/squashfs-root/usr/lib/Nuzky/libonnxruntime.so.1"
+test -f "$ort"
+ldd "$ort" | tee "$target/release/onnxruntime-ldd.txt"
+if grep -q 'not found' "$target/release/onnxruntime-ldd.txt"; then
+  echo 'Unresolved ONNX Runtime dependency' >&2
+  exit 1
+fi
+debs=("$target"/release/bundle/deb/*.deb)
+test "${#debs[@]}" -eq 1
+dpkg-deb -c "${debs[0]}" | grep -q './usr/lib/Nuzky/libonnxruntime.so.1$'
 stat --printf='%n: %s bytes\n' "${images[0]}" "$binary"

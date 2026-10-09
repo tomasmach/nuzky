@@ -37,3 +37,6 @@ if ($env:GITHUB_ENV) {
 }
 & "$env:FFMPEG_DIR/bin/ffmpeg.exe" -version
 if ($LASTEXITCODE -ne 0) { throw 'FFmpeg could not start.' }
+# ONNX Runtime, which debug builds load from the same build-deps directory when covers run.
+node "$PSScriptRoot/fetch-onnxruntime.mjs"
+if ($LASTEXITCODE -ne 0) { throw 'ONNX Runtime could not be fetched.' }

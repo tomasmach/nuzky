@@ -22,6 +22,7 @@ nuzky-session.workspace = true
 nuzky-mcp.workspace = true
 nuzky-agent.workspace = true
 nuzky-analysis.workspace = true
+nuzky-vision.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }

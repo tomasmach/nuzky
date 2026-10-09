@@ -32,14 +32,32 @@ isolated() {
   env XDG_DATA_HOME="$PWD/tmp-test/xdg/data" XDG_CACHE_HOME="$PWD/tmp-test/xdg/cache" XDG_RUNTIME_DIR="$runtime" "$@"
 }
 
+# ONNX Runtime is opened at run time, never linked, so Nuzky starts on CPUs without AVX2. Both programs
+# must reach main under an emulated Nehalem and the face models must run there.
+without_avx2() (
+  # A program that dies under qemu would leave a core dump in the checkout.
+  ulimit -c 0
+  cargo build --locked -p nuzky-app -p nuzky-cli || return 1
+  for program in nuzky-app nuzky; do
+    qemu-x86_64-static -cpu Nehalem "target/debug/$program" mcp 2>&1 | grep -q INVALID_ARGUMENTS || {
+      echo "$program does not start on a CPU without AVX2" >&2
+      return 1
+    }
+  done
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="qemu-x86_64-static -cpu Nehalem" \
+    isolated cargo test --locked -p nuzky-vision --lib -- --include-ignored runtime:: the_face_models
+)
+
 step "Own node_modules" own_node_modules
 step "npm install from the lockfile" npm ci --no-audit --no-fund
 step "Rust format" cargo fmt --all --check
 step "Frontend types and build" npm run build
 step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
+step "ONNX Runtime" node scripts/fetch-onnxruntime.mjs
 step "Rust tests" isolated cargo test --workspace --locked
 step "Test media and models" scripts/fixtures.sh
 step "Rust tests with media and models" isolated cargo test --workspace --locked -- --ignored
+step "Starts and finds faces without AVX2" without_avx2
 step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
 step "UI flows" python3 scripts/repro.py --all

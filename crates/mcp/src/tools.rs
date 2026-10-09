@@ -219,6 +219,7 @@ impl Backend {
             "import_media" => self.import(parse(arguments)?, state),
             "activity" => self.activity(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
+            "segment_subject" => self.segment_subject(parse(arguments)?, state),
             "transcribe" => self.transcribe(parse(arguments)?, state),
             "get_transcript" => self.get_transcript(parse(arguments)?, state),
             "edit_transcript" => self.edit_transcript(parse(arguments)?, state),
@@ -446,6 +447,9 @@ impl Backend {
             return Ok(json!({"zooms": zooms, "time_basis": "timeline",
                 "transcript_key": transcript::word_key(&state.project, &derived.words)}));
         }
+        if matches!(args.kind, AnalysisKind::ThumbnailFrames) {
+            return self.thumbnail_frames(args, state);
+        }
         let asset_id = args.asset_id.context("INVALID_ARGUMENTS: asset_id is required for this kind")?;
         let mut asset = state.project.asset(&asset_id).with_context(|| format!("UNKNOWN_ASSET: {asset_id}"))?.clone();
         asset.path = self.resolve(&asset.path).to_string_lossy().into_owned();
@@ -476,11 +480,79 @@ impl Backend {
                 }
                 AnalysisKind::Scenes => json!({"cuts": nuzky_analysis::scene_cuts_cancellable(&asset, SceneParams { threshold: p.threshold.unwrap_or(0.18), min_gap_us: p.min_gap_us.unwrap_or(300_000) }, || cancel.load(Ordering::Relaxed))?}),
                 AnalysisKind::Fillers => { let t = transcript.context("Missing filler transcript")?; json!({"ranges": nuzky_analysis::filler_words(&t, &t.language)}) },
-                AnalysisKind::Retakes | AnalysisKind::Emphasis => anyhow::bail!("This kind is answered without a job"),
+                AnalysisKind::Retakes | AnalysisKind::Emphasis | AnalysisKind::ThumbnailFrames => {
+                    anyhow::bail!("This kind is not an asset analysis")
+                }
             };
             check_cancel(&cancel)?;
             Ok(json!({"asset_id": asset.id, "time_basis": "source", "analysis": result}))
         })
+    }
+
+    /// Renders the timeline without text and scores frames for a cover, as a job. The face models
+    /// must be installed; this never downloads them.
+    fn thumbnail_frames(&self, args: Analyze, state: &SessionState) -> Result<Value> {
+        ensure!(args.asset_id.is_none(), "INVALID_ARGUMENTS: thumbnail_frames reads the whole timeline; omit asset_id");
+        let format = match args.params.format.as_deref() {
+            None => None,
+            Some("9:16") => Some(nuzky_vision::Format::Vertical),
+            Some("16:9") => Some(nuzky_vision::Format::Wide),
+            Some(other) => anyhow::bail!("INVALID_ARGUMENTS: format is \"9:16\" or \"16:9\", not {other:?}"),
+        };
+        let project = self.media_project(&state.project);
+        activity::timeline_range(&project, None)?;
+        media::check_media(&project)?;
+        let models = nuzky_analysis::models_dir();
+        nuzky_vision::models::require(nuzky_vision::models::FRAMES, &models)?;
+        let format = format.unwrap_or(nuzky_vision::Format::of(&project.canvas));
+        self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "analysis",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                let candidates = nuzky_vision::thumbnail_frames(&project, &models, Some(format), &cancel, &mut |phase, done| {
+                    let phase = match phase {
+                        nuzky_vision::thumbnails::Phase::Looking => "looking",
+                        nuzky_vision::thumbnails::Phase::Scoring => "scoring",
+                    };
+                    progress.set(phase, Some(done))
+                })?;
+                Ok(json!({"kind": "thumbnail_frames", "time_basis": "timeline", "format": format, "candidates": candidates}))
+            },
+        )
+    }
+
+    /// Masks the subject of one timeline frame as a job and keeps the mask in the cache.
+    fn segment_subject(&self, args: SegmentSubject, state: &SessionState) -> Result<Value> {
+        let project = self.media_project(&state.project);
+        let (start, end) = activity::timeline_range(&project, None)?;
+        ensure!((start..end).contains(&args.time_us), "INVALID_RANGE: time_us must be inside 0..{end}");
+        media::check_media(&project)?;
+        let models = nuzky_analysis::models_dir();
+        nuzky_vision::models::require(nuzky_vision::models::MASK, &models)?;
+        let cache = self.host.cache_dir.clone();
+        let t = args.time_us;
+        self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "segment",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                let mask = nuzky_vision::segment_subject(&project, t, &models, &cache, &cancel, &mut |phase| {
+                    progress.set(
+                        match phase {
+                            nuzky_vision::mask::Phase::Rendering => "rendering",
+                            nuzky_vision::mask::Phase::Segmenting => "segmenting",
+                        },
+                        None,
+                    )
+                })?;
+                Ok(json!({"time_us": t, "mask_path": mask.path, "width": mask.width, "height": mask.height,
+                    "subject_box": mask.subject_box, "subject_share": mask.subject_share, "person": mask.person,
+                    "cached": mask.cached}))
+            },
+        )
     }
 
     /// Without the app nothing prepares the sound of files whose words were stored earlier, and

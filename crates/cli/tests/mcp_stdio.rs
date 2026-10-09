@@ -760,3 +760,114 @@ fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() 
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     c.finish();
 }
+
+/// Polls a job until `done` says it is finished or `timeout` passes; returns the last state.
+fn wait_job(c: &mut Client, job: &Value, timeout: Duration, done: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let status = c.call("job", json!({"job_id": job["job_id"], "action": "get"}));
+        if done(&status) || status["status"] != "running" {
+            return status;
+        }
+        assert!(std::time::Instant::now() < deadline, "job took too long: {status}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A still on the main track, so the timeline has a picture.
+fn place_still(c: &mut Client) {
+    let image = c.dir.join("still.ppm");
+    std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+    let run = c.call("begin_run", json!({"label":"still"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[image]}))["asset_ids"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
+    );
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+}
+
+#[test]
+fn cover_tools_name_missing_models_and_never_download_them() {
+    // Its own empty data directory: no models installed.
+    let mut c = Client::start(true, None, Some(None));
+    place_still(&mut c);
+    let frames = c.error("analyze", json!({"kind":"thumbnail_frames"}));
+    assert!(frames.contains("MODEL_MISSING: face detector") && frames.contains("nuzky vision-models"), "{frames}");
+    let mask = c.error("segment_subject", json!({"time_us": 0}));
+    assert!(mask.contains("MODEL_MISSING") && mask.contains("birefnet-lite.onnx"), "{mask}");
+    assert!(!c.dir.join("data/nuzky/models").exists(), "nothing was downloaded");
+    let format = c.error("analyze", json!({"kind":"thumbnail_frames","params":{"format":"4:3"}}));
+    assert!(format.contains("INVALID_ARGUMENTS"), "{format}");
+    let outside = c.error("segment_subject", json!({"time_us": 60_000_000}));
+    assert!(outside.contains("INVALID_RANGE"), "{outside}");
+    c.finish();
+}
+
+#[test]
+#[ignore = "Requires tmp-test/face-thumb.mp4 and the vision models from scripts/fixtures.sh; run with XDG_DATA_HOME=tmp-test/xdg/data"]
+fn cover_frames_and_subject_mask_of_a_face_over_stdio() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let media = root.join("tmp-test/face-thumb.mp4").canonicalize().unwrap();
+    let mut c = Client::new(true);
+    let run = c.call("begin_run", json!({"label":"import"}));
+    let ids = c.call("import_media", json!({"run_id":run["run_id"],"paths":[media]}))["asset_ids"].clone();
+    // The 12 s face five times: long enough that a stop has work left to skip.
+    let place: Vec<Value> = (0..5).map(|_| json!({"type":"addClip","assetId":ids[0]})).collect();
+    c.call("apply_edits", json!({"run_id":run["run_id"],"request_id":"place","edits":place}));
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+
+    // Stopped while it looks at the timeline, the job ends at once.
+    let job = c.call("analyze", json!({"kind":"thumbnail_frames"}));
+    wait_job(&mut c, &job, Duration::from_secs(30), |s| s["phase"] == "looking" && s["progress"].as_f64() > Some(0.05));
+    let asked = std::time::Instant::now();
+    c.call("job", json!({"job_id": job["job_id"], "action": "cancel"}));
+    let stopped = wait_job(&mut c, &job, Duration::from_secs(10), |_| false);
+    assert_eq!(stopped["status"], "cancelled", "{stopped}");
+    assert!(asked.elapsed() < Duration::from_secs(1), "cancelling took {:?}", asked.elapsed());
+
+    let job = c.call("analyze", json!({"kind":"thumbnail_frames","params":{"format":"16:9"}}));
+    let done = wait_job(&mut c, &job, Duration::from_secs(120), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let result = &done["result"];
+    assert_eq!((result["format"].clone(), result["time_basis"].clone()), (json!("16:9"), json!("timeline")));
+    let best = &result["candidates"][0];
+    // [6,12) s of every 12 s holds the sharp open eyes; the blur and the blink come before.
+    assert!(best["time_us"].as_i64().unwrap() % 12_000_000 >= 6_000_000, "{result}");
+    assert!(best["parts"]["eyes_open"].as_f64().unwrap() > 0.9, "{result}");
+    assert_eq!(best["faces"].as_array().unwrap().len(), 1, "{result}");
+    assert!(best["subject_box"].is_array() && best["crops"]["16:9"].is_array(), "{result}");
+
+    // Stopped in the middle of the mask model, the job ends within a few seconds.
+    let job = c.call("segment_subject", json!({"time_us": 1_500_000}));
+    wait_job(&mut c, &job, Duration::from_secs(30), |s| s["phase"] == "segmenting");
+    std::thread::sleep(Duration::from_millis(2500));
+    let asked = std::time::Instant::now();
+    c.call("job", json!({"job_id": job["job_id"], "action": "cancel"}));
+    let stopped = wait_job(&mut c, &job, Duration::from_secs(10), |_| false);
+    assert_eq!(stopped["status"], "cancelled", "{stopped}");
+    assert!(asked.elapsed() < Duration::from_secs(3), "cancelling took {:?}", asked.elapsed());
+
+    let job = c.call("segment_subject", json!({"time_us": 7_500_000}));
+    let done = wait_job(&mut c, &job, Duration::from_secs(120), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let mask = &done["result"];
+    assert_eq!(
+        (mask["width"].clone(), mask["height"].clone(), mask["person"].clone()),
+        (json!(1080), json!(1920), json!(true))
+    );
+    let share = mask["subject_share"].as_f64().unwrap();
+    assert!((0.6..0.8).contains(&share), "{mask}");
+    assert!(
+        PathBuf::from(mask["mask_path"].as_str().unwrap()).starts_with(&c.dir),
+        "the mask is in this client's cache"
+    );
+    // The same frame of the same edit comes from the cache.
+    let again = c.call("segment_subject", json!({"time_us": 7_500_000}));
+    let again = wait_job(&mut c, &again, Duration::from_secs(30), |_| false);
+    assert_eq!(
+        (again["result"]["cached"].clone(), again["result"]["mask_path"].clone()),
+        (json!(true), mask["mask_path"].clone())
+    );
+    c.finish();
+}

@@ -901,6 +901,8 @@ pub fn run() {
             cancel_job,
             jobs::start_captions,
             jobs::speech_models,
+            jobs::vision_models,
+            jobs::start_vision_models,
             jobs::start_transcript,
             transcripts::transcript_view,
             transcripts::cut_words,
