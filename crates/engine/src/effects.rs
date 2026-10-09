@@ -74,7 +74,7 @@ fn keyframed(clip: &Clip, u: i64) -> Option<Transform> {
     for pair in clip.keyframes.windows(2) {
         let (a, b) = (&pair[0], &pair[1]);
         if u <= b.t_us {
-            let p = (u - a.t_us) as f32 / (b.t_us - a.t_us).max(1) as f32;
+            let p = a.ease.at((u - a.t_us) as f32 / (b.t_us - a.t_us).max(1) as f32);
             let lerp = |a: f32, b: f32| a + (b - a) * p;
             // A keyframe without a crop shows the whole layer.
             let crop = (a.transform.crop.is_some() || b.transform.crop.is_some()).then(|| {
@@ -143,7 +143,7 @@ fn animate(t: &mut Transform, kind: AnimationKind, p: f32, exiting: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Animation, Keyframe, TransitionKind};
+    use crate::model::{Animation, Ease, Keyframe, TransitionKind};
 
     fn clip() -> Clip {
         Clip::new(
@@ -186,7 +186,10 @@ mod tests {
         let crop = Crop { left: 0.2, top: 0.0, right: 0.4, bottom: 0.1 };
         let a = Transform { x: -0.5, y: 0.2, scale: 0.5, rotation: -90.0, opacity: 0.2, crop: Some(crop) };
         let b = Transform { x: 0.5, y: 0.6, scale: 1.5, rotation: 90.0, opacity: 0.8, crop: None };
-        c.keyframes = vec![Keyframe { t_us: 0, transform: a }, Keyframe { t_us: 2_000_000, transform: b }];
+        c.keyframes = vec![
+            Keyframe { t_us: 0, transform: a, ease: Ease::Linear },
+            Keyframe { t_us: 2_000_000, transform: b, ease: Ease::Linear },
+        ];
         assert_eq!(transform_at(&c, 0).0, a);
         assert_eq!(transform_at(&c, 5_000_000).0, b);
         let mid = transform_at(&c, 2_000_000).0;
@@ -196,6 +199,11 @@ mod tests {
         assert_eq!(mid.crop, Some(Crop { left: 0.1, top: 0.0, right: 0.2, bottom: 0.05 }));
         c.keyframes[0].transform.crop = None;
         assert_eq!(transform_at(&c, 2_000_000).0.crop, None);
+        // A smooth keyframe starts and ends its way to the next one gently: a quarter of the time
+        // covers 15.6 % of the way, half the time half of it.
+        c.keyframes[0].ease = Ease::Smooth;
+        assert!((transform_at(&c, 1_500_000).0.scale - 0.65625).abs() < 1e-6);
+        assert!((transform_at(&c, 2_000_000).0.scale - 1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -398,6 +398,13 @@ button:focus-visible .pv {
   animation-timing-function: steps(5, end);
 }
 
+/* Motion presets, stronger than the real move so it reads at tile size. Ken Burns grows from the right edge, as the engine zooms it. */
+@keyframes m-pushIn { 0%, 10% { transform: scale(1) } 90%, 100% { transform: scale(1.4) } }
+@keyframes m-pullOut { 0%, 10% { transform: scale(1.4) } 90%, 100% { transform: scale(1) } }
+.m-kenBurns {
+  transform-origin: 100% 50%;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
