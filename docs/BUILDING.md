@@ -1,20 +1,18 @@
 # Building and distributing Nuzky
 
-Use current stable Rust (minimum 1.90), Node.js 22.12+ and the committed Cargo/npm lockfiles. CI runs `cargo test --workspace --locked`, `npm ci`, `npm run typecheck` and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
+Use current stable Rust (minimum 1.90), Node.js 22.12+ and the committed Cargo/npm lockfiles. Pull requests run lint, types, the app and website builds, clippy and `cargo test --workspace --locked` on `ubuntu-24.04` (`.github/workflows/checks.yml`): every pull request that is not a draft once the repository is public, and only pull requests with the `ci` label while it is private. A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
 
 ## Linux
 
 Ubuntu 24.04:
 
 ```sh
-sudo apt-get update
-sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev clang cmake pkg-config \
-  ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-  libswresample-dev libavfilter-dev libavdevice-dev libx264-dev \
-  patchelf libfuse2t64 librsvg2-bin libvulkan1 mesa-vulkan-drivers libvulkan-dev glslc
+bash scripts/setup-ubuntu-deps.sh
 npm ci
 npm run tauri dev
 ```
+
+The script installs the packages CI uses, so its list is the one known to work.
 
 Ubuntu 24.04 ships [FFmpeg 6.1](https://packages.ubuntu.com/noble/libavcodec-dev). `ffmpeg-next 9.0.0` supports older FFmpeg releases, including 6.1, through build-time version detection; its crate version does not require FFmpeg 9. CI deliberately uses distribution packages here. [Upstream build notes](https://github.com/zmwangx/rust-ffmpeg/wiki/Notes-on-building) describe the native-library requirement. Local Fedora/Nobara development uses FFmpeg 8. Both routes must keep headers and runtime SONAMEs matched.
 
@@ -142,7 +140,7 @@ Covers (`crates/vision`) run their models with ONNX Runtime, which Nuzky opens a
 
 ## CI, release and remaining platform checks
 
-Actions minutes are capped and macOS counts ten times, so pull requests are checked locally with `scripts/check.sh` and GitHub only scans them for secrets (`secrets.yml`). `ci.yml` runs on request (`gh workflow run ci.yml --ref <branch>`) and from `release.yml`. It caches npm and Cargo, tests all three systems, then builds and uploads installers and build-info files for 14 days. A `v*` tag runs the same build/test matrix; all three jobs must pass before a draft release is created and receives all installers plus SHA-256 checksums. The tag must equal `v` plus `src-tauri/tauri.conf.json`'s version. Set all package versions consistently before tagging. The release job uses the repository's automatic `GITHUB_TOKEN` with `contents: write`; no personal token is needed. A rerun can replace draft assets but refuses to modify a published release.
+GitHub scans every pull request for secrets (`secrets.yml`) and runs the Linux checks in `checks.yml`. While the repository is private, Actions minutes are capped and macOS counts ten times, so `checks.yml` runs only on pull requests with the `ci` label. `scripts/check.sh` adds the tests with media and models, the audits and the UI flows, and runs locally before every merge. `ci.yml` runs on request (`gh workflow run ci.yml --ref <branch>`) and from `release.yml`. It caches npm and Cargo, tests all three systems, then builds and uploads installers and build-info files for 14 days. A `v*` tag runs the same build/test matrix; all three jobs must pass before a draft release is created and receives all installers plus SHA-256 checksums. The tag must equal `v` plus `src-tauri/tauri.conf.json`'s version. Set all package versions consistently before tagging. The release job uses the repository's automatic `GITHUB_TOKEN` with `contents: write`; no personal token is needed. A rerun can replace draft assets but refuses to modify a published release.
 
 Each release also carries `latest.json` with its version. Installed copies read it from `https://github.com/tomasmach/nuzky/releases/latest/download/latest.json` at most once a day and show "Update available" on the home screen. GitHub serves that address from the newest published release that is not a prerelease, so publishing the draft is what announces a version; drafts and prereleases are never announced. Anonymous requests to a private repository get 404, so the repository must be public before the first public release, or installed copies never hear of an update. After a release is published, `update-notice.yml` reads the address like an installed copy and fails, which GitHub reports by email, when it does not show the published tag. To take back a bad release, turn it back into a draft or mark it as a prerelease; the address then points at the previous one. Nuzky only notifies: people download the new installer from the release page, and nothing installs itself. The file keeps the shape of the Tauri updater's static JSON, so a later in-app installer can add its signed `platforms` to the same file without silencing older copies, which read only `version`. A package manager that updates Nuzky itself can set `NUZKY_NO_UPDATE_CHECK=1`; Nuzky then never checks.
 

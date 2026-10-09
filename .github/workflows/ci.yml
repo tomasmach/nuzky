@@ -1,7 +1,7 @@
 name: Build and test
 
-# Actions minutes are capped and macOS counts ten times, so the three-system build runs only for a
-# release tag (through release.yml) and on request. Changes are checked locally with scripts/check.sh.
+# The three-system build with installers runs for a release tag (through release.yml) and on request.
+# Pull requests run checks.yml on Linux, and scripts/check.sh is the full local gate.
 on:
   workflow_dispatch:
   workflow_call:
@@ -21,25 +21,20 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
       - name: Install Rust
         shell: bash
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-v1
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev clang cmake pkg-config \
-            ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libswresample-dev libavfilter-dev libavdevice-dev libx264-dev \
-            patchelf libfuse2t64 librsvg2-bin libvulkan1 mesa-vulkan-drivers libvulkan-dev glslc
+        run: bash scripts/setup-ubuntu-deps.sh
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
@@ -63,7 +58,7 @@ jobs:
       - name: Verify Linux bundle
         if: runner.os == 'Linux'
         run: bash scripts/verify-linux-bundle.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nuzky-${{ matrix.os }}
           path: |
