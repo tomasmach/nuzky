@@ -6,6 +6,6 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true, host: "localhost", watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/docs/**", "**/skills/**", "**/scripts/**", "**/target/**", "**/target-*/**", "**/tmp-test/**"] } },
+  server: { port: 1420, strictPort: true, host: "localhost", watch: { ignored: ["**/src-tauri/**", "**/crates/**", "**/docs/**", "**/skills/**", "**/scripts/**", "**/target/**", "**/target-*/**", "**/tmp-test/**", "**/site/**"] } },
   build: { target: "es2022" },
 });

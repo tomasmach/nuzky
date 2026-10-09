@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+/* The app's own tokens (DESIGN.md), plus the page background a shade below the app window. */
+@theme {
+  --color-site: #08080a;
+  --color-bg: #0c0c0e;
+  --color-stage: #121214;
+  --color-card: #111113;
+  --color-panel: #1c1c1f;
+  --color-raised: #2c2c30;
+  --color-fg: #f2f2f5;
+  --color-muted: #a1a1a9;
+  --color-subtle: #6e6e75;
+  --color-accent: #2997ff;
+  --color-accent-strong: #0071e3;
+  --color-ok: #30d158;
+  --color-warn: #ff9f0a;
+  --color-caption-yellow: #ffd60a;
+  /* Claude Code's brand orange, only on its logo. */
+  --color-claude: #d97757;
+  --color-clip-video: #20466d;
+  --color-clip-audio: #144a31;
+  --color-clip-title: #6a4314;
+  --color-clip-captions: #4a3478;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-face), ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-site);
+    color: var(--color-fg);
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
+  }
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+  }
+  ::selection {
+    background: rgb(41 151 255 / 0.35);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Tile and card surface used across the page. */
+  .surface {
+    background: var(--color-card);
+    border: 1px solid rgb(255 255 255 / 0.07);
+  }
+
+  /* Liquid glass: a frosted, slightly lensed layer with a lit top rim and a faint lower bounce. */
+  .glass {
+    position: relative;
+    isolation: isolate;
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0.02) 40%, rgb(255 255 255 / 0.04)),
+      rgb(22 22 25 / 0.78);
+    backdrop-filter: blur(28px) saturate(1.6) brightness(0.8);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6) brightness(0.8);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.22),
+      inset 0 -1px 0 rgb(255 255 255 / 0.06),
+      inset 0 0 0 1px rgb(255 255 255 / 0.08),
+      0 18px 50px rgb(0 0 0 / 0.55);
+  }
+  .glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(160deg, rgb(255 255 255 / 0.35), rgb(255 255 255 / 0) 35%, rgb(255 255 255 / 0) 70%, rgb(255 255 255 / 0.12));
+    /* Longhands only: the minifier drops `exclude` from the `mask` shorthand, and the gradient then covers the whole card. */
+    -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+    -webkit-mask-clip: content-box, border-box;
+    mask-clip: content-box, border-box;
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    z-index: -1;
+  }
+  @media (prefers-contrast: more) {
+    .glass {
+      background: #232327;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+
+  /* App capsule from DESIGN.md (`bar`). */
+  .capsule {
+    background: rgb(255 255 255 / 0.075);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.1),
+      inset 0 0 0 1px rgb(255 255 255 / 0.07);
+  }
+
+  .btn-light {
+    background: #f2f2f5;
+    color: #0c0c0e;
+    transition: background-color 120ms ease-out, transform 120ms ease-out;
+  }
+  .btn-light:hover {
+    background: #ffffff;
+  }
+  .btn-light:active {
+    transform: scale(0.98);
+  }
+
+  .heading-xl {
+    font-size: clamp(2.75rem, 7.4vw, 6rem);
+    line-height: 1;
+    letter-spacing: -0.042em;
+    font-weight: 600;
+  }
+  .heading-lg {
+    font-size: clamp(2rem, 4.2vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.034em;
+    font-weight: 600;
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fills from --from to --to, so a bar can grow one step at a time. */
+@keyframes progress {
+  from {
+    transform: scaleX(var(--from, 0));
+  }
+  to {
+    transform: scaleX(var(--to, 1));
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
