@@ -182,6 +182,8 @@ export function Home() {
     const back = menu?.back;
     setMenu(null);
     if (!chose) back?.focus();
+    // A chosen item may move focus on, as Rename and Duplicate do; otherwise it goes back, not to the page.
+    else requestAnimationFrame(() => (!document.activeElement || document.activeElement === document.body) && back?.focus());
   };
 
   const cardMenu = (p: LibraryProject): MenuEntry[] => {
