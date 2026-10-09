@@ -3,5 +3,5 @@ import { llmsFullTxt, markdownResponse } from "@/lib/markdown";
 export const dynamic = "force-static";
 
 export function GET() {
-  return markdownResponse(llmsFullTxt(), { plain: true });
+  return markdownResponse(llmsFullTxt(), { plain: true, noindex: true });
 }

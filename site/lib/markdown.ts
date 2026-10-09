@@ -127,10 +127,12 @@ export function llmsFullTxt() {
 }
 
 // `Vary` keeps a cache from handing the Markdown to a browser, since `/` serves it to agents that ask for
-// `text/markdown`. A page's Markdown names its HTML page as canonical, so search engines index only the page.
+// `text/markdown`. A page's Markdown names its HTML page as canonical, so search engines index only the page;
+// llms-full.txt, which holds both pages, is kept out of the index altogether.
 // llms.txt files go out as plain text, which every browser shows instead of downloading.
-export function markdownResponse(body: string, { canonical, plain = false }: { canonical?: string; plain?: boolean } = {}) {
+export function markdownResponse(body: string, { canonical, plain = false, noindex = false }: { canonical?: string; plain?: boolean; noindex?: boolean } = {}) {
   const headers: Record<string, string> = { "Content-Type": `text/${plain ? "plain" : "markdown"}; charset=utf-8`, Vary: "Accept" };
   if (canonical) headers.Link = `<${url}${canonical}>; rel="canonical"`;
+  if (noindex) headers["X-Robots-Tag"] = "noindex";
   return new Response(body, { headers });
 }
