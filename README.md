@@ -37,7 +37,7 @@ src             React + TypeScript UI
 
 - The engine renders every frame offscreen with wgpu. The preview streams those frames to the webview over a loopback WebSocket that only accepts the app's own origin and a per-launch secret. Export reuses the same renderer at full resolution.
 - Each video clip decodes on its own thread with exact seeking on real timestamps, so cuts and variable frame rates stay frame accurate.
-- Audio of each file is decoded once into a 48 kHz cache. Playback, waveforms, export and captions all mix from it.
+- Audio of each file is decoded once into a 48 kHz cache. Playback, export and captions all mix from it. Waveform peaks are written beside it while it decodes, and the timeline loads them in blocks around what is on screen.
 - The Rust side owns the project. The UI sends edit commands and receives the new project back.
 
 More detail: [docs/INTERACTION.md](docs/INTERACTION.md) (behaviour), [DESIGN.md](DESIGN.md) (visual tokens).

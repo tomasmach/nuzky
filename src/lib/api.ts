@@ -21,7 +21,8 @@ export const api = {
   importMedia: (paths: string[], epoch: Epoch) =>
     invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("import_media", { paths, expectedEpoch: epoch }),
   thumbnail: (assetId: string) => invoke<string | null>("thumbnail", { assetId }),
-  waveform: (assetId: string) => invoke<number[] | null>("waveform", { assetId }),
+  /** Waveform peaks `from..to`; while the sound is still being prepared, only the part decoded so far and `complete: false`. */
+  waveform: (assetId: string, from: number, to: number) => invoke<{ peaks: number[]; complete: boolean } | null>("waveform", { assetId, from, to }),
   play: () => invoke<void>("play"),
   pause: () => invoke<void>("pause"),
   seek: (tUs: number) => invoke<void>("seek", { tUs: Math.round(tUs) }),

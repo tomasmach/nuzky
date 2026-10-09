@@ -176,7 +176,7 @@ function useBackendEvents() {
     );
     offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
     offs.push(listen("transcripts-changed", () => useSpeech.setState((s) => ({ stored: s.stored + 1 }))));
-    offs.push(listen<string>("audio-ready", (e) => useEditor.getState().loadWaveform(e.payload, true)));
+    offs.push(listen<string>("audio-ready", (e) => useEditor.getState().reloadWaveform(e.payload)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
     // null: the preview recovered, e.g. after a failed frame.
     offs.push(listen<string | null>("engine-error", (e) => useEditor.setState({ engineError: e.payload })));

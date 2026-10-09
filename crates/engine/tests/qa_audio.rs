@@ -247,3 +247,54 @@ fn mp3_attached_picture_remains_audio_asset() {
     let n = extract_pcm(&source, &out, |_| Ok(())).unwrap();
     assert!((n as i64 - 48000).abs() <= 1024, "frames={n}");
 }
+
+/// A long phone recording (AAC, 44.1 kHz mono, so it is resampled and doubled to stereo): the waveform
+/// of its start can be read while the rest still decodes, and it is the waveform of the finished cache.
+/// A cache extracted before peaks were written gets the same peaks from its samples.
+#[test]
+fn waveform_of_the_start_of_a_long_recording_comes_while_it_decodes() {
+    use nuzky_engine::audio::{pcm_path, waveform_peaks};
+    use std::time::{Duration, Instant};
+    if !available() {
+        return;
+    }
+    let d = dir("waveform-peaks");
+    let source = d.join("long.m4a");
+    let speech = "volume='if(gt(sin(2*PI*0.11*t)+0.3,0),0.2+0.6*abs(sin(2*PI*0.37*t)),0)':eval=frame";
+    ff(&["-f", "lavfi", "-i", "sine=frequency=180:sample_rate=44100:duration=900", "-af", speech, "-ac", "1"], &source);
+    let asset = probe(&source, "long".into()).unwrap();
+    let cache = d.join("cache");
+    std::fs::remove_dir_all(&cache).ok();
+    let worker = std::thread::spawn({
+        let (cache, asset) = (cache.clone(), asset.clone());
+        move || ensure_pcm(&cache, &asset, |_| Ok(())).unwrap()
+    });
+    // The first 30 s, as the timeline asks for them right after the import.
+    let started = Instant::now();
+    let (early, complete) = loop {
+        let (peaks, complete) = waveform_peaks(&cache, &asset, 0, 1500).unwrap();
+        if peaks.len() == 1500 || worker.is_finished() {
+            break (peaks, complete);
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let shown = started.elapsed();
+    let pcm = worker.join().unwrap();
+    let decoded = started.elapsed();
+    eprintln!("QA waveform: first 30 s after {shown:?}, whole 15 min decoded after {decoded:?}");
+    assert!(!complete, "the start was read only once the whole file was decoded ({decoded:?})");
+    let reference = peaks(&Pcm::open(&pcm).unwrap(), 50);
+    assert_eq!(early, reference[..1500], "the start read during decoding differs from the finished cache");
+    assert_eq!(waveform_peaks(&cache, &asset, 0, usize::MAX).unwrap(), (reference.clone(), true));
+    assert_eq!(pcm, pcm_path(&cache, &asset));
+    // Without peaks next to the cache, the asked part is measured from its samples.
+    for entry in std::fs::read_dir(pcm.parent().unwrap()).unwrap().flatten() {
+        if entry.path().extension().is_some_and(|e| e == "peaks") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+    let middle = waveform_peaks(&cache, &asset, 22_000, 23_600).unwrap();
+    assert_eq!(middle, (reference[22_000..23_600].to_vec(), true));
+    let end = waveform_peaks(&cache, &asset, reference.len() - 10, reference.len() + 500).unwrap();
+    assert_eq!(end, (reference[reference.len() - 10..].to_vec(), true));
+}

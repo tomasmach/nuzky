@@ -29,7 +29,7 @@ Pravidlo odsud, které bojuje s úkolem, neporušuj potichu. Řekni to nahlas.
 
 - Rust vlastní projekt. UI posílá `EditCmd` a dostává zpět nový snapshot. Agenti a CLI jdou přes stejný `ProjectSession` (`crates/session`), kde jsou i autosave, obnova po pádu a běhy agenta.
 - Náhled kreslí vlákno v `src-tauri/src/engine.rs` přes wgpu (`crates/engine/src/render.rs`, `gpu.rs`) a posílá snímky přes loopback WebSocket s tajemstvím a kontrolou originu. Export používá stejný renderer.
-- Zvuk každého souboru se jednou dekóduje do 48kHz cache (`crates/engine/src/audio.rs`). Přehrávání, waveformy, export i titulky míchají z ní. Cache patří souboru (cesta, velikost, mtime), ne jen ID assetu, protože agent může pod stejné ID vložit jiný soubor.
+- Zvuk každého souboru se jednou dekóduje do 48kHz cache (`crates/engine/src/audio.rs`). Přehrávání, export i titulky míchají z ní. Waveform čte peaky, které se zapisují vedle cache už během dekódování, a timeline je načítá po blocích jen kolem toho, co je na obrazovce. Cache patří souboru (cesta, velikost, mtime), ne jen ID assetu, protože agent může pod stejné ID vložit jiný soubor.
 - Dlouhá práce běží jako job: export, titulky, příprava zvuku a modely v `src-tauri/src/jobs.rs`, práce agenta v `crates/session/src/jobs.rs`. Každý job hlásí průběh a reaguje na zrušení.
 - Přístup každého MCP nástroje je v jedné tabulce `crates/mcp/src/rules.rs`. Návod pro agenty `skills/nuzky-edit/SKILL.md` je zároveň `nuzky://guide`. Architektura AI je v `docs/AI-ARCHITECTURE.md`.
 - Chybové kódy jsou prefixy zpráv (`RUN_ACTIVE`, `CANCELLED`, `READ_ONLY`, `OUTPUT_EXISTS`…) a frontend je čte přes `startsWith`. Kód nepřejmenovávej bez úpravy všech míst, která ho čtou.

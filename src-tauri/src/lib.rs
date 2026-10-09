@@ -522,15 +522,27 @@ async fn thumbnail(app: AppHandle, asset_id: String) -> CmdResult<Option<String>
     .map_err(err)?
 }
 
+#[derive(serde::Serialize)]
+struct WaveformPeaks {
+    peaks: Vec<u8>,
+    /// False while the sound is still being prepared: only the part decoded so far is there.
+    complete: bool,
+}
+
+/// Waveform peaks `from..to` of an asset; the timeline asks for the blocks around what is on screen.
 #[tauri::command]
-async fn waveform(app: AppHandle, asset_id: String) -> CmdResult<Option<Vec<u8>>> {
+async fn waveform(app: AppHandle, asset_id: String, from: usize, to: usize) -> CmdResult<Option<WaveformPeaks>> {
     let state = app.state::<AppState>();
     let asset = state.project()?.asset(&asset_id).cloned();
     let Some(asset) = asset else { return Ok(None) };
-    let path = nuzky_engine::audio::pcm_path(&state.cache_dir, &asset);
+    // Preparing this sound failed; nothing more will come.
+    if state.audio_failed.lock().unwrap().contains(&nuzky_engine::audio::pcm_path(&state.cache_dir, &asset)) {
+        return Ok(Some(WaveformPeaks { peaks: Vec::new(), complete: true }));
+    }
+    let cache = state.cache_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let pcm = nuzky_engine::audio::Pcm::open(&path).ok()?;
-        Some(nuzky_engine::audio::peaks(&pcm, 50))
+        let (peaks, complete) = nuzky_engine::audio::waveform_peaks(&cache, &asset, from, to).ok()?;
+        Some(WaveformPeaks { peaks, complete })
     })
     .await
     .map_err(err)

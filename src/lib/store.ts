@@ -43,7 +43,8 @@ interface EditorState {
   engineError: string | null;
   thumbs: Record<string, string | null>;
   filmstrips: Record<string, Filmstrip | null>;
-  waveforms: Record<string, number[] | null>;
+  /** Loaded blocks of each asset's waveform, by block index; every clip of the file draws from them. */
+  waveforms: Record<string, Record<number, WaveBlock>>;
   assetDrag: AssetDrag | null;
   /** Where files dragged in from the desktop are over the window, in CSS pixels, while they include media. */
   fileDrag: { x: number; y: number } | null;
@@ -79,15 +80,120 @@ interface EditorState {
   dismissToast: (id: number) => void;
   loadThumb: (assetId: string) => void;
   loadFilmstrip: (assetId: string) => void;
-  loadWaveform: (assetId: string, force?: boolean) => void;
+  /** Keeps blocks `first..=last` of an asset's waveform loaded until the returned function is called. */
+  showWaveform: (assetId: string, first: number, last: number) => () => void;
+  /** Loads the shown blocks of an asset again, e.g. once its sound is prepared or the id names another file. */
+  reloadWaveform: (assetId: string) => void;
+}
+
+/** Waveform peaks per second of sound, and per block: the unit they are loaded and kept in (10.24 s). */
+export const PEAKS_PER_SECOND = 50;
+export const PEAKS_PER_BLOCK = 512;
+
+export interface WaveBlock {
+  peaks: Uint8Array;
+  /** False while more of the block is still being decoded. */
+  complete: boolean;
 }
 
 export type EditInput = EditCmd | EditCmd[] | ((project: Project) => EditCmd | EditCmd[] | null);
 
 let toastId = 0;
 const pending = new Set<string>();
-/** Forced waveform reloads asked for while a load was pending; they run when it ends. */
-const reloadWaveforms = new Set<string>();
+
+/** Blocks kept that no waveform on screen shows: 256 are 128 KB, 44 minutes of sound. Those shown longest ago go first. */
+const KEPT_BLOCKS = 256;
+const BLOCKS_PER_REQUEST = 64;
+/** The blocks each waveform on screen shows. */
+const waveformViews = new Map<number, { assetId: string; first: number; last: number }>();
+let waveformView = 0;
+/** Loaded blocks as `assetId:index`, the one shown longest ago first. */
+const waveformUse = new Set<string>();
+/** Bumped when an asset's loaded blocks may be stale, so replies to requests sent before are dropped. */
+const waveformGeneration = new Map<string, number>();
+/** While a shown block is still being decoded it is asked for again, less often while nothing new comes. */
+const waveformRetry = new Map<string, { timer: ReturnType<typeof setTimeout> | null; delay: number }>();
+
+function waveformShown(assetId: string, block: number) {
+  for (const v of waveformViews.values()) if (v.assetId === assetId && block >= v.first && block <= v.last) return true;
+  return false;
+}
+
+function touchWaveform(key: string) {
+  waveformUse.delete(key);
+  waveformUse.add(key);
+}
+
+/** Drops loaded blocks past KEPT_BLOCKS that nothing shows, those shown longest ago first; the same object when none go. */
+function evictWaveforms(waveforms: EditorState["waveforms"]) {
+  if (waveformUse.size <= KEPT_BLOCKS) return waveforms;
+  const out = { ...waveforms };
+  const copied = new Set<string>();
+  for (const key of waveformUse) {
+    if (waveformUse.size <= KEPT_BLOCKS) break;
+    const at = key.lastIndexOf(":");
+    const [assetId, block] = [key.slice(0, at), Number(key.slice(at + 1))];
+    if (waveformShown(assetId, block)) continue;
+    waveformUse.delete(key);
+    if (!out[assetId]) continue;
+    if (!copied.has(assetId)) out[assetId] = { ...out[assetId] };
+    copied.add(assetId);
+    delete out[assetId][block];
+  }
+  return copied.size > 0 ? out : waveforms;
+}
+
+function retryWaveform(assetId: string, grew: boolean) {
+  const retry = waveformRetry.get(assetId) ?? { timer: null, delay: 250 };
+  retry.delay = grew ? 250 : Math.min(retry.delay * 2, 4000);
+  if (!retry.timer)
+    retry.timer = setTimeout(() => {
+      retry.timer = null;
+      loadWaveform(assetId);
+    }, retry.delay);
+  waveformRetry.set(assetId, retry);
+}
+
+/** Asks for the shown blocks of an asset that are not loaded or still growing, in runs of neighbouring blocks. */
+function loadWaveform(assetId: string) {
+  const epoch = useEditor.getState().snap?.sessionEpoch;
+  const have = useEditor.getState().waveforms[assetId] ?? {};
+  const generation = waveformGeneration.get(assetId) ?? 0;
+  const key = (block: number) => `wave:${epoch}:${assetId}:${block}`;
+  const wanted = new Set<number>();
+  for (const v of waveformViews.values()) if (v.assetId === assetId) for (let b = v.first; b <= v.last; b++) wanted.add(b);
+  const missing = [...wanted].filter((b) => !have[b]?.complete && !pending.has(key(b))).sort((a, b) => a - b);
+  for (let i = 0; i < missing.length; ) {
+    let j = i;
+    while (j + 1 < missing.length && missing[j + 1] === missing[j] + 1 && j + 1 - i < BLOCKS_PER_REQUEST) j++;
+    const [first, last] = [missing[i], missing[j]];
+    i = j + 1;
+    for (let b = first; b <= last; b++) pending.add(key(b));
+    const current = () => useEditor.getState().snap?.sessionEpoch === epoch && (waveformGeneration.get(assetId) ?? 0) === generation;
+    api
+      .waveform(assetId, first * PEAKS_PER_BLOCK, (last + 1) * PEAKS_PER_BLOCK)
+      .then((reply) => {
+        if (!reply || !current()) return;
+        const blocks = { ...useEditor.getState().waveforms[assetId] };
+        let grew = false;
+        for (let b = first; b <= last; b++) {
+          const peaks = Uint8Array.from(reply.peaks.slice((b - first) * PEAKS_PER_BLOCK, (b - first + 1) * PEAKS_PER_BLOCK));
+          grew ||= peaks.length > (blocks[b]?.peaks.length ?? 0);
+          // A full block no longer changes, even while the rest of the file decodes.
+          blocks[b] = { peaks, complete: reply.complete || peaks.length === PEAKS_PER_BLOCK };
+          touchWaveform(`${assetId}:${b}`);
+        }
+        useEditor.setState({ waveforms: evictWaveforms({ ...useEditor.getState().waveforms, [assetId]: blocks }) });
+        if (!reply.complete) retryWaveform(assetId, grew);
+      })
+      .catch(() => {})
+      .finally(() => {
+        for (let b = first; b <= last; b++) pending.delete(key(b));
+        // Asked for before the blocks went stale: ask again.
+        if (useEditor.getState().snap?.sessionEpoch === epoch && !current()) loadWaveform(assetId);
+      });
+  }
+}
 
 /**
  * Edits, undo and redo run one at a time in the order they were made. An entry with the same
@@ -304,7 +410,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       ...(switched ? { thumbs: {}, filmstrips: {}, waveforms: {} } : {}),
       ...(rebound.length > 0 ? { thumbs: without(get().thumbs), filmstrips: without(get().filmstrips), waveforms: without(get().waveforms) } : {}),
     });
-    for (const id of rebound) get().loadWaveform(id, true);
+    if (switched) waveformUse.clear();
+    for (const id of rebound) get().reloadWaveform(id);
     if (switched && snap.agentBridgeError) {
       get().toast({ kind: "info", text: "AI agents can't connect to this project while it is open here. Your own editing works normally." });
     }
@@ -390,23 +497,29 @@ export const useEditor = create<EditorState>((set, get) => ({
       .finally(() => pending.delete(key));
   },
 
-  loadWaveform: (assetId, force = false) => {
-    const epoch = get().snap?.sessionEpoch;
-    const key = `wave:${epoch}:${assetId}`;
-    if (!force && get().waveforms[assetId]) return;
-    // The pending load may have asked before the audio was ready, so a forced one runs after it.
-    if (pending.has(key)) {
-      if (force) reloadWaveforms.add(key);
-      return;
-    }
-    pending.add(key);
-    api
-      .waveform(assetId)
-      .then((peaks) => peaks && get().snap?.sessionEpoch === epoch && set({ waveforms: { ...get().waveforms, [assetId]: peaks } }))
-      .finally(() => {
-        pending.delete(key);
-        if (reloadWaveforms.delete(key) && get().snap?.sessionEpoch === epoch) get().loadWaveform(assetId, true);
+  showWaveform: (assetId, first, last) => {
+    const view = ++waveformView;
+    waveformViews.set(view, { assetId, first, last });
+    for (let b = first; b <= last; b++) if (waveformUse.has(`${assetId}:${b}`)) touchWaveform(`${assetId}:${b}`);
+    loadWaveform(assetId);
+    return () => {
+      waveformViews.delete(view);
+      // After the commit, so a waveform that only moved has shown its new blocks first.
+      queueMicrotask(() => {
+        const waveforms = get().waveforms;
+        const kept = evictWaveforms(waveforms);
+        if (kept !== waveforms) set({ waveforms: kept });
       });
+    };
+  },
+
+  reloadWaveform: (assetId) => {
+    waveformGeneration.set(assetId, (waveformGeneration.get(assetId) ?? 0) + 1);
+    const blocks = get().waveforms[assetId];
+    // Kept on screen until the new ones arrive.
+    if (blocks) set({ waveforms: { ...get().waveforms, [assetId]: Object.fromEntries(Object.entries(blocks).map(([b, block]) => [b, { ...block, complete: false }])) } });
+    for (const key of waveformUse) if (key.startsWith(`${assetId}:`) && !blocks?.[Number(key.slice(assetId.length + 1))]) waveformUse.delete(key);
+    loadWaveform(assetId);
   },
 }));
 
