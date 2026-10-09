@@ -77,23 +77,25 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
 
   return (
     <div className="flex h-[740px] w-[1200px] flex-col gap-1.5 overflow-hidden rounded-[14px] bg-bg px-1.5 pb-1.5 text-left text-fg ring-1 ring-white/10">
-      {/* Top bar with the macOS window controls beside Projects */}
-      <div className="flex h-12 shrink-0 items-center justify-between px-1">
-        <div className="flex w-[260px] items-center gap-2.5">
-          <div className="flex items-center gap-2 pl-2 pr-1.5">
-            {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
-              <span key={c} className="size-3 rounded-full ring-[0.5px] ring-black/20" style={{ background: c }} />
-            ))}
-          </div>
-          <Capsule>
-            <LayoutGrid className="size-[15px] text-muted" />
-            Projects
-          </Capsule>
-        </div>
+      {/* The macOS title bar: window controls on the left, the project in the middle. */}
+      <div className="relative -mx-1.5 flex h-7 shrink-0 items-center border-b border-white/[0.06] bg-white/[0.025] px-3.5">
         <div className="flex items-center gap-2">
-          <span className="text-[13px] font-semibold">Morning run</span>
-          <span className="text-[12px] text-muted">Saved</span>
+          {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
+            <span key={c} className="size-3 rounded-full ring-[0.5px] ring-black/20" style={{ background: c }} />
+          ))}
         </div>
+        <div className="absolute inset-x-0 flex justify-center gap-2 text-[12px]">
+          <span className="font-semibold">Morning run</span>
+          <span className="text-muted">Saved</span>
+        </div>
+      </div>
+
+      {/* Top bar */}
+      <div className="flex h-11 shrink-0 items-center justify-between">
+        <Capsule>
+          <LayoutGrid className="size-[15px] text-muted" />
+          Projects
+        </Capsule>
         <div className="flex w-[260px] items-center justify-end gap-2">
           <Capsule className={dim(focus !== "export")}>
             <Sparkles className="size-[15px] text-accent" />
@@ -143,7 +145,7 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
 
         {/* Preview */}
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 rounded-xl bg-stage p-3.5 ring-1 ring-inset ring-white/[0.06]">
-          <div className="relative h-[356px] w-[200px] ring-1 ring-white/[0.12]">
+          <div className="relative h-[340px] w-[191px] ring-1 ring-white/[0.12]">
             <Image src="/media/reel-hike.jpg" alt="" fill sizes="400px" className="object-cover" />
             <div className={`absolute inset-x-0 bottom-16 flex justify-center ${focus === "captions" ? "" : ""}`}>
               <span
