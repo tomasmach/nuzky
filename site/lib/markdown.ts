@@ -7,13 +7,12 @@ import { buildFromSource, license, releaseNotes, repo, url, version } from "./si
 const raw = repo.replace("github.com", "raw.githubusercontent.com") + "/main";
 const abs = (href: string) => (href.startsWith("/") ? url + href : href);
 const list = (items: string[]) => items.map((i) => `- ${i}`).join("\n");
-const qa = (items: Faq[]) =>
-  items.map((f) => `### ${f.q}\n\n${f.a}${f.link ? ` [${f.link.label}](${abs(f.link.href)}.md)` : ""}`).join("\n\n");
+const qa = (items: Faq[]) => items.map((f) => `### ${f.q}\n\n${f.a}${f.link ? ` [${f.link.label}](${abs(f.link.href)}.md)` : ""}`).join("\n\n");
 
 const summary =
   "Nuzky is a free, open source desktop video editor in the spirit of CapCut, made for Reels, TikTok and Shorts. It runs on your computer, writes captions locally with Whisper and lets an AI agent such as Claude Code or Codex edit the open project while you watch.";
 
-const status = `Status: in development. The first builds for macOS (Apple Silicon), Windows (x64) and Linux are coming soon; Linux is the platform it is tested on today. Current version: ${version}. License: GPL-3.0-or-later.`;
+const status = `Status: in development. The first version for macOS, Windows and Linux is coming soon. Current version: ${version}. License: GPL-3.0-or-later.`;
 
 export function homeMarkdown() {
   return `# Nuzky: free, open source video editor
@@ -57,7 +56,7 @@ export function alternativeMarkdown() {
   const cell = (s: string) => s.replace(/\|/g, "\\|");
   return `# Nuzky vs CapCut: the open source CapCut alternative
 
-> Nuzky is a free, open source video editor, built and tested on Linux first, with macOS and Windows builds coming. It has a timeline, auto captions that run on your computer and an export made for Reels and TikTok, with no subscription, no account and no watermark. It does not have CapCut's template library or a phone app.
+> Nuzky is a free, open source video editor for Reels, TikTok and Shorts. Auto captions are free with no limit, exports go up to 4K with no watermark, and there is no subscription or account. It does not have CapCut's template library or a phone app.
 
 ${status}
 
@@ -99,7 +98,7 @@ export function llmsTxt() {
 
 ${status}
 
-No account, no watermark, no subscription. Editing, captions and export run on the computer; an AI agent the user connects sees the transcript and the frames it inspects. It is an alternative to CapCut for people who edit on a computer, including Linux, where CapCut has no app. Agents edit video in Nuzky through its MCP server; the agent guide under Source is the one that server serves.
+No account, no watermark, no subscription. Editing, captions and export run on the computer; an AI agent the user connects sees the transcript and the frames it inspects. It is an alternative to CapCut for creators who edit on a computer. Agents edit video in Nuzky through its MCP server; the agent guide under Source is the one that server serves.
 
 ## Pages
 

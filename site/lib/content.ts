@@ -1,44 +1,45 @@
 // Copy that the pages, the structured data for search engines and the Markdown for AI agents all share,
-// so a fact changes in one place.
+// so a fact changes in one place. It is written for creators who edit reels, not for developers.
 
 export type Faq = { q: string; a: string; link?: { label: string; href: string } };
 
 export const faq: Faq[] = [
   {
     q: "Is Nuzky really free?",
-    a: "Yes. There is no paid plan, no account and no watermark on your exports. Nuzky is open source under GPL-3.0, so anyone can read, build and share the code. AI editing runs on your own Claude Code or Codex plan.",
+    a: "Yes. No subscription, no watermark on your videos and no account to make. Nuzky is open source, so it stays free. If you let AI do the editing, it runs on your own Claude or ChatGPT plan.",
   },
   {
-    q: "When can I download Nuzky?",
-    a: "Nuzky is still in development. The first builds for macOS, Windows and Linux are coming soon. On GitHub, choose Watch, then Custom, then Releases, and GitHub emails you when the first build ships.",
+    q: "When can I download it?",
+    a: "Soon. The first version for Mac, Windows and Linux is on its way. Watch Nuzky on GitHub to hear the moment it's out.",
   },
   {
     q: "How is Nuzky different from CapCut?",
-    a: "Nuzky is open source, free with no account, and runs on Linux too. It has a timeline, auto captions, caption styles and an export made for Reels and TikTok. It doesn't have CapCut's library of templates and effects, and there is no phone app.",
+    a: "Everything in Nuzky is free: auto captions, 4K export, no watermark and no account. It's made for editing on your computer. CapCut has more templates and effects, and a phone app.",
     link: { label: "Compare Nuzky and CapCut", href: "/capcut-alternative" },
   },
   {
-    q: "Does Nuzky run on Linux?",
-    a: "Yes. Linux is where Nuzky is built and tested first. Builds for macOS, Windows and Linux are coming soon, and you can build it from source today.",
+    q: "Are the auto captions free?",
+    a: "Yes, with no limit. Nuzky writes captions from what you say, right on your computer. Pick a style, make the spoken word light up and fix any word it got wrong.",
   },
   {
-    q: "Do my videos get uploaded anywhere?",
-    a: "No. Editing, captions and export all run on your computer. Nuzky only goes online to download its speech models and to check for a new version once a day, and you can turn that check off. An AI agent you connect sees the transcript and the frames it checks, like anything else you share with it.",
+    q: "Are my videos private?",
+    a: "Yes. Your videos stay on your computer, and nothing gets uploaded to edit, caption or export them. If you ask an AI to edit for you, it sees what's said in the video and the frames it checks.",
   },
   {
-    q: "How do the auto captions work?",
-    a: "Whisper turns the speech into captions on your computer, and music and silence stay uncaptioned. Each line lands on the timeline as a clip. Pick one of seven styles, such as Reel, Karaoke or Box, highlight the spoken word and fix any word it misheard.",
+    q: "Can AI edit the video for me?",
+    a: "Yes. Say what you want, like “cut the ums and pauses and add captions”, and watch it edit in the app. You can stop it any time, and one undo takes it all back. It works through your own Claude or ChatGPT plan, and not on Windows yet.",
   },
   {
-    q: "Can an AI agent edit my video?",
-    a: "Yes. Connect Claude Code or Codex in one click, or any other MCP client, and ask for a cut in plain words. You watch every change in the open project, you can stop it at any time, and one undo takes the whole run back. The agent runs on your own Claude Code or Codex plan, and live editing in the app doesn't work on Windows yet.",
+    q: "Will videos from my phone work?",
+    a: "Yes. iPhone and Android videos open the right way up, selfies included, and every cut lands on the exact frame you picked.",
   },
   {
-    q: "Which files can Nuzky open and export?",
-    a: "Video, audio and images from phones and cameras, including HEVC and H.264, variable frame rate and front camera footage. It exports MP4 (H.264 and AAC) from 720p to 4K. The Reels and TikTok preset writes 1080 × 1920 at 30 fps with the sound levelled to −14 LUFS.",
+    q: "Is it ready for TikTok, Reels and Shorts?",
+    a: "Yes. One click exports a vertical 1080 × 1920 video with the volume levelled for social apps.",
   },
 ];
 
+// For search engines and AI agents, which want the full picture.
 export const features = [
   "Vertical 9:16 canvas, plus 16:9, 1:1 and 4:5",
   "Opens phone and camera footage, including HEVC, H.264, variable frame rate, rotated and front camera video",
@@ -47,10 +48,10 @@ export const features = [
   "Edit by text: delete words in the transcript and the video cuts with them",
   "Keyframes, speed, entry and exit animations, transitions and filter presets",
   "Text with outline, background box, colour, position, rotation and opacity",
-  "Auto captions with Whisper on your computer, seven caption styles and a highlight on the spoken word",
+  "Auto captions on your computer with no limit, seven caption styles and a highlight on the spoken word",
   "Clean voice for speech recorded with room noise or hum",
   "Real-time preview with sound",
-  "MP4 export (H.264 and AAC) from 720p to 4K, drawn by the same renderer as the preview",
+  "MP4 export from 720p to 4K with no watermark, drawn by the same renderer as the preview",
   "Reels and TikTok preset: 1080 × 1920 at 30 fps, sound levelled to −14 LUFS",
   "Saves after every edit and recovers after a crash",
   "AI agents edit the open project through MCP: Claude Code, Codex or any MCP client, with one undo per run (not on Windows yet)",
@@ -67,74 +68,60 @@ export const capcutSources = [
 ];
 
 export const comparison: { label: string; nuzky: string; capcut: string }[] = [
+  { label: "Price", nuzky: "Free. No subscription.", capcut: "Free plan, then Pro or Ultra for premium features and AI credits" },
+  { label: "Auto captions", nuzky: "Free, with no limit", capcut: "Some caption features need Pro" },
+  { label: "Export", nuzky: "Up to 4K, never a watermark", capcut: "Videos that use Pro features need Pro to export" },
   {
-    label: "Price",
-    nuzky: "Free. No paid plan, no account, no watermark. AI editing uses your own Claude Code or Codex plan.",
-    capcut: "Free plan with basic tools. Premium templates, Pro features and AI credits need the paid Pro or Ultra plan.",
-  },
-  {
-    label: "Auto captions",
-    nuzky: "Free and on your computer, with seven styles and a highlight on the spoken word",
-    capcut: "Include Pro-only parts, according to CapCut's help centre",
-  },
-  { label: "Export", nuzky: "MP4 from 720p to 4K at 24 to 60 fps. No watermark.", capcut: "A video that uses any Pro feature needs Pro to export" },
-  { label: "Source code", nuzky: "Open source, GPL-3.0", capcut: "Closed source, made by ByteDance" },
-  {
-    label: "Computers",
-    nuzky: "Linux first. macOS and Windows builds are coming and not tested yet.",
-    capcut: "macOS and Windows apps. On Linux, only the web editor, which needs an account.",
-  },
-  { label: "Phones", nuzky: "No phone app", capcut: "iOS and Android" },
-  {
-    label: "Your footage",
-    nuzky: "Edited, captioned and exported on your computer. An AI agent you connect sees the transcript and the frames it checks.",
-    capcut: "The phone and desktop apps edit files on your device. In the web editor you upload your clips to CapCut.",
+    label: "Your videos",
+    nuzky: "Stay on your computer. An AI you ask to edit sees what's said and the frames it checks.",
+    capcut: "The apps edit on your device. The web editor uploads them.",
   },
   {
     label: "AI editing",
-    nuzky: "Your own agent edits the open project: Claude Code, Codex or any MCP client. One undo takes a run back. Not on Windows yet.",
-    capcut: "Built-in AI tools, paid for with monthly credits",
+    nuzky: "Tell it what to cut and watch it work. Uses your Claude or ChatGPT plan. Not on Windows yet.",
+    capcut: "Built-in AI tools, paid with credits",
   },
   {
     label: "Templates and effects",
-    nuzky: "No template library. Seven filter presets, eight transitions, entry and exit animations and seven caption styles.",
+    nuzky: "Filters, transitions, animations and seven caption styles. No template library.",
     capcut: "A large library of templates, effects and stickers",
   },
-  { label: "Status", nuzky: "In development, first builds coming soon", capcut: "Mature and widely used" },
+  { label: "Where it runs", nuzky: "Mac, Windows and Linux", capcut: "Phones, Mac, Windows and the web" },
+  { label: "Open source", nuzky: "Yes, free for good", capcut: "No" },
+  { label: "Available", nuzky: "Coming soon", capcut: "Now" },
 ];
 
 export const pickNuzky = [
-  "You edit on a computer, including Linux",
-  "You don't want another subscription",
-  "You want editing and captions to run on your computer",
-  "You already use Claude Code or Codex and want it to do the rough cut",
-  "You want to read, change or build the code yourself",
+  "You're done paying a subscription to edit",
+  "You want free auto captions with no limit",
+  "You want your videos to stay on your computer",
+  "You'd like AI to do the boring first cut",
 ];
 
 export const pickCapcut = [
   "You edit on your phone",
   "You build videos from templates, effects and stickers",
-  "You need your projects synced across devices",
-  "You need a finished, released app today",
+  "You need your projects on every device",
+  "You need an app you can download today",
 ];
 
 export const fromCapcut = [
-  { title: "The same layout", text: "Media on the left, the preview in the middle, the inspector on the right and the timeline across the bottom." },
-  { title: "Q and W", text: "Delete the part of a clip left or right of the playhead, CapCut's fast way to cut a talking head." },
-  { title: "Edit by text", text: "Delete words in the transcript and the video cuts with them, with captions and overlays kept in sync." },
+  { title: "The same layout", text: "Media on the left, the preview in the middle, settings on the right and the timeline at the bottom." },
+  { title: "Q and W", text: "Cut away the part before or after the playhead with one key, just like in CapCut." },
+  { title: "Edit by text", text: "Delete words in the transcript and the video cuts with them, captions included." },
 ];
 
 export const capcutFaq: Faq[] = [
   {
     q: "Can I open my CapCut projects in Nuzky?",
-    a: "No. Bring the original clips and rebuild the cut. CapCut templates and stickers don't carry over.",
+    a: "No. Bring your original clips and edit them again. CapCut templates and stickers don't come along.",
   },
   {
-    q: "Is there a CapCut app for Linux?",
-    a: "No. CapCut's web editor runs in a browser on Linux, but it needs an account and you upload your clips to it. Nuzky is built and tested on Linux first.",
+    q: "Are CapCut's auto captions free?",
+    a: "Not entirely. CapCut's help centre says auto captions include features that need Pro. In Nuzky, captions are free with no limit.",
   },
   {
-    q: "How is Nuzky different from Kdenlive or Shotcut?",
-    a: "Kdenlive and Shotcut are general-purpose editors. Nuzky is made for short vertical videos: it's built around a 9:16 canvas, styles captions with a highlight on the spoken word, has a Reels and TikTok preset and lets an AI agent make the cut.",
+    q: "Does Nuzky get any rights to my videos?",
+    a: "No. Nuzky doesn't upload your videos and asks for no rights to anything you make.",
   },
 ];
