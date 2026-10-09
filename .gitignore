@@ -10,6 +10,7 @@
 /.cargo/config.toml
 /src-tauri/gen/schemas
 *.local
+CLAUDE.local.md
 .playwright-mcp/
 /tmp-test/
 __pycache__/
