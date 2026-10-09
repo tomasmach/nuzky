@@ -6,7 +6,7 @@ The rules for code changes are in [AGENTS.md](AGENTS.md), for people and coding 
 
 ## Set up a checkout
 
-1. Install the build dependencies for your system from [docs/BUILDING.md](docs/BUILDING.md) (Rust 1.90+, Node 22.12+, FFmpeg, clang, cmake, WebKitGTK on Linux).
+1. Install the build dependencies for your system from [docs/BUILDING.md](docs/BUILDING.md) (Rust 1.94+, Node 22.12+, FFmpeg, clang, cmake, WebKitGTK on Linux).
 2. Turn on the repository's git hooks. The pre-push hook scans for secrets and blocks video and audio files:
 
    ```sh

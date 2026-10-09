@@ -1,6 +1,6 @@
 # Building and distributing Nuzky
 
-Use current stable Rust (minimum 1.90), Node.js 22.12+ and the committed Cargo/npm lockfiles. Pull requests run lint, types, the app and website builds, clippy and `cargo test --workspace --locked` on `ubuntu-24.04` (`.github/workflows/checks.yml`): every pull request that is not a draft once the repository is public, and only pull requests with the `ci` label while it is private. A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
+Use current stable Rust (minimum 1.94, which `candle-core` needs for its NEON code on Apple Silicon), Node.js 22.12+ and the committed Cargo/npm lockfiles. Pull requests run lint, types, the app and website builds, clippy and `cargo test --workspace --locked` on `ubuntu-24.04` (`.github/workflows/checks.yml`): every pull request that is not a draft once the repository is public, and only pull requests with the `ci` label while it is private. A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
 
 ## Linux
 
