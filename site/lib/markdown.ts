@@ -65,7 +65,7 @@ export function alternativeMarkdown() {
   const cell = (s: string) => s.replace(/\|/g, "\\|");
   return `# Nuzky vs CapCut: the open source CapCut alternative
 
-> Nuzky is a free, open source video editor for Reels, TikTok and Shorts. Auto captions are free with no limit, exports go up to 4K with no watermark, and there is no subscription or account. It does not have CapCut's template library or a phone app.
+> Nuzky is a free, open source video editor for TikTok, Reels, Shorts and YouTube. Auto captions are free with no limit, exports go up to 4K with no watermark, and there is no subscription or account. It does not have CapCut's template library or a phone app.
 
 ${status}
 

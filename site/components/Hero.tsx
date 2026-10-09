@@ -103,10 +103,11 @@ export function Hero() {
   return (
     <section ref={section} className="relative">
       <div className="relative z-10 flex flex-col items-center px-5 pt-16 text-center sm:pt-24">
-        <h1 className="heading-xl">
-          Make the video.
+        {/* A notch under heading-xl, so the first sentence stays on one line from tablet width up. */}
+        <h1 className="heading-xl text-[length:clamp(2.75rem,6.6vw,5.5rem)]">
+          You just wanted to edit a{"\u00a0"}video.
           <br />
-          <span className="text-subtle">Skip the boring{"\u00a0"}part.</span>
+          <span className="text-subtle">Nuzky does the boring{"\u00a0"}part.</span>
         </h1>
         <p className="mt-7 max-w-[600px] text-[17px] text-muted sm:text-[20px]">
           A free video editor. AI writes the captions in your language and cuts out the ums, the pauses and the retakes.
