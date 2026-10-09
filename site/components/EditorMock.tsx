@@ -285,7 +285,7 @@ export function EditorMock({ focus = "edit" }: { focus?: EditorFocus }) {
                   icon={<Clapperboard className="size-2.5" />}
                 />
               ))}
-              <Clip x={0} w={1100} top={lanes.audio} h={34} color="var(--color-clip-audio)" label="Sunrise — ambient" icon={<Music2 className="size-2.5" />} />
+              <Clip x={0} w={1100} top={lanes.audio} h={34} color="var(--color-clip-audio)" label="Sunrise.m4a" icon={<Music2 className="size-2.5" />} />
               <div className="absolute left-1.5 flex items-center gap-0.5" style={{ top: lanes.audio + 20, height: 12 }}>
                 {bars.map((h, k) => (
                   <span key={k} className="w-1 shrink-0 rounded-[1px] bg-ok/60" style={{ height: h }} />
