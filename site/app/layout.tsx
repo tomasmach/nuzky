@@ -29,7 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${inter.variable} ${mono.variable}`}>
       <body className="min-h-dvh overflow-x-hidden bg-site">
         {children}
-        {/* Vercel Web Analytics counts visits without cookies, so the site needs no consent banner. */}
+        {/* Vercel Web Analytics counts visits without cookies or stored identifiers. */}
         <Analytics />
       </body>
     </html>
