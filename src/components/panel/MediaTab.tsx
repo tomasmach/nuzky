@@ -1,13 +1,14 @@
 import { useEffect } from "react";
-import { AudioLines, Film, Plus, Trash2 } from "lucide-react";
+import { AudioLines, Film, PictureInPicture2, Plus, Trash2 } from "lucide-react";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Asset } from "../../lib/types";
 import { ProgressBar, lockedProps, useLockReason } from "../ui";
-import { ImportPlaceholder, ImportTile, KindIcon, addAtPlayhead, assetDragHandler, pickAndImport, removeAsset } from "./assets";
+import { ImportPlaceholder, ImportTile, KindIcon, addAtPlayhead, addPictureInPicture, assetDragHandler, pickAndImport, removeAsset } from "./assets";
 
 /** Round action on a media tile; no blur, so a grid of them stays cheap to paint. */
 const ACTION = "flex h-[26px] w-[26px] items-center justify-center rounded-full transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+const QUIET_ACTION = `bg-black/55 text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/.18)] hover:bg-black/75 aria-disabled:hover:bg-black/55 ${ACTION}`;
 
 function MediaItem({ asset }: { asset: Asset }) {
   const thumb = useEditor((s) => s.thumbs[asset.id]);
@@ -58,13 +59,25 @@ function MediaItem({ asset }: { asset: Asset }) {
           >
             <Plus size={15} />
           </button>
+          {asset.kind !== "audio" && (
+            <button
+              type="button"
+              aria-label={`Add ${asset.name} as picture in picture`}
+              title="Picture in picture at the playhead"
+              onClick={() => addPictureInPicture(asset.id)}
+              {...lockedProps(lock)}
+              className={QUIET_ACTION}
+            >
+              <PictureInPicture2 size={14} />
+            </button>
+          )}
           <button
             type="button"
             aria-label={`Remove ${asset.name}`}
             title="Remove from project, with its clips"
             onClick={() => removeAsset(asset)}
             {...lockedProps(lock)}
-            className={`bg-black/55 text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/.18)] hover:bg-black/75 hover:text-danger aria-disabled:hover:bg-black/55 aria-disabled:hover:text-white ${ACTION}`}
+            className={`hover:text-danger aria-disabled:hover:text-white ${QUIET_ACTION}`}
           >
             <Trash2 size={14} />
           </button>

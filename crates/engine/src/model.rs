@@ -330,6 +330,9 @@ pub enum ClipContent {
         /// until the cleaned sound is prepared; export always has the cleaned sound.
         #[serde(default)]
         clean_voice: bool,
+        /// Rounded corners, a border and a shadow around the picture, as for a picture in picture.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<Shape>,
     },
     #[serde(rename_all = "camelCase")]
     Text {
@@ -392,13 +395,63 @@ pub struct Transform {
     /// Degrees, clockwise.
     pub rotation: f32,
     pub opacity: f32,
+    /// Edges cut off the layer. Part of the transform, so keyframes can animate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Crop>,
 }
 
 impl Default for Transform {
     fn default() -> Self {
-        Self { x: 0.0, y: 0.0, scale: 1.0, rotation: 0.0, opacity: 1.0 }
+        Self { x: 0.0, y: 0.0, scale: 1.0, rotation: 0.0, opacity: 1.0, crop: None }
     }
 }
+
+/// How much of each edge is cut off, as a fraction of the layer's width (left, right) or height (top,
+/// bottom), on the picture as it shows after rotation and mirroring. The rest stays where it was.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Crop {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Crop {
+    /// The part left visible as left, top, right and bottom edges in 0..1.
+    pub fn visible(crop: Option<Crop>) -> [f32; 4] {
+        let c = crop.unwrap_or_default();
+        [c.left, c.top, 1.0 - c.right, 1.0 - c.bottom]
+    }
+}
+
+/// The edge of a video or image layer.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Shape {
+    /// Corner radius as a share of half the shorter visible side, 0 to 1. 1 rounds the shorter sides
+    /// fully: a circle when the crop leaves a square.
+    pub radius: f32,
+    /// Canvas pixels, drawn outside the edge; 0 draws no border.
+    pub border_width: f32,
+    /// `#rrggbb` or `#rrggbbaa`
+    pub border_color: String,
+    /// A soft shadow under the layer, 0 (none) to 1.
+    pub shadow: f32,
+}
+
+impl Default for Shape {
+    fn default() -> Self {
+        Self { radius: 0.0, border_width: 0.0, border_color: "#ffffff".into(), shadow: 0.0 }
+    }
+}
+
+/// Widest border, in canvas pixels.
+pub const MAX_BORDER_WIDTH: f32 = 100.0;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -572,6 +625,22 @@ mod tests {
         let ClipContent::Text { words, style, .. } = &content else { panic!() };
         assert!(words.is_empty() && style.highlight.is_none());
         assert_eq!(serde_json::to_string(&content).unwrap(), old);
+    }
+
+    #[test]
+    fn media_without_crop_or_shape_saves_as_before() {
+        let old = r#"{"type":"media","assetId":"a","sourceInUs":0,"volume":1.0,"transform":{"x":0.0,"y":0.0,"scale":1.0,"rotation":0.0,"opacity":1.0},"speed":1.0,"adjust":{"exposure":0.0,"tint":0.0,"highlights":0.0,"shadows":0.0,"fade":0.0,"brightness":0.0,"contrast":0.0,"saturation":0.0,"temperature":0.0,"vignette":0.0},"fadeInUs":0,"fadeOutUs":0,"cleanVoice":false}"#;
+        let content: ClipContent = serde_json::from_str(old).unwrap();
+        assert_eq!(serde_json::to_string(&content).unwrap(), old);
+        let ClipContent::Media { mut transform, .. } = content else { panic!() };
+        transform.crop = Some(Crop { left: 0.25, ..Crop::default() });
+        let shape = Some(Shape { radius: 1.0, border_width: 8.0, border_color: "#ff0000".into(), shadow: 0.5 });
+        let json = serde_json::json!({"transform": transform, "shape": shape});
+        assert_eq!(
+            json["transform"]["crop"],
+            serde_json::json!({"left": 0.25, "top": 0.0, "right": 0.0, "bottom": 0.0})
+        );
+        assert_eq!(serde_json::from_value::<Option<Shape>>(json["shape"].clone()).unwrap(), shape);
     }
 
     #[test]

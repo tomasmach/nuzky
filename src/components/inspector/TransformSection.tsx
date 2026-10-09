@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, Diamond, Maximize, Minimize, RotateCcw } fro
 import { clipOffset, keyframeIndexAt, keyframeTolerance, transformAt, upsertKeyframe } from "../../lib/keyframes";
 import { LIMITS } from "../../lib/limits";
 import { DEFAULT_TRANSFORM } from "../../lib/presets";
-import { editClip, isCaptionTrack, readoutTime, setClipTransform, undoAction, useEditor } from "../../lib/store";
+import { editClip, isCaptionTrack, readoutTime, setClipTransform, transformAtPlayhead, undoAction, useEditor } from "../../lib/store";
 import type { Asset, Clip, EditCmd, Transform } from "../../lib/types";
 import { Button, IconButton, NumberInput, Section, Segmented, Slider } from "../ui";
 import { QUIET } from "./Header";
@@ -120,7 +120,8 @@ function atPlayhead(clip: Clip, timeUs: number, fps: number): AtPlayhead {
   };
 }
 
-export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset }) {
+/** `children` sit right under the Transform section, above Zoom over clip. */
+export function TransformSection({ clip, asset, children }: { clip: Clip; asset?: Asset; children?: ReactNode }) {
   const canvas = useEditor((s) => s.snap!.project.canvas);
   // Plain values, so playback re-renders the section only when a keyframed value moves or a keyframe is passed.
   const at = useEditor(useShallow((s) => atPlayhead(clip, readoutTime(s), canvas.fps)));
@@ -139,9 +140,14 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
   const framing = !centred ? null : Math.abs(transform.scale - 1) < 1e-4 ? "fit" : Math.abs(transform.scale - fillScale) < 1e-4 ? "fill" : null;
 
   // New text is centred; captions sit low in the frame, where the engine puts them.
+  // The crop at the playhead stays: it has its own section and reset.
   const reset = () =>
     editClip(clip.id, (c, track) => [
-      { type: "updateClip", clipId: c.id, transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0 } },
+      {
+        type: "updateClip",
+        clipId: c.id,
+        transform: { ...DEFAULT_TRANSFORM, y: isCaptionTrack(track) ? LIMITS.captionY : 0, crop: transformAtPlayhead(c, useEditor.getState().timeUs).crop },
+      },
       { type: "setKeyframes", clipId: c.id, keyframes: [] },
     ]);
 
@@ -181,6 +187,7 @@ export function TransformSection({ clip, asset }: { clip: Clip; asset?: Asset })
         <Slider label="Rotation" value={transform.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => set({ rotation: v }, "rot")} />
         <Slider label="Opacity" value={transform.opacity * 100} min={0} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => set({ opacity: v / 100 }, "opacity")} />
       </Section>
+      {children}
       <ZoomOverClip clip={clip} scale={transform.scale} />
     </>
   );

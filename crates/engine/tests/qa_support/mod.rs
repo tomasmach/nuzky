@@ -82,6 +82,7 @@ pub fn clip(id: &str, asset: &str, start: i64, duration: i64) -> Clip {
             fade_in_us: 0,
             fade_out_us: 0,
             clean_voice: false,
+            shape: None,
         },
     )
 }

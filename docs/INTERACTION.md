@@ -22,10 +22,12 @@ Drag the gap above the timeline to resize it (a grip shows while the pointer is 
 ### Import
 Entry: Import button, `Ctrl+I`, or files dropped on the window. Files dropped on the timeline are also placed on it; while media files are dragged over the timeline, an `accent` line shows where they would land. Each picked or dropped file shows at once in Media (and Audio for sound files) with its name and a skeleton thumbnail while it is read. The Audio tab's "Add music or sound" opens the picker filtered to audio.
 Outcome: items appear in Media (all kinds) and, for audio, in Audio. Unsupported files produce one toast naming each file by name only with a short reason ("build.log is not a video, audio or image file"); the rest still import.
-Hovering or focusing a media or audio item shows `+` (add at playhead) and a trash button (remove the item and its clips at once; a toast offers Undo, like deleting clips).
+Hovering or focusing a media or audio item shows `+` (add at playhead), on videos and images a picture-in-picture button (see Add to timeline), and a trash button (remove the item and its clips at once; a toast offers Undo, like deleting clips).
 
 ### Add to timeline
 `+` on a media item adds it at the playhead (video and images on the main track, audio on an audio track). Dragging an item onto a track places it at the pointer. The new clip is selected.
+
+**Picture in picture**: the button on a video or image item puts it at the playhead in a small window over the main track, for a screenshot or a second camera beside a talking head. The window's longer side is 45 % of the canvas's shorter side; it sits in the top right corner, against the corner of the Reels and TikTok safe area on vertical videos and 4 % of the shorter side from the edges on the others, with corners rounded at 15 % and a soft shadow. It goes on the first overlay track free there, else on a new one above the others. A video plays its whole length, an image lasts 3 s. One undo step; the new clip is selected, so the inspector shows its crop and shape.
 
 ### Edit clips
 - **Select**: click. `Shift`-click adds to the selection. Click empty space or press `Esc` to clear.
@@ -55,15 +57,15 @@ The Filters tab applies a preset (None, Vivid, Warm, Cool, Mono, Fade, Moody, Pu
 `Space` plays and pauses; the focused control keeps focus and is not pressed. A focused checkbox or menu item keeps Space for itself. Clicking or dragging the ruler scrubs. `←`/`→` step one frame, with `Shift` one second. `Home`/`End` jump to the ends. A focused slider keeps its own arrow, Home and End keys. The sound card drives the clock, so picture and sound stay in sync.
 
 ### Preview
-Clicking the paused preview selects the top-most visible layer under the pointer; clicking where no layer is clears the selection. The selected layer gets a box: drag inside it to move, drag a corner to scale uniformly, drag the round handle to rotate (`Shift` snaps to 15°). The box of a layer larger than the frame is cut off at the edge of the preview area, and handles that would leave it stay on that edge, so they can always be grabbed. While moving, the layer centre snaps to the canvas centre lines within 6 px and a guide shows. Each gesture is one undo step. If the clip has keyframes, the gesture writes the keyframe at the playhead. Ratio, right of the transport, switches the canvas between 9:16, 16:9, 1:1 and 4:5; in its menu ↑/↓ move, and choosing or Esc returns focus to Ratio.
+Clicking the paused preview selects the top-most visible layer under the pointer, so a click outside the curve of a circle or a rounded corner reaches the layer below; clicking where no layer is clears the selection. The selected layer gets a box: drag inside it to move, drag a corner to scale uniformly, drag the round handle to rotate (`Shift` snaps to 15°). On videos and images, dragging the bar in the middle of an edge crops that edge: the rest of the picture stays where it is, a dashed outline shows the whole picture while dragging, and each edge stops 5 % short of the opposite one. An edge too short on screen for its bar to clear the corner handles has none; the inspector crops it. The box of a layer larger than the frame is cut off at the edge of the preview area, and handles that would leave it stay on that edge, so they can always be grabbed. While moving, the layer centre snaps to the canvas centre lines within 6 px and a guide shows. Each gesture is one undo step. If the clip has keyframes, the gesture writes the keyframe at the playhead. Ratio, right of the transport, switches the canvas between 9:16, 16:9, 1:1 and 4:5; in its menu ↑/↓ move, and choosing or Esc returns focus to Ratio.
 
 ### Inspector
 Shows the selected clip with CapCut's tabs, remembering the last tab per clip kind:
 
 | Selection | Tabs |
 |---|---|
-| Video clip | Video (transform), Adjust, Speed, Animation, Audio (only when the file has sound) |
-| Image clip | Image (transform), Adjust, Animation |
+| Video clip | Video (transform, crop and shape), Adjust, Speed, Animation, Audio (only when the file has sound) |
+| Image clip | Image (transform, crop and shape), Adjust, Animation |
 | Text or caption clip | Text, Animation, Transform |
 | Audio clip (also detached sound) | Audio: volume, fades, Clean voice, speed |
 | Transition | Kind name, duration, Remove |
@@ -74,7 +76,8 @@ Adjust offers Exposure, Brightness, Contrast, Highlights, Shadows, Saturation, T
 
 While playing, values that follow keyframes update ten times a second; paused or scrubbing, they show the exact frame. Number fields keep what you type until Enter or blur, so "-" or "1," is never rejected mid-typing; Esc restores the value, ↑/↓ step (`Shift` ×10), commas work as decimal points. Changes preview live.
 
-- **Keyframes**: the diamond in the Transform header adds a keyframe with the current values at the playhead, or removes the one there (filled diamond). Arrows jump to the previous and next keyframe. Once a clip has keyframes, every transform change updates or creates the keyframe at the playhead. Removing the last keyframe keeps its values. Reset clears the transform and all keyframes.
+- **Keyframes**: the diamond in the Transform header adds a keyframe with the current values at the playhead, or removes the one there (filled diamond). Arrows jump to the previous and next keyframe. Once a clip has keyframes, every transform change updates or creates the keyframe at the playhead. Removing the last keyframe keeps its values. Reset clears the transform and all keyframes and keeps the crop at the playhead.
+- **Crop and shape** (videos and images), right under Transform: Shape is Rectangle, Rounded (Corners from 1 to 99 % of half the shorter side, 15 % to start with, as a new picture in picture has) or Circle. Circle rounds fully and crops the longer side so a square is left, in the same undo step; the layer moves so the side nearer the canvas edge stays put, so a picture in picture in a corner stays in the corner and a centred layer stays centred. Crop left, right, top and bottom cut that share of the picture off, each stopping 5 % short of the opposite edge; the rest stays where it is. The crop is part of the transform: once the clip has keyframes, a crop change writes the keyframe at the playhead like the other transform values, so a crop can move, and a line says so. Border draws up to 40 px (canvas pixels) outside the edge in its color; Border color shows once it is wider than 0. Shadow puts a soft shadow under the layer, 0–100 %. Reset crop and shape shows the whole picture with plain edges again, every keyframe included. The preview and the export draw the same edge.
 - **Zoom over clip**: a punch-in or pull-out in one step. Apply writes a keyframe at the start and one at the end of the clip, from the first scale to the second, keeping the position and rotation at the playhead. The fields start at the current scale and 20 points more, or at the first and last keyframe when there are some. Existing keyframes are replaced, with a toast that offers Undo.
 - **Several clips**: one change applies to every selected clip as one undo step, a slider drag included. Where the clips differ the field shows "—"; a typed value then applies to all. A transform change applies to the whole clip, every keyframe included, so "110 % on every clip" is Select all on track plus one value.
 - **Speed**: presets 0.5x–3x or a logarithmic slider from 0.1x to 10x. Speed changes the clip length; the tab shows the new duration and the source length used.

@@ -588,3 +588,126 @@ fn hlg_and_pq_sources_are_tone_mapped_like_libplacebo() {
         assert!(red[0] > 175.0 && red[1] < 60.0, "{transfer}: red {red:?}");
     }
 }
+
+/// Black where the frame shows nothing; the gradient below is never black.
+fn black(frame: &[u8], width: usize, x: usize, y: usize) -> bool {
+    frame[(y * width + x) * 4..][..3].iter().all(|&v| v < 12)
+}
+
+fn crop_and_shape(p: &mut Project, crop: Crop, shape: Option<Shape>) {
+    let ClipContent::Media { transform, shape: current, .. } = &mut p.tracks[0].clips[0].content else {
+        unreachable!()
+    };
+    transform.crop = Some(crop);
+    *current = shape;
+}
+
+#[test]
+fn crop_circle_border_and_shadow_match_ffmpeg() {
+    if !available() {
+        return;
+    }
+    let d = dir("crop-shape");
+    // A gradient with blue everywhere, so nothing of the picture is black and a shifted crop shows.
+    let gradient = "color=black:s=320x180,format=rgb24,geq=r='X*255/W':g='Y*255/H':b=128";
+    let source = d.join("gradient.png");
+    ff(&["-f", "lavfi", "-i", gradient, "-frames:v", "1"], &source);
+    let mut p = project(&source, 200_000);
+    let mut renderer = Renderer::new().unwrap();
+    let mut frame = |p: &Project, w, h| renderer.render(p, 0, w, h, Wait::Exact, false).unwrap();
+
+    // Cropped edges are cut off to the pixel and the rest stays where it was.
+    crop_and_shape(&mut p, Crop { left: 0.25, top: 0.1, right: 0.15, bottom: 0.2 }, None);
+    let cropped = frame(&p, 320, 180);
+    let error = mae(&cropped, &raw(&source, &["-vf", "crop=192:126:80:18,pad=320:180:80:18:black"]));
+    assert!(error < 0.5, "crop: pixel MAE={error}");
+    for y in 18..144 {
+        assert!(black(&cropped, 320, 79, y) && !black(&cropped, 320, 80, y), "left edge at row {y}");
+        assert!(!black(&cropped, 320, 271, y) && black(&cropped, 320, 272, y), "right edge at row {y}");
+    }
+    assert!(black(&cropped, 320, 150, 17) && !black(&cropped, 320, 150, 18) && black(&cropped, 320, 150, 144));
+
+    // A border sits outside the crop: 6 px of red, then the background again.
+    let border = Shape { border_width: 6.0, border_color: "#ff0000".into(), ..Shape::default() };
+    crop_and_shape(&mut p, Crop { left: 0.25, top: 0.1, right: 0.15, bottom: 0.2 }, Some(border));
+    let bordered = frame(&p, 320, 180);
+    let px = |x: usize, y: usize| &bordered[(y * 320 + x) * 4..][..3];
+    assert!([74, 79].iter().all(|&x| px(x, 80) == [255, 0, 0]) && black(&bordered, 320, 73, 80), "{:?}", px(74, 80));
+    assert!(px(150, 12) == [255, 0, 0] && black(&bordered, 320, 150, 11) && px(150, 149) == [255, 0, 0]);
+    assert_eq!(&bordered[(80 * 320 + 150) * 4..][..4], &cropped[(80 * 320 + 150) * 4..][..4], "inside is unchanged");
+
+    // Fully rounded corners on a square crop: a circle, as FFmpeg cuts it, at export and preview sizes.
+    let round = Shape { radius: 1.0, ..Shape::default() };
+    crop_and_shape(&mut p, Crop { left: 0.21875, right: 0.21875, ..Crop::default() }, Some(round));
+    let circle = frame(&p, 320, 180);
+    let reference = raw(
+        &source,
+        &[
+            "-filter_complex",
+            "color=black:s=320x180[bg];[0]format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='255*lte(hypot(X+0.5-160,Y+0.5-90),90)'[fg];[bg][fg]overlay=format=auto",
+            "-frames:v",
+            "1",
+        ],
+    );
+    let error = mae(&circle, &reference);
+    assert!(error < 1.0, "circle: pixel MAE={error}");
+    assert!(black(&circle, 320, 72, 2) && black(&circle, 320, 247, 177) && !black(&circle, 320, 160, 2));
+    let half = frame(&p, 160, 90);
+    let shrunk: Vec<u8> = (0..90 * 160 * 4)
+        .map(|i| {
+            let (c, x, y) = (i % 4, i / 4 % 160, i / 640);
+            let at = |dx: usize, dy: usize| circle[((2 * y + dy) * 320 + 2 * x + dx) * 4 + c] as u32;
+            ((at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1) + 2) / 4) as u8
+        })
+        .collect();
+    let error = mae(&half, &shrunk);
+    assert!(error < 2.0, "circle at half size: pixel MAE={error}");
+
+    // A shadow darkens the white canvas below the layer, less above it, and nothing far away.
+    p.canvas.background = "#ffffff".into();
+    crop_and_shape(&mut p, Crop::default(), Some(Shape { shadow: 1.0, ..Shape::default() }));
+    let ClipContent::Media { transform, .. } = &mut p.tracks[0].clips[0].content else { unreachable!() };
+    transform.scale = 0.5;
+    let shadowed = frame(&p, 320, 180);
+    let grey = |x: usize, y: usize| shadowed[(y * 320 + x) * 4];
+    assert!(
+        grey(160, 136) < 200 && grey(160, 43) > grey(160, 136) && grey(160, 170) == 255,
+        "{:?}",
+        [grey(160, 136), grey(160, 43)]
+    );
+
+    // The blurred background shows only what the crop keeps: the darker red left half, not the red right one.
+    p.canvas.background_blur = 1.0;
+    crop_and_shape(&mut p, Crop { right: 0.5, ..Crop::default() }, None);
+    let ClipContent::Media { transform, .. } = &mut p.tracks[0].clips[0].content else { unreachable!() };
+    transform.scale = 1.0;
+    let blurred = frame(&p, 320, 180);
+    let red = blurred[(90 * 320 + 310) * 4];
+    assert!(red < 140, "red {red} of the cut-off half shows in the background");
+}
+
+#[test]
+fn crop_follows_the_picture_as_shown_after_exif_rotation_and_mirroring() {
+    if !available() {
+        return;
+    }
+    let d = dir("crop-orientation");
+    let source = d.join("gradient.jpg");
+    let gradient = "color=black:s=96x64,format=rgb24,geq=r='X*255/W':g='Y*255/H':b=128";
+    ff(&["-f", "lavfi", "-i", gradient, "-frames:v", "1", "-q:v", "2"], &source);
+    let jpeg = std::fs::read(&source).unwrap();
+    let mut renderer = Renderer::new().unwrap();
+    // Upright, turned 90° and turned 90° with a mirror, as a front camera saves selfies.
+    for orientation in [1, 6, 5] {
+        let path = d.join(format!("orientation-{orientation}.jpg"));
+        std::fs::write(&path, with_exif_orientation(&jpeg, orientation)).unwrap();
+        let mut p = project(&path, 200_000);
+        let (w, h) = (p.canvas.width, p.canvas.height);
+        crop_and_shape(&mut p, Crop { left: 0.25, top: 0.125, right: 0.125, bottom: 0.25 }, None);
+        let got = renderer.render(&p, 0, w, h, Wait::Exact, false).unwrap();
+        let (left, top) = (w / 4, h / 8);
+        let filter = format!("crop={}:{}:{left}:{top},pad={w}:{h}:{left}:{top}:black", w * 5 / 8, h * 5 / 8);
+        let error = mae(&got, &raw(&path, &["-frames:v", "1", "-vf", &filter]));
+        assert!(error < 3.0, "orientation {orientation}: pixel MAE={error}");
+    }
+}

@@ -645,18 +645,20 @@ export function editClips(ids: string[], build: (clip: Clip, track: Track, proje
  * playhead, a clip without keyframes changes its single transform. `patch` is merged into the
  * transform at the playhead as it is when the edit is sent, so quick edits never undo each other.
  */
-export function setClipTransform(clipId: string, patch: Partial<Transform>, coalesce?: string) {
+type TransformPatch = Partial<Transform> | ((current: Transform) => Partial<Transform>);
+
+/** The edit that changes the transform at `timeUs`: the clip's own, or once it has keyframes, the keyframe there. */
+export function transformEdit(clip: Clip, project: Project, timeUs: number, patch: TransformPatch): EditCmd {
+  const offset = clipOffset(clip, timeUs);
+  const current = transformAt(clip, clip.content.transform, offset);
+  const transform = { ...current, ...(typeof patch === "function" ? patch(current) : patch) };
+  if (clip.keyframes.length === 0) return { type: "updateClip", clipId: clip.id, transform };
+  return { type: "setKeyframes", clipId: clip.id, keyframes: upsertKeyframe(clip, offset, transform, keyframeTolerance(project.canvas.fps)) };
+}
+
+export function setClipTransform(clipId: string, patch: TransformPatch, coalesce?: string) {
   const timeUs = useEditor.getState().timeUs;
-  return editClip(
-    clipId,
-    (clip, _track, project) => {
-      const offset = clipOffset(clip, timeUs);
-      const transform = { ...transformAt(clip, clip.content.transform, offset), ...patch };
-      if (clip.keyframes.length === 0) return { type: "updateClip", clipId, transform };
-      return { type: "setKeyframes", clipId, keyframes: upsertKeyframe(clip, offset, transform, keyframeTolerance(project.canvas.fps)) };
-    },
-    coalesce,
-  );
+  return editClip(clipId, (clip, _track, project) => transformEdit(clip, project, timeUs, patch), coalesce);
 }
 
 export async function deleteSelection() {

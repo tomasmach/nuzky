@@ -765,6 +765,7 @@ mod tests {
                     fade_in_us: 0,
                     fade_out_us: 0,
                     clean_voice: false,
+                    shape: None,
                 },
             );
             if id == "b" {
@@ -828,6 +829,7 @@ mod tests {
                     fade_in_us: 0,
                     fade_out_us: 0,
                     clean_voice: false,
+                    shape: None,
                 },
             );
             if id == "b" {

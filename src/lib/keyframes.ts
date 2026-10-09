@@ -1,3 +1,4 @@
+import { NO_CROP } from "./presets";
 import type { Clip, Keyframe, Transform } from "./types";
 import { US } from "./time";
 
@@ -8,7 +9,11 @@ export function keyframeTolerance(fps: number) {
 
 function lerp(a: Transform, b: Transform, f: number): Transform {
   const m = (x: number, y: number) => x + (y - x) * f;
-  return { x: m(a.x, b.x), y: m(a.y, b.y), scale: m(a.scale, b.scale), rotation: m(a.rotation, b.rotation), opacity: m(a.opacity, b.opacity) };
+  const t: Transform = { x: m(a.x, b.x), y: m(a.y, b.y), scale: m(a.scale, b.scale), rotation: m(a.rotation, b.rotation), opacity: m(a.opacity, b.opacity) };
+  // A keyframe without a crop shows the whole layer.
+  if (!a.crop && !b.crop) return t;
+  const [ca, cb] = [a.crop ?? NO_CROP, b.crop ?? NO_CROP];
+  return { ...t, crop: { left: m(ca.left, cb.left), top: m(ca.top, cb.top), right: m(ca.right, cb.right), bottom: m(ca.bottom, cb.bottom) } };
 }
 
 /** Same rule as the renderer: linear between keyframes, nearest one holds outside them. */

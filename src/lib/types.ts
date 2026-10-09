@@ -202,6 +202,10 @@ export type ClipContent = {
    * until the cleaned sound is prepared; export always has the cleaned sound.
    */
   cleanVoice: boolean,
+  /**
+   * Rounded corners, a border and a shadow around the picture, as for a picture in picture.
+   */
+  shape?: Shape | null,
 } | {
   "type": "text",
   text: string,
@@ -218,6 +222,17 @@ export type ClipContent = {
 export type Collection = {
   id: string,
   name: string,
+};
+
+/**
+ * How much of each edge is cut off, as a fraction of the layer's width (left, right) or height (top,
+ * bottom), on the picture as it shows after rotation and mirroring. The rest stays where it was.
+ */
+export type Crop = {
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
 };
 
 /**
@@ -248,6 +263,11 @@ export type EditCmd = {
   assetId: string,
   startUs: number | null,
   trackId: string | null,
+} | {
+  "type": "addPictureInPicture",
+  assetId: string,
+  startUs: number,
+  durationUs?: number | null,
 } | {
   "type": "addText",
   startUs: number,
@@ -289,6 +309,10 @@ export type EditCmd = {
    * Clean voice on clips with sound: less rumble, hum, background noise and harsh s sounds.
    */
   cleanVoice?: boolean | null,
+  /**
+   * Video and image clips: corners, border and shadow. The default shape removes them.
+   */
+  shape?: Shape | null,
 } | {
   "type": "setAnimation",
   clipId: string,
@@ -408,9 +432,13 @@ export type Keyframe = {
 export type LayerBounds = {
   clipId: string,
   /**
-   * Top-left, top-right, bottom-right, bottom-left in canvas pixels.
+   * Top-left, top-right, bottom-right, bottom-left of the visible part in canvas pixels.
    */
   corners: [[number, number], [number, number], [number, number], [number, number]],
+  /**
+   * The same corners of the whole layer, before its crop.
+   */
+  frame: [[number, number], [number, number], [number, number], [number, number]],
 };
 
 export type Library = {
@@ -519,6 +547,29 @@ export type SaidHit = {
   before: string,
   text: string,
   after: string,
+};
+
+/**
+ * The edge of a video or image layer.
+ */
+export type Shape = {
+  /**
+   * Corner radius as a share of half the shorter visible side, 0 to 1. 1 rounds the shorter sides
+   * fully: a circle when the crop leaves a square.
+   */
+  radius: number,
+  /**
+   * Canvas pixels, drawn outside the edge; 0 draws no border.
+   */
+  borderWidth: number,
+  /**
+   * `#rrggbb` or `#rrggbbaa`
+   */
+  borderColor: string,
+  /**
+   * A soft shadow under the layer, 0 (none) to 1.
+   */
+  shadow: number,
 };
 
 export type Snapshot = {
@@ -690,6 +741,10 @@ export type Transform = {
    */
   rotation: number,
   opacity: number,
+  /**
+   * Edges cut off the layer. Part of the transform, so keyframes can animate it.
+   */
+  crop?: Crop | null,
 };
 
 /**

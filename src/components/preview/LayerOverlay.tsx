@@ -1,13 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { followPointer } from "../../lib/drag";
+import { NO_CROP } from "../../lib/presets";
 import { findClip, setClipTransform, transformAtPlayhead, useAiLocked, useEditor } from "../../lib/store";
-import type { LayerBounds, Transform } from "../../lib/types";
+import type { Crop, LayerBounds, Project, Transform } from "../../lib/types";
+import { withEdge } from "../inspector/ShapeSection";
 
 type Pt = [number, number];
-type Mode = "move" | "scale" | "rotate";
+type Edge = keyof Crop;
+type Mode = "move" | "scale" | "rotate" | Edge;
+
+/** Each crop handle sits in the middle of its edge of the box (top-left, top-right, bottom-right, bottom-left). */
+const EDGE_CORNERS: { edge: Edge; from: number; to: number }[] = [
+  { edge: "top", from: 0, to: 1 },
+  { edge: "right", from: 1, to: 2 },
+  { edge: "bottom", from: 2, to: 3 },
+  { edge: "left", from: 3, to: 0 },
+];
 
 const HANDLE = 10;
+const CROP_BAR = 18;
 const ROTATE_GAP = 26;
 const SNAP_SCREEN_PX = 6;
 
@@ -29,6 +41,37 @@ function inQuad(p: Pt, q: Pt[]) {
 const centreOf = (q: Pt[]): Pt => [(q[0][0] + q[2][0]) / 2, (q[0][1] + q[2][1]) / 2];
 const angleOf = (c: Pt, p: Pt) => (Math.atan2(p[1] - c[1], p[0] - c[0]) * 180) / Math.PI;
 
+/** The part of a quad between the crop's edges. */
+function cropQuad(q: Pt[], c: Crop): Pt[] {
+  const at = (u: number, v: number): Pt => [q[0][0] + u * (q[1][0] - q[0][0]) + v * (q[3][0] - q[0][0]), q[0][1] + u * (q[1][1] - q[0][1]) + v * (q[3][1] - q[0][1])];
+  return [at(c.left, c.top), at(1 - c.right, c.top), at(1 - c.right, 1 - c.bottom), at(c.left, 1 - c.bottom)];
+}
+
+/** Where `p` lies along the top and left edges of a quad, 0 at the top-left corner and 1 at the far ends. */
+function alongQuad(q: Pt[], p: Pt): Pt {
+  const along = (end: Pt) => {
+    const [ex, ey] = [end[0] - q[0][0], end[1] - q[0][1]];
+    return ((p[0] - q[0][0]) * ex + (p[1] - q[0][1]) * ey) / Math.max(1e-6, ex * ex + ey * ey);
+  };
+  return [along(q[1]), along(q[3])];
+}
+
+/** The corner radius of a video or image, as a share of half its shorter visible side. */
+function shapeRadius(project: Project, clipId: string) {
+  const content = findClip(project, clipId)?.clip.content;
+  return content?.type === "media" ? (content.shape?.radius ?? 0) : 0;
+}
+
+/** Whether `p` is inside a quad with rounded corners, so a click beside a circle reaches the layer below. */
+function inRounded(p: Pt, q: Pt[], radius: number) {
+  if (radius <= 0) return true;
+  const [u, v] = alongQuad(q, p);
+  const [w, h] = [Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]), Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1])];
+  const r = (radius * Math.min(w, h)) / 2;
+  const [x, y] = [Math.max(0, Math.abs(u - 0.5) * w - w / 2 + r), Math.max(0, Math.abs(v - 0.5) * h - h / 2 + r)];
+  return Math.hypot(x, y) <= r;
+}
+
 function rotateAbout(p: Pt, c: Pt, deg: number): Pt {
   const r = (deg * Math.PI) / 180;
   const [dx, dy] = [p[0] - c[0], p[1] - c[1]];
@@ -40,13 +83,16 @@ interface Gesture {
   clipId: string;
   base: Transform;
   corners: Pt[];
+  /** The whole layer before its crop. */
+  frame: Pt[];
   start: Pt;
   key: string;
 }
 
 /**
  * Selection box over the preview frame: click selects the top-most layer under the pointer,
- * dragging moves it, corners scale it, the top handle rotates it (Shift snaps to 15°).
+ * dragging moves it, corners scale it, the top handle rotates it (Shift snaps to 15°). On videos and
+ * images the bars in the middle of each edge crop that edge.
  * Draws nothing while the engine reports no layer bounds.
  *
  * `bleed` is how far the visible preview area reaches past the frame on each side. The box may
@@ -62,7 +108,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   const timeUs = useEditor((s) => (s.playing ? null : s.timeUs));
   const ref = useRef<HTMLDivElement>(null);
   const [bounds, setBounds] = useState<LayerBounds[]>([]);
-  const [live, setLive] = useState<{ corners: Pt[]; guideX: boolean; guideY: boolean } | null>(null);
+  const [live, setLive] = useState<{ corners: Pt[]; frame?: Pt[]; guideX: boolean; guideY: boolean } | null>(null);
   // Ends the running gesture's window listeners and frame request; also called on unmount.
   const stop = useRef<(() => void) | null>(null);
   const k = width / canvas.width;
@@ -89,6 +135,8 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   /** Changed transform fields and box for the pointer at `p` during gesture `g`. */
   const solve = (g: Gesture, p: Pt, shift: boolean): { patch: Partial<Transform>; corners: Pt[]; guideX: boolean; guideY: boolean } => {
     const c = centreOf(g.corners);
+    // The layer scales and turns about the centre of the whole picture, which a crop moves off the box's centre.
+    const pivot = centreOf(g.frame);
     const t = { ...g.base };
     let corners = g.corners;
     let guideX = false;
@@ -110,18 +158,26 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       t.y = g.base.y + dy / canvas.height;
       corners = g.corners.map(([x, y]) => [x + dx, y + dy]);
     } else if (g.mode === "scale") {
-      const f = Math.hypot(p[0] - c[0], p[1] - c[1]) / Math.max(1, Math.hypot(g.start[0] - c[0], g.start[1] - c[1]));
+      const f = Math.hypot(p[0] - pivot[0], p[1] - pivot[1]) / Math.max(1, Math.hypot(g.start[0] - pivot[0], g.start[1] - pivot[1]));
       t.scale = Math.max(0.1, Math.min(10, g.base.scale * f));
       const ratio = t.scale / g.base.scale;
-      corners = g.corners.map(([x, y]) => [c[0] + (x - c[0]) * ratio, c[1] + (y - c[1]) * ratio]);
-    } else {
-      let rot = g.base.rotation + angleOf(c, p) - angleOf(c, g.start);
+      corners = g.corners.map(([x, y]) => [pivot[0] + (x - pivot[0]) * ratio, pivot[1] + (y - pivot[1]) * ratio]);
+    } else if (g.mode === "rotate") {
+      let rot = g.base.rotation + angleOf(pivot, p) - angleOf(pivot, g.start);
       rot = ((((rot + 180) % 360) + 360) % 360) - 180;
       if (shift) rot = Math.round(rot / 15) * 15;
       t.rotation = Math.round(rot * 10) / 10;
-      corners = g.corners.map((q) => rotateAbout(q, c, t.rotation - g.base.rotation));
+      corners = g.corners.map((q) => rotateAbout(q, pivot, t.rotation - g.base.rotation));
+    } else {
+      // The dragged edge moves as far as the pointer, which may have grabbed a bar pinned to the edge of
+      // the preview area; the picture itself stays put.
+      const [[u, v], [u0, v0]] = [alongQuad(g.frame, p), alongQuad(g.frame, g.start)];
+      const crop = g.base.crop ?? NO_CROP;
+      const at = { left: crop.left + u - u0, right: crop.right - u + u0, top: crop.top + v - v0, bottom: crop.bottom - v + v0 }[g.mode];
+      t.crop = withEdge(crop, g.mode, Math.round(at * 1000) / 1000);
+      corners = cropQuad(g.frame, t.crop);
     }
-    const patch = g.mode === "move" ? { x: t.x, y: t.y } : g.mode === "scale" ? { scale: t.scale } : { rotation: t.rotation };
+    const patch = g.mode === "move" ? { x: t.x, y: t.y } : g.mode === "scale" ? { scale: t.scale } : g.mode === "rotate" ? { rotation: t.rotation } : { crop: t.crop };
     return { patch, corners, guideX, guideY };
   };
 
@@ -134,7 +190,8 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       raf = 0;
       if (!ref.current) return;
       const { patch, corners, guideX, guideY } = solve(g, toCanvas(latest.x, latest.y), latest.shift);
-      setLive({ corners, guideX, guideY });
+      // While cropping, a dashed outline shows the whole layer.
+      setLive({ corners, frame: g.mode in NO_CROP ? g.frame : undefined, guideX, guideY });
       // The store builds the edit from the latest confirmed clip, so a keyframe written earlier
       // in this gesture is updated, not duplicated, and other fields are never reverted.
       lastEdit = setClipTransform(g.clipId, patch, g.key);
@@ -176,10 +233,11 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     };
   };
 
-  const begin = (mode: Mode, clipId: string, corners: Pt[], e: { clientX: number; clientY: number }) => {
-    const found = findClip(useEditor.getState().snap!.project, clipId);
+  const begin = (mode: Mode, b: LayerBounds, e: { clientX: number; clientY: number }) => {
+    const found = findClip(useEditor.getState().snap!.project, b.clipId);
     if (!found) return null;
-    return { mode, clipId, corners, base: transformAtPlayhead(found.clip, useEditor.getState().timeUs), start: toCanvas(e.clientX, e.clientY), key: `preview:${clipId}:${Date.now()}` };
+    const base = transformAtPlayhead(found.clip, useEditor.getState().timeUs);
+    return { mode, clipId: b.clipId, corners: b.corners as Pt[], frame: b.frame as Pt[], base, start: toCanvas(e.clientX, e.clientY), key: `preview:${b.clipId}:${Date.now()}` };
   };
 
   // Moves that arrive while the bounds request is in flight are replayed once it resolves.
@@ -209,7 +267,8 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     setBounds(list);
     if (list.length === 0) return;
     const p = toCanvas(down.clientX, down.clientY);
-    const hit = [...list].reverse().find((b) => inQuad(p, b.corners as Pt[]));
+    const project = useEditor.getState().snap!.project;
+    const hit = [...list].reverse().find((b) => inQuad(p, b.corners as Pt[]) && inRounded(p, b.corners as Pt[], shapeRadius(project, b.clipId)));
     if (!hit) {
       useEditor.getState().select([]);
       return;
@@ -217,20 +276,22 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     if (!useEditor.getState().selection.includes(hit.clipId) || useEditor.getState().selection.length > 1) useEditor.getState().select([hit.clipId]);
     // While the AI edits, a click still selects but nothing moves.
     if (released || useEditor.getState().aiRun) return;
-    const g = begin("move", hit.clipId, hit.corners as Pt[], down);
+    const g = begin("move", hit, down);
     if (g) run(g, latest);
   };
 
-  const onHandle = (mode: Mode, clipId: string, corners: Pt[]) => (e: React.PointerEvent) => {
+  const onHandle = (mode: Mode, b: LayerBounds) => (e: React.PointerEvent) => {
     if (e.button !== 0 || useEditor.getState().aiRun) return;
     e.stopPropagation();
-    const g = begin(mode, clipId, corners, e);
+    const g = begin(mode, b, e);
     if (g) run(g, { x: e.clientX, y: e.clientY, shift: e.shiftKey });
   };
 
   const selected = selection.length === 1 ? bounds.find((b) => b.clipId === selection[0]) : undefined;
   const corners = live?.corners ?? (selected?.corners as Pt[] | undefined);
   const screen = corners?.map(([x, y]) => [x * k, y * k] as Pt);
+  // Videos and images crop; text does not.
+  const croppable = useEditor((s) => !!selected && findClip(s.snap!.project, selected.clipId)?.clip.content.type === "media");
   // Visible preview area in overlay coordinates; the preview clips everything outside it.
   const pad = HANDLE / 2 + 1;
   const visible = (p: Pt) => p[0] >= -bleed.x + pad && p[0] <= width + bleed.x - pad && p[1] >= -bleed.y + pad && p[1] <= height + bleed.y - pad;
@@ -251,6 +312,8 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       const dir: Pt = [(top[0] - c[0]) / len, (top[1] - c[1]) / len];
       const out: Pt = [top[0] + dir[0] * ROTATE_GAP, top[1] + dir[1] * ROTATE_GAP];
       if (visible(out)) return out;
+      // Inside a small box the handle would cover the picture and catch the press meant to move it.
+      if (2 * len < 3 * ROTATE_GAP) return pin(out);
       const inside: Pt = [top[0] - dir[0] * ROTATE_GAP, top[1] - dir[1] * ROTATE_GAP];
       return visible(inside) ? inside : pin(inside);
     })();
@@ -263,6 +326,9 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       {screen && selected && !playing && top && up && (
         <>
           <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height}>
+            {live?.frame && (
+              <polygon points={live.frame.map(([x, y]) => `${x * k},${y * k}`).join(" ")} fill="none" stroke="var(--color-fg)" strokeOpacity={0.6} strokeWidth={1} strokeDasharray="4 4" />
+            )}
             <polygon points={screen.map((p) => p.join(",")).join(" ")} fill="none" stroke="var(--color-fg)" strokeWidth={1.5} />
             <line x1={top[0]} y1={top[1]} x2={up[0]} y2={up[1]} stroke="var(--color-fg)" strokeWidth={1.5} />
           </svg>
@@ -271,16 +337,42 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
               key={i}
               role="presentation"
               data-handle="scale"
-              onPointerDown={onHandle("scale", selected.clipId, selected.corners as Pt[])}
+              onPointerDown={onHandle("scale", selected)}
               className="absolute rounded-[2px] border border-black/60 bg-fg"
               style={{ left: x - HANDLE / 2, top: y - HANDLE / 2, width: HANDLE, height: HANDLE, cursor: i % 2 === 0 ? "nwse-resize" : "nesw-resize" }}
             />
           ))}
+          {!locked &&
+            croppable &&
+            EDGE_CORNERS.map(({ edge, from, to }) => {
+              // On a short edge the bar would cover the corner handles; the inspector still crops it.
+              if (Math.hypot(screen[to][0] - screen[from][0], screen[to][1] - screen[from][1]) < CROP_BAR + 2 * HANDLE + 8) return null;
+              const [x, y] = pin([(screen[from][0] + screen[to][0]) / 2, (screen[from][1] + screen[to][1]) / 2]);
+              const angle = angleOf(screen[from], screen[to]);
+              return (
+                <div
+                  key={edge}
+                  role="presentation"
+                  title={`Drag to crop the ${edge} edge`}
+                  data-handle={`crop-${edge}`}
+                  onPointerDown={onHandle(edge, selected)}
+                  className="absolute rounded-full border border-black/60 bg-fg"
+                  style={{
+                    left: x - CROP_BAR / 2,
+                    top: y - 2.5,
+                    width: CROP_BAR,
+                    height: 5,
+                    transform: `rotate(${angle}deg)`,
+                    cursor: edge === "left" || edge === "right" ? "ew-resize" : "ns-resize",
+                  }}
+                />
+              );
+            })}
           {!locked && <div
             role="presentation"
             title="Rotate (Shift snaps to 15°)"
             data-handle="rotate"
-            onPointerDown={onHandle("rotate", selected.clipId, selected.corners as Pt[])}
+            onPointerDown={onHandle("rotate", selected)}
             className="absolute rounded-full border border-black/60 bg-fg"
             style={{ left: up[0] - 6, top: up[1] - 6, width: 12, height: 12, cursor: "grab" }}
           />}
