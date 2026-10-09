@@ -1,0 +1,29 @@
+name: Check the update notice
+
+# Installed copies learn about a release from latest.json on the latest published release. This
+# fails, and GitHub emails the owner, when they cannot read it: the repository is private, the file
+# is missing, or "latest" is another release.
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  latest-json:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Read latest.json as an installed copy does
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+        run: |
+          for attempt in 1 2 3 4 5; do
+            version=$(curl -fsSL --proto '=https' --max-filesize 65536 "$URL" | jq -r .version) || version=
+            if [ "v$version" = "$TAG" ]; then echo "Installed copies see $TAG."; exit 0; fi
+            sleep 30
+          done
+          echo "::error::Installed copies cannot see $TAG: $URL gave '${version:-nothing}'. Is the repository public?"
+          exit 1

@@ -17,6 +17,7 @@ An open-source desktop video editor in the spirit of CapCut, with a native Rust 
 - Real-time preview with sound; the sound card clock keeps picture and audio in sync
 - MP4 export (H.264 + AAC) using the same renderer as the preview, so the export matches what you saw; the Reels & TikTok preset writes 1080x1920 at 30 fps with the sound levelled to -14 LUFS (ITU-R BS.1770), true peak at most -1 dBTP
 - Automatic saving after every edit
+- Says on the home screen when a new version is out. It checks GitHub at most once a day, reading only the version number, and the check can be turned off there
 - AI agents edit through MCP, live in the open app with one undo per run; Connect agent sets up Claude Code and Codex in one click
 - Learns how a creator edits from their recordings and finished cuts into an editable `EDIT.md` that AI agents follow, and scores any cut of a recording against the creator's own
 

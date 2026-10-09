@@ -9,6 +9,7 @@ mod preview_server;
 mod store;
 mod thumbs;
 mod transcripts;
+mod updates;
 mod zooms;
 
 use std::collections::HashMap;
@@ -90,6 +91,9 @@ pub struct Boot {
     transport: Transport,
     engine_error: Option<String>,
     startup_notice: Option<String>,
+    version: String,
+    /// False when `CAPOPEN_NO_UPDATE_CHECK=1`: CapOpen then never asks whether a newer version exists.
+    update_checks: bool,
 }
 
 #[derive(Serialize)]
@@ -365,7 +369,7 @@ impl AppState {
 }
 
 #[tauri::command]
-fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
+fn boot(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boot> {
     Ok(Boot {
         limits: capopen_engine::edit::LIMITS,
         snapshot: state.session.lock().unwrap().snapshot(Vec::new())?,
@@ -373,6 +377,8 @@ fn boot(state: State<'_, AppState>) -> CmdResult<Boot> {
         transport: *state.engine.transport.lock().unwrap(),
         engine_error: state.engine.error.lock().unwrap().clone(),
         startup_notice: state.startup_notice.clone(),
+        version: app.package_info().version.to_string(),
+        update_checks: updates::enabled(),
     })
 }
 
@@ -897,6 +903,8 @@ pub fn run() {
             agent_panel::agent_send,
             agent_panel::agent_stop,
             transcripts::correct_words,
+            updates::check_for_update,
+            updates::open_release_page,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CapOpen")

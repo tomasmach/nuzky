@@ -728,6 +728,8 @@ export function Menu({
     const left = Math.max(8, Math.min(x, window.innerWidth - width - 8));
     const top = at.above ? Math.max(8, at.y - height) : at.y + height > window.innerHeight - 8 ? Math.max(8, window.innerHeight - height - 8) : at.y;
     setPlace({ left, top });
+    // A hidden element cannot take focus, so it shows in place now rather than with the next render.
+    Object.assign(el.style, { left: `${left}px`, top: `${top}px`, visibility: "visible" });
     el.focus({ preventScroll: true });
   }, [at.x, at.y, at.align, at.above]);
 
@@ -817,7 +819,11 @@ export function Menu({
               onPointerEnter={() => {
                 setActive(i);
                 if (item.submenu && !item.disabled) setOpen({ index: i, keyboard: false });
-                else if (open && open.index !== i) setOpen(null);
+                else if (open && open.index !== i) {
+                  // The submenu had the focus; the keys go on working here once it closes.
+                  ref.current?.focus({ preventScroll: true });
+                  setOpen(null);
+                }
               }}
               onClick={() => choose(i, false)}
               className={`flex h-7 items-center gap-2 rounded-md px-2 ${active === i ? "bg-white/[.08]" : ""} ${

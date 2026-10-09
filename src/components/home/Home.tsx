@@ -56,6 +56,7 @@ import { AiRunBar, JobIndicator } from "../TopBar";
 import { Button, IconButton, Menu, type MenuEntry } from "../ui";
 import { ProjectCard } from "./ProjectCard";
 import { Poster } from "./Poster";
+import { VersionRow } from "../Updates";
 
 type MenuState = { items: MenuEntry[]; at: { x: number; y: number; align?: "start" | "end"; above?: boolean }; label: string; keyboard: boolean; back: HTMLElement | null; /** The card it acts on. */ target?: string };
 
@@ -181,6 +182,8 @@ export function Home() {
     const back = menu?.back;
     setMenu(null);
     if (!chose) back?.focus();
+    // A chosen item may move focus on, as Rename and Duplicate do; otherwise it goes back, not to the page.
+    else requestAnimationFrame(() => (!document.activeElement || document.activeElement === document.body) && back?.focus());
   };
 
   const cardMenu = (p: LibraryProject): MenuEntry[] => {
@@ -769,78 +772,83 @@ function Sidebar({
     );
 
   return (
-    <nav aria-label="Collections" className="pane flex w-[232px] shrink-0 flex-col gap-0.5 overflow-y-auto p-2">
-      <Row icon={<LayoutGrid size={16} />} label="All projects" count={empty ? 0 : projects?.length} on={filter === "all"} onClick={() => pick("all")} onKeyDown={rowKeys} />
-      <div className="mt-4 mb-1 flex h-7 items-center justify-between pl-2.5">
-        <h2 className="text-[13px] font-semibold text-fg">Collections</h2>
-        <IconButton label="New collection" onClick={() => setCreating([])} className="h-7 w-7">
-          <Plus size={15} />
-        </IconButton>
-      </div>
-      {collections.map((c) =>
-        renaming === c.id ? (
+    <div className="pane flex w-[232px] shrink-0 flex-col">
+      <nav aria-label="Collections" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+        <Row icon={<LayoutGrid size={16} />} label="All projects" count={empty ? 0 : projects?.length} on={filter === "all"} onClick={() => pick("all")} onKeyDown={rowKeys} />
+        <div className="mt-4 mb-1 flex h-7 items-center justify-between pl-2.5">
+          <h2 className="text-[13px] font-semibold text-fg">Collections</h2>
+          <IconButton label="New collection" onClick={() => setCreating([])} className="h-7 w-7">
+            <Plus size={15} />
+          </IconButton>
+        </div>
+        {collections.map((c) =>
+          renaming === c.id ? (
+            <NameField
+              key={c.id}
+              initial={c.name}
+              label="Collection name"
+              onDone={(name) => {
+                setRenaming(null);
+                if (name !== null) void renameCollection(c.id, name);
+              }}
+            />
+          ) : (
+            <Row
+              key={c.id}
+              drop={c.id}
+              dropping={!!drag}
+              over={drag?.over === c.id}
+              icon={<Folder size={16} />}
+              label={c.name}
+              count={count(c.id)}
+              on={filter === c.id}
+              onClick={() => pick(c.id)}
+              onKeyDown={(e) => {
+                if (e.key === "F2") {
+                  e.preventDefault();
+                  setRenaming(c.id);
+                } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  collectionMenu(c, { x: r.left + 12, y: r.bottom }, true);
+                } else rowKeys(e);
+              }}
+              onContextMenu={(at) => collectionMenu(c, at, false)}
+            />
+          ),
+        )}
+        {creating !== null ? (
           <NameField
-            key={c.id}
-            initial={c.name}
-            label="Collection name"
-            onDone={(name) => {
-              setRenaming(null);
-              if (name !== null) void renameCollection(c.id, name);
+            initial=""
+            label="New collection name"
+            onDone={async (name) => {
+              const paths = creating;
+              setCreating(null);
+              if (name === null) return;
+              const created = await createCollection(name, paths);
+              if (!created) return;
+              if (paths.length === 0) pick(created.id);
+              else useEditor.getState().toast({ kind: "success", text: paths.length === 1 ? `Moved the project to ${created.name}.` : `Moved ${paths.length} projects to ${created.name}.` });
             }}
           />
         ) : (
-          <Row
-            key={c.id}
-            drop={c.id}
-            dropping={!!drag}
-            over={drag?.over === c.id}
-            icon={<Folder size={16} />}
-            label={c.name}
-            count={count(c.id)}
-            on={filter === c.id}
-            onClick={() => pick(c.id)}
-            onKeyDown={(e) => {
-              if (e.key === "F2") {
-                e.preventDefault();
-                setRenaming(c.id);
-              } else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
-                e.preventDefault();
-                const r = e.currentTarget.getBoundingClientRect();
-                collectionMenu(c, { x: r.left + 12, y: r.bottom }, true);
-              } else rowKeys(e);
-            }}
-            onContextMenu={(at) => collectionMenu(c, at, false)}
-          />
-        ),
-      )}
-      {creating !== null ? (
-        <NameField
-          initial=""
-          label="New collection name"
-          onDone={async (name) => {
-            const paths = creating;
-            setCreating(null);
-            if (name === null) return;
-            const created = await createCollection(name, paths);
-            if (!created) return;
-            if (paths.length === 0) pick(created.id);
-            else useEditor.getState().toast({ kind: "success", text: paths.length === 1 ? `Moved the project to ${created.name}.` : `Moved ${paths.length} projects to ${created.name}.` });
-          }}
-        />
-      ) : (
-        collections.length === 0 && (
-          <button
-            type="button"
-            data-row
-            onKeyDown={rowKeys}
-            onClick={() => setCreating([])}
-            className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-muted transition-colors duration-[120ms] hover:bg-white/[.05] hover:text-fg"
-          >
-            <FolderPlus size={16} /> New collection
-          </button>
-        )
-      )}
-    </nav>
+          collections.length === 0 && (
+            <button
+              type="button"
+              data-row
+              onKeyDown={rowKeys}
+              onClick={() => setCreating([])}
+              className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-muted transition-colors duration-[120ms] hover:bg-white/[.05] hover:text-fg"
+            >
+              <FolderPlus size={16} /> New collection
+            </button>
+          )
+        )}
+      </nav>
+      <div className="shrink-0 p-2 pt-0">
+        <VersionRow showMenu={showMenu} />
+      </div>
+    </div>
   );
 }
 

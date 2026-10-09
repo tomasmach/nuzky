@@ -152,6 +152,13 @@ def home(r):
     r.shot('context-menu')
     menus = r.s.run("return [...document.querySelectorAll('[role=menu]')].map((m) => m.getAttribute('aria-label'))")
     r.check('Move to collection opens the list of collections', menus == ['Croatia day 2', 'Move to collection'], menus)
+    # The pointer moves on to Rename: the list closes and the keys work in the project menu again.
+    r.s.run("[...document.querySelectorAll('[role=menu]')][0].querySelectorAll('[role=menuitem]').forEach((i) => "
+            "i.textContent.startsWith('Rename') && i.dispatchEvent(new PointerEvent('pointerover', {bubbles: true})))")
+    focus = lambda: r.s.run("const m = document.querySelectorAll('[role=menu]'); return [m.length, document.activeElement === m[0]]")
+    r.check('moving the pointer off the list closes it and the project menu keeps the keyboard', wait(lambda: focus() == [1, True], 3), focus())
+    click(r, 'Move to collection', '[role=menu]')
+    wait(lambda: len(r.s.run("return [...document.querySelectorAll('[role=menu]')]")) == 2, 3)
     r.s.run("[...document.querySelectorAll('[role=menu]')][1].querySelectorAll('[role=menuitemradio]').forEach((i) => i.textContent.includes('Client work') && i.click())")
     croatia = card(r, 'Croatia day 2')['path']
     library = r.work / 'data/capopen/library.json'

@@ -109,6 +109,8 @@ class Run:
         (self.work / 'data/capopen/projects').mkdir(parents=True)
         self.env = dict(os.environ, XDG_DATA_HOME=str(self.work / 'data'), XDG_CACHE_HOME=str(self.work / 'cache'),
                         XDG_RUNTIME_DIR=runtime, DBUS_SESSION_BUS_ADDRESS='disabled:', GDK_BACKEND='x11',
+                        # Flows never ask GitHub for a new version; tests/e2e/updates.py serves its own.
+                        CAPOPEN_NO_UPDATE_CHECK='1',
                         PYTHONDONTWRITEBYTECODE='1')
         self.checks, self.shots, self.s = [], [], None
 
