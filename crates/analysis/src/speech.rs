@@ -19,6 +19,8 @@ const CS: usize = RATE / 100;
 const GAP: usize = RATE / 5;
 /// Audio Whisper encodes in one pass.
 const WINDOW: usize = 30 * RATE;
+/// Vulkan where the `gpu` feature is on, Metal on every Mac.
+const GPU: bool = cfg!(any(feature = "gpu", target_os = "macos"));
 
 pub enum AudioSource<'a> {
     Asset { asset: &'a Asset, cache: &'a Path },
@@ -88,10 +90,10 @@ pub fn transcribe_words_cancellable(
         return Ok(transcript);
     }
     let mut context_params = WhisperContextParameters::default();
-    context_params.use_gpu(cfg!(feature = "gpu"));
+    context_params.use_gpu(GPU);
     let context = match WhisperContext::new_with_params(model_path, context_params) {
         Ok(context) => context,
-        Err(error) if cfg!(feature = "gpu") => {
+        Err(error) if GPU => {
             eprintln!("GPU speech context failed ({error}); retrying on CPU");
             let mut cpu_params = WhisperContextParameters::default();
             cpu_params.use_gpu(false);
