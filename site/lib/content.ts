@@ -1,20 +1,23 @@
 // Copy that the pages, the structured data for search engines and the Markdown for AI agents all share,
 // so a fact changes in one place. It is written for creators who edit reels, not for developers.
 
+import { releaseNotes } from "./site";
+
 export type Faq = { q: string; a: string; link?: { label: string; href: string } };
 
 export const faq: Faq[] = [
   {
     q: "Is Nuzky really free?",
-    a: "Yes. No subscription, no watermark on your videos and no account to make. Nuzky is open source, so it stays free. If you let AI do the editing, it runs on your own Claude or ChatGPT plan.",
+    a: "Yes. No subscription, no watermark on your videos and no sign-up. Nuzky is open source, so it stays free. If you let AI do the editing, it runs on your own Claude or ChatGPT plan.",
   },
   {
     q: "When can I download it?",
-    a: "Soon. The first version for Mac, Windows and Linux is on its way. Watch Nuzky on GitHub to hear the moment it's out.",
+    a: "Soon. The first version for Mac, Windows and Linux is on its way. If you have a GitHub account, watch Nuzky's releases and you'll get an email when it's out.",
+    link: { label: "Nuzky releases on GitHub", href: releaseNotes },
   },
   {
     q: "How is Nuzky different from CapCut?",
-    a: "Everything in Nuzky is free: auto captions, 4K export, no watermark and no account. It's made for editing on your computer. CapCut has more templates and effects, and a phone app.",
+    a: "Nothing in Nuzky is locked behind a paid plan, so export never asks you to upgrade. It's made for editing on a computer. CapCut has more templates and effects, and a phone app.",
     link: { label: "Compare Nuzky and CapCut", href: "/capcut-alternative" },
   },
   {
@@ -27,7 +30,7 @@ export const faq: Faq[] = [
   },
   {
     q: "Can AI edit the video for me?",
-    a: "Yes. Say what you want, like “cut the ums and pauses and add captions”, and watch it edit in the app. You can stop it any time, and one undo takes it all back. It works through your own Claude or ChatGPT plan, and not on Windows yet.",
+    a: "Yes. Type what you want, like “cut the ums and pauses and add captions”, and watch it edit in the app. Stop it any time, and one undo takes it all back. It runs on your own Claude or ChatGPT plan, and doesn't work on Windows yet.",
   },
   {
     q: "Will videos from my phone work?",
@@ -35,7 +38,7 @@ export const faq: Faq[] = [
   },
   {
     q: "Is it ready for TikTok, Reels and Shorts?",
-    a: "Yes. One click exports a vertical 1080 × 1920 video with the volume levelled for social apps.",
+    a: "Yes. Pick the Reels & TikTok export and you get a vertical 1080 × 1920 video with the volume levelled for social apps.",
   },
 ];
 
@@ -68,17 +71,17 @@ export const capcutSources = [
 ];
 
 export const comparison: { label: string; nuzky: string; capcut: string }[] = [
-  { label: "Price", nuzky: "Free. No subscription.", capcut: "Free plan, then Pro or Ultra for premium features and AI credits" },
+  { label: "Price", nuzky: "Free and open source. No subscription.", capcut: "Free plan, then Pro or Ultra for premium features and AI credits" },
   { label: "Auto captions", nuzky: "Free, with no limit", capcut: "Some caption features need Pro" },
   { label: "Export", nuzky: "Up to 4K, never a watermark", capcut: "Videos that use Pro features need Pro to export" },
   {
     label: "Your videos",
-    nuzky: "Stay on your computer. An AI you ask to edit sees what's said and the frames it checks.",
+    nuzky: "Stay on your computer. If you use AI editing, the AI reads what's said and looks at a few frames.",
     capcut: "The apps edit on your device. The web editor uploads them.",
   },
   {
     label: "AI editing",
-    nuzky: "Tell it what to cut and watch it work. Uses your Claude or ChatGPT plan. Not on Windows yet.",
+    nuzky: "Type what to cut and watch it work. Uses your Claude or ChatGPT plan. Not on Windows yet.",
     capcut: "Built-in AI tools, paid with credits",
   },
   {
@@ -86,14 +89,12 @@ export const comparison: { label: string; nuzky: string; capcut: string }[] = [
     nuzky: "Filters, transitions, animations and seven caption styles. No template library.",
     capcut: "A large library of templates, effects and stickers",
   },
-  { label: "Where it runs", nuzky: "Mac, Windows and Linux", capcut: "Phones, Mac, Windows and the web" },
-  { label: "Open source", nuzky: "Yes, free for good", capcut: "No" },
-  { label: "Available", nuzky: "Coming soon", capcut: "Now" },
+  { label: "Where it runs", nuzky: "Mac (Apple silicon), Windows and Linux", capcut: "Phones, Mac, Windows and the web" },
 ];
 
 export const pickNuzky = [
   "You're done paying a subscription to edit",
-  "You want free auto captions with no limit",
+  "You want auto captions without paying for them",
   "You want your videos to stay on your computer",
   "You'd like AI to do the boring first cut",
 ];
@@ -118,10 +119,10 @@ export const capcutFaq: Faq[] = [
   },
   {
     q: "Are CapCut's auto captions free?",
-    a: "Not entirely. CapCut's help centre says auto captions include features that need Pro. In Nuzky, captions are free with no limit.",
+    a: "Not entirely. CapCut's help centre says auto captions include features that need Pro. In Nuzky, captions are free.",
   },
   {
-    q: "Does Nuzky get any rights to my videos?",
-    a: "No. Nuzky doesn't upload your videos and asks for no rights to anything you make.",
+    q: "Who owns the videos I make in Nuzky?",
+    a: "You do. Nuzky doesn't upload your videos and claims no rights to anything you make.",
   },
 ];

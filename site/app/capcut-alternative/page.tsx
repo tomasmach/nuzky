@@ -11,7 +11,7 @@ import { Nav } from "@/components/Nav";
 import { SectionHeading } from "@/components/SectionHeading";
 import { Waves } from "@/components/Waves";
 import { capcutChecked, capcutFaq, capcutSources, comparison, fromCapcut, pickCapcut, pickNuzky } from "@/lib/content";
-import { repo, url } from "@/lib/site";
+import { releaseNotes, url } from "@/lib/site";
 
 const path = "/capcut-alternative";
 const title = "Nuzky vs CapCut: the open source CapCut alternative";
@@ -77,17 +77,18 @@ export default function CapcutAlternative() {
         <div className="mx-auto w-full max-w-[1240px] px-5">
           <header className="flex flex-col items-center pt-16 text-center sm:pt-24">
             <h1 className="heading-xl">
-              The open source
+              The free
               <br />
               <span className="text-subtle">CapCut alternative.</span>
             </h1>
             <p className="mt-7 max-w-[720px] text-[17px] text-muted sm:text-[20px]">
-              Nuzky is a free video editor for Reels, TikTok and Shorts. Auto captions with no limit, 4K export and no watermark, all without a subscription.
+              Nuzky is an open source video editor for Reels, TikTok and Shorts. Captions, 4K export and every effect cost nothing, so export never asks you to
+              upgrade.
             </p>
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-              <a href={repo} className="btn-light flex h-12 items-center gap-2 rounded-full px-6 text-[15px] font-semibold">
+              <a href={releaseNotes} className="btn-light flex h-12 items-center gap-2 rounded-full px-6 text-[15px] font-semibold">
                 <GitHubLogo className="size-[17px]" />
-                Get notified on GitHub
+                Follow releases on GitHub
               </a>
               <a href="/#editor" className="glass flex h-12 items-center rounded-full px-[22px] text-[15px] font-semibold transition-colors hover:bg-white/10">
                 See the editor
@@ -153,7 +154,7 @@ export default function CapcutAlternative() {
 
         {/* The light runs edge to edge behind the questions, so their glass has something to bend. */}
         <div className="relative overflow-hidden">
-          <Waves swellAt="[data-waves=faq]" intensity={1.9} />
+          <Waves swellAt="[data-waves=faq]" intensity={1.9} className="[mask-image:linear-gradient(to_bottom,transparent,#000_240px)]" />
           <section className="relative z-10 mx-auto w-full max-w-[1240px] px-5 pt-28 sm:pt-[150px]">
             <SectionHeading center first="Coming from CapCut?" second="You already know your way around." />
             <div className="mx-auto mt-10 grid max-w-[1000px] gap-4 md:grid-cols-3">

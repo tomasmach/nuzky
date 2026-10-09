@@ -5,9 +5,10 @@ import { type Faq, capcutChecked, capcutFaq, capcutSources, comparison, faq, fea
 import { buildFromSource, license, releaseNotes, repo, url, version } from "./site";
 
 const raw = repo.replace("github.com", "raw.githubusercontent.com") + "/main";
-const abs = (href: string) => (href.startsWith("/") ? url + href : href);
+// Links within the site point at the Markdown of the page.
+const abs = (href: string) => (href.startsWith("/") ? `${url}${href}.md` : href);
 const list = (items: string[]) => items.map((i) => `- ${i}`).join("\n");
-const qa = (items: Faq[]) => items.map((f) => `### ${f.q}\n\n${f.a}${f.link ? ` [${f.link.label}](${abs(f.link.href)}.md)` : ""}`).join("\n\n");
+const qa = (items: Faq[]) => items.map((f) => `### ${f.q}\n\n${f.a}${f.link ? ` [${f.link.label}](${abs(f.link.href)})` : ""}`).join("\n\n");
 
 const summary =
   "Nuzky is a free, open source desktop video editor in the spirit of CapCut, made for Reels, TikTok and Shorts. It runs on your computer, writes captions locally with Whisper and lets an AI agent such as Claude Code or Codex edit the open project while you watch.";

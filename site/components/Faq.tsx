@@ -8,7 +8,9 @@ import { faq, type Faq as Item } from "@/lib/content";
 // the light a point a little below the top of the panel, which stays put when a question opens.
 export function FaqList({ items, className = "" }: { items: Item[]; className?: string }) {
   return (
-    <div className={`glass mx-auto max-w-[820px] rounded-[28px] p-2 ${className}`}>
+    <div
+      className={`glass mx-auto max-w-[820px] rounded-[28px] bg-[rgb(22_22_25/0.5)] p-2 backdrop-blur-[28px] backdrop-saturate-[1.6] contrast-more:bg-[#232327] contrast-more:backdrop-blur-none contrast-more:backdrop-saturate-100 ${className}`}
+    >
       <span data-waves="faq" aria-hidden className="pointer-events-none absolute inset-x-0 top-[180px]" />
       {items.map(({ q, a, link }) => (
         <details
@@ -42,7 +44,7 @@ export function Faq() {
   return (
     // The light runs edge to edge and fades out below the panel, before the download section brings its own.
     <div className="relative overflow-hidden pb-16">
-      <Waves swellAt="[data-waves=faq]" intensity={1.9} />
+      <Waves swellAt="[data-waves=faq]" intensity={1.9} className="[mask-image:linear-gradient(to_bottom,transparent,#000_240px)]" />
       <section id="faq" className="relative z-10 mx-auto w-full max-w-[1240px] scroll-mt-10 px-5 pt-32 sm:pt-[180px]">
         <SectionHeading center first="Before you switch." second="The usual questions." />
         <FaqList items={faq} className="mt-12" />
