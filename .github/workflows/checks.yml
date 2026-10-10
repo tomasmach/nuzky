@@ -39,9 +39,11 @@ jobs:
           cache: npm
       - name: Install Rust
         run: rustup update stable --no-self-update && rustup default stable
+      # rust-cache leaves the root Cargo.toml out of its key. Without its hash here, a change of the build profiles
+      # kept restoring a build cargo threw away, so every run compiled all dependencies again and saved nothing.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: checks-ffmpeg-v1
+          key: checks-ffmpeg-v1-${{ hashFiles('Cargo.toml') }}
       - name: Install Linux dependencies
         run: bash scripts/setup-ubuntu-deps.sh
       - run: npm ci
