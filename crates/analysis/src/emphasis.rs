@@ -90,6 +90,27 @@ pub fn word_energy(
     sources: &HashMap<String, Vec<Word>>,
     cache: &Path,
 ) -> Result<Vec<Energy>> {
+    measure(project, words, sources, cache, true)
+}
+
+/// Like `word_energy`, for caption key words: the words of a file whose sound is not prepared (missing
+/// or unreadable media) are left unmeasured, so captions never wait for sound or fail without it.
+pub fn prepared_word_energy(
+    project: &Project,
+    words: &[TimelineWord],
+    sources: &HashMap<String, Vec<Word>>,
+    cache: &Path,
+) -> Result<Vec<Energy>> {
+    measure(project, words, sources, cache, false)
+}
+
+fn measure(
+    project: &Project,
+    words: &[TimelineWord],
+    sources: &HashMap<String, Vec<Word>>,
+    cache: &Path,
+    wait_for_sound: bool,
+) -> Result<Vec<Energy>> {
     let mut out = vec![Energy::default(); words.len()];
     let mut assets: Vec<&str> = words.iter().map(|w| w.asset_id.as_str()).collect();
     assets.sort_unstable();
@@ -100,8 +121,12 @@ pub fn word_energy(
             sources.get(asset_id).into_iter().flatten().map(|w| ((w.start_us, w.text.as_str()), w.end_us)).collect();
         // Reading a word's level must never start decoding a whole file nobody can stop: the app
         // prepares sound in the background and recognition leaves it ready.
+        let prepared = nuzky_engine::audio::pcm_path(cache, asset).exists();
+        if !prepared && !wait_for_sound {
+            continue;
+        }
         anyhow::ensure!(
-            nuzky_engine::audio::pcm_path(cache, asset).exists(),
+            prepared,
             "AUDIO_NOT_READY: the sound of {} is still being prepared; try again in a moment",
             asset.name
         );

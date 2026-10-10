@@ -877,9 +877,8 @@ impl Backend {
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before captions");
         let grouping = args.grouping();
         let look = args.look()?;
-        // Key words are found by the sound of the words, as for analyze(kind: "emphasis").
-        self.prepare_sound(&project, &derived, state)?;
-        let energy = nuzky_analysis::word_energy(&project, &derived.words, &derived.sources, &self.host.cache_dir)?;
+        let energy =
+            nuzky_analysis::prepared_word_energy(&project, &derived.words, &derived.sources, &self.host.cache_dir)?;
         let keys = nuzky_analysis::key_words(&derived.words, &energy);
         let (edit, _) = transcript::caption_edit(&derived.words, &keys, &state.project, look, grouping)?;
         let result = self.host.session.apply_edits(

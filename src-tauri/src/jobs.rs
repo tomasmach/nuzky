@@ -682,7 +682,6 @@ fn run_speech_job(
         let host = host.upgrade().context(SWITCHED)?;
         (host.transcripts.clone(), host.cache_dir.clone())
     };
-    let heard = assets.clone();
     let mut missing = Vec::new();
     for asset in assets {
         if request.refresh || store.get(&asset)?.is_none() {
@@ -691,12 +690,6 @@ fn run_speech_job(
     }
     let estimated = recognise(&store, &cache, missing, request, cancel, rep)?;
     check_cancelled(cancel)?;
-    if request.captions.is_some() {
-        // Key words are found by the sound of the words; recognition usually left it ready.
-        for asset in heard.iter().filter(|a| has_audio(a)) {
-            ensure_pcm(&cache, asset, |_| check_cancelled(cancel))?;
-        }
-    }
     // Recognition goes on without the word timing model, for example offline; say so.
     let note = if estimated { ". Word times are estimated: the word timing model could not be loaded" } else { "" };
     let app = rep.app.clone();
@@ -717,7 +710,7 @@ fn run_speech_job(
         "A clip was added during recognition. Generate the captions again."
     );
     rep.progress(1.0, Some("Grouping captions"));
-    let energy = nuzky_analysis::word_energy(&view.project, &derived.words, &derived.sources, &cache)?;
+    let energy = nuzky_analysis::prepared_word_energy(&view.project, &derived.words, &derived.sources, &cache)?;
     let keys = nuzky_analysis::key_words(&derived.words, &energy);
     let look = CaptionPreset {
         name: String::new(),

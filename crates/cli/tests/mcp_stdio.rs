@@ -550,17 +550,6 @@ fn caption_style_packages_over_stdio() {
         json!({"run_id": run["run_id"], "request_id": "place",
         "edits": [{"type": "addAssets", "assets": [asset]}, {"type": "addClip", "assetId": "take"}]}),
     );
-    let args = json!({"run_id": run["run_id"], "style_preset": "hormozi"});
-    let waiting: Value = serde_json::from_str(&c.error("build_captions", args)).unwrap();
-    let message = waiting["error"].as_str().unwrap();
-    assert!(message.starts_with("AUDIO_NOT_READY"), "{message}");
-    let job = message.split("as job ").nth(1).unwrap().split(';').next().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while c.call("job", json!({"job_id": job, "action": "get"}))["status"] == "running" {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert_eq!(c.call("job", json!({"job_id": job, "action": "get"}))["status"], "done");
     for (name, preset) in [("hormozi", caption_preset("hormozi").unwrap()), ("MY-NEON", &own)] {
         let made = c.call("build_captions", json!({"run_id": run["run_id"], "style_preset": name}));
         assert!(made["caption_count"].as_u64().unwrap() > 1);
