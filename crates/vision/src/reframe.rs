@@ -318,21 +318,27 @@ fn smooth(track: &[Option<[f32; 2]>]) -> Option<Vec<[f32; 2]>> {
 }
 
 /// Keyframes, in clip time, that hold the picture while the face stays within the dead zone around where it was
-/// put and move it over `PAN_US` once it leaves, arriving with the look that found it gone. None when it never
-/// moves.
+/// put and move it on one smooth curve once it leaves: over `PAN_US` up to the look that found it gone, and on to
+/// the last look of those that find it still going. None when it never moves.
 fn keys(times: &[i64], positions: &[[f32; 2]]) -> Vec<(i64, [f32; 2])> {
     let mut held = positions[0];
     let mut keys: Vec<(i64, [f32; 2])> = Vec::new();
+    let mut previous = None;
     for (&t, &at) in times.iter().zip(positions) {
-        if (at[0] - held[0]).abs() <= DEAD_ZONE[0] && (at[1] - held[1]).abs() <= DEAD_ZONE[1] {
-            continue;
+        if (at[0] - held[0]).abs() > DEAD_ZONE[0] || (at[1] - held[1]).abs() > DEAD_ZONE[1] {
+            if keys.last().is_some_and(|k| Some(k.0) == previous) {
+                // It went on since the last look: the same move goes on to here, instead of stopping on the way.
+                keys.pop();
+            } else {
+                let from = (t - PAN_US).max(keys.last().map_or(0, |k| k.0));
+                if keys.last().is_none_or(|k| k.0 < from) {
+                    keys.push((from, held));
+                }
+            }
+            keys.push((t, at));
+            held = at;
         }
-        let from = (t - PAN_US).max(keys.last().map_or(0, |k| k.0));
-        if keys.last().is_none_or(|k| k.0 < from) {
-            keys.push((from, held));
-        }
-        keys.push((t, at));
-        held = at;
+        previous = Some(t);
     }
     keys
 }
@@ -431,6 +437,9 @@ mod tests {
         // Without any face nothing is followed; a still face never moves.
         assert!(smooth(&[None, None]).is_none());
         assert!(super::keys(&times[..3], &[[0.1, 0.0]; 3]).is_empty());
+        // A face that keeps going is followed in one move, not one that stops at every look.
+        let walking = [[0.0, 0.0], [0.0, 0.0], [0.1, 0.0], [0.2, 0.0], [0.3, 0.0], [0.3, 0.0]];
+        assert_eq!(super::keys(&times[..6], &walking), [(times[2] - PAN_US, [0.0, 0.0]), (times[4], [0.3, 0.0])]);
     }
 
     /// The interview filmed wide, her face crossing from a third to two thirds of the way at 5 s, cut at 7 s
