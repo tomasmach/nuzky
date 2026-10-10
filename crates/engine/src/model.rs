@@ -339,10 +339,13 @@ pub enum ClipContent {
         volume: f32,
         #[serde(default)]
         transform: Transform,
-        /// Playback speed; the clip covers `duration_us * speed` of source. Audio follows
-        /// (pitch changes with speed).
+        /// Playback speed; the clip covers `duration_us * speed` of source. Sound follows it.
         #[serde(default = "one")]
         speed: f32,
+        /// Sound at another speed keeps its pitch; off, it gets higher when faster and lower
+        /// when slower. Projects from before it have it off, so they sound as they did.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_pitch: bool,
         #[serde(default)]
         adjust: Adjust,
         /// Audio fades at the clip edges.

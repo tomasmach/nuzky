@@ -62,7 +62,14 @@ export function SpeedSection({ clip, content, asset }: { clip: Clip; content: Me
         <dt className="text-muted">Source used</dt>
         <dd className="text-fg">{formatDuration(sourceUs)}</dd>
       </dl>
-      {asset?.hasAudio && speed !== 1 && <p className="text-[12px] text-muted">The pitch of the sound changes with the speed.</p>}
+      {asset?.hasAudio && speed !== 1 && (
+        <Checkbox
+          label="Keep pitch"
+          checked={content.keepPitch ?? false}
+          title="The voice sounds as high as at 1x. Off, it gets higher when faster and lower when slower."
+          onChange={(v) => edit({ type: "updateClip", clipId: clip.id, keepPitch: v })}
+        />
+      )}
     </Section>
   );
 }

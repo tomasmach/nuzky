@@ -42,4 +42,6 @@ When a decision is the user's to make (which take to keep, tight or loose cuts, 
 
 For speech recorded with audible room noise, hum or harsh s sounds, set `{"type":"updateClip","clipId":…,"cleanVoice":true}` on its clips with sound (high-pass, gentle denoise, de-ess; not for music); export waits for the cleaned sound.
 
+To speed up a talking head, 1.1–1.25 is common: `{"type":"updateClip","clipId":…,"speed":1.2}`. A clip moved off 1x keeps the pitch of its voice (`keepPitch` turns on); add `"keepPitch":false` only when the user wants the voice higher or lower with the speed. Captions and word times follow the speed either way.
+
 For music under speech, set `{"type":"updateClip","clipId":…,"duckDb":12}` on the music clip instead of lowering its volume by hand: it goes 12 dB down while a video's own sound has speech and comes back in the pauses, the same in playback and export. Speech is any sound in video clips above -40 dBFS, never an imported audio file. 6 is gentle, 18 strong, up to 40; 0 turns it off.

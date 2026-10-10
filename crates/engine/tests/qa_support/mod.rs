@@ -78,6 +78,7 @@ pub fn clip(id: &str, asset: &str, start: i64, duration: i64) -> Clip {
             volume: 1.0,
             transform: Transform::default(),
             speed: 1.0,
+            keep_pitch: false,
             adjust: Adjust::default(),
             fade_in_us: 0,
             fade_out_us: 0,

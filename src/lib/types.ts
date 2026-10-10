@@ -186,10 +186,14 @@ export type ClipContent = {
   volume: number,
   transform: Transform,
   /**
-   * Playback speed; the clip covers `duration_us * speed` of source. Audio follows
-   * (pitch changes with speed).
+   * Playback speed; the clip covers `duration_us * speed` of source. Sound follows it.
    */
   speed: number,
+  /**
+   * Sound at another speed keeps its pitch; off, it gets higher when faster and lower
+   * when slower. Projects from before it have it off, so they sound as they did.
+   */
+  keepPitch?: boolean,
   adjust: Adjust,
   /**
    * Audio fades at the clip edges.
@@ -309,6 +313,11 @@ export type EditCmd = {
    * Changing speed keeps the source range, so the clip gets shorter or longer.
    */
   speed?: number | null,
+  /**
+   * Sound at another speed keeps its pitch. Moving a clip off 1x turns it on unless the
+   * same command sets it.
+   */
+  keepPitch?: boolean | null,
   adjust?: Adjust | null,
   fadeInUs?: number | null,
   fadeOutUs?: number | null,

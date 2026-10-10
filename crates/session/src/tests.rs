@@ -308,6 +308,7 @@ fn media_clip() -> Clip {
             asset_id: "a".into(),
             source_in_us: 0,
             speed: 1.0,
+            keep_pitch: false,
             volume: 1.0,
             transform: Transform::default(),
             adjust: Adjust::default(),

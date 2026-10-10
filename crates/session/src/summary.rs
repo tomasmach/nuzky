@@ -263,6 +263,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             ClipContent::Media {
                 volume: v1,
                 speed: s1,
+                keep_pitch: k1,
                 adjust: a1,
                 fade_in_us: fi1,
                 fade_out_us: fo1,
@@ -274,6 +275,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             ClipContent::Media {
                 volume: v2,
                 speed: s2,
+                keep_pitch: k2,
                 adjust: a2,
                 fade_in_us: fi2,
                 fade_out_us: fo2,
@@ -296,6 +298,8 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             }
             if s1 != s2 {
                 push("Changed the speed of");
+            } else if k1 != k2 {
+                push(if *k2 { "Turned on Keep pitch for" } else { "Turned off Keep pitch for" });
             }
             if a1 != a2 {
                 push("Changed the colour of");

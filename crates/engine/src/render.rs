@@ -814,6 +814,7 @@ mod tests {
                     asset_id: "a".into(),
                     source_in_us: 0,
                     speed: 1.0,
+                    keep_pitch: false,
                     volume: 1.0,
                     transform: Transform { x, scale: 0.2, rotation: 25.0, ..Transform::default() },
                     adjust: Default::default(),

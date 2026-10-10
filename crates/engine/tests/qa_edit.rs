@@ -32,6 +32,7 @@ fn update_speed(id: &str, speed: f32) -> EditCmd {
         text: None,
         style: None,
         speed: Some(speed),
+        keep_pitch: None,
         adjust: None,
         fade_in_us: None,
         fade_out_us: None,
