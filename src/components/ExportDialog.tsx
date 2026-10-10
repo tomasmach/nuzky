@@ -247,6 +247,7 @@ export function ExportDialog() {
 
   return (
     <div
+      data-scrim
       className="fixed inset-0 z-[100] flex items-center justify-center scrim-in bg-black/45"
       onPointerDown={(e) => e.target === e.currentTarget && close()}
     >
@@ -296,14 +297,16 @@ export function ExportDialog() {
               <button
                 ref={presetButton}
                 type="button"
+                data-menu
                 aria-haspopup="menu"
                 aria-expanded={!!presetMenu}
+                aria-label={`Preset: ${options.preset ? presetOf(options.preset).label : "Custom"}`}
                 onClick={(e) => {
                   const box = e.currentTarget.getBoundingClientRect();
                   // A click has a pointer position; Enter and Space have none.
                   setPresetMenu(presetMenu ? null : { x: box.left, y: box.bottom + 4, width: box.width, keyboard: e.detail === 0 });
                 }}
-                className="flex h-8 min-w-0 items-center gap-2 rounded-[8px] bg-white/[.09] px-2.5 text-left text-[13px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out enabled:hover:bg-white/[.13]"
+                className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-white/[.09] px-2.5 text-left text-[13px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/.06),inset_0_1px_0_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out enabled:hover:bg-white/[.13]"
               >
                 <span className="min-w-0 flex-1 truncate">{options.preset ? presetOf(options.preset).label : "Custom"}</span>
                 <ChevronDown size={14} className="shrink-0 text-muted" />

@@ -85,6 +85,13 @@ def youtube(r, start_export):
     # YouTube keeps the frame rate free: another one stays YouTube 1080p.
     r.s.run("[...document.querySelectorAll(\"[role=dialog] [aria-label='Frame rate'] button\")].find((b) => b.textContent === '25').click()")
     time.sleep(0.3)
+    # .click() carries no pointer, as Enter on the button: the menu opens on the current preset, so Enter keeps it.
+    open_presets(r)
+    active = r.s.run("const m = document.querySelector('[role=menu][aria-label=Preset]');"
+                     "return document.getElementById(m.getAttribute('aria-activedescendant'))?.textContent ?? null")
+    r.check('the preset menu opened from the keyboard starts on the current preset', (active or '').startswith('YouTube 1080p'), active)
+    r.s.run("document.querySelector('[data-scrim]').dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))")
+    r.check('a click beside the menu closes only the menu', wait(lambda: not r.s.run(PRESETS), 5) and r.s.run(DIALOG))
     dialog = r.s.run(DIALOG)
     options = {'resolution': int(r.s.run(PRESSED, 'Resolution').rstrip('p').replace('4K', '2160')),
                'fps': int(r.s.run(PRESSED, 'Frame rate')), 'quality': 'recommended',

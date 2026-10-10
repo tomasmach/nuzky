@@ -795,7 +795,8 @@ export function Menu({
   const ref = useRef<HTMLDivElement>(null);
   const id = useId();
   const choices = items.flatMap((item, i) => (item === "separator" ? [] : [i]));
-  const [active, setActive] = useState(keyboard ? (choices[0] ?? -1) : -1);
+  // From the keyboard it starts on the current choice, so Enter keeps it.
+  const [active, setActive] = useState(keyboard ? (choices.find((i) => (items[i] as MenuItemEntry).checked) ?? choices[0] ?? -1) : -1);
   const [open, setOpen] = useState<{ index: number; keyboard: boolean } | null>(null);
   const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
 
@@ -813,7 +814,13 @@ export function Menu({
   }, [at.x, at.y, at.align, at.above]);
 
   useEffect(() => {
-    const outside = (e: PointerEvent) => !(e.target as Element | null)?.closest?.("[data-menu]") && onClose(false);
+    const outside = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.("[data-menu]")) return;
+      // A click on a dialog's scrim only closes the menu, not the dialog under it.
+      if (target?.closest?.("[data-scrim]")) e.stopPropagation();
+      onClose(false);
+    };
     const resized = () => onClose(false);
     window.addEventListener("pointerdown", outside, true);
     window.addEventListener("resize", resized);
