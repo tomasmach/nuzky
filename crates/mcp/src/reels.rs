@@ -9,7 +9,7 @@ use nuzky_engine::{
     Project,
     edit::{EditCmd, MAIN_TRACK, TimeRange, new_id},
     model::{AssetKind, ClipContent, MAX_REEL_HOOK_CHARS, ReelCandidate, ReelStatus},
-    speech::TimelineWord,
+    speech::{TimelineWord, is_heard},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -68,17 +68,29 @@ fn ends_sentence(words: &[TimelineWord], i: usize) -> bool {
 }
 
 /// The cut that keeps only the words `from` to `to` as edit_transcript keep does. That cut leaves clips without
-/// words alone, so the clips before and after the ones playing the first and the last word go too.
+/// speech alone, so those before and after the clips that play the kept words go too.
 fn cut(project: &Project, derived: &Derived, from: usize, to: usize) -> Result<transcript::Cut> {
     let ranges =
         transcript::edit_ranges(project, derived, None, Some(&[[from, to]]), Some(transcript::DEFAULT_PAUSE_US))?;
     let cut = transcript::plan_cut(project, derived, ranges)?;
-    let clip = |word: Option<&TimelineWord>| {
-        let id = &word?.clip_id;
-        cut.preview.tracks.iter().flat_map(|t| &t.clips).find(|c| &c.id == id)
+    let preview = &cut.preview;
+    // A clip playing any part of a word, so a word split across two clips keeps both pieces.
+    let speech: Vec<_> = preview
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter().filter(move |clip| is_heard(preview, track, clip)))
+        .filter(|clip| {
+            let ClipContent::Media { asset_id, source_in_us, speed, .. } = &clip.content else { return false };
+            let end = *source_in_us as f64 + clip.duration_us as f64 * f64::from(*speed);
+            let words = derived.sources.get(asset_id).map_or(&[][..], Vec::as_slice);
+            words.iter().any(|w| (w.start_us as f64) < end && w.end_us > *source_in_us)
+        })
+        .collect();
+    let (Some(start), Some(end)) = (speech.iter().map(|c| c.start_us).min(), speech.iter().map(|c| c.end_us()).max())
+    else {
+        return Ok(cut);
     };
-    let (Some(first), Some(last)) = (clip(cut.words.first()), clip(cut.words.last())) else { return Ok(cut) };
-    let edges: Vec<_> = [(0, first.start_us), (last.end_us(), cut.preview.duration_us())]
+    let edges: Vec<_> = [(0, start), (end, preview.duration_us())]
         .into_iter()
         .filter(|(start_us, end_us)| end_us > start_us)
         .map(|(start_us, end_us)| TimeRange { start_us, end_us })
@@ -87,7 +99,7 @@ fn cut(project: &Project, derived: &Derived, from: usize, to: usize) -> Result<t
         return Ok(cut);
     }
     let reel = Derived { sources: derived.sources.clone(), words: cut.words.clone(), ..Derived::default() };
-    transcript::plan_cut(&cut.preview, &reel, edges)
+    transcript::plan_cut(preview, &reel, edges)
 }
 
 /// Candidates for `proposals`, each inside the transcript, from the start of a sentence to the end of one, apart
@@ -289,8 +301,10 @@ mod tests {
         project.apply(EditCmd::AddClip { asset_id: "broll".into(), start_us: Some(0), track_id: None }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "broll".into(), start_us: None, track_id: None }).unwrap();
         sources.insert("broll".into(), vec![]);
+        // The take plays from 6 s to 16 s between the two pieces of B-roll, split inside word3 (9.5 to 9.9 s).
+        let take = project.tracks[0].clips[1].id.clone();
+        project.apply(EditCmd::SplitClip { clip_id: take, at_us: 9_600_000 }).unwrap();
         let derived = Derived::new(&project, sources, vec![]);
-        // word3 to word5 of the take, which plays from 6 s to 16 s between the two pieces of B-roll.
         let reel = cut(&project, &derived, 3, 5).unwrap().preview;
         let assets: Vec<_> = reel.tracks[0]
             .clips
