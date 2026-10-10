@@ -2,7 +2,7 @@
 said. The preview, the engine's own frame and the exported file must light the same word at the same moment,
 nothing while a caption holds after its last word. A word corrected in place keeps lighting up; a caption that
 gains a word lights nothing."""
-import subprocess, time
+import json, subprocess, time
 
 from e2e.harness import CLI, FIXTURES, changed_share, flow, link_models, preview_crop, preview_rect, wait
 
@@ -208,13 +208,28 @@ def tile_js(name):
     return f"return [...document.querySelectorAll('button[aria-pressed]')].find((b) => b.textContent.trim() === {name!r})"
 
 
+# Said with emphasis: espeak speaks every sentence at about the same level, so this one is made twice as loud.
+LOUDER = 'Kamera musí stát pevně na stativu.'
+
+
+def styles_setup(r):
+    from e2e.reel import truth
+    karaoke_setup(r)
+    (start, end), = [(s, e) for take, _, text, s, e in truth() if take == 2 and text == LOUDER]
+    r.louder = (start, end)
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(FIXTURES / 'reel-2.mp4'), '-c:v', 'copy', '-af',
+                    f"volume=2:enable='between(t,{start - 0.05:.3f},{end + 0.05:.3f})'", '-c:a', 'aac', '-b:a', '192k',
+                    str(r.work / 'loud-take.mp4')], check=True)
+
+
 @flow('caption-styles', 'A caption style brings its font, entry animation and key words to every caption; key words show in '
-      'the preview and the export, survive regenerating, and My styles outlive a restart', before=karaoke_setup)
+      'the preview and the export, survive regenerating and a word correction, and My styles outlive a restart',
+      before=styles_setup)
 def caption_styles(r):
     from e2e.harness import Session, close_window
     from e2e.home import resize
-    r.import_media(FIXTURES / 'reel-2.mp4')
-    r.add_clip('reel-2.mp4')
+    r.import_media(r.work / 'loud-take.mp4')
+    r.add_clip('loud-take.mp4')
     r.s.run(f"window.__nuzky.speech.setState({{model: '{MODEL}', language: 'cs'}})")
     r.s.run("[...document.querySelectorAll('[role=tab]')].find((t) => t.textContent.trim() === 'Captions')?.click()")
     if not r.check('the Captions tab offers the Hormozi green style', wait(lambda: r.s.run(tile_js('Hormozi green') + ' ? true : false'), 10, 0.5)):
@@ -231,7 +246,11 @@ def caption_styles(r):
     r.check('every caption has the style\'s font, key words and pop-in',
             len(captions) > 2 and all({k: c[k] for k in look} == look for c in captions), [{k: c[k] for k in look} for c in captions[:2]])
     keys = [[w.get('key', False) for w in c['words']] for c in captions]
-    print(f"  key words: {[w['text'] for c in captions for w in c['words'] if w.get('key')]}", flush=True)
+    keyed = [(c['startUs'] + w['startUs'], w['text']) for c in captions for w in c['words'] if w.get('key')]
+    print(f"  key words: {keyed}", flush=True)
+    start, end = r.louder
+    r.check('Emphasis marks words of the louder sentence as key, and only those',
+            keyed and all(start * 1e6 - 100_000 <= at <= end * 1e6 for at, _ in keyed), {'key': keyed, 'louder': r.louder})
 
     # Key words by length instead, for every caption at once.
     r.s.run("[...document.querySelectorAll('[role=group][aria-label=\"Key words\"] button')].find((b) => b.textContent.trim() === 'Longest').click()")
@@ -303,7 +322,19 @@ def caption_styles(r):
     r.check('after regenerating every caption keeps the font, the pop-in and Longest in green',
             again and all(c['font'] == 'Montserrat' and c['animIn'] == look['animIn'] and c['keywords'] == {'color': KEY_GREEN, 'pick': 'longest'} for c in again),
             [{k: c[k] for k in look} for c in again[:2]])
-    r.check('regenerating marks the same words as key', [[w.get('key', False) for w in c['words']] for c in again] == keys)
+    r.check('regenerating marks the same words as key', any(map(any, keys)) and [[w.get('key', False) for w in c['words']] for c in again] == keys)
+    # Correcting a key word keeps it key.
+    view = r.s.call('window.__nuzky.api.transcriptView(500000)')
+    word = next((w for w in view['words'] for _, text in keyed[:1] if w['text'].strip() == text), None)
+    if r.check('the transcript has the first key word', word, keyed):
+        fixed = word['text'].strip().upper()
+        r.s.call('window.__nuzky.api.correctWords(arguments[0], arguments[1], arguments[2])', view['key'], [{'i': word['i'], 'text': fixed}],
+                 r.state()['epoch'])
+        time.sleep(1.5)
+        saved = json.loads(r.saved_project().read_text())
+        words = [w for t in saved['tracks'] if t['name'] == 'Captions' for c in t['clips'] for w in c['content'].get('words', [])]
+        r.check(f'the key word corrected to "{fixed}" stays key', any(w['text'] == fixed and w.get('key') for w in words),
+                [w for w in words if w['text'] == fixed])
     time.sleep(1.5)
     regenerated = green(engine_frame(r, settled_us, 'engine-regenerated'))
     r.check('the regenerated caption shows its key word in the same place', same_place(regenerated[0], engine[0]),
