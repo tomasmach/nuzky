@@ -15,6 +15,7 @@ LANTERNS = 'aaaaaaaa-0000-4000-8000-000000000002'
 NC = 'aaaaaaaa-0000-4000-8000-000000000003'
 ND = 'aaaaaaaa-0000-4000-8000-000000000004'
 SA = 'aaaaaaaa-0000-4000-8000-000000000005'
+JAMENDO = 'aaaaaaaa-0000-4000-8000-000000000007'
 # Found only by id, its file answers after 15 s: a download the user stops.
 SLOW = 'aaaaaaaa-0000-4000-8000-000000000006'
 DEED = {'by': 'https://creativecommons.org/licenses/{}/4.0/', 'cc0': 'https://creativecommons.org/publicdomain/zero/1.0/'}
@@ -60,7 +61,7 @@ class Openverse:
                         time.sleep(15)
                     return self.reply(server.files[url.path[7:]], 'audio/mpeg')
                 if url.path == f'/v1/audio/{SLOW}/':
-                    slow = audio(SLOW, 'Slow Song', 'Slow Band', 'by', 'slow.mp3')
+                    slow = audio(SLOW, 'Slow Song', 'Slow Band', 'by', 'slow.mp3', source='freesound')
                     slow['url'], slow['duration'] = f"{server.base}/files/{slow.pop('file')}", 3000
                     return self.reply(json.dumps(slow).encode())
                 if url.path == '/v1/audio/':
@@ -86,7 +87,8 @@ class Openverse:
         self.base = f'http://127.0.0.1:{self.http.server_port}'
 
     def results(self):
-        found = [audio(RAINY, 'Rainy Window', 'Lumen Drift', 'by', 'rainy.mp3'),
+        found = [audio(RAINY, 'Rainy Window', 'Lumen Drift', 'by', 'rainy.mp3', source='wikimedia_audio'),
+                 audio(JAMENDO, 'Jamendo Track', 'Somebody', 'by', 'rainy.mp3'),
                  audio(NC, 'Not For Profit', 'Nobody', 'by-nc', 'rainy.mp3'),
                  audio(ND, 'No Changes', 'Nobody', 'by-nd', 'rainy.mp3'),
                  audio(SA, 'Share Alike', 'Nobody', 'by-sa', 'rainy.mp3'),
@@ -141,13 +143,14 @@ def sounds(r):
     found = wait(lambda: len(rows(r)) >= 2 and rows(r), 10) or rows(r)
     titles = ' | '.join(x['text'] for x in found)
     r.check('Rainy Window (CC BY) and Paper Lanterns (CC0) show with author, source and licence',
-            any('Rainy Window' in x['text'] and 'Lumen Drift · Jamendo' in x['text'] and 'CC BY' in x['text'] for x in found)
+            any('Rainy Window' in x['text'] and 'Lumen Drift · Wikimedia Commons' in x['text'] and 'CC BY' in x['text'] for x in found)
             and any('Paper Lanterns' in x['text'] and 'CC0' in x['text'] for x in found), titles)
     r.check('NC, ND and SA never show, whatever the catalogue sends', not any(t in titles for t in ('Not For Profit', 'No Changes', 'Share Alike')), titles)
+    r.check("Jamendo's tracks stay out", 'Jamendo Track' not in titles, titles)
     query = urllib.parse.parse_qs(urllib.parse.urlparse(r.openverse.requests[0]).query)
     r.check('the request carries the search text and the licence filter, nothing from the project',
-            query.get('q') == ['Lofi'] and query.get('license') == ['cc0,by'] and query.get('category') == ['music']
-            and set(query) <= {'q', 'license', 'page', 'page_size', 'mature', 'filter_dead', 'category'}, query)
+            query.get('q') == ['Lofi music'] and query.get('license') == ['cc0,by'] and query.get('excluded_source') == ['jamendo']
+            and set(query) <= {'q', 'license', 'page', 'page_size', 'mature', 'filter_dead', 'excluded_source'}, query)
     r.check('Openverse is named under the results, with the advice to check the licence',
             r.s.run("return document.body.innerText.includes('Search uses Openverse. Nuzky is not endorsed or certified by Openverse.')"))
 

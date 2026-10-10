@@ -137,7 +137,7 @@ function Sources({ onClose }: { onClose: (keyboard: boolean) => void }) {
       <p className="text-[13px] font-semibold text-fg">Where to search</p>
       <div className="flex flex-col gap-1">
         <p className="text-[13px] text-fg">Openverse</p>
-        <p className="text-muted">Music and sounds from Jamendo, Freesound and Wikimedia Commons. Only CC0 and CC BY.</p>
+        <p className="text-muted">Music and sounds from Freesound and Wikimedia Commons. Only CC0 and CC BY.</p>
       </div>
       <div className="flex flex-col gap-2 border-t border-white/[.07] pt-3">
         {settings && (

@@ -29,6 +29,9 @@ const MAX_JSON_BYTES: u64 = 4 << 20;
 /// Longer music than anyone puts under a short video.
 const MAX_FILE_BYTES: u64 = 60 << 20;
 const CC_BY_VERSIONS: &[&str] = &["1.0", "2.0", "2.5", "3.0", "4.0"];
+/// Jamendo sells commercial use of its catalogue apart from the tracks' own licences, so its music stays
+/// out until that is settled; nearly all of Openverse's CC0 and CC BY music is from there.
+const EXCLUDED_SOURCES: &[&str] = &["jamendo"];
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "SoundKind"))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -403,7 +406,10 @@ fn from_openverse(audio: OpenverseAudio, kind: Kind) -> Option<Sound> {
         License::Cc0 => "cc0",
         License::CcBy => "by",
     };
-    if audio.license != expected || audio.license_version.as_deref() != Some(version.as_str()) {
+    if audio.license != expected
+        || audio.license_version.as_deref() != Some(version.as_str())
+        || audio.source.as_deref().is_some_and(|source| EXCLUDED_SOURCES.contains(&source))
+    {
         return None;
     }
     let (url, file) = (audio.foreign_landing_url?, audio.url?);
@@ -438,18 +444,23 @@ fn openverse(text: &str, kind: Kind, license: Option<License>, page: u32) -> Res
         Some(License::CcBy) => "by",
         None => "cc0,by",
     };
+    // Without Jamendo almost nothing is filed as music, so music is found by its words, mostly on Freesound.
+    let text = match kind {
+        Kind::Music if !text.to_lowercase().contains("music") => format!("{text} music"),
+        _ => text.to_owned(),
+    };
     let mut pairs = vec![
-        ("q", text.to_owned()),
+        ("q", text),
         ("license", licenses.to_owned()),
         ("page", page.to_string()),
         ("page_size", PAGE_SIZE.to_string()),
         ("mature", "false".to_owned()),
         ("filter_dead", "true".to_owned()),
+        ("excluded_source", EXCLUDED_SOURCES.join(",")),
     ];
-    // Sound effects come from Freesound, where most have no category; music is whatever is filed as music.
-    match kind {
-        Kind::Music => pairs.push(("category", "music".to_owned())),
-        Kind::Effect => pairs.push(("source", "freesound".to_owned())),
+    // Sound effects come from Freesound, where most have no category.
+    if kind == Kind::Effect {
+        pairs.push(("source", "freesound".to_owned()));
     }
     let url = format!("{}audio/?{}", openverse_base(), query(&pairs));
     let found: OpenversePage = get_json("Openverse", &url, None)?;
@@ -460,7 +471,8 @@ fn openverse(text: &str, kind: Kind, license: Option<License>, page: u32) -> Res
 
 fn openverse_sound(id: &str) -> Result<Sound> {
     let audio: OpenverseAudio = get_json("Openverse", &format!("{}audio/{id}/", openverse_base()), None)?;
-    from_openverse(audio, Kind::Effect).context("UNLICENSED: this sound's licence does not allow monetized videos")
+    from_openverse(audio, Kind::Effect)
+        .context("UNLICENSED: the sound library does not offer this sound; it offers only CC0 and CC BY")
 }
 
 // ---------- Freesound ----------
@@ -539,7 +551,7 @@ fn freesound_sound(id: &str) -> Result<Sound> {
     let key = freesound_key().context("KEY_MISSING: turn on Freesound and add your API key in the sound library")?;
     let url = format!("{}sounds/{id}/?fields={FREESOUND_FIELDS}", freesound_base());
     from_freesound(get_json("Freesound", &url, Some(&key))?)
-        .context("UNLICENSED: this sound's licence does not allow monetized videos")
+        .context("UNLICENSED: the sound library does not offer this sound; it offers only CC0 and CC BY")
 }
 
 // ---------- Search and download ----------
@@ -758,7 +770,7 @@ mod tests {
             "id": "b386828e-b628-45f6-b900-6441a49cc977", "title": "Lofy", "creator": "macouno",
             "license": license, "license_version": version, "license_url": deed,
             "foreign_landing_url": "https://www.jamendo.com/track/317391",
-            "url": "https://prod-1.storage.jamendo.com/?trackid=317391&format=mp32", "duration": 160000, "source": "jamendo", "filetype": "mp32"
+            "url": "https://prod-1.storage.jamendo.com/?trackid=317391&format=mp32", "duration": 160000, "source": "wikimedia_audio", "filetype": "mp32"
         }))
         .unwrap()
     }
@@ -769,7 +781,10 @@ mod tests {
         let ok =
             from_openverse(audio("by", "3.0", "https://creativecommons.org/licenses/by/3.0/"), Kind::Music).unwrap();
         assert_eq!((ok.license, ok.license_version.as_str(), ok.duration_us), (License::CcBy, "3.0", 160_000_000));
-        assert_eq!(ok.provider, "Jamendo");
+        assert_eq!(ok.provider, "Wikimedia Commons");
+        let mut jamendo = audio("by", "3.0", "https://creativecommons.org/licenses/by/3.0/");
+        jamendo.source = Some("jamendo".into());
+        assert!(from_openverse(jamendo, Kind::Music).is_none(), "Jamendo stays out");
         assert_eq!(file_name(&ok), "openverse-b386828e-b628-45f6-b900-6441a49cc977.mp3");
         assert!(
             from_openverse(audio("cc0", "1.0", "https://creativecommons.org/publicdomain/zero/1.0/"), Kind::Effect)
