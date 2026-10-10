@@ -934,9 +934,10 @@ pub fn run() {
             // GTK has set the process's locale from the system, so on a Czech or German system C code reads numbers
             // with a decimal comma. ONNX Runtime read its operators' default values that way when the first model
             // loaded, and the person model then saw nobody, so covers lost where the person is. Numbers stay C; the
-            // interface formats its own in the webview.
+            // interface formats its own in the webview, and native file dialogs show sizes with a point.
             #[cfg(target_os = "linux")]
-            // SAFETY: on the main thread before any other code of the app runs.
+            // SAFETY: setlocale is not thread-safe. This runs before the app starts any thread of its own, so only
+            // threads GTK and WebKit started while making the window could race it.
             unsafe {
                 libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
             }
