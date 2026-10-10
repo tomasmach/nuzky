@@ -49,7 +49,7 @@ python3 -m pip install --user Pillow numpy
 | Rust tests by name | `cargo test --workspace <name>` (`-p <crate>` builds most dependencies again with other features) |
 | Tests that need media and models | `scripts/fixtures.sh`, then `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test --workspace <name> -- --ignored` |
 | A UI flow in the real app | `python3 scripts/repro.py <flow>` (`--list` shows them) |
-| Everything, before a merge | `scripts/check.sh` (tens of minutes) |
+| Everything | `scripts/check.sh` (tens of minutes) |
 
 `scripts/repro.py` runs the app with its own data folders, so it never touches your projects, and out of your way: in a headless gamescope on Linux, off screen and never in front on macOS. Run the CLI and `nuzky mcp` by hand from the terminal where you exported the variables above, so they use the same folders and find that app.
 
@@ -65,7 +65,7 @@ NUZKY_WRITE_TYPES=1 cargo test -p nuzky-app typescript_types
 
 - Branch from a fresh `main`, keep one change per pull request, and rebase before opening it.
 - Fill in the template: the problem, the solution and how you verified it. A change you can see needs a screenshot from `tmp-test/repro/<flow>/`; motion needs a short video.
-- GitHub runs lint, both builds and the Rust tests on every pull request that is not a draft (`.github/workflows/checks.yml`). While the repository is private, it runs them only on pull requests with the `ci` label. The maintainer runs `scripts/check.sh` with the UI flows before merging.
+- GitHub runs lint, both builds and the Rust tests on every pull request that is not a draft (`.github/workflows/checks.yml`). While the repository is private, it runs them only on pull requests with the `ci` label. The maintainer runs `scripts/check.sh` with the UI flows right after merging until the first release, and before merging from then on. Run the flows your change touches before you send it.
 - A change of behaviour or keys goes into [docs/INTERACTION.md](docs/INTERACTION.md) in the same pull request, a visual change into [DESIGN.md](DESIGN.md).
 
 By contributing you agree that your contribution is licensed under GPL-3.0-or-later, like the rest of Nuzky.

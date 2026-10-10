@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Local gate before every merge to main and every release. GitHub runs the faster part of it on every pull
-# request (.github/workflows/checks.yml); the tests with media and models, the check without AVX2, the audits and
-# the UI flows run only here. A pull request that changes only the website in site/ and no dependencies skips it
-# (AGENTS.md). On macOS it runs everything except the check without AVX2, which needs x86-64 Linux.
+# Local gate after every merge to main until the first release, before every merge from then on, and before every
+# release. GitHub runs the faster part of it on every pull request (.github/workflows/checks.yml); the tests with
+# media and models, the check without AVX2, the audits and the UI flows run only here. A pull request that changes
+# only the website in site/ and no dependencies skips it (AGENTS.md). On macOS it runs everything except the check without AVX2, which needs x86-64 Linux.
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
 set -uo pipefail
 cd "$(dirname "$0")/.."
