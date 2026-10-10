@@ -65,6 +65,7 @@ def youtube(r, start_export):
         lambda: r.s.run('return window.__nuzky.store.getState().snap.project.canvas.width') == 1920, 10), edited)
     r.key('e', ctrlKey=True)
     r.check('Ctrl+E opens the export dialog', wait(lambda: r.s.run(DIALOG), 5))
+    time.sleep(0.5)  # the dialog fades in over 200 ms
     items = open_presets(r)
     usable = [i['text'] for i in items if not i['disabled']]
     r.check('the preset menu offers Custom and the YouTube presets first, with their sizes',
@@ -75,6 +76,7 @@ def youtube(r, start_export):
             and blocked.get('Reels & TikTokNeeds 9:16') == 'Reels & TikTok needs a 9:16 video. Switch Ratio under the preview to 9:16.'
             and 'Instagram feedNeeds 4:5' in blocked and 'SquareNeeds 1:1' in blocked and 'YouTube ShortsNeeds 9:16' in blocked,
             blocked)
+    time.sleep(0.3)
     r.shot('export-presets-16x9')
     r.key('Escape')
     r.check('Esc closes the preset menu and keeps the dialog', wait(lambda: not r.s.run(PRESETS), 5) and r.s.run(DIALOG))
