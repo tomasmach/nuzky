@@ -7,6 +7,8 @@ import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCo
  */
 type Epoch = string | undefined;
 
+export type FeedbackKind = "bug" | "idea" | "message";
+
 export const api = {
   setUiContext: (selection: string[], playheadUs: number) => invoke<void>("set_ui_context", { selection, playheadUs: Math.round(playheadUs) }),
   resolveRecovery: (action: "keep" | "restore", epoch: Epoch) => invoke<Snapshot>("resolve_recovery", { action, expectedEpoch: epoch }),
@@ -128,6 +130,8 @@ export const api = {
   /** A newer released version, or null when this one is the latest. */
   checkForUpdate: () => invoke<string | null>("check_for_update"),
   openReleasePage: () => invoke<void>("open_release_page"),
+  /** A prefilled GitHub issue for a bug or an idea, or the author's X profile, in the browser. */
+  openFeedback: (kind: FeedbackKind) => invoke<void>("open_feedback", { kind }),
   styleView: () => invoke<StyleView>("style_view"),
   styleAct: (action: StyleAction) => invoke<StyleView>("style_act", { action }),
   /** Learns from 1 to 3 recordings, each with the video cut from it, as a `style` job. */
