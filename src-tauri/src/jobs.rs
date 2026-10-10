@@ -14,7 +14,7 @@ use nuzky_analysis::models_dir;
 use nuzky_engine::audio::{ensure_pcm, has_audio};
 use nuzky_engine::edit::new_id;
 use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
-use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project, TextStyle};
+use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project, TextStyle, TrackKind};
 use nuzky_engine::proxy;
 use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use nuzky_mcp::model_download::{self, Integrity};
@@ -33,7 +33,7 @@ pub struct JobEvent {
     #[cfg_attr(
         test,
         ts(
-            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover""#
+            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe""#
         )
     )]
     pub kind: &'static str,
@@ -105,7 +105,7 @@ pub(crate) fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
         match kind {
             "export" => running == "export",
             "captions" | "transcript" | "style" => matches!(running, "captions" | "transcript" | "style"),
-            "vision-models" | "cover-pick" | "cover-mask" | "cover-export" => running == kind,
+            "vision-models" | "cover-pick" | "cover-mask" | "cover-export" | "reframe" => running == kind,
             // Each one decodes a whole video; the next file waits, so the preview keeps some of the machine.
             "proxy" => running == "proxy",
             "matte" => running == "matte",
@@ -600,6 +600,98 @@ struct SpeechRequest {
     /// Recognise every heard file again, not only those without a transcript.
     refresh: bool,
     captions: Option<CaptionRequest>,
+}
+
+#[tauri::command]
+pub fn start_reframe(
+    app: AppHandle,
+    width: u32,
+    height: u32,
+    clip_ids: Option<Vec<String>>,
+    expected_epoch: Option<String>,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let (host, view) = {
+        let current = crate::lock_session(&state.session, expected_epoch.as_deref())?;
+        (Arc::downgrade(&current.host), current.host.session.state().map_err(crate::err)?)
+    };
+    let project = view.project;
+    let pictures: Vec<_> = project
+        .tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Video)
+        .flat_map(|t| &t.clips)
+        .filter_map(|c| match &c.content {
+            ClipContent::Media { asset_id, .. } => project.asset(asset_id).filter(|a| a.kind != AssetKind::Audio),
+            _ => None,
+        })
+        .collect();
+    if pictures.is_empty() {
+        return Err("Add a video or image to the timeline first.".into());
+    }
+    if let Some(asset) = pictures.iter().find(|a| !Path::new(&a.path).is_file()) {
+        return Err(format!("MEDIA_MISSING: {}", asset.name));
+    }
+    nuzky_vision::runtime::require().map_err(crate::err)?;
+    let id = format!("reframe:{}", new_id());
+    let cancel = register(&app, &id).ok_or("Reframe is already running")?;
+    let (worker, job) = (app.clone(), id.clone());
+    let spawned = std::thread::Builder::new().name("reframe".into()).spawn(move || {
+        let mut rep = Reporter::new(&worker, &job, "reframe", "Following the face".into());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::cover::download_models(
+                nuzky_vision::models::REFRAME,
+                false,
+                "Downloading the face model",
+                &cancel,
+                &mut rep,
+            )?;
+            let result = nuzky_vision::reframe::reframe(
+                &project,
+                &models_dir(),
+                (width, height),
+                clip_ids.as_deref(),
+                &cancel,
+                &mut |p| rep.progress(p, Some("Following the face")),
+            )?;
+            check_cancelled(&cancel)?;
+            let state = worker.state::<AppState>();
+            let current = state.session.lock().unwrap();
+            const SWITCHED: &str = "Another project was opened, so the reframe result was not applied.";
+            anyhow::ensure!(host.ptr_eq(&Arc::downgrade(&current.host)), SWITCHED);
+            current
+                .host
+                .session
+                .edit(
+                    result.commands,
+                    None,
+                    nuzky_session::Expect { revision: Some(view.stamp.revision), speech_layout_key: None },
+                )
+                .map_err(|error| {
+                    if error.to_string().starts_with("STALE_REVISION") {
+                        anyhow::anyhow!("The project changed while following the face. Reframe again.")
+                    } else {
+                        error
+                    }
+                })?;
+            if let Ok(snap) = current.snapshot(Vec::new()) {
+                worker.emit("project-changed", snap).ok();
+            }
+            Ok(Some(
+                serde_json::json!({"width":width, "height":height,
+                "followed":result.followed.len(), "centred":result.centred.len()})
+                .to_string(),
+            ))
+        }))
+        .unwrap_or_else(|p| Err(anyhow::anyhow!("Reframe crashed: {}", panic_text(&p))));
+        rep.finish(result, cancel.load(Ordering::Relaxed));
+        unregister(&worker, &job);
+    });
+    if let Err(error) = spawned {
+        unregister(&app, &id);
+        return Err(format!("Starting reframe: {error}"));
+    }
+    Ok(id)
 }
 
 #[tauri::command]

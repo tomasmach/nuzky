@@ -100,6 +100,8 @@ export const api = {
   coverClose: () => invoke<void>("cover_close"),
   /** Pick for me: downloads the models on first use, picks frames for `format` and masks the person in the best, as a `cover` job. */
   startCoverPick: (format: ThumbnailFormat, epoch: Epoch) => invoke<string>("start_cover_pick", { format, expectedEpoch: epoch }),
+  startReframe: (width: number, height: number, clipIds: string[] | null, epoch: Epoch) =>
+    invoke<string>("start_reframe", { width, height, clipIds, expectedEpoch: epoch }),
   /** Masks the person in the frame at `timeUs`, downloading the mask model on first use. */
   startCoverMask: (timeUs: number, epoch: Epoch) => invoke<string>("start_cover_mask", { timeUs: Math.round(timeUs), expectedEpoch: epoch }),
   /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */

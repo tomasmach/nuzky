@@ -103,7 +103,8 @@ export function JobIndicator() {
       {running.length > 1 && <span className="text-muted">+{running.length - 1}</span>}
     </>
   );
-  if (j.kind === "audio" || j.kind === "matte")
+  // A reframe shows its progress and Stop on the preview.
+  if (j.kind === "audio" || j.kind === "matte" || j.kind === "reframe")
     return (
       <span className="bar flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-fg" role="status">
         {body}

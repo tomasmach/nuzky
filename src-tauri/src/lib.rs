@@ -1040,6 +1040,7 @@ pub fn run() {
             layer_bounds,
             cancel_job,
             jobs::start_captions,
+            jobs::start_reframe,
             jobs::speech_models,
             jobs::vision_models,
             jobs::start_vision_models,

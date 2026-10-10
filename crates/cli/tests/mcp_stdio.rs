@@ -187,7 +187,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 29);
+    assert_eq!(tools.len(), 30);
     let search = tools.iter().find(|t| t["name"] == "search_sounds").unwrap();
     assert_eq!(search["annotations"]["openWorldHint"], true);
     assert_eq!(search["annotations"]["readOnlyHint"], true);
@@ -1022,6 +1022,80 @@ fn apply_motion_moves_clips_on_a_smooth_curve_and_skips_keyed_ones_over_stdio() 
     c.call("end_run", json!({"run_id":run,"action":"keep"}));
     c.call("undo_run", json!({"run_id":run}));
     assert!(clips(&mut c).is_empty());
+    c.finish();
+}
+
+#[test]
+fn reframe_names_missing_models_without_changing_the_project_over_stdio() {
+    let mut c = Client::start(true, None, Some(None));
+    place_still(&mut c);
+    let run = c.call("begin_run", json!({"label":"reframe"}))["run_id"].clone();
+    let before = std::fs::read(c.dir.join("project.nuzky")).unwrap();
+    let revision = c.call("get_state", json!({}))["revision"].clone();
+    let error = c.error("reframe", json!({"run_id":run,"format":"9:16"}));
+    assert!(error.contains("MODEL_MISSING") && error.contains("yunet-2026may.onnx"), "{error}");
+    let invalid = c.error("reframe", json!({"run_id":run,"format":"16:9"}));
+    assert!(invalid.contains("INVALID_ARGUMENTS"), "{invalid}");
+    assert_eq!(c.call("get_state", json!({}))["revision"], revision);
+    assert_eq!(std::fs::read(c.dir.join("project.nuzky")).unwrap(), before);
+    assert!(!c.dir.join("data/nuzky/models").exists());
+    c.finish();
+}
+
+#[test]
+#[ignore = "Requires tmp-test/wide-head.mp4 and the face model from scripts/fixtures.sh; run with XDG_DATA_HOME=$PWD/tmp-test/xdg/data"]
+fn reframe_follows_a_wide_head_and_undoes_with_the_run_over_stdio() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let media = root.join("tmp-test/wide-head.mp4").canonicalize().unwrap();
+    let mut c = Client::new(true);
+    let import = c.call("begin_run", json!({"label":"import"}))["run_id"].clone();
+    let asset = c.call("import_media", json!({"run_id":import,"paths":[media]}))["asset_ids"][0].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":import,"request_id":"place","edits":[
+            {"type":"setCanvas","width":1920,"height":1080}, {"type":"addClip","assetId":asset}
+        ]}),
+    );
+    c.call("end_run", json!({"run_id":import,"action":"keep"}));
+    let before = std::fs::read(c.dir.join("project.nuzky")).unwrap();
+    let run = c.call("begin_run", json!({"label":"reframe"}))["run_id"].clone();
+    let job = c.call("reframe", json!({"run_id":run,"format":"9:16"}));
+    let done = wait_job(&mut c, &job, Duration::from_secs(60), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let state = c.call("get_state", json!({}));
+    assert_eq!((&state["canvas"]["width"], &state["canvas"]["height"]), (&json!(1080), &json!(1920)));
+    let clip = &state["tracks"][0]["clips"][0];
+    assert!(clip["content"]["transform"]["scale"].as_f64().unwrap() > 3.0, "{clip}");
+    assert_eq!(done["result"]["followed"], json!([clip["id"]]));
+    assert_eq!(done["result"]["centred"], json!([]));
+    assert_eq!(done["result"]["revision"], state["revision"]);
+    assert_eq!(
+        (&done["result"]["format"], &done["result"]["width"], &done["result"]["height"]),
+        (&json!("9:16"), &json!(1080), &json!(1920))
+    );
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+    c.call("undo_run", json!({"run_id":run}));
+    assert_eq!(std::fs::read(c.dir.join("project.nuzky")).unwrap(), before);
+
+    let run = c.call("begin_run", json!({"label":"concurrent edit"}))["run_id"].clone();
+    let job = c.call("reframe", json!({"run_id":run,"format":"4:5","clip_ids":[clip["id"]]}));
+    c.call(
+        "apply_edits",
+        json!({"run_id":run,"request_id":"change","edits":[
+            {"type":"setCanvas","width":1440,"height":1080}
+        ]}),
+    );
+    let done = wait_job(&mut c, &job, Duration::from_secs(60), |_| false);
+    assert_eq!(done["status"], "failed", "{done}");
+    assert!(done["error"].as_str().unwrap().contains("Call reframe again"), "{done}");
+    let changed = std::fs::read(c.dir.join("project.nuzky")).unwrap();
+    let saved: Value = serde_json::from_slice(&changed).unwrap();
+    assert_eq!(saved["canvas"]["width"], 1440);
+    let job = c.call("reframe", json!({"run_id":run,"format":"1:1"}));
+    c.call("job", json!({"job_id":job["job_id"],"action":"cancel"}));
+    let done = wait_job(&mut c, &job, Duration::from_secs(10), |_| false);
+    assert_eq!(done["status"], "cancelled", "{done}");
+    assert_eq!(std::fs::read(c.dir.join("project.nuzky")).unwrap(), changed);
     c.finish();
 }
 
