@@ -147,7 +147,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 25);
+    assert_eq!(tools.len(), 27);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -322,6 +322,36 @@ fn readonly_resources_prompts_and_clear_errors() {
             .contains("labels must differ")
     );
     c.finish();
+}
+
+#[test]
+fn an_agent_reads_the_style_and_keeps_what_the_creator_agreed_to() {
+    let mut c = Client::start(true, None, Some(None));
+    let style = c.call("get_style", json!({}));
+    assert!(style["text"].is_null() && style["own"] == json!([]) && style["version"] == 0, "{style}");
+    let rule = "Never cut my sign-off.";
+    let changed = c.call("change_style", json!({"action": {"type": "setOwn", "text": rule}}));
+    assert_eq!(changed["own"], json!([rule]));
+    assert_eq!(changed["versions"][0]["label"], "AI: Added your rule");
+    let file = std::fs::read_to_string(c.dir.join("data/nuzky/EDIT.md")).unwrap();
+    assert!(file.contains(&format!("## Your rules\n\nThe creator's own instructions. They win over every rule below and over the guide.\n\n- {rule}\n")), "{file}");
+    assert_eq!(c.rpc("resources/read", json!({"uri":"nuzky://style"}))["result"]["contents"][0]["text"], file.as_str());
+    let edited = file.replace(rule, "Keep my sign-off.");
+    let stale = c.error("change_style", json!({"action": {"type": "setText", "text": edited, "baseVersion": 0}}));
+    assert!(stale.contains("STYLE_CHANGED"), "{stale}");
+    let changed = c.call(
+        "change_style",
+        json!({"action": {"type": "setText", "text": edited, "baseVersion": changed["version"]}}),
+    );
+    assert_eq!(changed["own"], json!(["Keep my sign-off."]));
+    assert!(c.error("change_style", json!({"action": {"type": "reset"}})).contains("only the creator"));
+    // The style is the creator's, not the project's: nothing in the project changed.
+    assert_eq!(c.call("get_state", json!({}))["revision"], 0);
+    c.finish();
+    let mut reader = Client::start(false, None, Some(None));
+    assert!(reader.error("change_style", json!({"action": {"type": "setOwn", "text": "x"}})).contains("READ_ONLY"));
+    assert!(!reader.dir.join("data/nuzky/EDIT.md").exists());
+    reader.finish();
 }
 
 // Only on Linux does XDG_DATA_HOME choose where Nuzky looks for EDIT.md.

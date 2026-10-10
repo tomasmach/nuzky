@@ -214,6 +214,15 @@ impl Backend {
                 };
                 Ok(serde_json::to_value(self.host.session.undo_to(target)?)?)
             }
+            // The style belongs to the creator, not to the project: no run, and the project is untouched.
+            "get_style" => {
+                let _: GetStyle = parse(arguments)?;
+                crate::style::for_agent(&crate::style::Store::default().view()?)
+            }
+            "change_style" => {
+                let a: ChangeStyle = parse(arguments)?;
+                crate::style::for_agent(&crate::style::Store::default().act_for_agent(a.action)?)
+            }
             "suggest_options" => {
                 let a: SuggestOptions = parse(arguments)?;
                 ensure!((2..=6).contains(&a.options.len()), "INVALID_ARGUMENTS: offer 2 to 6 options");

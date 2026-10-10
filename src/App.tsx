@@ -28,6 +28,7 @@ import { Launcher } from "./components/home/Launcher";
 import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
+import { listenStyle, loadStyle, useStyle } from "./lib/style";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
 
@@ -176,6 +177,8 @@ function useBackendEvents() {
       }),
     );
     offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
+    const offStyle = listenStyle();
+    void loadStyle();
     offs.push(listen("transcripts-changed", () => useSpeech.setState((s) => ({ stored: s.stored + 1 }))));
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().reloadWaveform(e.payload)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
@@ -253,6 +256,7 @@ function useBackendEvents() {
     );
     return () => {
       unwatch();
+      offStyle();
       offs.forEach((p) => p.then((off) => off()));
     };
   }, []);
@@ -330,7 +334,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
+    __nuzky: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
   });
 
 async function startEditor() {

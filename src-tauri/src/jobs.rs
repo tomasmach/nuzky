@@ -1,4 +1,5 @@
-//! Long-running work off the UI path: audio preparation, export, transcripts and auto captions.
+//! Long-running work off the UI path: audio preparation, export, transcripts, auto captions and
+//! learning the creator's style from their videos.
 //! Every job reports through `job` events.
 
 use std::collections::HashSet;
@@ -19,7 +20,7 @@ use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use nuzky_mcp::model_download::{self, Integrity};
 use nuzky_mcp::transcript;
 use nuzky_session::{host::Host, transcripts::TranscriptStore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::AppState;
@@ -29,7 +30,7 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct JobEvent {
     pub id: String,
-    #[cfg_attr(test, ts(type = r#""audio" | "proxy" | "export" | "captions" | "transcript""#))]
+    #[cfg_attr(test, ts(type = r#""audio" | "proxy" | "export" | "captions" | "transcript" | "style""#))]
     pub kind: &'static str,
     pub label: String,
     #[cfg_attr(test, ts(type = r#""running" | "done" | "failed" | "cancelled""#))]
@@ -89,7 +90,7 @@ impl Reporter {
     }
 }
 
-/// Exports run one at a time; captions and transcripts share one recognition slot.
+/// Exports run one at a time; captions, transcripts and style learning share one recognition slot.
 fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
     let state = app.state::<AppState>();
     let mut jobs = state.jobs.lock().unwrap();
@@ -98,7 +99,7 @@ fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
         let running = running.split(':').next().unwrap_or(running);
         match kind {
             "export" => running == "export",
-            "captions" | "transcript" => matches!(running, "captions" | "transcript"),
+            "captions" | "transcript" | "style" => matches!(running, "captions" | "transcript" | "style"),
             "vision-models" => running == "vision-models",
             // Each one decodes a whole video; the next file waits, so the preview keeps some of the machine.
             "proxy" => running == "proxy",
@@ -678,6 +679,105 @@ fn download_vad(cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathB
     model_download::download(&url, &models_dir().join(VAD_MODEL), VAD_INTEGRITY, cancel, |value| {
         rep.progress(value, Some("Downloading voice detector"))
     })
+}
+
+/// A raw recording and the finished video the creator cut from it.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Deserialize, Clone)]
+pub struct StylePair {
+    pub recording: String,
+    pub cut: String,
+}
+
+/// How one pair of a style learning job ended, sent as `style-pair`.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StylePairResult {
+    pub job_id: String,
+    pub index: usize,
+    /// The share of the finished video's speech found in the recording.
+    pub matched: Option<f32>,
+    /// Why nothing was learned from the pair.
+    pub error: Option<String>,
+}
+
+/// Learns the creator's style from 1 to 3 pairs the way `nuzky style learn` does, so the same
+/// files teach the same. A pair that does not match is skipped and says why; the style changes
+/// only when the creator accepts what was learned.
+pub fn start_style_learning(app: &AppHandle, pairs: Vec<StylePair>) -> Result<String, String> {
+    if !(1..=3).contains(&pairs.len()) {
+        return Err("Choose 1 to 3 recordings, each with the video you cut from it.".into());
+    }
+    let id = format!("style:{}", new_id());
+    let cancel = register(app, &id).ok_or("Speech is already being recognised. Try again when it is done.")?;
+    let (app, cache, job_id) = (app.clone(), app.state::<AppState>().cache_dir.clone(), id.clone());
+    std::thread::Builder::new()
+        .name("style".into())
+        .spawn(move || {
+            let mut rep = Reporter::new(&app, &job_id, "style", "Learning your style".into());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                learn_pairs(&app, &job_id, &pairs, &cache, &cancel, &mut rep)
+            }))
+            .unwrap_or_else(|p| Err(anyhow::anyhow!("Learning crashed: {}", panic_text(&p))));
+            let cancelled = cancel.load(Ordering::Relaxed);
+            rep.finish(result.map(|()| None), cancelled);
+            unregister(&app, &job_id);
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+fn learn_pairs(
+    app: &AppHandle,
+    job_id: &str,
+    pairs: &[StylePair],
+    cache: &Path,
+    cancel: &AtomicBool,
+    rep: &mut Reporter,
+) -> anyhow::Result<()> {
+    use nuzky_mcp::style;
+    let model = transcript::best_model();
+    download_model(model, cancel, rep)?;
+    download_vad(cancel, rep)?;
+    let transcripts = TranscriptStore::open()?;
+    let store = style::Store::default();
+    let mut learned = 0;
+    for (index, pair) in pairs.iter().enumerate() {
+        check_cancelled(cancel)?;
+        let at = |part: f32| (index as f32 + part) / pairs.len() as f32;
+        let result = (|| {
+            let mut video = |path: &str, from: f32| {
+                rep.progress(at(from), Some("Recognising speech"));
+                style::video(Path::new(path), "auto", &transcripts, cache, cancel, |stage| match stage {
+                    transcript::Stage::Waiting => rep.progress(at(from), Some("Waiting for another transcription")),
+                    transcript::Stage::DownloadingAligner(_) => {
+                        rep.progress(at(from), Some("Downloading word timing model"))
+                    }
+                    transcript::Stage::Recognising | transcript::Stage::Aligning => {
+                        rep.progress(at(from), Some("Recognising speech"))
+                    }
+                })
+            };
+            let recording = video(&pair.recording, 0.0)?;
+            let cut = video(&pair.cut, 0.4)?;
+            rep.progress(at(0.7), Some("Comparing sound and picture"));
+            style::compare(&recording, &cut, &transcripts, cache, &|| cancel.load(Ordering::Relaxed))
+        })();
+        let mut event = StylePairResult { job_id: job_id.into(), index, matched: None, error: None };
+        match result {
+            Ok(evidence) => {
+                event.matched = evidence.matched;
+                store.add_evidence(evidence)?;
+                learned += 1;
+            }
+            Err(_) if cancel.load(Ordering::Relaxed) => anyhow::bail!("CANCELLED: job cancelled"),
+            Err(error) => event.error = Some(format!("{error:#}")),
+        }
+        app.emit("style-pair", &event).ok();
+    }
+    anyhow::ensure!(learned > 0, "None of the finished videos was cut from its recording, so nothing was learned.");
+    Ok(())
 }
 
 fn count_label(count: usize, singular: &str, plural: &str) -> String {

@@ -25,6 +25,8 @@ interface LibraryState {
   collections: Collection[];
   /** "all" or a collection id. */
   filter: string;
+  /** What the home screen shows: the projects, or the creator's style. */
+  page: "projects" | "style";
   sort: Sort;
   /** Paths of the selected projects on the home screen. */
   selection: string[];
@@ -45,6 +47,7 @@ export const useLibrary = create<LibraryState>(() => ({
   projects: null,
   collections: [],
   filter: "all",
+  page: "projects",
   sort: localStorage.getItem(SORT_KEY) === "name" ? "name" : "opened",
   selection: [],
   posters: {},

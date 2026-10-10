@@ -6,6 +6,7 @@ mod jobs;
 mod library;
 mod preview_server;
 mod store;
+mod style;
 #[cfg(all(target_os = "macos", debug_assertions))]
 pub mod test_bridge;
 mod thumbs;
@@ -933,6 +934,7 @@ pub fn run() {
             app.manage(agent_panel::AgentPanel::default());
             app.state::<AppState>().session.lock().unwrap().start_pump(app.handle().clone(), events);
             jobs::prepare_media(&app.state::<AppState>(), &project);
+            style::watch(app.handle().clone());
             app.emit("ready", ()).ok();
             #[cfg(all(target_os = "macos", debug_assertions))]
             test_bridge::start(app)?;
@@ -994,6 +996,9 @@ pub fn run() {
             agent_panel::agent_send,
             agent_panel::agent_stop,
             transcripts::correct_words,
+            style::style_view,
+            style::style_act,
+            style::start_style_learning,
             updates::check_for_update,
             updates::open_release_page,
         ])

@@ -16,6 +16,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  Scissors,
   Search,
   Sparkles,
   Trash2,
@@ -23,6 +24,9 @@ import {
   X,
 } from "lucide-react";
 import { followPointer } from "../../lib/drag";
+import { useStyle } from "../../lib/style";
+import { StylePage } from "../style/StylePage";
+import { AiPanel } from "../ai/AiPanel";
 import {
   blocked,
   createCollection,
@@ -76,25 +80,37 @@ function newProjectItems(): MenuEntry[] {
 
 const byName = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 
-/** The AI panel works on the open project, so it opens in the editor. */
+/** The AI panel works on the open project, so it opens in the editor; on Your style it opens beside the style. */
 function openAi() {
+  if (useLibrary.getState().page === "style") return useStyle.setState((s) => ({ chatOpen: !s.chatOpen }));
   showEditor();
   useDock.setState({ open: true });
 }
 
 function AiButton() {
   const working = useAgent((s) => s.status !== "idle");
+  const style = useLibrary((s) => s.page === "style");
+  const open = useStyle((s) => s.chatOpen) && style;
+  const title = style ? (open ? "Close the AI (Ctrl+J)" : "Talk about your style with the AI (Ctrl+J)") : "Open the editor with AI (Ctrl+J)";
   return (
-    <Button variant="bar" pill title={working ? "Open the editor with AI (Ctrl+J). It is still working." : "Open the editor with AI (Ctrl+J)"} onClick={openAi}>
+    <Button variant="bar" pill aria-pressed={style ? open : undefined} title={working ? `${title}. It is still working.` : title} onClick={openAi} className={open ? "bg-white/[.15]!" : ""}>
       {working ? <Loader2 size={15} className="animate-spin text-accent" /> : <Sparkles size={15} />} AI
     </Button>
   );
+}
+
+/** The AI beside Your style: what the creator says there is about their style. */
+function StyleChat() {
+  const panel = useRef<HTMLElement>(null);
+  return <AiPanel about="style" panelRef={panel} className="w-[340px] shrink-0" onClose={() => useStyle.setState({ chatOpen: false })} />;
 }
 
 export function Home() {
   const projects = useLibrary((s) => s.projects);
   const collections = useLibrary((s) => s.collections);
   const filter = useLibrary((s) => s.filter);
+  const page = useLibrary((s) => s.page);
+  const chatOpen = useStyle((s) => s.chatOpen);
   const sort = useLibrary((s) => s.sort);
   const selection = useLibrary((s) => s.selection);
   const loadError = useLibrary((s) => s.loadError);
@@ -317,12 +333,14 @@ export function Home() {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (menu || useLibrary.getState().pendingSwitch || document.querySelector("dialog[open]")) return;
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+      // The style page has no search; its fields take what is typed.
+      const style = useLibrary.getState().page === "style";
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (e.key === "Escape" && !typing) {
         if (useLibrary.getState().selection.length > 0) select([]);
         else showEditor();
-      } else if (mod && (key === "k" || key === "f")) {
+      } else if (mod && (key === "k" || key === "f") && !style) {
         e.preventDefault();
         searchField.current?.focus();
         searchField.current?.select();
@@ -339,7 +357,7 @@ export function Home() {
         e.preventDefault();
         const r = document.querySelector("[data-new-project]")?.getBoundingClientRect();
         if (r) showMenu(newProjectItems(), { x: r.right, y: r.bottom + 6, align: "end" }, "New project", true);
-      } else if (!typing && !mod && !e.altKey && e.key.length === 1 && e.key !== " ") {
+      } else if (!typing && !style && !mod && !e.altKey && e.key.length === 1 && e.key !== " ") {
         // Typing anywhere starts a search, as in the launcher.
         e.preventDefault();
         searchField.current?.focus();
@@ -378,7 +396,11 @@ export function Home() {
       </header>
       <div className="flex min-h-0 flex-1 gap-1.5 px-1.5 pb-1.5">
         <Sidebar drag={drag} creating={creating} setCreating={setCreating} showMenu={showMenu} />
-        <main className="pane relative flex min-w-0 flex-1 flex-col" aria-label={title}>
+        <main className="pane relative flex min-w-0 flex-1 flex-col" aria-label={page === "style" ? "Your style" : title}>
+          {page === "style" ? (
+            <StylePage />
+          ) : (
+            <>
           <div className="flex h-16 shrink-0 items-center gap-2 pl-6 pr-4">
             <h1 className="max-w-[40%] shrink-0 truncate text-[17px] font-semibold text-fg">{title}</h1>
             {projects && !firstRun && <span className="tabular shrink-0 text-[13px] text-muted">{inView.length}</span>}
@@ -486,7 +508,9 @@ export function Home() {
               </>
             )}
           </div>
-          {selection.length > 0 && <SelectionBar showMenu={showMenu} newCollection={setCreating} />}
+            </>
+          )}
+          {selection.length > 0 && page === "projects" && <SelectionBar showMenu={showMenu} newCollection={setCreating} />}
           {fileDrag && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-[12px] bg-black/45">
               <div className="overlay flex w-[320px] flex-col items-center gap-2 rounded-[20px] px-6 py-7 text-center">
@@ -497,6 +521,7 @@ export function Home() {
             </div>
           )}
         </main>
+        {page === "style" && chatOpen && <StyleChat />}
       </div>
       {menu && <Menu items={menu.items} at={menu.at} label={menu.label} keyboard={menu.keyboard} onClose={closeMenu} />}
       {drag && (
@@ -752,7 +777,9 @@ function Sidebar({
   const empty = onlyPristine(projects, useEditor((s) => s.snap));
   const [renaming, setRenaming] = useState<string | null>(null);
   const count = (id: string) => projects?.filter((p) => p.collection === id).length ?? 0;
-  const pick = (id: string) => useLibrary.setState({ filter: id, selection: [] });
+  const page = useLibrary((s) => s.page);
+  const suggestions = useStyle((s) => s.view?.suggestions.length ?? 0);
+  const pick = (id: string) => useLibrary.setState({ filter: id, page: "projects", selection: [] });
 
   const rowKeys = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -774,7 +801,16 @@ function Sidebar({
   return (
     <div className="pane flex w-[232px] shrink-0 flex-col">
       <nav aria-label="Collections" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
-        <Row icon={<LayoutGrid size={16} />} label="All projects" count={empty ? 0 : projects?.length} on={filter === "all"} onClick={() => pick("all")} onKeyDown={rowKeys} />
+        <Row icon={<LayoutGrid size={16} />} label="All projects" count={empty ? 0 : projects?.length} on={page === "projects" && filter === "all"} onClick={() => pick("all")} onKeyDown={rowKeys} />
+        <Row
+          icon={<Scissors size={16} />}
+          label="Your style"
+          count={suggestions || undefined}
+          countLabel={suggestions === 1 ? "1 suggestion" : `${suggestions} suggestions`}
+          on={page === "style"}
+          onClick={() => useLibrary.setState({ page: "style", selection: [] })}
+          onKeyDown={rowKeys}
+        />
         <div className="mt-4 mb-1 flex h-7 items-center justify-between pl-2.5">
           <h2 className="text-[13px] font-semibold text-fg">Collections</h2>
           <IconButton label="New collection" onClick={() => setCreating([])} className="h-7 w-7">
@@ -801,7 +837,7 @@ function Sidebar({
               icon={<Folder size={16} />}
               label={c.name}
               count={count(c.id)}
-              on={filter === c.id}
+              on={page === "projects" && filter === c.id}
               onClick={() => pick(c.id)}
               onKeyDown={(e) => {
                 if (e.key === "F2") {
@@ -856,6 +892,7 @@ function Row({
   icon,
   label,
   count,
+  countLabel,
   on,
   onClick,
   onKeyDown,
@@ -867,6 +904,8 @@ function Row({
   icon: ReactNode;
   label: string;
   count: number | undefined;
+  /** Says what the count is; such a count is news, in accent. */
+  countLabel?: string;
   on: boolean;
   onClick: () => void;
   onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => void;
@@ -896,7 +935,14 @@ function Row({
     >
       <span className={`shrink-0 ${on || over ? "text-accent" : "text-muted"}`}>{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {count !== undefined && <span className="tabular shrink-0 text-[12px] text-muted">{count}</span>}
+      {count !== undefined &&
+        (countLabel ? (
+          <span className="tabular shrink-0 text-[12px] font-medium text-accent" aria-label={countLabel} title={countLabel}>
+            {count}
+          </span>
+        ) : (
+          <span className="tabular shrink-0 text-[12px] text-muted">{count}</span>
+        ))}
     </button>
   );
 }

@@ -45,7 +45,7 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
         Some("compare") if files.len() == 3 && out.is_none() && !replace => {
             let recording = video(&files[0])?;
             let cut = video(&files[1])?;
-            let alignment = style::aligned(&recording, &cut.asset, cache, &|| false)?;
+            let alignment = style::aligned(&recording, &cut, cache, &|| false)?;
             let human: Vec<bool> =
                 alignment.places(&recording.record.words, &cut.record.words).iter().map(Option::is_some).collect();
             let agent = project_keeps(&files[2], &recording, &store)?;

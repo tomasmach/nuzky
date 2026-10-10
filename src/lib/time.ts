@@ -24,3 +24,10 @@ export function formatDuration(us: number): string {
   const s = us / US;
   return s < 60 ? `${s.toFixed(1)} s` : formatTime(us, false);
 }
+
+/** The time of day, with the date when it was not today. */
+export function when(ms: number) {
+  const at = new Date(ms);
+  const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}

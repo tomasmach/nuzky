@@ -131,6 +131,28 @@ impl Alignment {
         }
         places
     }
+
+    /// The share of the cut's recognised words that the recording says where the sound places
+    /// them; none without words. Speech of another recording can sound alike to the matching of
+    /// sound alone, but its words are not there.
+    pub fn words_found(&self, words: &[Word], cut_words: &[Word]) -> Option<f32> {
+        if words.is_empty() || cut_words.is_empty() {
+            return None;
+        }
+        let found = cut_words
+            .iter()
+            .filter(|w| {
+                let middle = (w.start_us + w.end_us) / 2;
+                let Some(piece) = self.pieces.iter().find(|p| p.start_us <= middle && middle < p.end_us) else {
+                    return false;
+                };
+                let (token, at) = (super::token(&w.text), w.start_us + piece.offset_us);
+                !token.is_empty()
+                    && words.iter().any(|r| super::token(&r.text) == token && (r.start_us - at).abs() <= RECOGNITION_US)
+            })
+            .count();
+        Some(found as f32 / cut_words.len() as f32)
+    }
 }
 
 /// Places every part of `cut` in `recording`. Order may change: a hook moved to the front is found too.
@@ -359,6 +381,29 @@ impl Biquad {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn words_said_elsewhere_do_not_match() {
+        let alignment = Alignment {
+            pieces: vec![Piece { start_us: 0, end_us: 2_000_000, offset_us: 5_000_000 }],
+            matched: 1.0,
+            cut_duration_us: 2_000_000,
+            cut_pauses: vec![],
+            recording_pauses: vec![],
+        };
+        let at =
+            |start_us, text: &str| Word { start_us, end_us: start_us + 300_000, text: text.into(), probability: 1.0 };
+        let recording = [at(5_000_000, "So"), at(5_400_000, "today,"), at(9_000_000, "cat")];
+        let cut = [at(0, "so"), at(400_000, "today"), at(800_000, "cat")];
+        assert_eq!(
+            alignment.words_found(&recording, &cut),
+            Some(2.0 / 3.0),
+            "cat is said 3 s from where the sound put it"
+        );
+        let other = [at(0, "Dnes"), at(400_000, "natáčím")];
+        assert_eq!(alignment.words_found(&recording, &other), Some(0.0));
+        assert_eq!(alignment.words_found(&[], &cut), None);
+    }
 
     #[test]
     fn a_word_just_past_a_piece_plays_at_its_end() {

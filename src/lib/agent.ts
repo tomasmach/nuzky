@@ -62,7 +62,12 @@ export interface PromptContext {
   selection: string[] | null;
   playheadUs: number | null;
   frame: boolean;
+  /** Sent from the Your style page: about the creator's style, not the open project. */
+  style: boolean;
 }
+
+/** What the panel is about: the open project, or the creator's style on the Your style page. */
+export type AiAbout = "project" | "style";
 
 interface AgentState {
   agents: AgentInfo[] | null;
@@ -200,13 +205,15 @@ export function newChat() {
 }
 
 /** What the next message would carry, as the chips show it. */
-function promptContext(): PromptContext {
+function promptContext(about: AiAbout): PromptContext {
+  if (about === "style") return { selection: null, playheadUs: null, frame: false, style: true };
   const { selection, timeUs } = useEditor.getState();
   const { dropSelection, dropPlayhead, frame } = useAgent.getState();
-  return { selection: dropSelection || selection.length === 0 ? null : [...selection], playheadUs: dropPlayhead ? null : Math.round(timeUs), frame };
+  return { selection: dropSelection || selection.length === 0 ? null : [...selection], playheadUs: dropPlayhead ? null : Math.round(timeUs), frame, style: false };
 }
 
 function describeContext(c: PromptContext): string | null {
+  if (c.style) return "Your style";
   const parts: string[] = [];
   if (c.selection) parts.push(c.selection.length === 1 ? "1 clip" : `${c.selection.length} clips`);
   if (c.playheadUs !== null) parts.push(`Playhead ${formatTime(c.playheadUs, false)}`);
@@ -225,10 +232,10 @@ export function sendBlocked(): string | null {
   return null;
 }
 
-export async function send(text = useAgent.getState().draft.trim()) {
+export async function send(text = useAgent.getState().draft.trim(), about: AiAbout = "project") {
   const s = useAgent.getState();
   if (!text || sendBlocked()) return;
-  const context = promptContext();
+  const context = promptContext(about);
   const fromDraft = text === s.draft.trim();
   // The chat is named here, before sending, so even an agent that fails at once is heard.
   const chat = s.chat ?? crypto.randomUUID();

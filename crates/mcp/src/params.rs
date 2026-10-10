@@ -63,6 +63,16 @@ pub struct ListHistory {
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct GetStyle {}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeStyle {
+    /// The change, by its type: setOwn {text, index?}, accept {titles}, reject {title}, remove {title},
+    /// revert {title}, learnAgain {title}, setText {text, baseVersion} or restore {index}.
+    pub action: crate::style::StyleAction,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UndoTo {
     /// The version's index from list_history. Give index or hash.
     pub index: Option<u64>,

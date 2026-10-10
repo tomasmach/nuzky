@@ -35,6 +35,7 @@ const MAX_OWN_RULE: usize = 500;
 /// Why learning leaves a rule alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleFrozen"))]
 #[serde(rename_all = "lowercase")]
 pub enum Frozen {
     Rejected,
@@ -67,6 +68,7 @@ struct Version {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleSourceKind"))]
 #[serde(rename_all = "lowercase")]
 pub enum EvidenceKind {
     /// A recording and the finished video the creator cut from it.
@@ -136,6 +138,7 @@ pub struct StyleView {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleRule"))]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveRule {
     pub title: String,
@@ -163,6 +166,7 @@ pub struct Suggestion {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleChange"))]
 pub struct Change {
     pub name: String,
     pub from: Option<String>,
@@ -171,6 +175,7 @@ pub struct Change {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleConfidence"))]
 #[serde(rename_all = "camelCase")]
 pub struct Confidence {
     /// High in 3 or more videos, medium in 2, low in 1.
@@ -183,6 +188,7 @@ pub struct Confidence {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleLevel"))]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     High,
@@ -202,6 +208,7 @@ pub struct StyleMoment {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleNotLearned"))]
 pub struct NotLearned {
     pub title: String,
     pub reason: Frozen,
@@ -209,6 +216,7 @@ pub struct NotLearned {
 
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleSource"))]
 #[serde(rename_all = "camelCase")]
 pub struct LearnedFrom {
     pub title: String,
@@ -226,8 +234,8 @@ pub struct StyleVersion {
     pub at_ms: u64,
 }
 
-/// What the creator does to the style.
-#[derive(Clone, Debug, Deserialize)]
+/// What the creator, or an agent they agreed with, does to the style.
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StyleAction {
@@ -249,11 +257,14 @@ pub enum StyleAction {
     LearnAgain {
         title: String,
     },
-    /// Adds the creator's own rule, or with `index` changes it; empty text removes it.
+    /// Adds the creator's own rule, or with `index` changes it; empty text removes it. `was` is
+    /// the rule at `index` as the caller saw it, so a rule moved meanwhile is never changed instead.
     #[serde(rename_all = "camelCase")]
     SetOwn {
         index: Option<usize>,
         text: String,
+        #[serde(default)]
+        was: Option<String>,
     },
     /// The whole EDIT.md as the creator wrote it, over the version they started from.
     #[serde(rename_all = "camelCase")]
@@ -282,6 +293,11 @@ impl Store {
     /// The style in `dir`, which holds EDIT.md.
     pub fn at(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
+    }
+
+    /// What changes whenever the style or what was learned changes.
+    pub fn files(&self) -> [PathBuf; 3] {
+        [self.edit_md(), self.versions_path(), self.evidence_dir()]
     }
 
     fn edit_md(&self) -> PathBuf {
@@ -361,6 +377,19 @@ impl Store {
     }
 
     pub fn act(&self, action: StyleAction) -> Result<StyleView> {
+        self.act_as(action, "")
+    }
+
+    /// A change an agent makes for the creator; its version says so.
+    pub fn act_for_agent(&self, action: StyleAction) -> Result<StyleView> {
+        ensure!(
+            !matches!(action, StyleAction::Reset),
+            "INVALID_ARGUMENTS: only the creator goes back to the default style, in the app (Your style, Versions)"
+        );
+        self.act_as(action, "AI: ")
+    }
+
+    fn act_as(&self, action: StyleAction, by: &str) -> Result<StyleView> {
         let _lock = self.lock()?;
         let mut versions = self.synced()?;
         let current = versions.last().cloned().unwrap_or_default();
@@ -450,11 +479,15 @@ impl Store {
                 ensure!(frozen.remove(&title).is_some(), "UNKNOWN_RULE: learning does not leave {title} alone");
                 format!("Learn {title} again")
             }
-            StyleAction::SetOwn { index, text } => {
+            StyleAction::SetOwn { index, text, was } => {
                 let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 ensure!(text.chars().count() <= MAX_OWN_RULE, "TOO_LONG: keep a rule under {MAX_OWN_RULE} characters");
-                let count = doc.own().len();
-                ensure!(index.is_none_or(|i| i < count), "UNKNOWN_RULE: that rule of yours is gone");
+                let own = doc.own();
+                ensure!(index.is_none_or(|i| i < own.len()), "UNKNOWN_RULE: that rule of yours is gone");
+                ensure!(
+                    index.zip(was.as_ref()).is_none_or(|(i, was)| &own[i] == was),
+                    "STYLE_CHANGED: that rule of yours changed meanwhile; read the style again"
+                );
                 ensure!(index.is_some() || !text.is_empty(), "INVALID_ARGUMENTS: write the rule first");
                 doc.set_own(index, (!text.is_empty()).then_some(text.as_str()));
                 match (index, text.is_empty()) {
@@ -475,10 +508,15 @@ impl Store {
                 "Edited by hand".to_owned()
             }
             StyleAction::Restore { index } => {
-                let version = versions
-                    .iter()
-                    .find(|v| v.index == index)
-                    .with_context(|| format!("UNKNOWN_VERSION: version {index} is not kept"))?;
+                // Version 0 is the style before any change: none, while what was learned stays.
+                let none = Version { label: "No style yet".into(), ..Version::default() };
+                let version = match index {
+                    0 => &none,
+                    _ => versions
+                        .iter()
+                        .find(|v| v.index == index)
+                        .with_context(|| format!("UNKNOWN_VERSION: version {index} is not kept"))?,
+                };
                 doc = Doc::parse(version.text.as_deref().unwrap_or(""));
                 (accepted, frozen) = (version.accepted.clone(), version.frozen.clone());
                 format!("Restored: {}", version.label.strip_prefix("Restored: ").unwrap_or(&version.label))
@@ -497,7 +535,7 @@ impl Store {
         };
         tidy(&mut doc, &frozen);
         let text = (!doc.is_empty()).then(|| doc.text());
-        self.commit(&versions, &label, text, accepted, frozen)?;
+        self.commit(&versions, &format!("{by}{label}"), text, accepted, frozen)?;
         versions = self.read_versions()?;
         self.show(&versions)
     }
@@ -711,6 +749,21 @@ impl Store {
     }
 }
 
+/// The style as an agent reads it: what the app shows, with the first moments of each
+/// suggestion and the newest versions.
+pub fn for_agent(view: &StyleView) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(view)?;
+    for suggestion in value["suggestions"].as_array_mut().into_iter().flatten() {
+        if let Some(moments) = suggestion["moments"].as_array_mut() {
+            moments.truncate(4);
+        }
+    }
+    if let Some(versions) = value["versions"].as_array_mut() {
+        versions.truncate(10);
+    }
+    Ok(value)
+}
+
 fn accept(rule: &Rule) -> Accepted {
     Accepted { summary: rule.summary.clone(), choices: rule.choices.clone() }
 }
@@ -857,15 +910,19 @@ fn stable_id(path: &Path) -> Result<String> {
     Ok(format!("style-{:016x}", hash.finish()))
 }
 
-/// Where the cut came from in the recording, refused when too little of it is there.
-pub fn aligned(recording: &Video, cut: &Asset, cache: &Path, cancelled: &dyn Fn() -> bool) -> Result<Alignment> {
-    let alignment = learning::align(&recording.asset, cut, cache, cancelled)?;
+/// Where the cut came from in the recording, refused when too little of it is there: by sound,
+/// and by the words the cut says, which a cut of another recording only seems to share.
+pub fn aligned(recording: &Video, cut: &Video, cache: &Path, cancelled: &dyn Fn() -> bool) -> Result<Alignment> {
+    let mut alignment = learning::align(&recording.asset, &cut.asset, cache, cancelled)?;
+    if let Some(words) = alignment.words_found(&recording.record.words, &cut.record.words) {
+        alignment.matched = alignment.matched.min(words);
+    }
     ensure!(
         alignment.matched >= MIN_MATCH,
-        "NO_MATCH: {} does not look cut from {}: only {:.0}% of its speech was found in the recording",
-        cut.path,
-        recording.asset.path,
-        alignment.matched * 100.0
+        "NO_MATCH: only {:.0}% of the speech of {} is in {}, so it was not cut from it",
+        alignment.matched * 100.0,
+        cut.asset.name,
+        recording.asset.name
     );
     Ok(alignment)
 }
@@ -878,7 +935,7 @@ pub fn compare(
     cache: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Evidence> {
-    let alignment = aligned(recording, &cut.asset, cache, cancelled)?;
+    let alignment = aligned(recording, cut, cache, cancelled)?;
     let picture = learning::picture(&recording.asset, &cut.asset, &alignment, cancelled)?;
     if cancelled() {
         bail!("CANCELLED: learning was stopped");
@@ -1051,7 +1108,7 @@ mod tests {
     #[test]
     fn own_rules_and_hand_edits_outlive_learning() {
         let (store, dir) = store();
-        store.act(StyleAction::SetOwn { index: None, text: "Never cut  the product name.".into() }).unwrap();
+        store.act(StyleAction::SetOwn { index: None, text: "Never cut  the product name.".into(), was: None }).unwrap();
         assert!(file(&dir).unwrap().contains("## Your rules\n\nThe creator's own instructions."), "{:?}", file(&dir));
         let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
         let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
@@ -1117,15 +1174,33 @@ mod tests {
         store.act(StyleAction::Restore { index: view.versions[1].index }).unwrap();
         assert_eq!(file(&dir).unwrap(), after);
 
+        // The style before any change comes back too, and what was learned stays.
+        let view = store.act(StyleAction::Restore { index: 0 }).unwrap();
+        assert_eq!(file(&dir), None);
+        assert!(
+            !view.sources.is_empty()
+                && !view.suggestions.is_empty()
+                && view.versions[0].label == "Restored: No style yet"
+        );
+        store.act(StyleAction::Restore { index: view.versions[1].index }).unwrap();
+        assert_eq!(file(&dir).unwrap(), after);
+
         // A version cut short by a full disk does not swallow the next one.
         let mut versions = fs::OpenOptions::new().append(true).open(dir.join("style/versions.jsonl")).unwrap();
         versions.write_all(b"{\"index\":99,\"lab").unwrap();
         drop(versions);
-        store.act(StyleAction::SetOwn { index: None, text: "Keep it short.".into() }).unwrap();
+        store.act(StyleAction::SetOwn { index: None, text: "Keep it short.".into(), was: None }).unwrap();
         let view = store.view().unwrap();
         assert_eq!(view.versions[0].label, "Added your rule");
         assert_eq!(view.own, ["Keep it short."]);
-        store.act(StyleAction::SetOwn { index: Some(0), text: String::new() }).unwrap();
+        let moved = store.act(StyleAction::SetOwn { index: Some(0), text: String::new(), was: Some("Gone.".into()) });
+        assert!(
+            moved.unwrap_err().to_string().starts_with("STYLE_CHANGED"),
+            "a rule that moved is never removed instead"
+        );
+        store
+            .act(StyleAction::SetOwn { index: Some(0), text: String::new(), was: Some("Keep it short.".into()) })
+            .unwrap();
 
         let view = store.act(StyleAction::Reset).unwrap();
         assert_eq!(file(&dir), None);

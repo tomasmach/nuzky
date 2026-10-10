@@ -339,6 +339,15 @@ input[type="range"].range:disabled {
 .dialog-in {
   animation: dialog-in 200ms ease-out both;
 }
+/* A part of Your style that just changed, by the AI or anywhere else. */
+@keyframes changed {
+  from {
+    background-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+}
+.changed {
+  animation: changed 2400ms ease-out;
+}
 
 @keyframes indeterminate {
   from {
