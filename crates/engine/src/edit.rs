@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Adjust, Animation, Asset, AssetKind, Background, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Ease,
-    Keyframe, Project, Shape, TextStyle, Thumbnail, ThumbnailFormat, Track, TrackKind, Transform, Transition,
-    WordCorrection,
+    Keyframe, Project, ReelCandidate, Shape, TextStyle, Thumbnail, ThumbnailFormat, Track, TrackKind, Transform,
+    Transition, WordCorrection,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -246,6 +246,14 @@ pub enum EditCmd {
     },
     RemoveThumbnail {
         format: ThumbnailFormat,
+    },
+    /// Replaces every reel candidate.
+    SetReelCandidates {
+        candidates: Vec<ReelCandidate>,
+    },
+    /// Replaces the reel candidate with the same id.
+    UpdateReelCandidate {
+        candidate: ReelCandidate,
     },
 }
 
@@ -625,6 +633,19 @@ impl Project {
                 self.thumbnails.sort_by_key(|t| t.format as u8);
             }
             EditCmd::RemoveThumbnail { format } => self.thumbnails.retain(|t| t.format != format),
+            EditCmd::SetReelCandidates { candidates } => {
+                self.reel_candidates = candidates;
+                self.reel_candidates.sort_by_key(|c| c.start_us);
+            }
+            EditCmd::UpdateReelCandidate { candidate } => {
+                let slot = self
+                    .reel_candidates
+                    .iter_mut()
+                    .find(|c| c.id == candidate.id)
+                    .ok_or_else(|| anyhow!("Unknown reel candidate"))?;
+                *slot = candidate;
+                self.reel_candidates.sort_by_key(|c| c.start_us);
+            }
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();

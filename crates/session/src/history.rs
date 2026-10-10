@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
-use nuzky_engine::{Project, edit::EditCmd};
+use nuzky_engine::{Project, edit::EditCmd, model::ReelStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
@@ -208,6 +208,9 @@ pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
         EditCmd::ApplyMotion { .. } => "Motion",
         EditCmd::SetThumbnail { .. } => "Thumbnail",
         EditCmd::RemoveThumbnail { .. } => "Remove thumbnail",
+        EditCmd::SetReelCandidates { .. } => "Propose reels",
+        EditCmd::UpdateReelCandidate { candidate } if candidate.status == ReelStatus::Made => "Make reels",
+        EditCmd::UpdateReelCandidate { .. } => "Change reel",
     }
 }
 

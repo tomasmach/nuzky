@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -127,6 +127,8 @@ export const api = {
   /** Punch-ins on inclusive word ranges of the view with `key`, as one undo step. */
   applyZooms: (key: string, zooms: { from: number; to: number; scale: number }[], epoch: Epoch) =>
     invoke<ZoomsApplied>("apply_zooms", { key, zooms, expectedEpoch: epoch }),
+  /** A project of its own beside this one for each reel candidate, marked made here as one undo step. */
+  makeReels: (ids: string[], canvas: ReelFraming, epoch: Epoch) => invoke<ReelsMade>("make_reels", { ids, canvas, expectedEpoch: epoch }),
   /** A newer released version, or null when this one is the latest. */
   checkForUpdate: () => invoke<string | null>("check_for_update"),
   openReleasePage: () => invoke<void>("open_release_page"),

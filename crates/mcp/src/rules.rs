@@ -66,6 +66,9 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("apply_zooms", Never, true, false, false),
     // Leaves clips that already move alone, so the same call again changes nothing.
     rules("apply_motion", Never, false, true, false),
+    // Proposing replaces the reels proposed before; making only adds new projects beside the source.
+    rules("propose_reels", Never, true, false, false),
+    rules("make_reels", Never, false, false, false),
     rules("export_video", Never, false, false, true),
     // Only draws the thumbnail; a missing mask of its frame is made as a job into the cache.
     rules("inspect_thumbnail", Always, false, true, true),
@@ -134,6 +137,7 @@ mod tests {
                 "undo_to",
                 "build_captions",
                 "apply_zooms",
+                "propose_reels",
                 "resolve_recovery"
             ])
         );

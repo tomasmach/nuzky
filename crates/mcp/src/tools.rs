@@ -13,7 +13,7 @@ use nuzky_engine::{
     edit::{EditCmd, TimeRange, new_id},
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
-    model::{Thumbnail, ThumbnailFormat},
+    model::{ReelStatus, Thumbnail, ThumbnailFormat},
     thumbnail::ImageKind,
 };
 use nuzky_session::{Expect, Mode, ProjectSession, SessionState, Target, host::Host, jobs::check_cancel};
@@ -21,7 +21,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::{activity, media, params::*, transcript};
+use crate::{activity, media, params::*, reels, transcript};
 
 const PREVIEW_CHARS: usize = 400;
 /// How long activity waits for its job before handing it over to poll.
@@ -267,6 +267,8 @@ impl Backend {
             "build_captions" => self.captions(parse(arguments)?, state),
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "apply_motion" => self.apply_motion(parse(arguments)?, state),
+            "propose_reels" => self.propose_reels(parse(arguments)?, state),
+            "make_reels" => self.make_reels(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             "export_thumbnail" => self.export_thumbnail(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
@@ -414,6 +416,7 @@ impl Backend {
         object.insert("assets".into(), json!(project.assets));
         object.insert("tracks".into(), json!(project.tracks));
         object.insert("thumbnails".into(), json!(project.thumbnails));
+        object.insert("reel_candidates".into(), json!(project.reel_candidates));
         object.insert("duration_us".into(), json!(state.project.duration_us()));
         object.insert("caption_stats".into(), caption_stats(&state.project));
         object.insert("filtered".into(), json!(args.range.is_some() || args.clip_ids.is_some()));
@@ -759,9 +762,47 @@ impl Backend {
     }
 
     fn get_transcript(&self, args: GetTranscript, state: &SessionState) -> Result<Value> {
+        let limit = args.limit.unwrap_or(100);
+        ensure!((1..=500).contains(&limit), "INVALID_ARGUMENTS: limit is 1 to 500");
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        let key = transcript::word_key(&state.project, &derived.words);
         let mut result = transcript::summary(&derived, args.range_us)?;
-        result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
+        if args.limit.is_some() || args.cursor.is_some() {
+            let from = if let Some(cursor) = &args.cursor {
+                let (word, cursor_key) = cursor
+                    .split_once('.')
+                    .and_then(|(word, key)| word.parse::<usize>().ok().map(|word| (word, key)))
+                    .context("INVALID_ARGUMENTS: cursor is not a next_cursor from get_transcript")?;
+                ensure!(
+                    cursor_key == key,
+                    "SPEECH_CHANGED: the transcript changed since this cursor; start again without cursor"
+                );
+                word
+            } else {
+                0
+            };
+            let sentences = result["sentences"].as_array_mut().unwrap();
+            sentences.retain(|sentence| sentence["from"].as_u64().unwrap() >= from as u64);
+            let next = sentences.get(limit).map(|sentence| format!("{}.{}", sentence["from"], key));
+            sentences.truncate(limit);
+            let span = sentences
+                .first()
+                .zip(sentences.last())
+                .map(|(first, last)| (first["from"].as_u64().unwrap(), last["to"].as_u64().unwrap()));
+            for (field, index) in [("words", "i"), ("pauses", "after_word")] {
+                result[field]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|entry| span.is_some_and(|(a, b)| (a..=b).contains(&entry[index].as_u64().unwrap())));
+            }
+            result["next_cursor"] = json!(next);
+        }
+        if matches!(args.detail, Some(TranscriptDetail::Sentences)) {
+            let object = result.as_object_mut().unwrap();
+            object.remove("words");
+            object.remove("pauses");
+        }
+        result["transcript_key"] = json!(key);
         Ok(result)
     }
 
@@ -931,6 +972,63 @@ impl Backend {
         let result = self.host.session.apply_edits(&args.run_id, &request_id, vec![edit], Expect::default())?;
         Ok(json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch,
             "changed": result.changed, "skipped": result.outcome.skipped}))
+    }
+
+    /// The candidates replace those not made yet, as one edit of the run. A retry with the same request_id after a
+    /// failed save applies what was planned the first time.
+    fn propose_reels(&self, args: ProposeReels, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({ "propose_reels": &args });
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == arguments, "REQUEST_CONFLICT: request_id was used with different arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        transcript::check_key(&state.project, &derived, &args.transcript_key)?;
+        let made: Vec<_> =
+            state.project.reel_candidates.iter().filter(|c| c.status == ReelStatus::Made).cloned().collect();
+        let max = args.max_duration_us.unwrap_or(reels::DEFAULT_MAX_DURATION_US);
+        let proposed = reels::plan(&state.project, &derived, &args.candidates, max)?;
+        let prepared = requests.entry(key).or_insert(PreparedTranscriptEdit {
+            arguments,
+            edits: vec![EditCmd::SetReelCandidates { candidates: made.into_iter().chain(proposed.clone()).collect() }],
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            response: json!({ "candidates": proposed }),
+        });
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
+    }
+
+    /// Writes the reels' projects, then marks them made as one edit of the run. A retry with the same request_id
+    /// after a failed save marks the projects written the first time instead of writing new ones.
+    fn make_reels(&self, args: MakeReels, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({ "make_reels": &args });
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == arguments, "REQUEST_CONFLICT: request_id was used with different arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        let framing = args.canvas.unwrap_or_default();
+        let (made, edits) = reels::make(&self.project_path, &state.project, &derived, &args.ids, framing)?;
+        let prepared = requests.entry(key.clone()).or_insert(PreparedTranscriptEdit {
+            arguments,
+            edits,
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            response: json!({ "reels": made }),
+        });
+        let applied = self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        if applied.is_err() && reels::forget(&made, &self.host.session.state()?.project) {
+            requests.remove(&key);
+        }
+        applied
     }
 
     fn export(&self, args: Export, state: &SessionState) -> Result<Value> {
@@ -1580,7 +1678,7 @@ mod transcript_tests {
         let (dir, backend, project) = fixture();
         let run = backend.host.session.begin_run("remove slips".into()).unwrap();
         let state = backend.host.session.state().unwrap();
-        let initial = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap();
+        let initial = backend.get_transcript(GetTranscript::default(), &state).unwrap();
         let args = json!({"run_id":run.run_id,"transcript_key":initial["transcript_key"],"delete":[[1,2],[6,6]],"dry_run":true});
         let preview = backend.dispatch("edit_transcript", args.clone(), &state).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, project);
@@ -1593,12 +1691,12 @@ mod transcript_tests {
         let changed = backend.host.session.state().unwrap();
         assert_eq!(
             result["transcript_key"],
-            backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap()["transcript_key"]
+            backend.get_transcript(GetTranscript::default(), &changed).unwrap()["transcript_key"]
         );
         assert!(
             backend.dispatch("edit_transcript", apply, &changed).unwrap_err().to_string().contains("SPEECH_CHANGED")
         );
-        let transcript = backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap();
+        let transcript = backend.get_transcript(GetTranscript::default(), &changed).unwrap();
         assert_eq!(transcript["words"].as_array().unwrap().len(), 5);
         backend.host.session.end_run(&run.run_id, nuzky_session::EndAction::Keep).unwrap();
         backend.host.session.undo_run(&run.run_id).unwrap();
@@ -1621,7 +1719,7 @@ mod transcript_tests {
         let (dir, backend, before) = fixture();
         let run = backend.host.session.begin_run("retry transcript".into()).unwrap();
         let initial = backend.host.session.state().unwrap();
-        let transcript = backend.get_transcript(GetTranscript { range_us: None }, &initial).unwrap();
+        let transcript = backend.get_transcript(GetTranscript::default(), &initial).unwrap();
         let args = json!({"run_id":run.run_id,"request_id":"cut-once","transcript_key":transcript["transcript_key"],"delete":[[1,2]]});
         std::fs::remove_file(&backend.project_path).unwrap();
         std::fs::create_dir(&backend.project_path).unwrap();
@@ -1653,7 +1751,7 @@ mod transcript_tests {
     fn dry_run_plans_before_a_run_even_for_read_only_clients() {
         let (dir, backend, before) = fixture();
         let state = backend.host.session.state().unwrap();
-        let key = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap()["transcript_key"].clone();
+        let key = backend.get_transcript(GetTranscript::default(), &state).unwrap()["transcript_key"].clone();
         let plan_args = json!({"transcript_key":key,"delete":[[1,2]],"dry_run":true});
         let plan = backend.call("edit_transcript", plan_args.clone()).unwrap().structured_content.unwrap();
         assert_eq!(plan["dry_run"], true);

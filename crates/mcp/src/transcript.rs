@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use nuzky_analysis::VAD_MODEL;
 pub const BEFORE_WORD_US: i64 = 80_000;
 pub const AFTER_WORD_US: i64 = 120_000;
-const SENTENCE_GAP_US: i64 = 600_000;
+pub(crate) const SENTENCE_GAP_US: i64 = 600_000;
 const PAUSE_GAP_US: i64 = 300_000;
 pub const DEFAULT_PAUSE_US: i64 = 300_000;
 
@@ -310,6 +310,20 @@ pub fn word_key(project: &Project, words: &[TimelineWord]) -> String {
     format!("{}:{:016x}", nuzky_engine::speech::speech_layout_key(project), hash.finish())
 }
 
+pub fn sentences(words: &[TimelineWord]) -> Vec<[usize; 2]> {
+    let mut sentences = Vec::new();
+    let mut from = 0;
+    for (i, word) in words.iter().enumerate() {
+        if word.text.trim_end().ends_with(['.', ',', '!', '?', ';', ':', '…'])
+            || words.get(i + 1).is_none_or(|next| next.start_us - word.end_us >= SENTENCE_GAP_US)
+        {
+            sentences.push([from, i]);
+            from = i + 1;
+        }
+    }
+    sentences
+}
+
 pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
     if let Some([start, end]) = range {
         ensure!(start >= 0 && end > start, "INVALID_RANGE: expected [start_us,end_us)");
@@ -322,20 +336,14 @@ pub fn summary(derived: &Derived, range: Option<[i64; 2]>) -> Result<Value> {
         .filter(|(_, w)| visible(w.start_us, w.end_us))
         .map(|(i, w)| json!({"i":i,"start_us":w.start_us,"end_us":w.end_us,"text":w.text,"p":w.probability}))
         .collect();
-    let mut sentences = Vec::new();
-    let mut from = 0;
-    for (i, word) in words.iter().enumerate() {
-        if word.text.trim_end().ends_with(['.', ',', '!', '?', ';', ':', '…'])
-            || words.get(i + 1).is_none_or(|next| next.start_us - word.end_us >= SENTENCE_GAP_US)
-        {
-            let start = words[from].start_us;
-            if visible(start, word.end_us) {
-                sentences.push(json!({"from":from,"to":i,"start_us":start,"end_us":word.end_us,
-                    "text":words[from..=i].iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ")}));
-            }
-            from = i + 1;
-        }
-    }
+    let sentences: Vec<_> = sentences(words)
+        .into_iter()
+        .filter(|&[from, to]| visible(words[from].start_us, words[to].end_us))
+        .map(|[from, to]| {
+            json!({"from":from,"to":to,"start_us":words[from].start_us,"end_us":words[to].end_us,
+            "text":words[from..=to].iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ")})
+        })
+        .collect();
     let pauses: Vec<_> = words
         .windows(2)
         .enumerate()

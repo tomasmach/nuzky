@@ -210,11 +210,23 @@ pub struct Transcribe {
     /// Installed model name or absolute local .bin path. Defaults to best installed.
     pub model: Option<String>,
 }
-#[derive(Deserialize, JsonSchema)]
+#[derive(Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GetTranscript {
     /// Half-open timeline interval; word indices remain global.
     pub range_us: Option<[i64; 2]>,
+    /// sentences leaves out words and pauses, to read a long video cheaply.
+    pub detail: Option<TranscriptDetail>,
+    /// Sentences per page, 1-500; with limit or cursor the result is a page with next_cursor.
+    pub limit: Option<usize>,
+    /// next_cursor of the page before.
+    pub cursor: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptDetail {
+    Full,
+    Sentences,
 }
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -259,6 +271,30 @@ pub struct ApplyZooms {
     pub transcript_key: String,
     /// Punch-ins on INCLUSIVE word ranges, such as analyze(kind: "emphasis").zooms.
     pub zooms: Vec<crate::zooms::WordZoom>,
+}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposeReels {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without proposing twice.
+    pub request_id: Option<String>,
+    pub transcript_key: String,
+    /// Replace every reel proposed before; reels already made stay.
+    pub candidates: Vec<crate::reels::ReelProposal>,
+    /// Longest reel once made, 60 s by default.
+    pub max_duration_us: Option<i64>,
+}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MakeReels {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without making the reels twice.
+    pub request_id: Option<String>,
+    /// Ids from get_state's reel_candidates.
+    pub ids: Vec<String>,
+    /// crop (default) fills the 9:16 frame with the middle of the picture; blur fits the whole picture with a
+    /// blurred copy behind.
+    pub canvas: Option<crate::reels::Framing>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

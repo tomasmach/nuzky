@@ -1,6 +1,5 @@
 //! Headless Nuzky: inspect media, render single frames and export projects.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
@@ -156,34 +155,6 @@ fn check_render_output(project: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
-fn publish_new_project(out: &Path, project: &Project) -> Result<()> {
-    let tmp = nuzky_session::json_temp_path(out);
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-    let result = (|| {
-        file.write_all(&serde_json::to_vec_pretty(project)?)?;
-        file.sync_all()?;
-        // Unlike rename, hard_link refuses a destination created since the existence check.
-        match std::fs::hard_link(&tmp, out) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(anyhow::Error::new(error).context("Publishing new project"));
-            }
-            // FAT32 and exFAT have no hard links: claim the name first, so nothing is replaced.
-            Err(_) => {
-                std::fs::OpenOptions::new().write(true).create_new(true).open(out).context("Publishing new project")?;
-                if let Err(error) = std::fs::rename(&tmp, out) {
-                    let _ = std::fs::remove_file(out);
-                    return Err(anyhow::Error::new(error).context("Publishing new project"));
-                }
-            }
-        }
-        Ok(())
-    })();
-    drop(file);
-    let _ = std::fs::remove_file(tmp);
-    result
-}
-
 /// Downloads whichever of `models` are missing, checking size and SHA-256, once ONNX Runtime has
 /// loaded: models that could not run are not worth downloading.
 fn install_models(models: &[nuzky_vision::models::Model]) -> Result<()> {
@@ -285,7 +256,7 @@ fn main() -> Result<()> {
                 project.apply(EditCmd::AddAssets { assets: vec![asset] })?;
                 project.apply(EditCmd::AddClip { asset_id: id, start_us: None, track_id: None })?;
             }
-            publish_new_project(out, &project)?;
+            nuzky_session::publish_new(out, &project)?;
         }
         ["frame", project, secs, out, rest @ ..] => {
             check_render_output(Path::new(project), Path::new(out))?;

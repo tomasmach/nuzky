@@ -6,7 +6,8 @@ use nuzky_engine::{
     Project,
     model::{
         Asset, AssetKind, Background, Clip, ClipContent, MAX_BORDER_WIDTH, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO,
-        MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TextStyle, TrackKind, Transform, max_stroke_width,
+        MAX_REEL_HOOK_CHARS, MAX_REEL_TITLE_CHARS, MAX_REEL_WHY_CHARS, MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION,
+        ReelCandidate, ReelStatus, TextStyle, Thumbnail, TrackKind, Transform, max_stroke_width,
     },
 };
 
@@ -58,7 +59,8 @@ pub fn validate(project: &Project) -> Result<()> {
         }
     }
     word_corrections(project)?;
-    thumbnails(project)
+    thumbnails(project)?;
+    reel_candidates(project)
 }
 
 /// More than a long recording has words, so a project file cannot grow without bound.
@@ -197,33 +199,97 @@ fn thumbnails(project: &Project) -> Result<()> {
     let mut formats = HashSet::new();
     for thumbnail in &project.thumbnails {
         ensure!(formats.insert(thumbnail.format), "INVALID_PROJECT: two thumbnails of one format");
-        ensure!(thumbnail.time_us >= 0, "INVALID_PROJECT: a thumbnail's frame time must not be negative");
-        transform(&thumbnail.frame)?;
-        let background = &thumbnail.background;
+        self::thumbnail(thumbnail)?;
+    }
+    Ok(())
+}
+
+fn thumbnail(thumbnail: &Thumbnail) -> Result<()> {
+    ensure!(thumbnail.time_us >= 0, "INVALID_PROJECT: a thumbnail's frame time must not be negative");
+    transform(&thumbnail.frame)?;
+    let background = &thumbnail.background;
+    ensure!(
+        (0.0..=1.0).contains(&background.blur) && (0.0..=1.0).contains(&background.dim),
+        "INVALID_PROJECT: a thumbnail's background blur and dim go from 0 to 1"
+    );
+    color(&background.color, "thumbnail background")?;
+    ensure!(
+        thumbnail.texts.len() <= MAX_THUMBNAIL_TEXTS,
+        "INVALID_PROJECT: a thumbnail has at most {MAX_THUMBNAIL_TEXTS} texts"
+    );
+    for text in &thumbnail.texts {
         ensure!(
-            (0.0..=1.0).contains(&background.blur) && (0.0..=1.0).contains(&background.dim),
-            "INVALID_PROJECT: a thumbnail's background blur and dim go from 0 to 1"
+            text.text.chars().count() <= MAX_THUMBNAIL_CHARS,
+            "INVALID_PROJECT: a thumbnail text has at most {MAX_THUMBNAIL_CHARS} characters"
         );
-        color(&background.color, "thumbnail background")?;
+        text_style(&text.style, thumbnail.format.size())?;
+        transform(&text.transform)?;
+    }
+    if let Some(outline) = &thumbnail.outline {
         ensure!(
-            thumbnail.texts.len() <= MAX_THUMBNAIL_TEXTS,
-            "INVALID_PROJECT: a thumbnail has at most {MAX_THUMBNAIL_TEXTS} texts"
+            outline.width > 0.0 && outline.width <= MAX_BORDER_WIDTH,
+            "INVALID_PROJECT: a thumbnail's outline is wider than 0 and at most {MAX_BORDER_WIDTH} px"
         );
-        for text in &thumbnail.texts {
+        color(&outline.color, "thumbnail outline")?;
+    }
+    Ok(())
+}
+
+/// More reel candidates than a long video has moments, so a project file cannot grow without bound.
+const MAX_REEL_CANDIDATES: usize = 200;
+
+/// Candidates not made yet never share words or time; a made one's words may have moved since. A made one names
+/// its project, which the app may open, so that is an absolute path; texts are single lines the app shows as they are.
+fn reel_candidates(project: &Project) -> Result<()> {
+    let candidates = &project.reel_candidates;
+    ensure!(
+        candidates.len() <= MAX_REEL_CANDIDATES,
+        "INVALID_PROJECT: more than {MAX_REEL_CANDIDATES} reel candidates"
+    );
+    unique(candidates.iter().map(|c| c.id.as_str()), "reel candidate")?;
+    let line = |text: &str, max: usize| text.chars().count() <= max && !text.chars().any(char::is_control);
+    for c in candidates {
+        ensure!(line(&c.id, 64), "INVALID_PROJECT: a reel candidate's id is one line of up to 64 characters");
+        ensure!(
+            !c.title.trim().is_empty() && line(&c.title, MAX_REEL_TITLE_CHARS),
+            "INVALID_PROJECT: a reel's title is one line of 1 to {MAX_REEL_TITLE_CHARS} characters"
+        );
+        ensure!(
+            line(&c.why, MAX_REEL_WHY_CHARS) && line(&c.hook, MAX_REEL_HOOK_CHARS),
+            "INVALID_PROJECT: a reel's reason is one line of up to {MAX_REEL_WHY_CHARS} characters, its hook of up to {MAX_REEL_HOOK_CHARS}"
+        );
+        ensure!(
+            c.from <= c.to && c.start_us >= 0 && c.start_us < c.end_us && c.duration_us > 0,
+            "INVALID_PROJECT: reel candidate {} has no words or time",
+            c.id
+        );
+        ensure!(
+            c.score.is_finite() && (0.0..=1.0).contains(&c.score),
+            "INVALID_PROJECT: a reel's score goes from 0 to 1"
+        );
+        ensure!(
+            (c.status == ReelStatus::Made) == c.project_path.is_some(),
+            "INVALID_PROJECT: a made reel names its project, and only a made one"
+        );
+        if let Some(path) = &c.project_path {
             ensure!(
-                text.text.chars().count() <= MAX_THUMBNAIL_CHARS,
-                "INVALID_PROJECT: a thumbnail text has at most {MAX_THUMBNAIL_CHARS} characters"
+                line(path, 4096) && Path::new(path).is_absolute(),
+                "INVALID_PROJECT: a reel's project must be an absolute path"
             );
-            text_style(&text.style, thumbnail.format.size())?;
-            transform(&text.transform)?;
         }
-        if let Some(outline) = &thumbnail.outline {
-            ensure!(
-                outline.width > 0.0 && outline.width <= MAX_BORDER_WIDTH,
-                "INVALID_PROJECT: a thumbnail's outline is wider than 0 and at most {MAX_BORDER_WIDTH} px"
-            );
-            color(&outline.color, "thumbnail outline")?;
+        if let Some(cover) = &c.thumbnail {
+            thumbnail(cover)?;
         }
+    }
+    let mut open: Vec<&ReelCandidate> = candidates.iter().filter(|c| c.status != ReelStatus::Made).collect();
+    open.sort_by_key(|c| c.start_us);
+    for pair in open.windows(2) {
+        ensure!(
+            pair[0].to < pair[1].from && pair[0].end_us <= pair[1].start_us,
+            "INVALID_PROJECT: reel candidates {} and {} overlap",
+            pair[0].id,
+            pair[1].id
+        );
     }
     Ok(())
 }
@@ -699,6 +765,55 @@ mod tests {
         for (what, change) in broken {
             let error = youtube(change).unwrap_err().to_string();
             assert!(error.starts_with("INVALID_PROJECT") || error.starts_with("INVALID_COLOR"), "{what}: {error}");
+        }
+    }
+
+    /// A shared project can carry anything here, and the app shows these texts and may open the path.
+    #[test]
+    fn reel_candidates_stay_apart_with_single_line_texts_and_a_path_only_once_made() {
+        use nuzky_engine::model::ReelCandidate;
+        let candidate = |id: &str, from: usize, to: usize| -> ReelCandidate {
+            serde_json::from_value(
+                serde_json::json!({"id": id, "from": from, "to": to, "startUs": from as i64 * 1_000_000,
+                "endUs": to as i64 * 1_000_000 + 500_000, "title": "Why sleep wins", "hook": "Sleep is a cheat code.",
+                "why": "One claim and its proof.", "durationUs": 20_000_000, "score": 0.8, "status": "proposed"}),
+            )
+            .unwrap()
+        };
+        let mut project = Project::new("reels");
+        project.reel_candidates = vec![candidate("b", 40, 60), candidate("a", 0, 39)];
+        validate(&project).unwrap();
+        let with = |change: fn(&mut Vec<ReelCandidate>)| {
+            let mut changed = project.clone();
+            change(&mut changed.reel_candidates);
+            validate(&changed)
+        };
+        // A made one may overlap, since cuts may have moved its words.
+        with(|c| {
+            c[0].status = nuzky_engine::model::ReelStatus::Made;
+            c[0].project_path = Some("/videos/talk-reel-1.nuzky".into());
+            c[0].from = 30;
+        })
+        .unwrap();
+        type Break = fn(&mut Vec<ReelCandidate>);
+        let broken: [(&str, Break); 10] = [
+            ("shared words", |c| c[0].from = 39),
+            ("shared time", |c| c[0].start_us = 39_000_000),
+            ("same id", |c| c[0].id = "a".into()),
+            ("title", |c| c[0].title = " ".into()),
+            ("two lines", |c| c[0].why = "One\nTwo".into()),
+            ("score", |c| c[0].score = f32::NAN),
+            ("no time", |c| c[0].end_us = c[0].start_us),
+            ("path before made", |c| c[0].project_path = Some("/videos/x.nuzky".into())),
+            ("made without path", |c| c[0].status = nuzky_engine::model::ReelStatus::Made),
+            ("relative path", |c| {
+                c[0].status = nuzky_engine::model::ReelStatus::Made;
+                c[0].project_path = Some("x.nuzky".into());
+            }),
+        ];
+        for (what, change) in broken {
+            let error = with(change).unwrap_err().to_string();
+            assert!(error.starts_with("INVALID_PROJECT"), "{what}: {error}");
         }
     }
 

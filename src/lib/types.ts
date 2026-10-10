@@ -519,6 +519,12 @@ export type EditCmd = {
 } | {
   "type": "removeThumbnail",
   format: ThumbnailFormat,
+} | {
+  "type": "setReelCandidates",
+  candidates: Array<ReelCandidate>,
+} | {
+  "type": "updateReelCandidate",
+  candidate: ReelCandidate,
 };
 
 export type ExportRequest = {
@@ -655,6 +661,15 @@ export type Limits = {
   maxMotionStrength: number,
 };
 
+/**
+ * A reel project written beside its source.
+ */
+export type MadeReel = {
+  id: string,
+  path: string,
+  durationUs: number,
+};
+
 export type MotionKind = "pushIn" | "pullOut" | "kenBurns";
 
 export type PlannedRecording = {
@@ -692,6 +707,10 @@ export type Project = {
    * Covers and thumbnails of the video, at most one per format.
    */
   thumbnails?: Array<Thumbnail>,
+  /**
+   * Moments of a long video that could each be a reel of their own, in timeline order.
+   */
+  reelCandidates?: Array<ReelCandidate>,
 };
 
 export type ProjectSummary = {
@@ -725,6 +744,56 @@ export type ProjectVersion = {
 };
 
 export type Quality = "high" | "recommended" | "small";
+
+/**
+ * A moment an agent proposed as a reel. It is the transcript's words `from` to `to`, inclusive, which played
+ * from `start_us` to `end_us` when it was proposed; a reel is made of it only while they still do.
+ */
+export type ReelCandidate = {
+  id: string,
+  from: number,
+  to: number,
+  startUs: number,
+  endUs: number,
+  title: string,
+  /**
+   * The sentence the reel opens with.
+   */
+  hook: string,
+  /**
+   * Why it works on its own.
+   */
+  why: string,
+  /**
+   * How long the reel is once made: the words, the silence kept around them and pauses shortened as cuts do.
+   */
+  durationUs: number,
+  /**
+   * 0 to 1, higher is better.
+   */
+  score: number,
+  status: ReelStatus,
+  /**
+   * The reel's own project, once made.
+   */
+  projectPath?: string | null,
+  /**
+   * The reel's cover; nothing makes it yet.
+   */
+  thumbnail?: Thumbnail | null,
+};
+
+/**
+ * How a reel fills its 9:16 frame from a wider video.
+ */
+export type ReelFraming = "crop" | "blur";
+
+export type ReelStatus = "proposed" | "picked" | "rejected" | "made";
+
+export type ReelsMade = {
+  snapshot: Snapshot,
+  reels: Array<MadeReel>,
+};
 
 /**
  * Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of

@@ -259,7 +259,7 @@ async fn apply_cut(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use nuzky_engine::{
         Project,
@@ -273,7 +273,7 @@ mod tests {
     };
 
     /// A 10 s talk with a word every second and its stored transcript, plus music on its own track.
-    fn fixture() -> (std::path::PathBuf, Host) {
+    pub(crate) fn fixture() -> (std::path::PathBuf, Host) {
         let dir = std::env::temp_dir().join(format!("app-transcripts-{}", new_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let asset = |id: &str, kind| {

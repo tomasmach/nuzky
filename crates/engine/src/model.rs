@@ -27,7 +27,57 @@ pub struct Project {
     /// Covers and thumbnails of the video, at most one per format.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thumbnails: Vec<Thumbnail>,
+    /// Moments of a long video that could each be a reel of their own, in timeline order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reel_candidates: Vec<ReelCandidate>,
 }
+
+/// A moment an agent proposed as a reel. It is the transcript's words `from` to `to`, inclusive, which played
+/// from `start_us` to `end_us` when it was proposed; a reel is made of it only while they still do.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReelCandidate {
+    pub id: String,
+    pub from: usize,
+    pub to: usize,
+    pub start_us: i64,
+    pub end_us: i64,
+    pub title: String,
+    /// The sentence the reel opens with.
+    pub hook: String,
+    /// Why it works on its own.
+    pub why: String,
+    /// How long the reel is once made: the words, the silence kept around them and pauses shortened as cuts do.
+    pub duration_us: i64,
+    /// 0 to 1, higher is better.
+    pub score: f32,
+    pub status: ReelStatus,
+    /// The reel's own project, once made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    /// The reel's cover; nothing makes it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<Thumbnail>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReelStatus {
+    Proposed,
+    Picked,
+    Rejected,
+    /// Its project exists at `project_path`.
+    Made,
+}
+
+/// The longest title, reason and hook of a reel candidate, in characters.
+pub const MAX_REEL_TITLE_CHARS: usize = 100;
+pub const MAX_REEL_WHY_CHARS: usize = 300;
+pub const MAX_REEL_HOOK_CHARS: usize = 1000;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -753,6 +803,7 @@ impl Project {
             }],
             word_corrections: Vec::new(),
             thumbnails: Vec::new(),
+            reel_candidates: Vec::new(),
         }
     }
 

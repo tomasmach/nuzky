@@ -6,6 +6,7 @@ mod engine;
 mod jobs;
 mod library;
 mod preview_server;
+mod reels;
 mod sounds;
 mod store;
 mod style;
@@ -1062,6 +1063,7 @@ pub fn run() {
             agent_panel::agent_send,
             agent_panel::agent_stop,
             transcripts::correct_words,
+            reels::make_reels,
             style::style_view,
             style::style_act,
             style::start_style_learning,
