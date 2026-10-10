@@ -185,6 +185,9 @@ fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
     if let Some(highlight) = &style.highlight {
         color(highlight, "highlight color")?;
     }
+    if let Some(keywords) = &style.keywords {
+        color(&keywords.color, "key word color")?;
+    }
     Ok(())
 }
 
@@ -527,7 +530,7 @@ mod tests {
         let mut project = Project::new("colors");
         project.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         validate(&project).unwrap();
-        for field in 0..5 {
+        for field in 0..6 {
             for (value, valid) in [
                 ("#fff", true),
                 ("#FFAA00", true),
@@ -548,7 +551,11 @@ mod tests {
                     1 => style.color = value.into(),
                     2 => style.stroke_color = value.into(),
                     3 => style.background = Some(value.into()),
-                    _ => style.highlight = Some(value.into()),
+                    4 => style.highlight = Some(value.into()),
+                    _ => {
+                        style.keywords =
+                            Some(nuzky_engine::model::Keywords { color: value.into(), pick: Default::default() })
+                    }
                 }
                 let result = validate(&candidate);
                 assert_eq!(result.is_ok(), valid, "field {field}: {value:?}");
