@@ -288,7 +288,7 @@ fn asset() -> Asset {
     Asset {
         id: "a".into(),
         name: "a".into(),
-        path: "/missing.mov".into(),
+        path: std::env::temp_dir().join("missing.mov").to_string_lossy().into(),
         kind: AssetKind::Video,
         duration_us: 10_000_000,
         width: 1080,

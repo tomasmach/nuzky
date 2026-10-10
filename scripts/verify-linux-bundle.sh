@@ -37,5 +37,10 @@ if grep -q 'not found' "$target/release/onnxruntime-ldd.txt"; then
 fi
 debs=("$target"/release/bundle/deb/*.deb)
 test "${#debs[@]}" -eq 1
-dpkg-deb -c "${debs[0]}" | grep -q './usr/lib/Nuzky/libonnxruntime.so.1$'
+# A regular file, not a link; Tauri writes the deb's paths without a leading ./
+dpkg-deb -c "${debs[0]}" >"$target/release/deb-contents.txt"
+if ! grep -Eq '^-.* (\./)?usr/lib/Nuzky/libonnxruntime\.so\.1$' "$target/release/deb-contents.txt"; then
+  echo 'ONNX Runtime missing from the deb' >&2
+  exit 1
+fi
 stat --printf='%n: %s bytes\n' "${images[0]}" "$binary"

@@ -931,7 +931,7 @@ pub(crate) mod tests {
                 assets: vec![Asset {
                     id: "talk".into(),
                     name: "talk".into(),
-                    path: "/talk.mov".into(),
+                    path: std::env::temp_dir().join("talk.mov").to_string_lossy().into(),
                     kind: AssetKind::Video,
                     duration_us: 10_000_000,
                     width: 1080,
@@ -993,7 +993,7 @@ pub(crate) mod tests {
                 assets: vec![Asset {
                     id: "broll".into(),
                     name: "broll".into(),
-                    path: "/broll.mov".into(),
+                    path: std::env::temp_dir().join("broll.mov").to_string_lossy().into(),
                     kind: AssetKind::Video,
                     duration_us: 6_000_000,
                     width: 1080,
@@ -1056,7 +1056,8 @@ pub(crate) mod tests {
     fn a_take_that_speaks_at_once_leaves_no_sliver_of_the_take_before() {
         let (mut project, mut sources) = fixture();
         let mut next = project.assets[0].clone();
-        (next.id, next.path, next.duration_us) = ("next".into(), "/next.mov".into(), 3_000_000);
+        (next.id, next.path, next.duration_us) =
+            ("next".into(), std::env::temp_dir().join("next.mov").to_string_lossy().into(), 3_000_000);
         project.apply(EditCmd::AddAssets { assets: vec![next] }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "next".into(), start_us: None, track_id: None }).unwrap();
         let word =
@@ -1089,7 +1090,8 @@ pub(crate) mod tests {
             })
             .unwrap();
         let mut next = project.assets[0].clone();
-        (next.id, next.path, next.duration_us) = ("next".into(), "/next.mov".into(), 3_000_000);
+        (next.id, next.path, next.duration_us) =
+            ("next".into(), std::env::temp_dir().join("next.mov").to_string_lossy().into(), 3_000_000);
         project.apply(EditCmd::AddAssets { assets: vec![next] }).unwrap();
         project.apply(EditCmd::AddClip { asset_id: "next".into(), start_us: None, track_id: None }).unwrap();
         let word = |start_us, end_us, text: &str| Word { start_us, end_us, text: text.into(), probability: 1.0 };

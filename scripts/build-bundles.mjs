@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION as ORT_VERSION, fetchOnnxRuntime } from './fetch-onnxruntime.mjs';
@@ -49,6 +49,16 @@ switch (process.platform) {
     for (const name of ['LICENSE.txt', 'LICENSE', 'README.txt']) {
       if (existsSync(path.join(ffmpeg, name))) config.bundle.resources[path.join(ffmpeg, name)] = `licenses/ffmpeg/${name}`;
     }
+    // Tauri drops the drive letter from an absolute resource path, and GitHub's runner keeps these files on C:
+    // and the checkout on D:. Copied beside the build, they are named relative to src-tauri instead.
+    const stage = path.join(target, 'bundle-resources');
+    rmSync(stage, { recursive: true, force: true });
+    config.bundle.resources = Object.fromEntries(Object.entries(config.bundle.resources).map(([from, to]) => {
+      const copy = path.join(stage, to);
+      mkdirSync(path.dirname(copy), { recursive: true });
+      copyFileSync(from, copy);
+      return [path.relative('src-tauri', copy), to];
+    }));
     break;
   }
   default: throw new Error(`Unsupported platform: ${process.platform}`);
