@@ -358,3 +358,33 @@ fn a_blur_transition_leaves_a_picked_colour_as_picked() {
         assert!(corner.iter().all(|&v| v.abs_diff(128) <= 2), "at {t} us the grey is {corner:?}");
     }
 }
+
+#[test]
+fn the_preview_finds_a_chunk_made_after_a_later_one() {
+    if !available() {
+        return;
+    }
+    let dir = dir("matte-later");
+    let cache = dir.join("cache");
+    let _ = std::fs::remove_dir_all(&cache);
+    let path = phone_video(&dir, "phone.mov", 4);
+    let asset = probe(&path, "a".into()).unwrap();
+    let (times, xs) = (pts(&path), square_xs(&path));
+    // A clip of the second half has its chunk made; then the clip grows back to the start.
+    let mut half = project_with(&asset, green());
+    if let ClipContent::Media { source_in_us, .. } = &mut half.tracks[0].clips[0].content {
+        *source_in_us = 2_000_000;
+    }
+    half.tracks[0].clips[0].duration_us = 1_900_000;
+    prepare(&cache, &half);
+    let whole = project_with(&asset, green());
+    let mut preview = Renderer::new().unwrap();
+    preview.use_mattes(cache.clone(), Pending::Original);
+    let early = times.iter().position(|&t| t > 500_000).unwrap();
+    let plain = preview.render(&whole, times[early], W, H, Wait::Exact, false).unwrap();
+    assert!(wrong_pixels(&plain, xs[early]) > 1000, "shown as recorded while its chunk is missing");
+    prepare(&cache, &whole);
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let shown = preview.render(&whole, times[early], W, H, Wait::Exact, false).unwrap();
+    assert_eq!(wrong_pixels(&shown, xs[early]), 0, "the preview shows the chunk once it is made");
+}

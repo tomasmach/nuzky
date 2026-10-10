@@ -477,19 +477,22 @@ impl Mattes {
     /// The matte of the frame of `source` the decoder gave at `t_us`, `SIDE` × `SIDE` white RGBA with the person
     /// in alpha. A frame held across chunks that were never made, as over a long pause in variable frame rate
     /// video, is in the first chunk made after its own.
-    /// A chunk not found made is looked for in the directory again, at most every `LOOK_AGAIN`, or always with `again`.
+    /// A matte not found is looked for in the directory again, at most every `LOOK_AGAIN`, or always with `again`.
     pub(crate) fn alpha(&mut self, source: &str, t_us: i64, again: bool) -> Option<Arc<Vec<u8>>> {
         let key = file_key(source);
-        let own = chunk_of(t_us);
-        let find = |made: &BTreeSet<i64>| {
-            if made.contains(&own) { Some(own) } else { made.range(own + 1..=own + MAX_HELD_CHUNKS).next().copied() }
-        };
-        let mut chunk = find(self.made(&key, false));
-        if chunk.is_none() && (again || self.made.get(&key).is_some_and(|(at, _)| at.elapsed() >= LOOK_AGAIN)) {
-            chunk = find(self.made(&key, true));
+        if let Some(alpha) = self.find(source, &key, t_us, false) {
+            return Some(alpha);
         }
-        let chunk = chunk?;
-        self.read(source, chunk_path(&self.dir, &key, chunk), t_us, chunk != own)
+        let stale = self.made.get(&key).is_some_and(|(at, _)| at.elapsed() >= LOOK_AGAIN);
+        if again || stale { self.find(source, &key, t_us, true) } else { None }
+    }
+
+    /// The matte in the frame's own chunk, or in the first chunk made after it, where a held frame is kept.
+    fn find(&mut self, source: &str, key: &str, t_us: i64, again: bool) -> Option<Arc<Vec<u8>>> {
+        let own = chunk_of(t_us);
+        let made = self.made(key, again);
+        let chunk = if made.contains(&own) { own } else { *made.range(own + 1..=own + MAX_HELD_CHUNKS).next()? };
+        self.read(source, chunk_path(&self.dir, key, chunk), t_us, chunk != own)
     }
 
     /// The matte at `t_us` in one chunk, of exactly that frame when `exact`, else of the last one before it.
