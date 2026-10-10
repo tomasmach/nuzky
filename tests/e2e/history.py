@@ -20,7 +20,16 @@ def menu(r):
 
 
 def choose(r, label):
-    r.s.run(f"{ROWS}.find((row) => row.querySelector('.flex-1').textContent === arguments[0]).click()", label)
+    """Clicks the version. The menu closes when the window resizes, which a resize the flow made can still do
+    late on a loaded machine, and opens slowly there; it is opened again until the row is there."""
+    row = f"{ROWS}.find((row) => row.querySelector('.flex-1').textContent === arguments[0])"
+    for attempt in range(3):
+        if attempt:
+            menu(r)
+        if wait(lambda: r.s.run(f'return !!{row}', label), 10):
+            r.s.run(f'{row}.click()', label)
+            return
+    raise AssertionError(f'{label} is not in the versions menu')
 
 
 def alive(r):
