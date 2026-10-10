@@ -92,3 +92,5 @@ fi
 # ONNX Runtime, which debug builds load from the same deps directory when covers run.
 NUZKY_DEPS="$DEPS" node "$REPO/scripts/fetch-onnxruntime.mjs" >/dev/null
 echo "Dev dependencies ready in $ROOT"
+# A new worktree starts from another worktree's build instead of compiling every dependency again.
+bash "$REPO/scripts/seed-target.sh"

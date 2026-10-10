@@ -1,6 +1,6 @@
 //! Cover frames and subject masks on a real face with the real models. The face is the NASA
 //! interview in scripts/fixtures.sh; run as AGENTS.md says:
-//! `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test -p nuzky-vision -- --ignored`.
+//! `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test --workspace --test vision -- --ignored`.
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 

@@ -7,12 +7,25 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# One gate at a time per machine, whichever checkout it runs in: two at once take longer than one after the
+# other, fail on timing checks and collide on the UI flows' ports. A second gate waits here. The lock sits with
+# the build dependencies, not in XDG_RUNTIME_DIR, which a terminal running the app may have changed.
+mkdir -p "$HOME/.cache/nuzky/deps"
+exec 9>"$HOME/.cache/nuzky/deps/check.lock"
+if ! flock -n 9; then
+  echo "Another scripts/check.sh runs on this machine; this one starts when it ends."
+  flock 9
+fi
+# The time reported at the end leaves out the wait.
+SECONDS=0
+
 step() {
   local name=$1 started=$SECONDS
   shift
   echo
   echo "==> $name"
-  if ! "$@"; then
+  # The steps do not inherit the lock, so a process one of them leaves behind cannot hold it.
+  if ! "$@" 9>&-; then
     echo
     echo "check FAILED at: $name ($((SECONDS - started))s)" >&2
     exit 1
@@ -40,7 +53,9 @@ isolated() {
 without_avx2() (
   # A program that dies under qemu would leave a core dump in the checkout.
   ulimit -c 0
-  cargo build --locked -p nuzky-app -p nuzky-cli || return 1
+  # The same build as scripts/repro.py: every target of the workspace resolves the features `cargo test` does,
+  # so it adds only the app's binary instead of building the Nuzky crates again.
+  cargo build --locked --workspace --all-targets || return 1
   for program in nuzky-app nuzky; do
     # `mcp` without a project reaches main and refuses with INVALID_ARGUMENTS and exit code 1.
     local said
@@ -50,9 +65,30 @@ without_avx2() (
       return 1
     }
   done
+  # Selecting the whole workspace reuses the test build; `-p nuzky-vision` alone resolves other features and
+  # builds the engine and its dependencies a second time. The filters match tests in nuzky-vision only.
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="qemu-x86_64-static -cpu Nehalem" \
-    isolated cargo test --locked -p nuzky-vision --lib -- --include-ignored runtime:: the_face_models
+    isolated cargo test --locked --workspace --lib -- --include-ignored runtime:: the_face_models
 )
+
+# The Rust tests with media and the UI flows spend their time waiting for speech recognition on the GPU, the app
+# and real time, each with about a tenth of the CPU, so they run side by side. The flows' report follows the tests'.
+media_tests_and_flows() {
+  local flows=tmp-test/ui-flows.log tests_failed=0 flows_failed=0
+  python3 scripts/repro.py --all >"$flows" 2>&1 &
+  local pid=$!
+  # A job in the background ignores Ctrl+C, so a stopped gate stops its UI flows too and waits for their cleanup.
+  trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 130' INT
+  trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 143' TERM
+  isolated cargo test --workspace --locked -- --ignored || tests_failed=1
+  wait "$pid" || flows_failed=1
+  trap - INT TERM
+  echo
+  cat "$flows"
+  [ "$tests_failed" = 0 ] || echo "Rust tests with media and models FAILED" >&2
+  [ "$flows_failed" = 0 ] || echo "UI flows FAILED" >&2
+  [ "$tests_failed$flows_failed" = 00 ]
+}
 
 step "Own node_modules" own_node_modules
 step "npm install from the lockfile" npm ci --no-audit --no-fund
@@ -64,11 +100,10 @@ step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
 step "ONNX Runtime" node scripts/fetch-onnxruntime.mjs
 step "Rust tests" isolated cargo test --workspace --locked
 step "Test media and models" scripts/fixtures.sh
-step "Rust tests with media and models" isolated cargo test --workspace --locked -- --ignored
 step "Starts and finds faces without AVX2" without_avx2
 step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
-step "UI flows" python3 scripts/repro.py --all
+step "Rust tests with media and models, and the UI flows" media_tests_and_flows
 
 echo
 echo "check passed in $((SECONDS / 60))m $((SECONDS % 60))s"

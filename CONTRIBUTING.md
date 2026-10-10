@@ -38,8 +38,8 @@ cargo install --locked cargo-deny@0.20.2
 | What | Command |
 | --- | --- |
 | Frontend lint and build | `npm run lint` and `npm run build` |
-| One Rust crate | `cargo test -p <crate> <name>` |
-| Tests that need media and models | `scripts/fixtures.sh`, then `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test -p <crate> -- --ignored` |
+| Rust tests by name | `cargo test --workspace <name>` (`-p <crate>` builds most dependencies again with other features) |
+| Tests that need media and models | `scripts/fixtures.sh`, then `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test --workspace <name> -- --ignored` |
 | A UI flow in the real app | `python3 scripts/repro.py <flow>` (`--list` shows them) |
 | Everything, before a merge | `scripts/check.sh` (tens of minutes) |
 

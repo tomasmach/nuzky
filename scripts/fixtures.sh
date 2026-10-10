@@ -2,28 +2,54 @@
 # Creates the media and models that `cargo test -- --ignored` and scripts/repro.py read from tmp-test/.
 # Media are synthetic (FFmpeg test patterns, espeak-ng speech) or public-domain recordings pinned by SHA-256;
 # nothing is committed.
-# Models are downloaded once and checked against the SHA-256 the app pins in src-tauri/src/jobs.rs.
-# Existing files are kept; delete one to create it again.
+# Models are downloaded and media made once per machine, in ~/.cache/nuzky/deps/fixtures (or $NUZKY_DEPS/fixtures),
+# and every checkout takes a copy-on-write clone. Models are checked against the SHA-256 the app pins in
+# src-tauri/src/jobs.rs. Media are made again when this script, the reel takes or the FFmpeg or espeak-ng version
+# change. Otherwise existing files are kept; delete one to create it again.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 out=tmp-test
 models=$out/xdg/data/nuzky/models
-mkdir -p "$out/engine-evidence" "$models"
+shared=${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}/fixtures
+mkdir -p "$out/engine-evidence" "$models" "$shared"
+# An interrupted run leaves none of its temporary files behind.
+trap 'find "$out" "$shared" \( -name ".part-$$-*" -o -name "*.part.$$" \) -delete 2>/dev/null' EXIT
 for tool in ffmpeg espeak-ng curl sha256sum; do
   command -v "$tool" >/dev/null || { echo "fixtures: $tool is required" >&2; exit 1; }
 done
 
+# A clone shares disk blocks until one side changes; a hard link where the file system cannot clone.
+# Placed under a temporary name and renamed, so an interrupted copy is never taken for a whole file and a hard
+# link never writes through into the shared copy.
+place() {
+  local part=$2.part.$$
+  mkdir -p "$(dirname "$2")"
+  rm -f "$part"
+  cp --reflink=always "$1" "$part" 2>/dev/null || ln "$1" "$part" 2>/dev/null || cp "$1" "$part"
+  mv -f "$part" "$2"
+}
+
+takes=tests/e2e/reel_takes.tsv
+key=$({ cat scripts/fixtures.sh "$takes"; ffmpeg -version | head -1; espeak-ng --version; } | sha256sum | cut -c1-16)
+made=$shared/media-$key
+current=$([ "$(cat "$out/.media-key" 2>/dev/null)" = "$key" ] && echo yes || echo no)
 # Writes to a temporary name next to the target, so an interrupted run leaves no half file behind.
 media() {
-  local file=$out/$1
+  local file=$out/$1 cached=$made/$1
   shift
-  [ -s "$file" ] && return
+  [ "$current" = yes ] && [ -s "$file" ] && return
+  if [ -s "$cached" ]; then
+    place "$cached" "$file"
+    return
+  fi
   echo "> $file"
+  # Its own name, so two runs in one checkout never write into the same file.
   local part
-  part=$(dirname "$file")/.part-$(basename "$file")
+  part=$(dirname "$file")/.part-$$-$(basename "$file")
   "$@" "$part"
   mv "$part" "$file"
+  place "$file" "$cached"
 }
 ff() { ffmpeg -v error -y "$@"; }
 
@@ -56,7 +82,6 @@ media engine-evidence/identity.png ff -f lavfi -i testsrc2=s=540x960 -frames:v 1
 # The Czech talking head of the reel flow, spoken from tests/e2e/reel_takes.tsv: one file per take, each
 # phrase followed by its pause. Quiet pink room tone, so pauses are not digital silence, and speech around
 # -25 LUFS, so the export has to raise it to the Reels level. A changed list makes the takes again.
-takes=tests/e2e/reel_takes.tsv
 reel_take() {
   local take=$1 colour=$2 out=$3 dir n=0 inputs=()
   dir=$(mktemp -d)
@@ -76,9 +101,6 @@ reel_take() {
     -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -shortest "$out"
   rm -rf "$dir"
 }
-for take in 1 2 3; do
-  [ "$takes" -nt "$out/reel-$take.mp4" ] && rm -f "$out/reel-$take.mp4"
-done
 media reel-1.mp4 reel_take 1 0x2b3a4a
 media reel-2.mp4 reel_take 2 0x3a2b4a
 media reel-3.mp4 reel_take 3 0x2b4a3a
@@ -108,13 +130,25 @@ media voice.mp4 noisy_talk
 
 # Compares digests directly: macOS ships a BSD sha256sum without GNU's --check from stdin.
 sha256_is() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
+# Every download is kept once per machine under its SHA-256, so a new checkout clones the gigabytes of models
+# instead of fetching them again. fetch <file> <sha256> <curl arguments ending with the URL>
+fetch() {
+  local file=$1 sha=$2 stored=$shared/$2
+  shift 2
+  if ! { [ -f "$stored" ] && sha256_is "$stored" "$sha"; }; then
+    local part
+    part=$(mktemp "$stored.part.XXXXXX")
+    curl --fail --location --silent --show-error --output "$part" "$@"
+    sha256_is "$part" "$sha" || { rm -f "$part"; echo "fixtures: $file does not match its SHA-256" >&2; exit 1; }
+    mv "$part" "$stored"
+  fi
+  place "$stored" "$file"
+}
 model() {
   local file=$models/$1 sha=$2 url=$3
   if [ -f "$file" ] && sha256_is "$file" "$sha"; then return; fi
   echo "> $file"
-  curl --fail --location --silent --show-error --output "$file.part" "$url"
-  sha256_is "$file.part" "$sha" || { echo "fixtures: $file.part does not match its SHA-256" >&2; exit 1; }
-  mv "$file.part" "$file"
+  fetch "$file" "$sha" "$url"
 }
 model ggml-small.bin 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
@@ -147,10 +181,7 @@ model birefnet-lite.onnx 8fd304fd859a8dc999a4a93f1fb58f4c9a6bf575de64d95c2a78027
 krysar() {
   local mp3=$out/.krysar-02.mp3 sha=2ed724c0d782029b4b5219fd86c52682ac33acda1ca6dda3f0ebb8a95f88659b
   if ! { [ -f "$mp3" ] && sha256_is "$mp3" "$sha"; }; then
-    curl --fail --location --silent --show-error --output "$mp3.part" \
-      https://archive.org/download/krysar_2007_librivox/krysar_02_dyk_64kb.mp3
-    sha256_is "$mp3.part" "$sha" || { echo "fixtures: $mp3.part does not match its SHA-256" >&2; exit 1; }
-    mv "$mp3.part" "$mp3"
+    fetch "$mp3" "$sha" https://archive.org/download/krysar_2007_librivox/krysar_02_dyk_64kb.mp3
   fi
   ff -ss 97.5 -t 25.1 -i "$mp3" -ac 1 -c:a pcm_s16le -f wav "$1"
 }
@@ -167,10 +198,7 @@ epps() {
   local mp4=$out/.epps-2019-10-04.mp4 sha=0ceeb3bc5a834bbbc470b876ef959cf364da57d36a34b2b288704914202af105
   local id=iss061m2627771232_Live_Interviews_Jeanette_Epps_191004
   if ! { [ -f "$mp4" ] && sha256_is "$mp4" "$sha"; }; then
-    curl --fail --location --silent --show-error --range 0-10485759 --max-filesize 10485760 \
-      --output "$mp4.part" "https://images-assets.nasa.gov/video/$id/$id~large.mp4"
-    sha256_is "$mp4.part" "$sha" || { echo "fixtures: $mp4.part does not match its SHA-256" >&2; exit 1; }
-    mv "$mp4.part" "$mp4"
+    fetch "$mp4" "$sha" --range 0-10485759 --max-filesize 10485760 "https://images-assets.nasa.gov/video/$id/$id~large.mp4"
   fi
   ff -ss "$1" -i "$mp4" -frames:v 1 -vf "crop=396:704:447:8,scale=1080:1920:flags=lanczos,format=rgb24" "$2"
 }
@@ -185,3 +213,4 @@ face_thumb() {
     -c:v libx264 -preset veryfast -crf 18 -r 30 -force_key_frames 0,3,6,9 -an "$1"
 }
 media face-thumb.mp4 face_thumb
+echo "$key" >"$out/.media-key"

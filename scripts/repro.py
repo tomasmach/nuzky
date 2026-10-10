@@ -12,9 +12,10 @@ joins their running Nuzky. It runs inside headless gamescope with D-Bus switched
 dialog or notification reaches the desktop. Media and models come from scripts/fixtures.sh.
 
 Needs gamescope, WebKitWebDriver, Pillow and python-xlib. Vite takes port 1420 (the app's dev URL) and
-WebKitWebDriver 4444. A busy port belongs to another session, so the run stops instead of touching it.
+WebKitWebDriver 4444. Runs on one machine take turns: a second one waits for the first. A port that something
+else holds, such as a dev server, stops the run instead of touching it.
 """
-import importlib, json, os, shutil, signal, subprocess, sys
+import fcntl, importlib, json, os, shutil, signal, subprocess, sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -75,13 +76,23 @@ def main(args):
         finally:
             stop(vite)
         return 0
+    # Another session's run holds the ports until it ends; failing on them would waste a whole gate.
+    # Kept with the build dependencies, since a terminal running the app may have its own XDG_RUNTIME_DIR.
+    locks = Path.home() / '.cache/nuzky/deps'
+    locks.mkdir(parents=True, exist_ok=True)
+    turn = open(locks / 'repro.lock', 'w')
+    try:
+        fcntl.flock(turn, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('Another UI run uses the app on this machine; this one starts when it ends.', flush=True)
+        fcntl.flock(turn, fcntl.LOCK_EX)
     problems = preflight(names)
     if problems:
         print('repro cannot run:\n  ' + '\n  '.join(problems), file=sys.stderr)
         return 1
-    # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too.
-    subprocess.run(['cargo', 'build', '--locked', '-p', 'nuzky-app', '-p', 'nuzky-cli', '-p', 'nuzky-analysis'], cwd=ROOT,
-                   check=True)
+    # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too. Every target
+    # of the workspace resolves the features `cargo test` does, so this adds only the app's binary to its build.
+    subprocess.run(['cargo', 'build', '--locked', '--workspace', '--all-targets'], cwd=ROOT, check=True)
     # The debug app opens ONNX Runtime from the build dependencies when covers run.
     subprocess.run(['node', 'scripts/fetch-onnxruntime.mjs'], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     for name in names:

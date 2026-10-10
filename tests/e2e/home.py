@@ -193,8 +193,9 @@ def home(r):
     r.shot('trash-toast')
     r.s.run("[...document.querySelectorAll('[data-toast]')].find((t) => t.textContent.includes('to the Trash')).querySelector('button').click()")
     r.check('Undo brings it back', wait(lambda: card(r, 'Croatia day two copy'), 5))
-    # Moved again 20 s later: the first move's timer must not take this one.
-    time.sleep(20)
+    # Moved again 8 s later: the first move's timer must not take this one. The check 33 s after the first move
+    # falls 3 s after that timer and 5 s before the second one.
+    time.sleep(8)
     r.s.run("document.querySelector(`[data-path=\"${CSS.escape(arguments[0])}\"]`).focus()", copy['path'])
     r.key('Delete')
     moved = time.time()
