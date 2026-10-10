@@ -116,8 +116,8 @@ export function MotionSection({ clip }: { clip: Clip }) {
           </PresetTile>
         ))}
       </div>
-      <div className="flex flex-col gap-2">
-        <span className="text-[12px] text-muted">Strength</span>
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[12px] leading-4 text-muted">Strength</span>
         <Segmented
           label="Motion strength"
           disabled={!motion}
@@ -127,8 +127,8 @@ export function MotionSection({ clip }: { clip: Clip }) {
           options={STRENGTHS.map((s) => ({ id: s, label: `${Math.round(s * 100)}%`, title: `Zoom ${Math.round(s * 100)}%` }))}
         />
       </div>
-      <div className="flex flex-col gap-2">
-        <span className="text-[12px] text-muted">Range</span>
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[12px] leading-4 text-muted">Range</span>
         <Segmented
           label="Motion range"
           disabled={!motion}
