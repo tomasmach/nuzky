@@ -46,3 +46,43 @@ pub async fn make_reels(
     .await
     .map_err(crate::err)?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nuzky_engine::edit::EditCmd;
+    use nuzky_engine::model::ReelStatus;
+    use nuzky_mcp::reels::ReelProposal;
+    use nuzky_session::EndAction;
+
+    /// The app makes a reel as agents do, as one undo step, and never while an agent's run holds the project.
+    #[test]
+    fn the_app_makes_a_reel_as_one_undo_and_never_during_a_run() {
+        let (dir, host) = crate::transcripts::tests::fixture();
+        let state = host.session.state().unwrap();
+        let derived = transcript::derive(&state.project, &host.transcripts).unwrap();
+        let proposal = ReelProposal { from: 2, to: 4, title: "Middle".into(), why: String::new(), score: 0.5 };
+        let candidates =
+            reels::plan(&state.project, &derived, &[proposal], &[], reels::DEFAULT_MAX_DURATION_US).unwrap();
+        let proposed = EditCmd::SetReelCandidates { candidates: candidates.clone() };
+        host.session.edit(vec![proposed], None, Expect::default()).unwrap();
+        let ids = vec![candidates[0].id.clone()];
+        let reel = std::fs::canonicalize(&dir).unwrap().join("project-reel-1.nuzky");
+
+        let run = host.session.begin_run("Agent".into()).unwrap();
+        let refused = make(&host, &ids, Framing::Crop).unwrap_err().to_string();
+        assert!(refused.starts_with("RUN_ACTIVE"), "{refused}");
+        assert!(!reel.exists(), "a reel the project does not name was left behind");
+        host.session.end_run(&run.run_id, EndAction::Keep).unwrap();
+
+        let made = make(&host, &ids, Framing::Crop).unwrap();
+        assert_eq!(made[0].path, reel);
+        let status = |host: &Host| host.session.state().unwrap().project.reel_candidates[0].status;
+        assert_eq!(status(&host), ReelStatus::Made);
+        host.session.undo().unwrap();
+        assert_eq!(status(&host), ReelStatus::Proposed);
+        assert!(reel.is_file());
+        drop(host);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

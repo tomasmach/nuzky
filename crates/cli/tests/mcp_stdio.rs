@@ -49,9 +49,14 @@ impl Client {
         Self::spawn(dir, write, None)
     }
     fn spawn(dir: PathBuf, write: bool, style: Option<Option<&str>>) -> Self {
+        let project = dir.join("project.nuzky");
+        Self::spawn_at(dir, &project, write, style)
+    }
+    /// An agent on another project of the same folder, sharing the cache and data directory.
+    fn spawn_at(dir: PathBuf, project: &std::path::Path, write: bool, style: Option<Option<&str>>) -> Self {
         let binary = env!("CARGO_BIN_EXE_nuzky");
         let mut command = Command::new(binary);
-        command.arg("mcp").arg("--project").arg(dir.join("project.nuzky")).arg("--cache").arg(dir.join("cache"));
+        command.arg("mcp").arg("--project").arg(project).arg("--cache").arg(dir.join("cache"));
         if write {
             command.arg("--allow-write");
         }
@@ -187,7 +192,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 29);
+    assert_eq!(tools.len(), 31);
     let search = tools.iter().find(|t| t["name"] == "search_sounds").unwrap();
     assert_eq!(search["annotations"]["openWorldHint"], true);
     assert_eq!(search["annotations"]["readOnlyHint"], true);
@@ -1491,4 +1496,133 @@ fn transcript_sentences_and_pages_preserve_long_talk_over_stdio() {
     assert!(c.error("get_transcript", json!({"limit": 0})).contains("INVALID_ARGUMENTS"));
     assert!(c.error("get_transcript", json!({"limit": 501})).contains("INVALID_ARGUMENTS"));
     assert!(c.error("get_transcript", json!({"cursor": "370.stale"})).contains("SPEECH_CHANGED"));
+}
+
+/// A long talk becomes reels: proposals out of bounds are refused, three picked ones become projects beside it
+/// with only their words on a 9:16 canvas, the talk and its video stay as they were, and undo takes it all back.
+#[cfg(target_os = "linux")]
+#[test]
+fn reels_are_proposed_and_made_beside_a_long_talk_over_stdio() {
+    let mut c = Client::start(true, None, Some(None));
+    let words = long_talk(&mut c);
+    let at = |i: u64, field: &str| words[i as usize][field].as_i64().unwrap();
+    let transcript = c.call("get_transcript", json!({"detail": "sentences"}));
+    let key = transcript["transcript_key"].clone();
+    let sentences = transcript["sentences"].as_array().unwrap().clone();
+    let first = |k: usize| sentences[k]["from"].as_u64().unwrap();
+    let last = |k: usize| sentences[k]["to"].as_u64().unwrap();
+    let reel = |a: usize, b: usize, title: &str| json!({"from": first(a), "to": last(b), "title": title, "why": "One idea and its payoff.", "score": 0.7});
+
+    let run = c.call("begin_run", json!({"label": "Reels"}))["run_id"].clone();
+    let propose = |candidates: Value| json!({"run_id": run, "transcript_key": key, "candidates": candidates});
+    for (candidates, code) in [
+        (json!([reel(0, 19, "Twenty sentences")]), "REEL_TOO_LONG"),
+        (json!([reel(0, 4, "One"), reel(4, 8, "Two")]), "REEL_OVERLAP"),
+        (
+            json!([{"from": 2190, "to": 2209, "title": "Past the end", "why": "", "score": 0.5}]),
+            "REEL_OUTSIDE_TRANSCRIPT",
+        ),
+        (
+            json!([{"from": first(2), "to": last(6) - 1, "title": "Mid sentence", "why": "", "score": 0.5}]),
+            "REEL_BOUNDARY",
+        ),
+    ] {
+        let error = c.error("propose_reels", propose(candidates));
+        assert!(error.contains(code), "{code}: {error}");
+    }
+    assert_eq!(c.call("get_state", json!({}))["reel_candidates"], json!([]));
+    let picks = [(2, 6, "Sleep"), (40, 45, "Money"), (100, 113, "Fear")];
+    let mut candidates: Vec<Value> = picks.iter().map(|&(a, b, t)| reel(a, b, t)).collect();
+    candidates.push(reel(150, 152, "Habits"));
+    let proposed = c.call("propose_reels", propose(json!(candidates)))["candidates"].as_array().unwrap().clone();
+    assert_eq!(proposed.len(), 4);
+    for (candidate, &(a, b, title)) in proposed.iter().zip(&picks) {
+        let (from, to) = (first(a), last(b));
+        assert_eq!((candidate["title"].as_str(), candidate["status"].as_str()), (Some(title), Some("proposed")));
+        assert_eq!(
+            (candidate["startUs"].as_i64(), candidate["endUs"].as_i64()),
+            (Some(at(from, "start_us")), Some(at(to, "end_us")))
+        );
+        assert_eq!(candidate["hook"], sentences[a]["text"]);
+        // 80 ms before the first word, 120 ms after the last, and the 700 ms pauses between sentences down to 300 ms.
+        let expected = at(to, "end_us") - at(from, "start_us") + 200_000 - (b - a) as i64 * 400_000;
+        assert!((candidate["durationUs"].as_i64().unwrap() - expected).abs() <= 1_000, "{candidate} {expected}");
+    }
+    assert!(proposed[2]["durationUs"].as_i64().unwrap() <= 60_000_000);
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+
+    let source_path = c.dir.join("project.nuzky");
+    let video = c.dir.join("long-talk.mp4");
+    let source: Project = serde_json::from_slice(&std::fs::read(&source_path).unwrap()).unwrap();
+    let video_bytes = std::fs::read(&video).unwrap();
+    let run2 = c.call("begin_run", json!({"label": "Make reels"}))["run_id"].clone();
+    let ids: Vec<Value> = proposed[..3].iter().map(|c| c["id"].clone()).collect();
+    let args = json!({"run_id": run2, "request_id": "make", "ids": ids});
+    let made = c.call("make_reels", args.clone());
+    // A retry answers the same and writes nothing new.
+    assert_eq!(c.call("make_reels", args), made);
+    let reels = made["reels"].as_array().unwrap();
+    assert_eq!(reels.len(), 3);
+    let blurred = c.call("make_reels", json!({"run_id": run2, "ids": [proposed[3]["id"]], "canvas": "blur"}));
+    assert!(c.error("make_reels", json!({"run_id": run2, "ids": [ids[0]]})).contains("REEL_MADE"));
+    c.call("end_run", json!({"run_id": run2, "action": "keep"}));
+    let names: Vec<_> = std::fs::read_dir(&c.dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.ends_with(".nuzky"))
+        .collect();
+    assert_eq!(names.len(), 5, "{names:?}");
+
+    for (i, made) in reels.iter().chain(blurred["reels"].as_array().unwrap()).enumerate() {
+        let path = PathBuf::from(made["path"].as_str().unwrap());
+        assert_eq!(path, c.dir.join(format!("project-reel-{}.nuzky", i + 1)));
+        let reel: Project = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        nuzky_session::validate(&reel).unwrap();
+        assert_eq!((reel.canvas.width, reel.canvas.height), (1080, 1920));
+        assert_eq!(reel.duration_us(), proposed[i]["durationUs"].as_i64().unwrap());
+        assert_eq!(made["durationUs"], proposed[i]["durationUs"]);
+        assert_eq!(reel.name, proposed[i]["title"].as_str().unwrap());
+        assert_eq!(reel.assets, source.assets);
+        assert!(reel.reel_candidates.is_empty());
+        let nuzky_engine::model::ClipContent::Media { transform, .. } = &reel.tracks[0].clips[0].content else {
+            panic!()
+        };
+        // Crop fills the frame with the middle of the 16:9 picture; blur fits the whole of it.
+        let (scale, blur) = if i < 3 { ((1920.0 / 108.0) / (1080.0 / 192.0), 0.0) } else { (1.0, 0.5) };
+        assert!((transform.scale - scale).abs() < 1e-4 && reel.canvas.background_blur == blur, "{transform:?}");
+    }
+    // The reel holds exactly its sentences, for an agent working in it.
+    let mut first_reel =
+        Client::spawn_at(c.dir.clone(), &PathBuf::from(reels[0]["path"].as_str().unwrap()), false, Some(None));
+    let inside = first_reel.call("get_transcript", json!({"detail": "sentences"}));
+    assert_eq!(
+        inside["sentences"].as_array().unwrap().iter().map(|s| &s["text"]).collect::<Vec<_>>(),
+        sentences[2..=6].iter().map(|s| &s["text"]).collect::<Vec<_>>()
+    );
+    first_reel.finish();
+    first_reel.dir = PathBuf::new();
+
+    // The talk changed only in which candidates are made and where.
+    let after: Project = serde_json::from_slice(&std::fs::read(&source_path).unwrap()).unwrap();
+    let mut expected = source.clone();
+    for (candidate, made) in
+        expected.reel_candidates.iter_mut().zip(reels.iter().chain(blurred["reels"].as_array().unwrap()))
+    {
+        assert_eq!(candidate.id, made["id"].as_str().unwrap());
+        candidate.status = nuzky_engine::model::ReelStatus::Made;
+        candidate.project_path = Some(made["path"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(after, expected);
+    assert!(std::fs::read(&video).unwrap() == video_bytes, "the talk's video changed");
+
+    // Undo takes the made marks back, then the proposals; the reels' projects stay on disk.
+    c.call("undo_run", json!({"run_id": run2}));
+    assert_eq!(
+        serde_json::to_value(&c.call("get_state", json!({}))["reel_candidates"]).unwrap(),
+        json!(source.reel_candidates)
+    );
+    c.call("undo_run", json!({"run_id": run}));
+    assert_eq!(c.call("get_state", json!({}))["reel_candidates"], json!([]));
+    assert!(c.dir.join("project-reel-3.nuzky").is_file());
+    c.finish();
 }
