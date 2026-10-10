@@ -36,52 +36,80 @@ impl Quality {
     }
 }
 
-/// A platform's delivery format, shared by the export dialog, MCP and the CLI.
+/// A platform's delivery format, shared by the export dialog, MCP and the CLI. Every preset writes
+/// H.264 High and AAC 48 kHz stereo with the sound levelled to its loudness.
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Delivery {
-    /// Instagram Reels and TikTok: 1080x1920 at 30 fps, H.264 High, AAC 48 kHz stereo, loudness
-    /// -14 LUFS with true peak at most -1 dBTP. Needs a 9:16 canvas.
+    /// Instagram Reels and TikTok: 1080x1920 at 30 fps.
     Reels,
+    /// YouTube Shorts: 1080x1920 at the project frame rate.
+    Shorts,
+    /// YouTube: 1920x1080 at the project frame rate.
+    #[serde(rename = "youtube_1080p")]
+    Youtube1080p,
+    /// YouTube: 3840x2160 at the project frame rate.
+    #[serde(rename = "youtube_4k")]
+    Youtube4k,
+    /// Instagram feed: 1080x1350 at 30 fps.
+    InstagramFeed,
+    /// A square feed post: 1080x1080 at 30 fps.
+    Square,
 }
 
 impl Delivery {
+    pub const ALL: [Self; 6] =
+        [Self::Reels, Self::Shorts, Self::Youtube1080p, Self::Youtube4k, Self::InstagramFeed, Self::Square];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Reels => "Reels & TikTok",
+            Self::Shorts => "YouTube Shorts",
+            Self::Youtube1080p => "YouTube 1080p",
+            Self::Youtube4k => "YouTube 4K",
+            Self::InstagramFeed => "Instagram feed",
+            Self::Square => "Square",
         }
     }
 
     /// Short side in pixels.
     pub fn resolution(self) -> u32 {
         match self {
-            Self::Reels => 1080,
+            Self::Youtube4k => 2160,
+            _ => 1080,
         }
     }
 
-    pub fn fps(self) -> u32 {
+    /// `None` keeps the project frame rate, or the one asked for, up to `MAX_DELIVERY_FPS`:
+    /// YouTube wants a video at the rate it was shot. Instagram plays everything at 30.
+    pub fn fps(self) -> Option<u32> {
         match self {
-            Self::Reels => 30,
+            Self::Reels | Self::InstagramFeed | Self::Square => Some(30),
+            Self::Shorts | Self::Youtube1080p | Self::Youtube4k => None,
         }
     }
 
     /// The canvas width to height ratio the preset is made for.
     pub fn aspect(self) -> (u32, u32) {
         match self {
-            Self::Reels => (9, 16),
+            Self::Reels | Self::Shorts => (9, 16),
+            Self::Youtube1080p | Self::Youtube4k => (16, 9),
+            Self::InstagramFeed => (4, 5),
+            Self::Square => (1, 1),
         }
     }
 
-    /// Integrated loudness of the file in LUFS. Its true peak stays under -1 dBTP, which
-    /// `LIMITER_CEILING_DB` keeps for every preset.
+    /// Integrated loudness of the file in LUFS, where YouTube, Instagram and TikTok all normalise
+    /// playback. Its true peak stays under -1 dBTP, which `LIMITER_CEILING_DB` keeps for every preset.
     pub fn loudness(self) -> f64 {
-        match self {
-            Self::Reels => -14.0,
-        }
+        -14.0
     }
 }
+
+/// The most frames per second a delivery preset writes; YouTube takes no more.
+pub const MAX_DELIVERY_FPS: u32 = 60;
 
 #[derive(Clone, Debug)]
 pub struct ExportOptions {
@@ -249,13 +277,26 @@ pub fn check_options(project: &Project, options: &ExportOptions) -> Result<()> {
             ratio(w, h)
         );
     }
-    let fixed = [("resolution", options.resolution, delivery.resolution()), ("fps", options.fps, delivery.fps())];
+    let fixed = [("resolution", options.resolution, Some(delivery.resolution())), ("fps", options.fps, delivery.fps())];
     for (name, given, wanted) in fixed {
-        if given.is_some_and(|given| given != wanted) {
+        if let (Some(given), Some(wanted)) = (given, wanted)
+            && given != wanted
+        {
             bail!("{} exports at {name} {wanted}; leave {name} out or set it to {wanted}", delivery.label());
         }
     }
+    let fps = export_fps(project, options);
+    if fps > MAX_DELIVERY_FPS {
+        bail!(
+            "{} takes at most {MAX_DELIVERY_FPS} fps and this export is {fps} fps. Set fps to {MAX_DELIVERY_FPS} or less.",
+            delivery.label()
+        );
+    }
     Ok(())
+}
+
+fn export_fps(project: &Project, options: &ExportOptions) -> u32 {
+    options.fps.or(options.delivery.and_then(Delivery::fps)).unwrap_or(project.canvas.fps)
 }
 
 fn ratio(w: u32, h: u32) -> String {
@@ -362,7 +403,7 @@ fn encode(
     duration: i64,
 ) -> Result<()> {
     let delivery = options.delivery;
-    let fps = options.fps.or(delivery.map(Delivery::fps)).unwrap_or(project.canvas.fps);
+    let fps = export_fps(project, options);
     if fps == 0 || fps > 240 {
         bail!("Export frame rate must be between 1 and 240");
     }
