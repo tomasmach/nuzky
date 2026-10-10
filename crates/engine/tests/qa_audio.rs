@@ -421,3 +421,118 @@ fn music_ducks_under_speech_and_comes_back_in_the_pause() {
         assert!((level - pause + 12.0).abs() < 1.0, "the exported music is {:.2} dB under speech", level - pause);
     }
 }
+
+/// How far one channel of 48 kHz stereo strays from the steadiest `hz` tone in each 20 ms from `at` to
+/// `to` seconds: the largest error left after fitting a sine, against the level of the sound.
+fn tone_error(samples: &[f32], hz: f64, at: f64, to: f64) -> f64 {
+    let window = 960;
+    let mut worst = 0.0f64;
+    for from in ((at * 48_000.0) as usize..(to * 48_000.0) as usize - window).step_by(window) {
+        let (mut ss, mut sc, mut cc, mut ys, mut yc, mut yy) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        for i in from..from + window {
+            let phase = std::f64::consts::TAU * hz * i as f64 / 48_000.0;
+            let (s, c, y) = (phase.sin(), phase.cos(), samples[i * 2] as f64);
+            (ss, sc, cc, ys, yc, yy) = (ss + s * s, sc + s * c, cc + c * c, ys + y * s, yc + y * c, yy + y * y);
+        }
+        let det = ss * cc - sc * sc;
+        let (a, b) = ((ys * cc - yc * sc) / det, (yc * ss - ys * sc) / det);
+        let fitted = a * ys + b * yc;
+        worst = worst.max(((yy - fitted).max(0.0) / yy.max(1e-12)).sqrt());
+    }
+    worst
+}
+
+/// A 440 Hz tone at 1.25x with Keep pitch still sounds at 440 Hz, plays 4 s of source in 3.2 s, holds its level
+/// across the pieces of the stretch and across a split, mixes the same in playback-sized buffers as in one go,
+/// and exports so. Without Keep pitch it rises to 550 Hz as it always did.
+#[test]
+fn speed_keeps_the_pitch_and_the_length() {
+    use nuzky_engine::audio::Mixer;
+    use nuzky_engine::edit::EditCmd;
+    use nuzky_engine::export::{ExportOptions, export};
+    use std::sync::atomic::AtomicBool;
+    if !available() {
+        return;
+    }
+    let d = dir("keep-pitch");
+    let source = d.join("tone.mkv");
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x2b3a4a:s=108x192:r=30:d=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "aevalsrc=0.25*sin(2*PI*440*t)|0.25*sin(2*PI*440*t):s=48000:d=4",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "pcm_f32le",
+        ],
+        &source,
+    );
+    let mut p = project(&source, 4_000_000);
+    let cache = d.join("cache");
+    ensure_pcm(&cache, &p.assets[0], |_| Ok(())).unwrap();
+    let speed = serde_json::json!({"type": "updateClip", "clipId": "qa-clip", "speed": 1.25});
+    p.apply(serde_json::from_value::<EditCmd>(speed).unwrap()).unwrap();
+    let ClipContent::Media { keep_pitch, .. } = p.tracks[0].clips[0].content else { unreachable!() };
+    assert!(keep_pitch, "moving the clip off 1x does not turn Keep pitch on");
+    assert_eq!(p.tracks[0].clips[0].duration_us, 3_200_000);
+
+    let mix = |p: &Project, chunk: usize| {
+        let mut out = vec![0.0; 4 * 48_000 * CHANNELS];
+        let mut mixer = Mixer::new(cache.clone());
+        for (index, part) in out.chunks_mut(chunk * CHANNELS).enumerate() {
+            mixer.mix(p, (index * chunk) as i64, part);
+        }
+        out
+    };
+    let rms = |s: &[f32], at: f64, to: f64| {
+        let part = &s[(at * 48_000.0) as usize * 2..(to * 48_000.0) as usize * 2];
+        (part.iter().map(|x| x * x).sum::<f32>() / part.len() as f32).sqrt()
+    };
+    let started = std::time::Instant::now();
+    let kept = mix(&p, 4 * 48_000);
+    eprintln!("QA keep pitch: 3.2 s stretched in {:?}", started.elapsed());
+    assert!(mix(&p, 1024) == kept, "playback-sized buffers mix differently from one buffer");
+    let (at_440, at_550) = (tone_db(&kept, 440.0, 1.0, 1.0), tone_db(&kept, 550.0, 1.0, 1.0));
+    let error = tone_error(&kept, 440.0, 0.05, 3.15);
+    let (level, after) = (rms(&kept, 0.05, 3.15), rms(&kept, 3.21, 4.0));
+    eprintln!("QA keep pitch: 440 Hz {at_440:.2} dBFS, 550 Hz {at_550:.2} dBFS, error {error:.4}, level {level:.4}");
+    assert!((at_440 + 12.04).abs() < 0.3 && at_550 < -50.0, "the tone moved from 440 Hz");
+    assert!(error < 0.03, "the stretched tone strays {error:.4} from a steady sine");
+    assert!((level - 0.25 / 2f32.sqrt()).abs() < 0.004 && after < 1e-4, "the sound is not 3.2 s long at its level");
+
+    let split = serde_json::json!({"type": "splitClip", "clipId": "qa-clip", "atUs": 1_234_567});
+    let mut halves = p.clone();
+    halves.apply(serde_json::from_value::<EditCmd>(split).unwrap()).unwrap();
+    let joined = mix(&halves, 1024);
+    let step = joined.iter().zip(&kept).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(step < 1e-4, "a split changes the stretched sound by {step}");
+
+    let out = d.join("kept.mp4");
+    let options = ExportOptions { replace_existing: true, ..ExportOptions::default() };
+    export(&p, &cache, &out, &options, &AtomicBool::new(false), |_| {}).unwrap();
+    let decoded = run(Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&out)
+        .args(["-vn", "-f", "f32le", "-ac", "2", "-ar", "48000", "-"]))
+    .stdout;
+    let decoded: Vec<f32> = decoded.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect();
+    let length = decoded.len() as f64 / 2.0 / 48_000.0;
+    let (at_440, at_550) = (tone_db(&decoded, 440.0, 1.0, 1.0), tone_db(&decoded, 550.0, 1.0, 1.0));
+    eprintln!("QA keep pitch export: {length:.3} s, 440 Hz {at_440:.2} dBFS, 550 Hz {at_550:.2} dBFS");
+    assert!((length - 3.2).abs() < 0.05, "the export is {length:.3} s long");
+    assert!((at_440 + 12.04).abs() < 0.5 && at_550 < -40.0, "the exported tone moved from 440 Hz");
+
+    let ClipContent::Media { keep_pitch, .. } = &mut p.tracks[0].clips[0].content else { unreachable!() };
+    *keep_pitch = false;
+    let raised = mix(&p, 1024);
+    let (at_440, at_550) = (tone_db(&raised, 440.0, 1.0, 1.0), tone_db(&raised, 550.0, 1.0, 1.0));
+    assert!(at_440 < -50.0 && (at_550 + 12.04).abs() < 0.3, "without Keep pitch the tone is not at 550 Hz");
+}

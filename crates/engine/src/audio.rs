@@ -14,6 +14,7 @@ use crate::loudness::db_to_gain;
 use crate::media::extract_pcm_with_peaks;
 use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, Track, TrackKind};
 use crate::speech::is_heard;
+use crate::stretch::Stretch;
 
 /// Short fades at clip edges with nothing to crossfade with, so they do not click.
 const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
@@ -22,7 +23,7 @@ const CUT_FADE_US: i64 = 10_000;
 /// Sound past a cut joins the crossfade only where it is quiet: below this level (-45 dBFS), or
 /// this far below (-20 dB) the loudest moment of the sound kept next to the cut. Otherwise it may
 /// be the start of a deleted word, which must not come back.
-const QUIET_RMS: f32 = 0.0056;
+pub(crate) const QUIET_RMS: f32 = 0.0056;
 const QUIET_BELOW_KEPT: f32 = 0.1;
 const KEPT_CONTEXT_US: i64 = 200_000;
 /// Ducking listens to speech in 10 ms blocks of the files: a block louder than -40 dBFS is speech.
@@ -165,21 +166,30 @@ pub struct Mixer {
     /// Which 10 ms blocks of each raw cache are speech, measured once when ducking first asks:
     /// 0 not yet, 1 quiet, 2 speech.
     speech: HashMap<PathBuf, Vec<u8>>,
+    /// Pieces of sound that keeps its pitch, by cache, the file frame at the anchor and speed.
+    stretches: HashMap<(PathBuf, i64, u32), Stretch>,
 }
 
 impl Mixer {
     pub fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir, sources: HashMap::new(), cuts: HashMap::new(), speech: HashMap::new() }
+        Self {
+            cache_dir,
+            sources: HashMap::new(),
+            cuts: HashMap::new(),
+            speech: HashMap::new(),
+            stretches: HashMap::new(),
+        }
     }
 
     /// The sound `asset` plays with: its cleaned cache for a clip with Clean voice once that is
     /// ready, otherwise the raw cache. Only cache files change hands here; no processing runs.
-    fn source(&mut self, asset: &Asset, clean_voice: bool) -> Option<Arc<Pcm>> {
+    fn source(&mut self, asset: &Asset, clean_voice: bool) -> Option<(PathBuf, Arc<Pcm>)> {
         let raw = pcm_path(&self.cache_dir, asset);
-        if clean_voice && let Some(pcm) = self.open(crate::voice::path_for(&self.cache_dir, &raw), asset) {
-            return Some(pcm);
+        let cleaned = crate::voice::path_for(&self.cache_dir, &raw);
+        if clean_voice && let Some(pcm) = self.open(cleaned.clone(), asset) {
+            return Some((cleaned, pcm));
         }
-        self.open(raw, asset)
+        self.open(raw.clone(), asset).map(|pcm| (raw, pcm))
     }
 
     fn open(&mut self, path: PathBuf, asset: &Asset) -> Option<Arc<Pcm>> {
@@ -242,7 +252,7 @@ impl Mixer {
                 if !has_audio(asset) {
                     continue;
                 }
-                let Some(pcm) = self.source(asset, cleans_voice(clip)) else { continue };
+                let Some((path, pcm)) = self.source(asset, cleans_voice(clip)) else { continue };
                 let samples = pcm.samples();
                 let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
@@ -256,7 +266,30 @@ impl Mixer {
                 let joined_after = finish == c1 && track.clips.get(index + 1).is_some_and(|next| continues(clip, next));
                 let edges = (if joined_before { 0 } else { EDGE_FADE }, if joined_after { 0 } else { EDGE_FADE });
                 let duck = (*duck_db > 0.0).then(|| &*ducking.get_or_insert_with(|| self.ducking(project, start, end)));
-                for i in from.max(begin)..to.min(finish) {
+                let (from, to) = (from.max(begin), to.min(finish));
+                if from >= to {
+                    continue;
+                }
+                let stretch = keeps_pitch(clip).then(|| {
+                    // Pieces split from one clip share its stretch, so their sound plays on seamlessly.
+                    let first =
+                        (0..index).rev().take_while(|&i| continues(&track.clips[i], &track.clips[i + 1])).last();
+                    let first = &track.clips[first.unwrap_or(index)];
+                    let ClipContent::Media { source_in_us, .. } = &first.content else { unreachable!() };
+                    let origin = first.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
+                    let place = origin.round();
+                    let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
+                    let anchor = (src0 + (place - origin) * *speed as f64).round() as i64;
+                    let key = (path, anchor, speed.to_bits());
+                    if self.stretches.len() >= 256 && !self.stretches.contains_key(&key) {
+                        self.stretches.clear();
+                    }
+                    let stretch = self.stretches.entry(key).or_insert_with(|| Stretch::new(anchor, *speed as f64));
+                    let place = place as i64;
+                    stretch.reach(samples, from - place, to - place);
+                    (place, &*stretch)
+                });
+                for i in from..to {
                     let src = src0 + (i as f64 - origin) * *speed as f64;
                     let mut gain = volume
                         * gain_at(i, begin, finish, edges, incoming, outgoing)
@@ -266,7 +299,11 @@ impl Mixer {
                     }
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
-                        out[o + ch] += sample_at(samples, src, ch) * gain;
+                        let sample = match stretch {
+                            Some((place, stretch)) => stretch.sample(samples, i - place, ch),
+                            None => sample_at(samples, src, ch),
+                        };
+                        out[o + ch] += sample * gain;
                     }
                 }
             }
@@ -302,9 +339,13 @@ fn cleans_voice(clip: &Clip) -> bool {
     matches!(clip.content, ClipContent::Media { clean_voice: true, .. })
 }
 
+fn keeps_pitch(clip: &Clip) -> bool {
+    matches!(clip.content, ClipContent::Media { keep_pitch: true, speed, .. } if speed != 1.0)
+}
+
 /// Whether `next` starts where `clip` ends and plays on from the same source at the same
-/// level, as the two halves of a split do. Halves of which only one cleans the voice, or that
-/// duck differently, sound different, so they crossfade like a cut.
+/// level, as the two halves of a split do. Halves of which only one cleans the voice or keeps the
+/// pitch, or that duck differently, sound different, so they crossfade like a cut.
 fn continues(clip: &Clip, next: &Clip) -> bool {
     let (
         ClipContent::Media {
@@ -334,6 +375,7 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
         && volume_a == volume_b
         && duck_a == duck_b
         && cleans_voice(clip) == cleans_voice(next)
+        && keeps_pitch(clip) == keeps_pitch(next)
         && (source_b - source_end).abs() <= samples_to_us(1)
 }
 
@@ -398,7 +440,7 @@ impl Mixer {
         if !has_audio(asset) {
             return Some(false);
         }
-        let pcm = self.source(asset, false)?;
+        let (_, pcm) = self.source(asset, false)?;
         let samples = pcm.samples();
         let frame = |us: i64| (us_to_samples(us.max(0)) as usize).min(pcm.frames());
         let rms = |a: usize, b: usize| {
@@ -791,7 +833,7 @@ mod tests {
         ensure_pcm(&cache, &first, |_| Ok(())).unwrap();
         ensure_pcm(&cache, &second, |_| Ok(())).unwrap();
         let mut mixer = Mixer::new(cache.clone());
-        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset, false).unwrap().samples()[1000];
+        let level = |mixer: &mut Mixer, asset: &Asset| mixer.source(asset, false).unwrap().1.samples()[1000];
         let quiet = level(&mut mixer, &first);
         let loud = level(&mut mixer, &second);
         assert!((loud - quiet * 3.0).abs() < 1e-3, "{quiet} then {loud}");
@@ -879,6 +921,7 @@ mod tests {
                     volume: 1.0,
                     transform: Transform::default(),
                     speed,
+                    keep_pitch: false,
                     adjust: Default::default(),
                     fade_in_us: 0,
                     fade_out_us: 0,
@@ -944,6 +987,7 @@ mod tests {
                     volume: 1.0,
                     transform: Transform::default(),
                     speed: 2.0,
+                    keep_pitch: false,
                     adjust: Default::default(),
                     fade_in_us: 0,
                     fade_out_us: 0,

@@ -724,6 +724,7 @@ pub fn plan_correction(project: &Project, derived: &Derived, fixes: &[(usize, St
         text: Some(text),
         style: None,
         speed: None,
+        keep_pitch: None,
         adjust: None,
         fade_in_us: None,
         fade_out_us: None,

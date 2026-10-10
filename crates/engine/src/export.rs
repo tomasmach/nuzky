@@ -359,7 +359,7 @@ fn encode(
             let gain = plan_gain(project, cache_dir, total_samples, delivery.loudness(), cancel, report)?;
             Sound::Leveled(Box::new(Leveled::new(cache_dir, project, gain)))
         }
-        None => Sound::Mix(Mixer::new(cache_dir.to_path_buf())),
+        None => Sound::Mix(Box::new(Mixer::new(cache_dir.to_path_buf()))),
     };
 
     let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
@@ -510,7 +510,7 @@ const MEASURE_CHUNK: usize = SAMPLE_RATE as usize;
 /// The sound that goes into the file: the project mix as it plays, or for a delivery preset that
 /// mix at the planned gain through the true-peak limiter.
 enum Sound {
-    Mix(Mixer),
+    Mix(Box<Mixer>),
     Leveled(Box<Leveled>),
 }
 

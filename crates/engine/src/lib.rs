@@ -11,6 +11,7 @@ pub mod media;
 pub mod model;
 pub mod render;
 pub mod speech;
+mod stretch;
 pub mod text;
 pub mod voice;
 pub mod worker;

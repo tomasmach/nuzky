@@ -148,6 +148,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             asset_id,
             source_in_us,
             speed,
+            keep_pitch: _,
             volume,
             transform: t,
             fade_in_us,

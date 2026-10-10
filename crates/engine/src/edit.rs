@@ -135,6 +135,9 @@ pub enum EditCmd {
         style: Option<TextStyle>,
         /// Changing speed keeps the source range, so the clip gets shorter or longer.
         speed: Option<f32>,
+        /// Sound at another speed keeps its pitch. Moving a clip off 1x turns it on unless the
+        /// same command sets it.
+        keep_pitch: Option<bool>,
         adjust: Option<Adjust>,
         fade_in_us: Option<i64>,
         fade_out_us: Option<i64>,
@@ -334,6 +337,7 @@ fn media(asset_id: String, transform: Transform, shape: Option<Shape>) -> ClipCo
         volume: 1.0,
         transform,
         speed: 1.0,
+        keep_pitch: false,
         adjust: Adjust::default(),
         fade_in_us: 0,
         fade_out_us: 0,
@@ -845,6 +849,7 @@ impl Project {
                 text,
                 style,
                 speed,
+                keep_pitch,
                 adjust,
                 fade_in_us,
                 fade_out_us,
@@ -876,6 +881,7 @@ impl Project {
                         transform: tr,
                         volume: v,
                         speed: sp,
+                        keep_pitch: kp,
                         adjust: adj,
                         fade_in_us: fi,
                         fade_out_us: fo,
@@ -908,8 +914,14 @@ impl Project {
                         if let Some(x) = duck_db {
                             *duck = x.clamp(0.0, MAX_DUCK_DB);
                         }
+                        if let Some(x) = keep_pitch {
+                            *kp = x;
+                        }
                         if let Some(x) = speed {
                             let x = x.clamp(MIN_SPEED, MAX_SPEED);
+                            if *sp == 1.0 && keep_pitch.is_none() {
+                                *kp = true;
+                            }
                             let ratio = *sp as f64 / x as f64;
                             *sp = x;
                             clip.duration_us = ((clip.duration_us as f64 * ratio).round() as i64).max(min);
@@ -1946,6 +1958,7 @@ mod tests {
             text: None,
             style: None,
             speed: None,
+            keep_pitch: None,
             adjust: None,
             fade_in_us: None,
             fade_out_us: None,
@@ -1972,6 +1985,7 @@ mod tests {
             text,
             style,
             speed: Some(2.0),
+            keep_pitch: None,
             adjust,
             fade_in_us,
             fade_out_us,
@@ -2012,6 +2026,7 @@ mod tests {
             text,
             style,
             speed: Some(0.5),
+            keep_pitch: None,
             adjust,
             fade_in_us,
             fade_out_us,
@@ -2040,6 +2055,7 @@ mod tests {
             text,
             style,
             speed: Some(10.0),
+            keep_pitch: None,
             adjust,
             fade_in_us,
             fade_out_us,
@@ -2210,6 +2226,7 @@ mod tests {
                 "speed" => EditCmd::UpdateClip {
                     clip_id,
                     speed: Some(10.0),
+                    keep_pitch: None,
                     transform: None,
                     volume: None,
                     text: None,
@@ -2280,6 +2297,7 @@ mod tests {
                 text: None,
                 style: None,
                 speed: None,
+                keep_pitch: None,
                 adjust: None,
                 fade_in_us: None,
                 fade_out_us: None,
