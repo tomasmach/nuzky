@@ -300,6 +300,11 @@ impl Store {
         self.own_dir().join("versions.jsonl")
     }
 
+    /// Names the version whose EDIT.md is being written, until it is.
+    fn writing_path(&self) -> PathBuf {
+        self.own_dir().join("writing")
+    }
+
     /// Holds the style's lock, so one writer changes it at a time, across windows and processes.
     fn lock(&self) -> Result<File> {
         fs::create_dir_all(self.own_dir()).with_context(|| format!("Cannot create {}", self.own_dir().display()))?;
@@ -506,16 +511,24 @@ impl Store {
             Err(e) => return Err(e).context("Reading EDIT.md"),
         };
         let current = versions.last().cloned().unwrap_or_default();
-        if file == current.text {
-            return Ok(versions);
+        // A write that stopped after its version was saved: finish it.
+        if let Ok(index) = fs::read_to_string(self.writing_path()) {
+            if index.trim() == current.index.to_string() {
+                write_style(&self.edit_md(), current.text.as_deref())?;
+                fs::remove_file(self.writing_path()).context("Finishing a change of the style")?;
+                return Ok(versions);
+            }
+            fs::remove_file(self.writing_path()).context("Finishing a change of the style")?;
         }
-        // A write that stopped between the version and the file: finish it.
-        if versions.len() >= 2 && file == versions[versions.len() - 2].text {
-            write_style(&self.edit_md(), current.text.as_deref())?;
+        if file == current.text {
             return Ok(versions);
         }
         let (mut accepted, mut frozen) = (current.accepted, current.frozen);
         let label = if versions.is_empty() {
+            // Whoever wrote it, learning leaves the text around the rules as it is.
+            for name in ["header", "overview", "rare"] {
+                frozen.insert(name.to_owned(), Frozen::Edited);
+            }
             "Found EDIT.md"
         } else {
             let old = Doc::parse(current.text.as_deref().unwrap_or(""));
@@ -535,8 +548,11 @@ impl Store {
         frozen: BTreeMap<String, Frozen>,
     ) -> Result<()> {
         // The version is the commit point; a file not written yet is finished on the next change.
+        let index = versions.last().map_or(1, |v| v.index + 1);
+        write_whole(&self.writing_path(), index.to_string().as_bytes())?;
         self.append(versions, label, text.clone(), accepted, frozen)?;
-        write_style(&self.edit_md(), text.as_deref())
+        write_style(&self.edit_md(), text.as_deref())?;
+        fs::remove_file(self.writing_path()).context("Finishing a change of the style")
     }
 
     fn append(
@@ -558,9 +574,11 @@ impl Store {
         let mut line = serde_json::to_string(&version)?;
         line.push('\n');
         let path = self.versions_path();
-        if versions.len() >= 2 * MAX_VERSIONS {
+        // A line cut short, by a full disk or a crash, would swallow the next one.
+        let torn = !ends_with_newline(&path);
+        if torn || versions.len() >= 2 * MAX_VERSIONS {
             let mut all = String::new();
-            for v in &versions[versions.len() + 1 - MAX_VERSIONS..] {
+            for v in &versions[versions.len().saturating_sub(MAX_VERSIONS - 1)..] {
                 all.push_str(&serde_json::to_string(v)?);
                 all.push('\n');
             }
@@ -754,6 +772,17 @@ fn changes(before: &[Choice], after: &[Choice]) -> Vec<Change> {
         to: None,
     }));
     out
+}
+
+/// An empty or missing file counts as ending well.
+fn ends_with_newline(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = File::open(path) else { return true };
+    if file.seek(SeekFrom::End(-1)).is_err() {
+        return true;
+    }
+    let mut last = [0u8];
+    file.read_exact(&mut last).is_ok_and(|()| last[0] == b'\n')
 }
 
 fn now_ms() -> u64 {
@@ -1074,11 +1103,29 @@ mod tests {
         assert!(!file(&dir).unwrap().contains("## Pauses"), "before it was accepted, the style had no Pauses");
         assert!(view.not_learned.iter().any(|n| n.title == "Pauses" && n.reason == Frozen::Reverted));
 
-        // A write that stopped after its version is finished by the next change.
+        // A write that stopped after its version is finished by the next change...
         let after = file(&dir).unwrap();
         fs::write(dir.join("EDIT.md"), &learned).unwrap();
-        store.view().unwrap();
+        fs::write(dir.join("style/writing"), view.version.to_string()).unwrap();
+        let view = store.view().unwrap();
         assert_eq!(file(&dir).unwrap(), after);
+        assert!(!dir.join("style/writing").exists() && view.versions[0].label == "Reverted Pauses");
+        // ...while the same text put back by hand is the creator's change.
+        fs::write(dir.join("EDIT.md"), &learned).unwrap();
+        let view = store.view().unwrap();
+        assert_eq!((view.versions[0].label.as_str(), file(&dir).unwrap()), ("Changed outside Nuzky", learned.clone()));
+        store.act(StyleAction::Restore { index: view.versions[1].index }).unwrap();
+        assert_eq!(file(&dir).unwrap(), after);
+
+        // A version cut short by a full disk does not swallow the next one.
+        let mut versions = fs::OpenOptions::new().append(true).open(dir.join("style/versions.jsonl")).unwrap();
+        versions.write_all(b"{\"index\":99,\"lab").unwrap();
+        drop(versions);
+        store.act(StyleAction::SetOwn { index: None, text: "Keep it short.".into() }).unwrap();
+        let view = store.view().unwrap();
+        assert_eq!(view.versions[0].label, "Added your rule");
+        assert_eq!(view.own, ["Keep it short."]);
+        store.act(StyleAction::SetOwn { index: Some(0), text: String::new() }).unwrap();
 
         let view = store.act(StyleAction::Reset).unwrap();
         assert_eq!(file(&dir), None);
@@ -1086,6 +1133,30 @@ mod tests {
         let view = store.act(StyleAction::Restore { index: view.versions[1].index }).unwrap();
         assert_eq!(file(&dir).unwrap(), after, "back to default can be undone");
         assert!(view.versions.len() >= 6);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_edit_md_from_before_keeps_the_creators_own_text() {
+        let (store, dir) = store();
+        let cli = learning::learn(&[evidence("talk", 120_000).source()]);
+        let mine = cli
+            .replacen("| Recording | Language", "Always keep my intro.\n\n| Recording | Language", 1)
+            .replace("## Pauses\n", "## My brand\n\nSay Nuzky, never Nůžky.\n\n## Pauses\n");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("EDIT.md"), &mine).unwrap();
+        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        assert_eq!(view.versions[0].label, "Found EDIT.md");
+        assert!(view.suggestions.iter().all(|s| s.update), "{:?}", titles(&view));
+        store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let text = file(&dir).unwrap();
+        assert!(
+            text.contains("Always keep my intro.") && text.contains("## My brand\n\nSay Nuzky, never Nůžky.\n\n"),
+            "{text}"
+        );
+        assert!(text.contains("| edit_transcript shorten_pauses_us | 400000 |"), "{text}");
+        store.act(StyleAction::Remove { title: "Cuts".into() }).unwrap();
+        assert!(file(&dir).unwrap().contains("## My brand\n\nSay Nuzky"), "{}", file(&dir).unwrap());
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1,7 +1,8 @@
 //! EDIT.md in blocks. A block starts at a heading Nuzky writes and runs to the next one, so one
 //! rule can be added, replaced or removed while everything else stays as the creator left it.
 //! Text before the first such heading is the preamble; other headings, such as the creator's own
-//! sections or a rule's subsections, belong to the block above them.
+//! sections or a rule's subsections, belong to the block above them. A section of the creator's
+//! own stays when the block above it is written again or removed.
 
 use std::collections::BTreeSet;
 
@@ -16,6 +17,22 @@ pub const PREAMBLE: &str = "# Editing style\n\nAn agent editing through Nuzky fo
 /// How the preamble of a learned style starts.
 const LEARNED: &str = "# Editing style\n\nNuzky measured how these recordings became their finished cuts.";
 const OWN_INTRO: &str = "The creator's own instructions. They win over every rule below and over the guide.";
+/// Subheadings a rule writes itself.
+const SUBHEADINGS: &[&str] = &["### Zoom ins", "### Zoom outs", "### Slow moves"];
+
+/// Where the creator's own sections start in a block: the first heading after its first line
+/// that Nuzky does not write.
+fn foreign(text: &str) -> usize {
+    let mut at = 0;
+    for (i, line) in text.split_inclusive('\n').enumerate() {
+        let bare = line.trim_end();
+        if i > 0 && bare.starts_with('#') && !SUBHEADINGS.contains(&bare) {
+            return at;
+        }
+        at += line.len();
+    }
+    text.len()
+}
 
 /// Every heading that starts a block, in the order blocks are written.
 fn headings() -> impl Iterator<Item = &'static str> {
@@ -83,22 +100,28 @@ impl Doc {
         preamble.trim().is_empty() || preamble == PREAMBLE || preamble.starts_with(LEARNED)
     }
 
+    /// Writes the preamble again, keeping the creator's own sections in it.
     pub fn set_preamble(&mut self, text: String) {
-        self.blocks[0].text = text;
+        let old = &self.blocks[0].text;
+        self.blocks[0].text = text + &old[foreign(old)..];
     }
 
-    /// Replaces the block, or puts it where its heading belongs.
+    /// Writes the block again, keeping the creator's own sections in it, or puts it where its
+    /// heading belongs.
     pub fn set(&mut self, heading: &'static str, text: String) {
         if let Some(block) = self.blocks.iter_mut().find(|b| b.heading == Some(heading)) {
-            block.text = text;
+            block.text = text + &block.text[foreign(&block.text)..];
             return;
         }
         let at = self.blocks.iter().rposition(|b| rank(b.heading) <= rank(Some(heading))).map_or(0, |i| i + 1);
         self.blocks.insert(at, Block { heading: Some(heading), text });
     }
 
+    /// Removes the block; the creator's own sections in it join the block above.
     pub fn remove(&mut self, heading: &str) {
-        self.blocks.retain(|b| b.heading != Some(heading));
+        let Some(at) = self.blocks.iter().position(|b| b.heading == Some(heading)) else { return };
+        let block = self.blocks.remove(at);
+        self.blocks[at - 1].text.push_str(&block.text[foreign(&block.text)..]);
     }
 
     /// The rules in the file, by title, in file order.
@@ -124,7 +147,8 @@ impl Doc {
     }
 
     /// Writes the Settings table again: each rule's rows in rule order, `rows` for `title`, then
-    /// rows no rule writes. Without rows there is no table.
+    /// rows no rule writes. Other text in the Settings section stays; without rows or other text
+    /// there is no section.
     pub fn rebuild_settings(&mut self, title: Option<(&str, &[(String, String)])>) {
         let old = self.settings();
         let owner = |name: &str| SETTINGS.iter().find(|(n, _)| *n == name).map(|(_, owner)| *owner);
@@ -136,10 +160,27 @@ impl Doc {
             }
         }
         rows.extend(old.iter().filter(|(name, _)| owner(name).is_none()).cloned());
-        if rows.is_empty() {
+        let Some(block) = self.blocks.iter_mut().find(|b| b.heading == Some(SETTINGS_HEADING)) else {
+            if !rows.is_empty() {
+                self.set(SETTINGS_HEADING, settings_block(&rows));
+            }
+            return;
+        };
+        let table = settings_block(&rows);
+        let table = if rows.is_empty() { "" } else { &table[SETTINGS_HEADING.len() + 2..table.len() - 1] };
+        let lines: Vec<&str> = block.text.split_inclusive('\n').collect();
+        let is_row = |l: &str| l.trim_start().starts_with('|');
+        let text = match lines.iter().position(|l| is_row(l)) {
+            Some(first) => {
+                let end = first + lines[first..].iter().take_while(|l| is_row(l)).count();
+                [lines[..first].concat(), table.to_owned(), lines[end..].concat()].concat()
+            }
+            None => [lines[..1].concat(), "\n".to_owned(), table.to_owned(), lines[1..].concat()].concat(),
+        };
+        if rows.is_empty() && text.lines().skip(1).all(|l| l.trim().is_empty()) {
             self.remove(SETTINGS_HEADING);
         } else {
-            self.set(SETTINGS_HEADING, settings_block(&rows));
+            block.text = text;
         }
     }
 
@@ -283,6 +324,34 @@ mod tests {
         assert!(
             text.find(OWN).unwrap() < text.find("## Settings").unwrap()
                 && text.starts_with("# Editing style\n\nIntro.")
+        );
+    }
+
+    #[test]
+    fn the_creators_own_sections_outlive_rules_written_again_or_removed() {
+        let mut doc = Doc::parse(&STYLE.replace(
+            "| Cuts per minute | 6.0 |\n",
+            "| Cuts per minute | 6.0 |\n\nKeep the brand name.\n\n## Brand\n\nAlways say Nuzky.\n",
+        ));
+        doc.set("### Restarted sentences", "### Restarted sentences\n\nCut them all.\n\n".into());
+        doc.set("## Zoom", "## Zoom\n\nNone.\n\n".into());
+        doc.rebuild_settings(Some(("Cuts", &[("Cuts per minute".into(), "7.0".into())])));
+        let text = doc.text();
+        assert!(text.contains("### Restarted sentences\n\nCut them all.\n\n## My notes\n\nMine.\n\n"), "{text}");
+        assert!(text.contains("## Zoom\n\nNone.\n\n") && !text.contains("### Zoom ins"), "{text}");
+        assert!(
+            text.contains("| Cuts per minute | 7.0 |\n\nKeep the brand name.\n\n## Brand\n\nAlways say Nuzky.\n"),
+            "{text}"
+        );
+        doc.remove("### Restarted sentences");
+        doc.remove("## Pauses");
+        doc.remove("## Cuts");
+        doc.rebuild_settings(None);
+        let text = doc.text();
+        assert!(text.contains("Kept 80%.\n\n## My notes\n\nMine.\n\n## Zoom"), "{text}");
+        assert!(
+            text.contains("## Settings\n\n\nKeep the brand name.\n\n## Brand") && !text.contains("| Setting"),
+            "{text}"
         );
     }
 
