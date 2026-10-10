@@ -23,7 +23,7 @@ Cut a talking video by deleting words from its transcript, caption it with speec
 - Import footage straight from your phone. Rotated, mirrored and variable-frame-rate HEVC or H.264 clips cut on the exact frame. The canvas starts vertical (9:16), with 16:9, 1:1 and 4:5 a click away.
 - Edit on a magnetic main track with overlay video, audio and text tracks. Move, trim, split and delete with snapping, undo and redo; Nuzky saves after every edit.
 - Style text with an outline, a background box, size, colour, position, rotation and opacity.
-- Export MP4 (H.264 and AAC) from the same renderer as the preview, so the file matches what you saw. The Reels & TikTok preset writes 1080×1920 at 30 fps with the sound levelled to −14 LUFS and true peak at most −1 dBTP.
+- Export MP4 (H.264 and AAC) from the same renderer as the preview, so the file matches what you saw. Presets for Reels & TikTok, YouTube Shorts, YouTube 1080p and 4K, the Instagram feed and square posts write the platform's size with the sound levelled to −14 LUFS and true peak at most −1 dBTP.
 - Let any MCP-capable AI agent edit the open project while you watch; each run undoes as one step. Connect agent sets up Claude Code and Codex in one click, and the AI panel chats with your own Claude Code or Codex.
 - Teach Nuzky a creator's style from raw recordings and their finished cuts, or from timelines they cut in another editor and exported as OpenTimelineIO (.otio), on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
 
@@ -56,6 +56,7 @@ cargo run -p nuzky-cli -- new project.nuzky a.mp4 b.mov
 cargo run -p nuzky-cli -- frame project.nuzky 2.5 frame.png 540
 cargo run -p nuzky-cli -- render project.nuzky out.mp4
 cargo run -p nuzky-cli -- render project.nuzky reel.mp4 --preset reels
+cargo run -p nuzky-cli -- render project.nuzky video.mp4 --preset youtube_1080p
 cargo run -p nuzky-cli -- style learn raw.mov reel.mp4 raw2.mov reel2.mp4
 cargo run -p nuzky-cli -- style learn --from reel.otio --from reel2.otio
 cargo run -p nuzky-cli -- style compare raw.mov reel.mp4 project.nuzky

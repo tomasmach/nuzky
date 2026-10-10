@@ -303,13 +303,17 @@ pub struct Captions {
 #[serde(deny_unknown_fields)]
 pub struct Export {
     pub path: String,
-    /// "reels": Instagram Reels and TikTok, 1080x1920 at 30 fps, loudness levelled to -14 LUFS
-    /// with true peak at most -1 dBTP. Needs a 9:16 canvas.
+    /// "reels": 1080x1920, 30 fps, 9:16; "shorts": 1080x1920, project fps, 9:16;
+    /// "youtube_1080p": 1920x1080, project fps, 16:9; "youtube_4k": 3840x2160, project fps, 16:9;
+    /// "instagram_feed": 1080x1350, 30 fps, 4:5; "square": 1080x1080, 30 fps, 1:1.
+    /// Each needs the listed canvas ratio and levels sound to -14 LUFS with true peak <= -1 dBTP.
+    /// YouTube and Shorts keep project fps or the given fps, max 60; the others fix 30.
     pub preset: Option<Delivery>,
     /// Short side in pixels, e.g. 1080 for a 1080x1920 reel. Required without preset; with a
     /// preset leave it out or give the preset's own value.
     pub resolution: Option<u32>,
-    /// Required without preset; with a preset leave it out or give the preset's own value.
+    /// Required without preset. YouTube and Shorts keep project fps when omitted, or accept up to
+    /// 60; the other presets require 30 when given.
     pub fps: Option<u32>,
     /// Defaults to recommended.
     pub quality: Option<Quality>,

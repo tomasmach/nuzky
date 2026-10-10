@@ -327,8 +327,6 @@ fn export_writes_the_credits_of_cc_by_sounds_beside_the_video() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
-// The Reels & TikTok preset: what Instagram and TikTok take as it is, with the sound levelled.
-
 fn reels() -> ExportOptions {
     ExportOptions { delivery: Some(Delivery::Reels), replace_existing: true, ..ExportOptions::default() }
 }
@@ -339,16 +337,16 @@ const SPEECH: &str = "(sin(2*PI*130*t)+0.7*sin(2*PI*260*t)+0.5*sin(2*PI*390*t)+0
     +0.25*sin(2*PI*1100*t)+0.15*sin(2*PI*2500*t))*pow(max(0\\,sin(2*PI*3.3*t))\\,4)*between(mod(t\\,3)\\,0\\,2.2)\
     +4.5*exp(-150*mod(t\\,3))*sin(2*PI*2200*t)";
 
-/// A 9:16 talking head of `seconds`: a still picture, the speech-like sound through `level`
+/// A talking head of `seconds`: a still picture, the speech-like sound through `level`
 /// (an FFmpeg audio filter) and quiet pink room tone. Sound stays float PCM, so only the export
 /// changes it.
-fn talking_head(path: &Path, seconds: u32, level: &str) {
+fn talking_head(path: &Path, seconds: u32, level: &str, size: (u32, u32), fps: u32) {
     ff(
         &[
             "-f",
             "lavfi",
             "-i",
-            &format!("color=c=0x2b3a4a:s=108x192:r=30:d={seconds}"),
+            &format!("color=c=0x2b3a4a:s={}x{}:r={fps}:d={seconds}", size.0, size.1),
             "-f",
             "lavfi",
             "-i",
@@ -424,8 +422,8 @@ fn reels_project(path: &Path, seconds: u32) -> Project {
     project(path, seconds as i64 * 1_000_000)
 }
 
-/// Checks the format Instagram and TikTok expect; returns the integrated loudness and true peak.
-fn check_reels_file(out: &Path, seconds: f64) -> (f64, f64) {
+/// Checks the delivery format; returns the integrated loudness and true peak.
+fn check_delivery_file(out: &Path, seconds: f64, width: u32, height: u32, fps: u32) -> (f64, f64) {
     let j = info(out);
     let streams = j["streams"].as_array().unwrap();
     let video = streams.iter().find(|s| s["codec_type"] == "video").unwrap();
@@ -435,7 +433,7 @@ fn check_reels_file(out: &Path, seconds: f64) -> (f64, f64) {
     };
     assert_eq!(
         fields(video, &["codec_name", "profile", "width", "height", "r_frame_rate", "avg_frame_rate", "pix_fmt"]),
-        ["h264", "High", "1080", "1920", "30/1", "30/1", "yuv420p"]
+        ["h264", "High", &width.to_string(), &height.to_string(), &format!("{fps}/1"), &format!("{fps}/1"), "yuv420p"]
     );
     assert_eq!(
         fields(video, &["color_space", "color_transfer", "color_primaries", "color_range"]),
@@ -454,6 +452,41 @@ fn check_reels_file(out: &Path, seconds: f64) -> (f64, f64) {
 }
 
 #[test]
+fn delivery_presets_write_their_platform_format_at_minus_14_lufs() {
+    if !available() {
+        return;
+    }
+    let d = dir(&format!("delivery-presets-{}", nuzky_engine::edit::new_id()));
+    for delivery in Delivery::ALL {
+        let (width, height, fps) = match delivery {
+            Delivery::Reels => continue,
+            Delivery::Shorts => (1080, 1920, 25),
+            Delivery::Youtube1080p => (1920, 1080, 25),
+            Delivery::Youtube4k => (3840, 2160, 25),
+            Delivery::InstagramFeed => (1080, 1350, 30),
+            Delivery::Square => (1080, 1080, 30),
+        };
+        let input = d.join(format!("{}.mkv", delivery.label()));
+        let seconds = 2;
+        let (w, h) = delivery.aspect();
+        talking_head(&input, seconds, "volume=0.1", (w * 12, h * 12), 25);
+        let mut project = project(&input, seconds as i64 * 1_000_000);
+        project.canvas.fps = 25;
+        assert_eq!(project.assets[0].fps, 25.0);
+        let out = input.with_extension("mp4");
+        let options = ExportOptions { delivery: Some(delivery), ..ExportOptions::default() };
+        let started = Instant::now();
+        export(&project, &d.join("cache"), &out, &options, &AtomicBool::new(false), |_| {}).unwrap();
+        let took = started.elapsed();
+        let (lufs, peak) = check_delivery_file(&out, seconds as f64, width, height, fps);
+        eprintln!("QA {}: {seconds} s exported in {took:.2?}, {lufs} LUFS, {peak} dBTP", delivery.label());
+        assert!((lufs + 14.0).abs() <= 1.0, "{}: {lufs} LUFS", delivery.label());
+        assert!(peak <= -1.0, "{}: {peak} dBTP", delivery.label());
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
 fn reels_preset_writes_the_platform_format_at_minus_14_lufs() {
     if !available() {
         return;
@@ -463,7 +496,7 @@ fn reels_preset_writes_the_platform_format_at_minus_14_lufs() {
     // near -6 LUFS with peaks over 0 dBTP that must come down.
     for (name, level, source_lufs) in [("quiet", "volume=0.1", -26.0), ("loud", "volume=3,asoftclip=type=tanh", -6.0)] {
         let input = d.join(format!("{name}.mkv"));
-        talking_head(&input, 6, level);
+        talking_head(&input, 6, level, (108, 192), 30);
         let (lufs, peak) = ebur128(&input);
         eprintln!("QA reels {name} source: {lufs} LUFS, {peak} dBTP");
         assert!((lufs - source_lufs).abs() < 1.0, "{name} source is {lufs} LUFS");
@@ -476,7 +509,7 @@ fn reels_preset_writes_the_platform_format_at_minus_14_lufs() {
             }
         })
         .unwrap();
-        let (lufs, peak) = check_reels_file(&out, 6.0);
+        let (lufs, peak) = check_delivery_file(&out, 6.0, 1080, 1920, 30);
         eprintln!("QA reels {name} export: {lufs} LUFS, {peak} dBTP in {:?}", started.elapsed());
         assert!((lufs + 14.0).abs() <= 1.0, "{name}: {lufs} LUFS");
         assert!(peak <= -1.0, "{name}: true peak {peak} dBTP");
@@ -514,7 +547,7 @@ fn reels_preset_keeps_silence_silent() {
     );
     let out = d.join("silent-reel.mp4");
     export(&reels_project(&input, 2), &d.join("cache"), &out, &reels(), &AtomicBool::new(false), |_| {}).unwrap();
-    check_reels_file(&out, 2.0);
+    check_delivery_file(&out, 2.0, 1080, 1920, 30);
     let sound = decode(&out);
     assert!(sound.len() >= 2 * 48_000 * 2 - 2048, "{} samples", sound.len());
     assert!(sound.iter().all(|&x| x == 0.0), "silence came out as sound");
@@ -606,6 +639,12 @@ fn reels_preset_refuses_what_it_cannot_deliver() {
     assert!(error.to_string().contains("resolution 1080"), "{error}");
     let fast = ExportOptions { fps: Some(60), ..reels() };
     assert!(export(&tall, &d.join("cache"), &out, &fast, &AtomicBool::new(false), |_| {}).is_err());
+    let youtube = ExportOptions { delivery: Some(Delivery::Youtube1080p), ..options() };
+    let error = export(&tall, &d.join("cache"), &out, &youtube, &AtomicBool::new(false), |_| {}).unwrap_err();
+    assert!(error.to_string().contains("YouTube 1080p needs a 16:9 video"), "{error}");
+    let fast_youtube = ExportOptions { fps: Some(120), ..youtube };
+    let error = export(&wide, &d.join("cache"), &out, &fast_youtube, &AtomicBool::new(false), |_| {}).unwrap_err();
+    assert!(error.to_string().contains("at most 60"), "{error}");
     assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1, "only the input is left");
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -618,7 +657,7 @@ fn reels_loudness_passes_stop_within_a_second_of_cancel() {
     let d = dir("reels-cancel");
     let input = d.join("long.mkv");
     // Two minutes of speech, which needs the limiter and so several levelling passes.
-    talking_head(&input, 120, "volume=0.1");
+    talking_head(&input, 120, "volume=0.1", (108, 192), 30);
     let out = d.join("destination.mp4");
     std::fs::write(&out, b"existing destination").unwrap();
     let cancel = AtomicBool::new(false);
@@ -763,7 +802,7 @@ fn reels_preset_on_the_three_czech_takes() {
         let (lufs, peak) = ebur128(&out);
         eprintln!("QA takes {name}: {seconds:.1} s exported in {took:.1?}: {lufs} LUFS, {peak} dBTP");
         if name == "reels" {
-            check_reels_file(&out, seconds);
+            check_delivery_file(&out, seconds, 1080, 1920, 30);
             assert!((lufs + 14.0).abs() <= 1.0 && peak <= -1.0, "{lufs} LUFS, {peak} dBTP");
         }
     }

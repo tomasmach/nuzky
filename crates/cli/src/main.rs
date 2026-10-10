@@ -22,8 +22,13 @@ const USAGE: &str = "Usage:
   nuzky frame <project.json> <seconds> <out.png> [width]
   nuzky bench <project.json> [width] [seconds] [--proxy]
       plays and scrubs the preview; --proxy first makes the preview proxies of heavy video and plays from them
-  nuzky render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
+  nuzky render <project.json> <out.mp4> [resolution] [fps] [--preset <name>]
       reels: Instagram Reels and TikTok, 1080x1920 at 30 fps, sound levelled to -14 LUFS (9:16 only)
+      shorts: YouTube Shorts, 1080x1920 at project or given fps (max 60), sound levelled to -14 LUFS (9:16 only)
+      youtube_1080p: YouTube, 1920x1080 at project or given fps (max 60), sound levelled to -14 LUFS (16:9 only)
+      youtube_4k: YouTube, 3840x2160 at project or given fps (max 60), sound levelled to -14 LUFS (16:9 only)
+      instagram_feed: Instagram feed, 1080x1350 at 30 fps, sound levelled to -14 LUFS (4:5 only)
+      square: Square post, 1080x1080 at 30 fps, sound levelled to -14 LUFS (1:1 only)
       frame, bench, render, mask and thumbnail first find the person behind whom clip backgrounds go,
       downloading the person model when it is missing
   nuzky vision-models                     download the face and subject models
@@ -42,11 +47,12 @@ fn render_options(rest: &[&str]) -> Result<ExportOptions> {
     let mut args = rest.iter();
     while let Some(&arg) = args.next() {
         if arg == "--preset" {
-            let name = args.next().context("--preset needs a name: reels")?;
-            delivery = Some(match *name {
-                "reels" => Delivery::Reels,
-                other => bail!("Unknown preset {other}; the preset is reels"),
-            });
+            const NAMES: &str = "reels, shorts, youtube_1080p, youtube_4k, instagram_feed, square";
+            let name = args.next().with_context(|| format!("--preset needs a name: {NAMES}"))?;
+            delivery = Some(
+                serde_json::from_value::<Delivery>(serde_json::json!(name))
+                    .map_err(|_| anyhow::anyhow!("Unknown preset {name}; use {NAMES}"))?,
+            );
         } else {
             positional.push(arg);
         }

@@ -367,9 +367,10 @@ export type DeletedCollection = {
 };
 
 /**
- * A platform's delivery format, shared by the export dialog, MCP and the CLI.
+ * A platform's delivery format, shared by the export dialog, MCP and the CLI. Every preset writes
+ * H.264 High and AAC 48 kHz stereo with the sound levelled to its loudness.
  */
-export type Delivery = "reels";
+export type Delivery = "reels" | "shorts" | "youtube_1080p" | "youtube_4k" | "instagram_feed" | "square";
 
 export type Ease = "linear" | "smooth";
 
@@ -531,7 +532,8 @@ export type ExportRequest = {
    */
   quality: Quality,
   /**
-   * "reels" fixes the format and levels the sound; resolution and fps are then its own.
+   * Delivery format and -14 LUFS sound level. Resolution must match the preset; YouTube and
+   * Shorts accept fps up to 60, the others require 30.
    */
   preset?: Delivery | null,
 };
