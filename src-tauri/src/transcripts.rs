@@ -410,7 +410,13 @@ mod tests {
             words: vec![],
         }];
         let style = nuzky_engine::edit::caption_presets()[0].style.clone();
-        host.session.edit(vec![EditCmd::AddCaptions { segments, style }], None, Expect::default()).unwrap();
+        host.session
+            .edit(
+                vec![EditCmd::AddCaptions { segments, style, anim_in: None, anim_out: None }],
+                None,
+                Expect::default(),
+            )
+            .unwrap();
         let caption = |host: &Host| {
             let project = host.session.state().unwrap().project;
             match &project.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].content {

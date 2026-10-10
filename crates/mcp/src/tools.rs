@@ -872,11 +872,16 @@ impl Backend {
 
     fn captions(&self, args: Captions, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
-        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        let project = self.media_project(&state.project);
+        let derived = transcript::derive(&project, &self.host.transcripts)?;
         ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before captions");
         let grouping = args.grouping();
-        let style = args.style()?;
-        let (edit, _) = transcript::caption_edit(&derived.words, &state.project, style, grouping)?;
+        let look = args.look()?;
+        // Key words are found by the sound of the words, as for analyze(kind: "emphasis").
+        self.prepare_sound(&project, &derived, state)?;
+        let energy = nuzky_analysis::word_energy(&project, &derived.words, &derived.sources, &self.host.cache_dir)?;
+        let keys = nuzky_analysis::key_words(&derived.words, &energy);
+        let (edit, _) = transcript::caption_edit(&derived.words, &keys, &state.project, look, grouping)?;
         let result = self.host.session.apply_edits(
             &args.run_id,
             &new_id(),
@@ -1498,6 +1503,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         project
             .apply(EditCmd::AddText { start_us: 0, text: "A very long unrelated title".into(), style: style.clone() })
@@ -1511,6 +1517,8 @@ mod tests {
                     words: Vec::new(),
                 }],
                 style,
+                anim_in: None,
+                anim_out: None,
             })
             .unwrap();
         assert_eq!(caption_stats(&project), json!({"count":1,"max_chars":16,"max_words":2}));

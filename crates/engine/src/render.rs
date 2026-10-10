@@ -13,7 +13,7 @@ use crate::matte::{Mattes, SIDE};
 use crate::media::{RgbaFrame, Transfer, VideoDecoder, decode_size, file_key, orient};
 use crate::model::{
     Adjust, Asset, AssetKind, Background, Clip, ClipContent, Crop, MAX_BORDER_WIDTH, Project, Track, TrackKind,
-    Transform, TransitionKind, parse_color, spoken_word,
+    Transform, TransitionKind, key_words, parse_color, spoken_word,
 };
 use crate::text::{TextRenderer, TextStats};
 use crate::worker::VideoWorker;
@@ -156,7 +156,8 @@ fn placement(
             let wrap = style.max_width.unwrap_or(canvas.width as f32 * 0.9);
             // Karaoke: the word being said, by its place in the whole text, which a typewriter reveals from the start.
             let spoken = style.highlight.as_ref().and_then(|_| spoken_word(text, words, t_us - clip.start_us));
-            let text = text_renderer.render_spoken(&text[..end], &style, scale, wrap * scale, spoken);
+            let keys = style.keywords.as_ref().map(|k| key_words(text, words, k.pick)).unwrap_or_default();
+            let text = text_renderer.render_spoken(&text[..end], &style, scale, wrap * scale, spoken, &keys);
             ((text.image.width as f32 / text.scale, text.image.height as f32 / text.scale), Some(text.image))
         }
     };
@@ -898,6 +899,7 @@ mod tests {
             stroke_color: "#000000".into(),
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         for (id, start) in [("out", 0), ("in", 1_000_000)] {
             let mut clip = Clip::new(
@@ -961,6 +963,7 @@ mod tests {
             stroke_color: "#000000".into(),
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         let mut text = TextRenderer::new();
         // One line hits the glyph limit at 2160p, two lines the bitmap pixel limit.
@@ -1048,11 +1051,12 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         // The longest reel caption, 15 characters, is wider than the safe area at 95 px and wraps.
         let segment =
             CaptionSegment { start_us: 0, end_us: 1_000_000, text: "Největší rozdíl".into(), words: Vec::new() };
-        project.apply(EditCmd::AddCaptions { segments: vec![segment], style }).unwrap();
+        project.apply(EditCmd::AddCaptions { segments: vec![segment], style, anim_in: None, anim_out: None }).unwrap();
         let ClipContent::Text { style, .. } = &project.tracks[1].clips[0].content else { panic!() };
         assert_eq!(style.max_width, Some(720.0));
         let quad = layer_bounds(&project, 500_000, &mut TextRenderer::new())[0].1;
@@ -1081,6 +1085,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         // Rasterised at 2x and drawn at 1.3x, so every glyph edge is filtered down.
         let transform = Transform { scale: 1.3, rotation: 7.0, ..Transform::default() };
@@ -1109,6 +1114,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         let image = text.render("Ahoj světe", &style, 1.0, 972.0).image;
         let clip = Clip::new(
@@ -1171,11 +1177,13 @@ mod tests {
             background: None,
             max_width: None,
             highlight: highlight.map(Into::into),
+            keywords: None,
         };
         let word = |text: &str, start: i64, end: i64| CaptionWord {
             text: text.into(),
             start_us: KARAOKE_START + start,
             end_us: KARAOKE_START + end,
+            key: false,
         };
         let segment = CaptionSegment {
             start_us: KARAOKE_START,
@@ -1183,7 +1191,7 @@ mod tests {
             text: "Kůň úpěl ódy".into(),
             words: vec![word("Kůň", 100_000, 300_000), word("úpěl", 400_000, 700_000), word("ódy", 700_000, 1_000_000)],
         };
-        project.apply(EditCmd::AddCaptions { segments: vec![segment], style }).unwrap();
+        project.apply(EditCmd::AddCaptions { segments: vec![segment], style, anim_in: None, anim_out: None }).unwrap();
         project
     }
 
@@ -1258,6 +1266,50 @@ mod tests {
         for t in [0, 99_999, 1_000_000, 1_200_000, 1_499_999] {
             assert!(karaoke_pixels(&frame(t)).0.is_empty(), "{t}");
         }
+    }
+
+    /// Keyword green (#3ce35a, also where it fades into the black outline), by pixel index.
+    fn green_pixels(frame: &[u8]) -> Vec<usize> {
+        let pixels = frame.as_chunks::<4>().0.iter().enumerate();
+        pixels
+            .filter(|(_, p)| {
+                let [r, g, b] = [p[0], p[1], p[2]].map(f32::from);
+                g > 100.0 && r < 0.6 * g && b < 0.6 * g
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[test]
+    fn key_words_take_their_colour_and_the_spoken_word_goes_over_them() {
+        use crate::model::{KeywordPick, Keywords};
+        let (w, h) = KARAOKE_SIZE;
+        let mut renderer = Renderer::new().unwrap();
+        let mut project = karaoke_project(Some("#ffe14d"));
+        let ClipContent::Text { style, words, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+        style.keywords = Some(Keywords { color: "#3ce35a".into(), pick: KeywordPick::Emphasis });
+        words[1].key = true;
+        let mut frame =
+            |project: &Project, t: i64| renderer.render(project, KARAOKE_START + t, w, h, Wait::Exact, false).unwrap();
+        // In the gap only "úpěl" is green; while "Kůň" is said it is yellow and "úpěl" stays green.
+        let gap = green_pixels(&frame(&project, 350_000));
+        let area = pixel_box(&gap).expect("úpěl is green");
+        let (gap_yellow, _) = karaoke_pixels(&frame(&project, 350_000));
+        assert!(gap_yellow.is_empty());
+        let (yellow, _) = karaoke_pixels(&frame(&project, 200_000));
+        assert!(pixel_box(&yellow).unwrap()[2] < area[0], "Kůň is left of úpěl");
+        assert_eq!(green_pixels(&frame(&project, 200_000)), gap);
+        // While "úpěl" itself is said, the highlight wins: no green left.
+        let (spoken, _) = karaoke_pixels(&frame(&project, 550_000));
+        assert!(green_pixels(&frame(&project, 550_000)).is_empty() && pixel_box(&spoken) == Some(area));
+        // The longest word, whatever the scoring said; none once the text is edited by hand.
+        let ClipContent::Text { style, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+        style.keywords = Some(Keywords { color: "#3ce35a".into(), pick: KeywordPick::Longest });
+        let longest = project.clone();
+        assert_eq!(pixel_box(&green_pixels(&frame(&longest, 350_000))), Some(area));
+        let ClipContent::Text { text, .. } = &mut project.tracks[1].clips[0].content else { panic!() };
+        *text = "Kůň úpěl ódy!".into();
+        assert!(green_pixels(&frame(&project, 350_000)).is_empty());
     }
 
     #[test]

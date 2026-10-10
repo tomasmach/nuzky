@@ -234,6 +234,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         p.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         let video = main_id(&p, 0);

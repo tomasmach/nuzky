@@ -1,5 +1,5 @@
 use nuzky_engine::{
-    edit::{EditCmd, MotionKind, TimeRange},
+    edit::{CaptionPreset, EditCmd, MotionKind, TimeRange},
     export::{Delivery, Quality},
     model::{TextStyle, ThumbnailFormat},
 };
@@ -335,19 +335,21 @@ pub struct ExportThumbnail {
 }
 
 impl Captions {
-    /// The style asked for: a full style or a preset, Reel when neither is given.
-    pub fn style(&self) -> anyhow::Result<TextStyle> {
+    /// The style asked for: a full style or a preset with its animations, Reel when neither is given.
+    pub fn look(&self) -> anyhow::Result<CaptionPreset> {
         match (&self.style, &self.style_preset) {
             (Some(_), Some(_)) => anyhow::bail!("INVALID_ARGUMENTS: give style or style_preset, not both"),
-            (Some(style), None) => Ok(style.clone()),
-            (None, Some(name)) => nuzky_engine::edit::caption_preset(name).map(|p| p.style.clone()).ok_or_else(|| {
+            (Some(style), None) => {
+                Ok(CaptionPreset { name: String::new(), style: style.clone(), anim_in: None, anim_out: None })
+            }
+            (None, Some(name)) => nuzky_engine::edit::caption_preset(name).cloned().ok_or_else(|| {
                 let names: Vec<_> = nuzky_engine::edit::caption_presets()
                     .iter()
                     .map(|p| p.name.to_lowercase().replace(' ', "_"))
                     .collect();
                 anyhow::anyhow!("INVALID_ARGUMENTS: unknown style_preset {name:?}; use one of {}", names.join(", "))
             }),
-            (None, None) => Ok(reel_style()),
+            (None, None) => Ok(reel()),
         }
     }
 
@@ -361,8 +363,13 @@ impl Captions {
     }
 }
 
+pub fn reel() -> CaptionPreset {
+    nuzky_engine::edit::caption_presets()[0].clone()
+}
+
+#[cfg(test)]
 pub fn reel_style() -> nuzky_engine::model::TextStyle {
-    nuzky_engine::edit::caption_presets()[0].style.clone()
+    reel().style
 }
 
 #[cfg(test)]
@@ -378,7 +385,7 @@ mod tests {
         let defaults = nuzky_analysis::CaptionGrouping::default();
         assert_eq!(args.grouping().max_words, defaults.max_words);
         assert_eq!(args.grouping().max_chars, defaults.max_chars);
-        let style = args.style().unwrap();
+        let style = args.look().unwrap().style;
         assert_eq!(
             serde_json::to_value(style).unwrap(),
             serde_json::json!({
@@ -393,7 +400,7 @@ mod tests {
         let captions = |value: serde_json::Value| {
             let mut args = serde_json::json!({"run_id": "run"});
             args.as_object_mut().unwrap().extend(value.as_object().unwrap().clone());
-            serde_json::from_value::<Captions>(args).unwrap().style()
+            serde_json::from_value::<Captions>(args).unwrap().look().map(|look| look.style)
         };
         let karaoke = captions(serde_json::json!({"style_preset": "karaoke"})).unwrap();
         assert_eq!(karaoke.highlight.as_deref(), Some("#ffe14d"));

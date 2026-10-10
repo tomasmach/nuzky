@@ -426,7 +426,8 @@ mod tests {
         .unwrap();
         let mut project = Project::new("words");
         project.apply(EditCmd::AddText { start_us: 0, text: "Ahoj".into(), style }).unwrap();
-        let word = |start_us, end_us| nuzky_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us };
+        let word =
+            |start_us, end_us| nuzky_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us, key: false };
         for (words, valid) in [
             (vec![word(0, 0), word(-500, 100)], true),
             (vec![word(i64::MIN, i64::MAX)], true),

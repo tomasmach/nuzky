@@ -77,5 +77,232 @@
       "background": "#000000b3",
       "highlight": "#4ade80"
     }
+  },
+  {
+    "name": "Hormozi",
+    "style": {
+      "fontFamily": "Montserrat",
+      "fontSize": 100,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 8,
+      "strokeColor": "#000000",
+      "background": null,
+      "keywords": {
+        "color": "#ffd400"
+      }
+    },
+    "animIn": {
+      "kind": "pop",
+      "durationUs": 160000
+    }
+  },
+  {
+    "name": "Hormozi green",
+    "style": {
+      "fontFamily": "Montserrat",
+      "fontSize": 100,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 8,
+      "strokeColor": "#000000",
+      "background": null,
+      "keywords": {
+        "color": "#3ce35a"
+      }
+    },
+    "animIn": {
+      "kind": "pop",
+      "durationUs": 160000
+    }
+  },
+  {
+    "name": "Spotlight",
+    "style": {
+      "fontFamily": "Poppins",
+      "fontSize": 92,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 7,
+      "strokeColor": "#000000",
+      "background": null,
+      "highlight": "#ffe14d",
+      "keywords": {
+        "color": "#3ce35a"
+      }
+    },
+    "animIn": {
+      "kind": "pop",
+      "durationUs": 150000
+    }
+  },
+  {
+    "name": "Impact",
+    "style": {
+      "fontFamily": "Anton",
+      "fontSize": 110,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 8,
+      "strokeColor": "#000000",
+      "background": null,
+      "keywords": {
+        "color": "#ff4d4d"
+      }
+    },
+    "animIn": {
+      "kind": "zoomIn",
+      "durationUs": 200000
+    }
+  },
+  {
+    "name": "Headline",
+    "style": {
+      "fontFamily": "Bebas Neue",
+      "fontSize": 130,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 6,
+      "strokeColor": "#000000",
+      "background": null,
+      "keywords": {
+        "color": "#ffd400",
+        "pick": "longest"
+      }
+    },
+    "animIn": {
+      "kind": "slideUp",
+      "durationUs": 200000
+    }
+  },
+  {
+    "name": "Punchline",
+    "style": {
+      "fontFamily": "Oswald",
+      "fontSize": 96,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 7,
+      "strokeColor": "#000000",
+      "background": null,
+      "keywords": {
+        "color": "#ff8a00",
+        "pick": "last"
+      }
+    },
+    "animIn": {
+      "kind": "pop",
+      "durationUs": 160000
+    }
+  },
+  {
+    "name": "Neon",
+    "style": {
+      "fontFamily": "Lexend",
+      "fontSize": 88,
+      "color": "#ff8cf0",
+      "bold": true,
+      "strokeWidth": 6,
+      "strokeColor": "#5b0a52",
+      "background": null,
+      "keywords": {
+        "color": "#ffffff"
+      }
+    },
+    "animIn": {
+      "kind": "fade",
+      "durationUs": 200000
+    }
+  },
+  {
+    "name": "Neon blue",
+    "style": {
+      "fontFamily": "Lexend",
+      "fontSize": 88,
+      "color": "#7df9ff",
+      "bold": true,
+      "strokeWidth": 6,
+      "strokeColor": "#053b66",
+      "background": null,
+      "keywords": {
+        "color": "#ffffff"
+      }
+    },
+    "animIn": {
+      "kind": "fade",
+      "durationUs": 200000
+    }
+  },
+  {
+    "name": "Yellow box",
+    "style": {
+      "fontFamily": "Anton",
+      "fontSize": 84,
+      "color": "#111111",
+      "bold": false,
+      "strokeWidth": 0,
+      "strokeColor": "#000000",
+      "background": "#ffd400ee",
+      "keywords": {
+        "color": "#d61f1f"
+      }
+    },
+    "animIn": {
+      "kind": "pop",
+      "durationUs": 150000
+    }
+  },
+  {
+    "name": "White box",
+    "style": {
+      "fontFamily": "Poppins",
+      "fontSize": 64,
+      "color": "#111111",
+      "bold": true,
+      "strokeWidth": 0,
+      "strokeColor": "#000000",
+      "background": "#ffffffee",
+      "highlight": "#2563eb"
+    },
+    "animIn": {
+      "kind": "fade",
+      "durationUs": 150000
+    }
+  },
+  {
+    "name": "Minimal",
+    "style": {
+      "fontFamily": "Roboto",
+      "fontSize": 52,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 0,
+      "strokeColor": "#000000",
+      "background": "#0000008c"
+    },
+    "animIn": {
+      "kind": "fade",
+      "durationUs": 150000
+    },
+    "animOut": {
+      "kind": "fade",
+      "durationUs": 120000
+    }
+  },
+  {
+    "name": "Typewriter",
+    "style": {
+      "fontFamily": "Roboto",
+      "fontSize": 70,
+      "color": "#ffffff",
+      "bold": true,
+      "strokeWidth": 5,
+      "strokeColor": "#000000",
+      "background": null
+    },
+    "animIn": {
+      "kind": "typewriter",
+      "durationUs": 300000
+    }
   }
 ]

@@ -156,13 +156,13 @@ impl TextRenderer {
     /// Renders `text` with `style` scaled by `scale` (output pixels per canvas pixel).
     /// `max_width` is the wrap width in output pixels at the requested scale.
     pub fn render(&mut self, text: &str, style: &TextStyle, scale: f32, max_width: f32) -> TextImage {
-        self.render_spoken(text, style, scale, max_width, None)
+        self.render_spoken(text, style, scale, max_width, None, &[])
     }
 
-    /// Like `render`, with the word at byte range `spoken` of `text` filled in `style.highlight`.
-    /// Every variant uses the same layout, so the size and wrapping never change between words.
-    /// The layout is kept, so a new spoken word only repaints colours; shaping, glyph rasterising
-    /// and the outline happen once per text, never per frame.
+    /// Like `render`, with the words at byte ranges `keys` of `text` filled in `style.keywords` and the
+    /// word at `spoken` in `style.highlight`, over a key word too. Every variant uses the same layout, so
+    /// the size and wrapping never change between words. The layout is kept, so a new spoken word only
+    /// repaints colours; shaping, glyph rasterising and the outline happen once per text, never per frame.
     pub fn render_spoken(
         &mut self,
         text: &str,
@@ -170,9 +170,11 @@ impl TextRenderer {
         scale: f32,
         max_width: f32,
         spoken: Option<Range<usize>>,
+        keys: &[Range<usize>],
     ) -> TextImage {
-        let karaoke = style.highlight.is_some();
-        let spoken = spoken.filter(|range| karaoke && range.start < range.end);
+        let karaoke = style.highlight.is_some() || style.keywords.is_some();
+        let spoken = spoken.filter(|range| style.highlight.is_some() && range.start < range.end);
+        let keys = if style.keywords.is_some() { keys } else { &[] };
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
         format!("{style:?}").hash(&mut h);
@@ -180,6 +182,7 @@ impl TextRenderer {
         max_width.to_bits().hash(&mut h);
         let layout_key = h.finish();
         spoken.hash(&mut h);
+        keys.hash(&mut h);
         let key = h.finish();
         if let Some(img) = self.cache.get(&key) {
             return img.clone();
@@ -199,11 +202,12 @@ impl TextRenderer {
                     layout
                 }
             };
-            let mask = spoken.map(|range| self.word_mask(&layout, range));
-            self.paint(&layout, style, mask.as_deref())
+            let spoken = spoken.map(|range| self.word_mask(&layout, &[range]));
+            let keys = (!keys.is_empty()).then(|| self.word_mask(&layout, keys));
+            self.paint(&layout, style, keys.as_deref(), spoken.as_deref())
         } else {
             let layout = self.lay_out(text, style, scale, max_width);
-            self.paint(&layout, style, None)
+            self.paint(&layout, style, None, None)
         };
         if self.cache.len() >= 512
             || self.cache.values().map(|text| text.image.data.len()).sum::<usize>() + img.image.data.len()
@@ -220,11 +224,11 @@ impl TextRenderer {
         self.stats
     }
 
-    /// Coverage of the glyphs whose characters start inside `range`, the spoken word.
-    fn word_mask(&mut self, layout: &Layout, range: Range<usize>) -> Vec<u8> {
+    /// Coverage of the glyphs whose characters start inside `ranges`, words of the text.
+    fn word_mask(&mut self, layout: &Layout, ranges: &[Range<usize>]) -> Vec<u8> {
         let (w, h) = (layout.w, layout.h);
         let mut mask = vec![0u8; w * h];
-        for glyph in layout.glyphs.iter().filter(|glyph| range.contains(&glyph.start)) {
+        for glyph in layout.glyphs.iter().filter(|glyph| ranges.iter().any(|range| range.contains(&glyph.start))) {
             stamp(&mut self.swash, &mut self.fonts, glyph, &mut mask, w, h);
         }
         mask
@@ -301,14 +305,19 @@ impl TextRenderer {
         Layout { w, h, scale, radius: size * scale * 0.25, fill, outline, glyphs }
     }
 
-    /// Colours a layout: box, outline, then the fill, with the spoken word's coverage in the highlight.
-    fn paint(&mut self, layout: &Layout, style: &TextStyle, spoken: Option<&[u8]>) -> TextImage {
+    /// Colours a layout: box, outline, then the fill, with the key words' coverage in the keyword colour and
+    /// the spoken word's in the highlight.
+    fn paint(&mut self, layout: &Layout, style: &TextStyle, keys: Option<&[u8]>, spoken: Option<&[u8]>) -> TextImage {
         self.stats.paints += 1;
         let Layout { w, h, scale, radius, ref fill, ref outline, .. } = *layout;
         let fill_c = parse_color(&style.color);
         let stroke_c = parse_color(&style.stroke_color);
         let bg_c = style.background.as_deref().map(parse_color);
         let highlight_c = style.highlight.as_deref().map(parse_color).unwrap_or(fill_c);
+        let key_c = style.keywords.as_ref().map(|k| parse_color(&k.color)).unwrap_or(fill_c);
+        // The share of a fill pixel a mask's glyphs cover.
+        let share =
+            |mask: Option<&[u8]>, i: usize| mask.map_or(0.0, |m| (m[i] as f32 / fill[i].max(1) as f32).min(1.0));
 
         // Premultiplied "over" compositing, converted back to straight alpha at the end.
         let mut out = vec![0u8; w * h * 4];
@@ -329,15 +338,15 @@ impl TextRenderer {
                 if let Some(o) = outline {
                     over(stroke_c, o[i] as f32 / 255.0);
                 }
-                // The spoken word's glyphs cover the same pixels as in the fill mask; where a neighbour's
-                // edge overlaps them, the colours mix by coverage.
-                match spoken.map(|mask| mask[i]).filter(|&lit| lit > 0 && fill[i] > 0) {
-                    Some(lit) => {
-                        let t = (lit as f32 / fill[i] as f32).min(1.0);
-                        let c = std::array::from_fn(|k| fill_c[k] + (highlight_c[k] - fill_c[k]) * t);
-                        over(c, fill[i] as f32 / 255.0);
-                    }
-                    None => over(fill_c, fill[i] as f32 / 255.0),
+                // A word's glyphs cover the same pixels as in the fill mask; where a neighbour's edge
+                // overlaps them, the colours mix by coverage.
+                if fill[i] > 0 {
+                    let (key, lit) = (share(keys, i), share(spoken, i));
+                    let c: [f32; 4] = std::array::from_fn(|k| {
+                        let base = fill_c[k] + (key_c[k] - fill_c[k]) * key;
+                        base + (highlight_c[k] - base) * lit
+                    });
+                    over(c, fill[i] as f32 / 255.0);
                 }
                 if acc[3] > 0.0 {
                     let o = &mut out[i * 4..i * 4 + 4];
@@ -464,6 +473,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         }
     }
 

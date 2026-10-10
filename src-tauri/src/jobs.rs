@@ -12,9 +12,9 @@ use anyhow::Context;
 use nuzky_analysis::CaptionGrouping;
 use nuzky_analysis::models_dir;
 use nuzky_engine::audio::{ensure_pcm, has_audio};
-use nuzky_engine::edit::new_id;
+use nuzky_engine::edit::{CaptionPreset, new_id};
 use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
-use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project, TextStyle};
+use nuzky_engine::model::{Animation, Asset, AssetKind, ClipContent, Project, TextStyle};
 use nuzky_engine::proxy;
 use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use nuzky_mcp::model_download::{self, Integrity};
@@ -570,6 +570,11 @@ pub struct CaptionRequest {
     /// ISO code such as "cs", or "auto".
     pub language: String,
     pub style: TextStyle,
+    /// Entry and exit animations of every caption, from the caption style.
+    #[serde(default)]
+    pub anim_in: Option<Animation>,
+    #[serde(default)]
+    pub anim_out: Option<Animation>,
     /// Most words on screen at once (reels use 1–3); `None` uses phrase grouping,
     /// capped by PHRASE_MAX_WORDS and PHRASE_MAX_CHARS unless a limit is supplied.
     #[serde(default)]
@@ -677,6 +682,7 @@ fn run_speech_job(
         let host = host.upgrade().context(SWITCHED)?;
         (host.transcripts.clone(), host.cache_dir.clone())
     };
+    let heard = assets.clone();
     let mut missing = Vec::new();
     for asset in assets {
         if request.refresh || store.get(&asset)?.is_none() {
@@ -685,6 +691,12 @@ fn run_speech_job(
     }
     let estimated = recognise(&store, &cache, missing, request, cancel, rep)?;
     check_cancelled(cancel)?;
+    if request.captions.is_some() {
+        // Key words are found by the sound of the words; recognition usually left it ready.
+        for asset in heard.iter().filter(|a| has_audio(a)) {
+            ensure_pcm(&cache, asset, |_| check_cancelled(cancel))?;
+        }
+    }
     // Recognition goes on without the word timing model, for example offline; say so.
     let note = if estimated { ". Word times are estimated: the word timing model could not be loaded" } else { "" };
     let app = rep.app.clone();
@@ -702,8 +714,15 @@ fn run_speech_job(
         "A clip was added during recognition. Generate the captions again."
     );
     rep.progress(1.0, Some("Grouping captions"));
-    let (cmd, count) =
-        transcript::caption_edit(&derived.words, &view.project, captions.style.clone(), captions.grouping())?;
+    let energy = nuzky_analysis::word_energy(&view.project, &derived.words, &derived.sources, &cache)?;
+    let keys = nuzky_analysis::key_words(&derived.words, &energy);
+    let look = CaptionPreset {
+        name: String::new(),
+        style: captions.style.clone(),
+        anim_in: captions.anim_in,
+        anim_out: captions.anim_out,
+    };
+    let (cmd, count) = transcript::caption_edit(&derived.words, &keys, &view.project, look, captions.grouping())?;
     current
         .host
         .session
@@ -1049,6 +1068,8 @@ mod tests {
             language: "cs".into(),
             max_words,
             max_chars,
+            anim_in: None,
+            anim_out: None,
             style: TextStyle {
                 font_family: Some("Inter".into()),
                 font_size: 95.0,
@@ -1059,6 +1080,7 @@ mod tests {
                 background: None,
                 max_width: None,
                 highlight: None,
+                keywords: None,
             },
         }
     }

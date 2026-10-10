@@ -547,13 +547,16 @@ pub struct CaptionWord {
     pub text: String,
     pub start_us: i64,
     pub end_us: i64,
+    /// A key word of the speech, a number or a word said with emphasis, found when the caption was made.
+    /// `style.keywords` with `KeywordPick::Emphasis` colours it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub key: bool,
 }
 
-/// Byte range in `text` of the word spoken at `t_us` (clip time), or `None` in a gap, outside the
-/// words, for zero-length words and when `text` is not the words joined by single spaces.
-pub fn spoken_word(text: &str, words: &[CaptionWord], t_us: i64) -> Option<std::ops::Range<usize>> {
+/// Byte ranges in `text` of the words, or `None` when `text` is not the words joined by single spaces.
+fn word_ranges(text: &str, words: &[CaptionWord]) -> Option<Vec<std::ops::Range<usize>>> {
     let mut at = 0;
-    let mut spoken = None;
+    let mut ranges = Vec::with_capacity(words.len());
     for (i, word) in words.iter().enumerate() {
         if i > 0 {
             at += text.get(at..)?.strip_prefix(' ').map(|_| 1)?;
@@ -562,12 +565,34 @@ pub fn spoken_word(text: &str, words: &[CaptionWord], t_us: i64) -> Option<std::
         if text.get(at..end)? != word.text {
             return None;
         }
-        if word.start_us <= t_us && t_us < word.end_us {
-            spoken = Some(at..end);
-        }
+        ranges.push(at..end);
         at = end;
     }
-    (at == text.len()).then_some(spoken).flatten()
+    (at == text.len()).then_some(ranges)
+}
+
+/// Byte range in `text` of the word spoken at `t_us` (clip time), or `None` in a gap, outside the
+/// words, for zero-length words and when `text` is not the words joined by single spaces.
+pub fn spoken_word(text: &str, words: &[CaptionWord], t_us: i64) -> Option<std::ops::Range<usize>> {
+    let ranges = word_ranges(text, words)?;
+    words.iter().zip(ranges).rev().find(|(w, _)| w.start_us <= t_us && t_us < w.end_us).map(|(_, range)| range)
+}
+
+/// Byte ranges in `text` of the words `pick` marks as key; none when `text` is not the words joined by
+/// single spaces, so a caption edited by hand colours nothing.
+pub fn key_words(text: &str, words: &[CaptionWord], pick: KeywordPick) -> Vec<std::ops::Range<usize>> {
+    let Some(ranges) = word_ranges(text, words) else { return Vec::new() };
+    let letters = |w: &CaptionWord| w.text.chars().filter(|c| c.is_alphanumeric()).count();
+    let said: Vec<_> = words.iter().zip(ranges).filter(|(w, _)| letters(w) > 0).collect();
+    match pick {
+        KeywordPick::Emphasis => said.into_iter().filter(|(w, _)| w.key).map(|(_, range)| range).collect(),
+        KeywordPick::First => said.into_iter().next().map(|(_, range)| range).into_iter().collect(),
+        KeywordPick::Last => said.into_iter().last().map(|(_, range)| range).into_iter().collect(),
+        // The first of the longest, so a tie always marks the same word.
+        KeywordPick::Longest => {
+            said.into_iter().rev().max_by_key(|(w, _)| letters(w)).map(|(_, range)| range).into_iter().collect()
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -698,6 +723,40 @@ pub struct TextStyle {
     /// Needs the clip's `words`; outline, box, size and wrapping stay the same.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highlight: Option<String>,
+    /// Key words of a generated caption in their own colour; the word being spoken still takes `highlight`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub keywords: Option<Keywords>,
+}
+
+/// How a caption marks its key words. Needs the clip's `words`, like `highlight`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Keywords {
+    /// `#rrggbb` fill of the key words.
+    pub color: String,
+    #[serde(default)]
+    pub pick: KeywordPick,
+}
+
+/// Which words of a caption are key.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum KeywordPick {
+    /// Numbers and words said louder than the rest, as `analyze(kind: "emphasis")` scores speech; some
+    /// captions have none.
+    #[default]
+    Emphasis,
+    /// The first word of every caption.
+    First,
+    /// The last word of every caption.
+    Last,
+    /// The longest word of every caption.
+    Longest,
 }
 
 /// Oversized titles may extend beyond the canvas; these bounds still reject unbounded allocations.
@@ -827,11 +886,12 @@ mod tests {
                     background: None,
                     max_width: None,
                     highlight: Some("#ffe14d".into()),
+                    keywords: None,
                 },
                 transform: Transform::default(),
                 words: vec![
-                    CaptionWord { text: "Ahoj".into(), start_us: 0, end_us: 400_000 },
-                    CaptionWord { text: "světe".into(), start_us: 450_000, end_us: 900_000 },
+                    CaptionWord { text: "Ahoj".into(), start_us: 0, end_us: 400_000, key: false },
+                    CaptionWord { text: "světe".into(), start_us: 450_000, end_us: 900_000, key: true },
                 ],
             },
         });
@@ -868,7 +928,7 @@ mod tests {
 
     #[test]
     fn spoken_word_follows_the_words_and_ignores_edited_text() {
-        let word = |text: &str, start_us, end_us| CaptionWord { text: text.into(), start_us, end_us };
+        let word = |text: &str, start_us, end_us| CaptionWord { text: text.into(), start_us, end_us, key: false };
         let words = [word("Příliš", 0, 300), word("žluťoučký", 400, 800), word("kůň", 800, 800)];
         let text = "Příliš žluťoučký kůň";
         let at = |t| spoken_word(text, &words, t).map(|r| &text[r]);
@@ -887,6 +947,23 @@ mod tests {
             assert_eq!(spoken_word(edited, &words, 500), None, "{edited}");
         }
         assert_eq!(spoken_word("", &[], 0), None);
+    }
+
+    #[test]
+    fn key_words_follow_their_pick_and_ignore_edited_text() {
+        let word = |text: &str, key| CaptionWord { text: text.into(), start_us: 0, end_us: 1, key };
+        let words = [word("–", false), word("Stojí", false), word("450", true), word("korun!", false)];
+        let text = "– Stojí 450 korun!";
+        let picked = |pick| key_words(text, &words, pick).into_iter().map(|r| &text[r]).collect::<Vec<_>>();
+        assert_eq!(picked(KeywordPick::Emphasis), ["450"]);
+        // A dash is no word; the first longest wins a tie.
+        assert_eq!(picked(KeywordPick::First), ["Stojí"]);
+        assert_eq!(picked(KeywordPick::Last), ["korun!"]);
+        assert_eq!(picked(KeywordPick::Longest), ["Stojí"]);
+        assert!(key_words("– Stojí 450 korun.", &words, KeywordPick::First).is_empty());
+        // A style without keywords reads and writes as before.
+        let style: TextStyle = serde_json::from_str(r##"{"fontSize":95.0,"color":"#ffffff"}"##).unwrap();
+        assert!(style.keywords.is_none() && !serde_json::to_string(&style).unwrap().contains("keywords"));
     }
 
     #[test]
