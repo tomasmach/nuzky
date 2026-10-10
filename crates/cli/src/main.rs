@@ -9,7 +9,8 @@ use anyhow::{Context, Result, bail, ensure};
 use nuzky_engine::edit::{EditCmd, new_id};
 use nuzky_engine::export::{Delivery, ExportOptions, check_source_path, export};
 use nuzky_engine::media::probe;
-use nuzky_engine::{Project, Renderer, Wait};
+use nuzky_engine::model::AssetKind;
+use nuzky_engine::{Project, Renderer, Wait, proxy};
 
 mod style;
 
@@ -18,7 +19,8 @@ const USAGE: &str = "Usage:
   nuzky probe <media>
   nuzky new <project.json> <media>...     main-track project from media files
   nuzky frame <project.json> <seconds> <out.png> [width]
-  nuzky bench <project.json> [width] [seconds]
+  nuzky bench <project.json> [width] [seconds] [--proxy]
+      plays and scrubs the preview; --proxy first makes the preview proxies of heavy video and plays from them
   nuzky render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
       reels: Instagram Reels and TikTok, 1080x1920 at 30 fps, sound levelled to -14 LUFS (9:16 only)
   nuzky vision-models                     download the face and subject models
@@ -191,6 +193,16 @@ fn install_models(models: &[nuzky_vision::models::Model]) -> Result<()> {
     Ok(())
 }
 
+/// Playhead jumps the bench scrubs, spread over the timeline out of order.
+const SCRUB_JUMPS: i64 = 20;
+
+/// Average and 95th percentile, sorting the times.
+fn summary(times: &mut [f64]) -> (f64, f64) {
+    let avg = times.iter().sum::<f64>() / times.len() as f64;
+    times.sort_by(f64::total_cmp);
+    (avg, times[(times.len() * 95).div_ceil(100).saturating_sub(1)])
+}
+
 /// Prints how long each phase of a job took, to stderr.
 struct PhaseClock<P> {
     phase: Option<(P, Instant)>,
@@ -254,6 +266,8 @@ fn main() -> Result<()> {
         }
         ["bench", project, rest @ ..] => {
             let project = load(project)?;
+            let proxies = rest.contains(&"--proxy");
+            let rest: Vec<&str> = rest.iter().copied().filter(|arg| *arg != "--proxy").collect();
             let width: u32 = rest.first().map(|s| s.parse()).transpose()?.unwrap_or(576);
             let seconds: f64 = rest.get(1).map(|s| s.parse()).transpose()?.unwrap_or(5.0);
             if !seconds.is_finite() || seconds <= 0.0 {
@@ -263,6 +277,17 @@ fn main() -> Result<()> {
             let fps = project.canvas.fps.max(1) as u64;
             let frames = ((seconds * fps as f64).ceil() as u64).max(1);
             let mut renderer = Renderer::new()?;
+            if proxies {
+                for asset in project.assets.iter().filter(|a| a.kind == AssetKind::Video) {
+                    let source = Path::new(&asset.path);
+                    if proxy::wanted(source)? {
+                        let start = Instant::now();
+                        proxy::ensure_proxy(&cache_dir(), source, |_| Ok(()))?;
+                        eprintln!("Proxy of {} ready in {:.1} s", asset.name, start.elapsed().as_secs_f64());
+                    }
+                }
+                renderer.use_proxies(cache_dir());
+            }
             renderer.render(&project, 0, width, height, Wait::Exact, true)?;
             let clock = Instant::now();
             let mut times = Vec::with_capacity(frames as usize);
@@ -273,17 +298,25 @@ fn main() -> Result<()> {
                 renderer.render(&project, (i * 1_000_000 / fps) as i64, width, height, Wait::Ready, true)?;
                 times.push(now.elapsed().as_secs_f64() * 1000.0);
             }
-            let avg = times.iter().sum::<f64>() / times.len() as f64;
-            times.sort_by(f64::total_cmp);
+            let (avg, p95) = summary(&mut times);
             let text = renderer.text_stats();
             println!(
-                "{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {:.2} ms, {} late layers, text laid out {} times and painted {} times",
+                "{}: {width}x{height}, {frames} frames, avg {avg:.2} ms, p95 {p95:.2} ms, {} late layers, text laid out {} times and painted {} times",
                 renderer.adapter_name(),
-                times[(times.len() * 95).div_ceil(100).saturating_sub(1)],
                 renderer.late_layers,
                 text.layouts,
                 text.paints
             );
+            // Scrubbing: the paused preview waits for the exact frame wherever the playhead lands.
+            let mut jumps = Vec::with_capacity(SCRUB_JUMPS as usize);
+            for i in 0..SCRUB_JUMPS {
+                let t = project.duration_us() * ((i * 7) % SCRUB_JUMPS) / SCRUB_JUMPS + 12_345;
+                let now = Instant::now();
+                renderer.render(&project, t.min(project.duration_us() - 1), width, height, Wait::Exact, false)?;
+                jumps.push(now.elapsed().as_secs_f64() * 1000.0);
+            }
+            let (avg, p95) = summary(&mut jumps);
+            println!("scrub: {SCRUB_JUMPS} jumps, avg {avg:.2} ms, p95 {p95:.2} ms");
         }
         ["render", project, out, rest @ ..] => {
             let options = render_options(rest)?;

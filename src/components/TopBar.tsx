@@ -78,7 +78,7 @@ function ProjectsButton() {
   );
 }
 
-/** Background work. Export shows first and reopens its dialog; captions and transcripts open their tab. */
+/** Background work. Export shows first and reopens its dialog; captions and transcripts open their tab; a preview proxy can be stopped. */
 export function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
   const running = Object.values(jobs).filter((j) => j.status === "running");
@@ -98,6 +98,15 @@ export function JobIndicator() {
     return (
       <span className="bar flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-fg" role="status">
         {body}
+      </span>
+    );
+  if (j.kind === "proxy")
+    return (
+      <span className="bar flex h-8 items-center gap-1.5 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
+        {body}
+        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" title="Stop preparing the preview. It keeps playing the original file, which can stutter." onClick={() => void api.cancelJob(j.id)}>
+          Stop
+        </Button>
       </span>
     );
   return (

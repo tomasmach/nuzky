@@ -41,6 +41,8 @@ pub struct AppState {
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Sound caches whose extraction failed, not retried on every edit; a changed file gets a new one.
     audio_failed: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Preview proxies not to make: of video that decodes fast enough, that failed or that the user stopped.
+    proxy_skipped: Mutex<std::collections::HashSet<PathBuf>>,
     /// Saving failed when the window was closed; the next close quits without retrying the warning.
     close_failed: AtomicBool,
     /// The user agreed to cancel running work when closing the window.
@@ -248,7 +250,7 @@ impl OpenSession {
                             state.publish_project(&snap.project);
                             // Media an agent added, or rebound to another file under the same id,
                             // needs its sound prepared too; prepared sources are skipped.
-                            jobs::ensure_audio(&state, &snap.project);
+                            jobs::prepare_media(&state, &snap.project);
                             // User edits already return this snapshot; agent undo also reaches the UI.
                             if !matches!(origin, Origin::User) {
                                 app.emit("project-changed", snap).ok();
@@ -372,7 +374,7 @@ impl AppState {
         self.engine.send(Msg::Seek(0));
         self.publish_project(&snap.project);
         current.start_pump(self.app.clone(), rx);
-        jobs::ensure_audio(self, &snap.project);
+        jobs::prepare_media(self, &snap.project);
         Ok(snap)
     }
 }
@@ -563,7 +565,7 @@ async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option
             Expect::default(),
             expected_epoch.as_deref(),
         )?;
-        jobs::ensure_audio(&state, &snap.project);
+        jobs::prepare_media(&state, &snap.project);
         snap
     };
     Ok(ImportResult { snapshot, added, failed })
@@ -573,7 +575,7 @@ async fn import_media(app: AppHandle, paths: Vec<String>, expected_epoch: Option
 async fn thumbnail(app: AppHandle, asset_id: String) -> CmdResult<Option<String>> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        state.asset_preview(&asset_id, &state.thumbs, thumbs::thumbnail)
+        state.asset_preview(&asset_id, &state.thumbs, |asset| thumbs::thumbnail(&state.cache_dir, asset))
     })
     .await
     .map_err(err)?
@@ -820,7 +822,7 @@ async fn layer_bounds(app: AppHandle, t_us: i64) -> CmdResult<Vec<LayerBounds>> 
 async fn filmstrip(app: AppHandle, asset_id: String) -> CmdResult<Option<Filmstrip>> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        state.asset_preview(&asset_id, &state.filmstrips, thumbs::filmstrip)
+        state.asset_preview(&asset_id, &state.filmstrips, |asset| thumbs::filmstrip(&state.cache_dir, asset))
     })
     .await
     .map_err(err)?
@@ -910,6 +912,7 @@ pub fn run() {
                 cache_dir,
                 jobs: Mutex::new(HashMap::new()),
                 audio_failed: Mutex::new(Default::default()),
+                proxy_skipped: Mutex::new(Default::default()),
                 close_failed: AtomicBool::new(false),
                 quit_confirmed: AtomicBool::new(false),
                 thumbs: Mutex::new(HashMap::new()),
@@ -924,7 +927,7 @@ pub fn run() {
             app.manage(state);
             app.manage(agent_panel::AgentPanel::default());
             app.state::<AppState>().session.lock().unwrap().start_pump(app.handle().clone(), events);
-            jobs::ensure_audio(&app.state::<AppState>(), &project);
+            jobs::prepare_media(&app.state::<AppState>(), &project);
             app.emit("ready", ()).ok();
             #[cfg(all(target_os = "macos", debug_assertions))]
             test_bridge::start(app)?;
@@ -1039,8 +1042,8 @@ pub fn run() {
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl AppState {
-    /// Running work that closing the window would cancel. Audio preparation is not asked
-    /// about: it starts again with the project.
+    /// Running work that closing the window would cancel. Preparing audio or a preview proxy is
+    /// not asked about: it starts again with the project.
     fn running_work(&self) -> Option<&'static str> {
         let mut kinds: Vec<String> =
             self.jobs.lock().unwrap().keys().map(|id| id.split(':').next().unwrap_or(id).to_owned()).collect();
@@ -1073,7 +1076,7 @@ impl AppState {
 fn quit_question(kinds: &[String]) -> Option<&'static str> {
     if kinds.iter().any(|kind| kind == "export") {
         Some("An export is still running. Quitting cancels it and removes the unfinished file.")
-    } else if kinds.iter().any(|kind| kind != "audio") {
+    } else if kinds.iter().any(|kind| kind != "audio" && kind != "proxy") {
         Some("Speech recognition or analysis is still running. Quitting cancels it.")
     } else {
         None
@@ -1245,7 +1248,7 @@ mod ipc_lifecycle_tests {
     #[test]
     fn quitting_asks_about_real_work_and_waits_for_cancelled_jobs_to_clean_up() {
         let kinds = |list: &[&str]| list.iter().map(|kind| kind.to_string()).collect::<Vec<_>>();
-        assert_eq!(quit_question(&kinds(&["audio"])), None);
+        assert_eq!(quit_question(&kinds(&["audio", "proxy"])), None);
         assert!(quit_question(&kinds(&["audio", "captions"])).unwrap().starts_with("Speech recognition"));
         assert!(quit_question(&kinds(&["transcription", "export"])).unwrap().starts_with("An export"));
         let dir = std::env::temp_dir().join(format!("nuzky-quit-{}", new_id()));

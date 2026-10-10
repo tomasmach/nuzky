@@ -441,7 +441,7 @@ export type FontFamilies = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "export" | "captions" | "transcript",
+  kind: "audio" | "proxy" | "export" | "captions" | "transcript",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,

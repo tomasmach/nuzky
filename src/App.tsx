@@ -153,6 +153,7 @@ function onJob(job: JobEvent) {
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
   if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${job.message}` });
   if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}` });
+  if (job.kind === "proxy" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}. The preview plays the original file, which can stutter.` });
   // The dialog shows the result itself; with it closed, a toast reports it.
   if (job.kind === "export" && job.id === exportJobId && !exportOpen) {
     if (job.status === "done") {

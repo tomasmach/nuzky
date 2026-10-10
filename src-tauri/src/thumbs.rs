@@ -4,17 +4,17 @@ use std::path::Path;
 
 use anyhow::Result;
 use base64::Engine as _;
-use nuzky_engine::media::{VideoDecoder, decode_size, orient};
+use nuzky_engine::media::{decode_size, orient};
 use nuzky_engine::model::{Asset, AssetKind};
 
 const THUMB_HEIGHT: f32 = 120.0;
 const MAX_SPRITE_PIXELS: u64 = 4_000_000;
 
-pub fn thumbnail(asset: &Asset) -> Result<Option<String>> {
+pub fn thumbnail(cache_dir: &Path, asset: &Asset) -> Result<Option<String>> {
     if asset.kind == AssetKind::Audio || asset.width == 0 {
         return Ok(None);
     }
-    let mut decoder = VideoDecoder::open(Path::new(&asset.path))?;
+    let mut decoder = nuzky_engine::proxy::open_decoder(cache_dir, Path::new(&asset.path))?;
     let target = if asset.kind == AssetKind::Image { 0 } else { (asset.duration_us / 10).min(1_000_000) };
     decoder.seek(target)?;
     let mut picked = None;
@@ -40,7 +40,7 @@ pub fn thumbnail(asset: &Asset) -> Result<Option<String>> {
     Ok(Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png_bytes))))
 }
 
-pub fn filmstrip(asset: &Asset) -> Result<Option<crate::Filmstrip>> {
+pub fn filmstrip(cache_dir: &Path, asset: &Asset) -> Result<Option<crate::Filmstrip>> {
     if asset.kind == AssetKind::Audio || asset.width == 0 || asset.height == 0 {
         return Ok(None);
     }
@@ -49,7 +49,7 @@ pub fn filmstrip(asset: &Asset) -> Result<Option<crate::Filmstrip>> {
     let (dw, dh) = if asset.rotation % 180 == 90 { (frame_height, frame_width) } else { (frame_width, frame_height) };
     let width = frame_width * count;
     let mut sprite = vec![0; (width * frame_height * 4) as usize];
-    let mut decoder = VideoDecoder::open(Path::new(&asset.path))?;
+    let mut decoder = nuzky_engine::proxy::open_decoder(cache_dir, Path::new(&asset.path))?;
     let mut frames = [None, None];
     for i in 0..count {
         let target = i as i64 * interval_us;
@@ -125,7 +125,7 @@ mod tests {
         for duration in [600_000_000, 60_000_000] {
             asset.duration_us = duration;
             let start = std::time::Instant::now();
-            let strip = filmstrip(&asset).unwrap().unwrap();
+            let strip = filmstrip(Path::new("/nonexistent"), &asset).unwrap().unwrap();
             eprintln!("filmstrip {duration} us: {:?}, {} frames", start.elapsed(), strip.count);
             assert_eq!(strip.count, 40);
         }
@@ -139,7 +139,7 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         for name in ["portrait.mp4", "wide.mp4", "phone_hevc_vfr.mov", "music.mp3", "engine-evidence/identity.png"] {
             let asset = nuzky_engine::media::probe(&root.join(name), name.into()).unwrap();
-            let strip = filmstrip(&asset).unwrap();
+            let strip = filmstrip(Path::new("/nonexistent"), &asset).unwrap();
             if asset.kind == AssetKind::Audio {
                 assert!(strip.is_none());
                 continue;
