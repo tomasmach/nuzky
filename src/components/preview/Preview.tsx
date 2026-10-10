@@ -58,6 +58,8 @@ function useFrameStream(url: string, canvas: React.RefObject<HTMLCanvasElement |
       }
       // Opaque: frames have no transparency, and an opaque canvas needs no blending with what is behind it.
       el.getContext("2d", { alpha: false })?.putImageData(new ImageData(new Uint8ClampedArray(buf, HEADER, w * h * 4), w, h), 0, 0);
+      // The time of the frame on screen. After a seek the previous frame stays a moment; the UI flows wait for this.
+      el.dataset.us = String(t);
       // A frame rendered just before a pause can arrive after it; the pause already set the time.
       if (playing && useEditor.getState().playing) useEditor.setState({ timeUs: t });
     };

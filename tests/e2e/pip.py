@@ -65,6 +65,10 @@ def pip(r):
     r.seek(AT_US)
     select(r, [])
     rect = preview_rect(r)
+    # Until the frame at the playhead arrives, the preview shows the first one, which every later shot would differ from.
+    drawn = lambda: r.s.run("return document.querySelector('section[aria-label=Preview] canvas').dataset.us")
+    if not r.check('the preview draws the frame at the playhead', wait(lambda: drawn() == str(AT_US), 10), drawn()):
+        return
 
     def talking_head():
         r.shot('talking-head')
