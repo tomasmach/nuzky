@@ -63,7 +63,7 @@ def layout(r):
     r.shot('default')
     zoom = r.s.run("""const b = document.querySelector('input[aria-label="Timeline zoom"]').getBoundingClientRect();
         return {left: b.left, top: b.top, width: b.width, height: b.height, viewport: window.innerWidth};""")
-    track = preview_crop(r.work / 'default.png', zoom).convert('RGB')
+    track = preview_crop(r.work / 'default.png', zoom)
     start = track.getpixel((1, track.height // 2))
     r.check('the timeline zoom slider fills with accent from the very left end of its track',
             start[2] > 200 and start[0] < 100, start)
