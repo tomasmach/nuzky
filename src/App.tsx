@@ -29,6 +29,7 @@ import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { listenStyle, loadStyle, useStyle } from "./lib/style";
+import { LearnDialog } from "./components/style/LearnDialog";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
 
@@ -87,7 +88,8 @@ function useShortcuts() {
         useEditor.setState({ launcherOpen: true });
         return;
       }
-      if (isTyping(target) || s.exportOpen) return;
+      // The editor's keys stay with an open dialog of its own.
+      if (isTyping(target) || s.exportOpen || useStyle.getState().learnOpen) return;
       const fps = s.snap?.project.canvas.fps ?? 30;
       const key = e.key.toLowerCase();
       // A focused slider keeps its own arrow, Home and End keys.
@@ -427,6 +429,8 @@ export default function App() {
   const snap = useEditor((s) => s.snap);
   const view = useEditor((s) => s.view);
   const launcherOpen = useEditor((s) => s.launcherOpen);
+  // Learning from videos opens from Your style, the top bar or a toast, anywhere.
+  const learnOpen = useStyle((s) => s.learnOpen);
   const dock = useDockLayout();
   const win = useWindowSize();
   // A column docked at either edge narrows the editor; in the inspector's place the panel is the inspector's width.
@@ -515,6 +519,7 @@ export default function App() {
       {launcherOpen && !home && <Launcher />}
       <ExportDialog />
       <ConnectAgentDialog />
+      {learnOpen && <LearnDialog />}
       <SwitchDialog />
       {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}
       <Toasts bottom={home ? 18 : panes.timeline + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />

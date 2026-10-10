@@ -5,7 +5,6 @@ import { changeStyle, loadStyle, useStyle } from "../../lib/style";
 import { when } from "../../lib/time";
 import type { StyleConfidence, StyleFrozen, StyleRule, StyleSource, StyleView, Suggestion } from "../../lib/types";
 import { Button, IconButton, Menu, type MenuEntry } from "../ui";
-import { LearnDialog } from "./LearnDialog";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -78,7 +77,7 @@ function SuggestionCard({ s, busy }: { s: Suggestion; busy: boolean }) {
         <Button pill disabled={busy} disabledReason="Wait for the style to change" onClick={() => void changeStyle({ type: "reject", title: s.title }, `Learning leaves ${s.title} out`)}>
           Reject
         </Button>
-        <Button pill disabled={busy} disabledReason="Wait for the style to change" onClick={() => void changeStyle({ type: "accept", titles: [s.title] })}>
+        <Button pill disabled={busy} disabledReason="Wait for the style to change" onClick={() => void changeStyle({ type: "accept", titles: [s.title], seen: [s.text] })}>
           <Check size={14} /> Accept
         </Button>
       </div>
@@ -284,7 +283,7 @@ function LearnedRules({ view, changed }: { view: StyleView; changed: Set<string>
                 </span>
               )}
             </span>
-            {rule.confidence ? <Confidence c={rule.confidence} /> : <span className="text-[12px] text-muted">Not seen lately</span>}
+            {rule.confidence ? <Confidence c={rule.confidence} /> : rule.byYou ? <span /> : <span className="text-[12px] text-muted">Not seen lately</span>}
             <IconButton
               label={`More for ${rule.title}`}
               aria-haspopup="menu"
@@ -511,7 +510,6 @@ function Empty() {
 export function StylePage() {
   const view = useStyle((s) => s.view);
   const error = useStyle((s) => s.error);
-  const learnOpen = useStyle((s) => s.learnOpen);
   const [editing, setEditing] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -564,7 +562,7 @@ export function StylePage() {
                       disabled={busy}
                       onClick={async () => {
                         setBusy(true);
-                        await changeStyle({ type: "accept", titles: view.suggestions.map((s) => s.title) });
+                        await changeStyle({ type: "accept", titles: view.suggestions.map((s) => s.title), seen: view.suggestions.map((s) => s.text) });
                         setBusy(false);
                       }}
                     >
@@ -586,7 +584,6 @@ export function StylePage() {
           </div>
         </div>
       )}
-      {learnOpen && <LearnDialog />}
       {resetting && view && <ResetDialog view={view} onClose={() => setResetting(false)} />}
     </>
   );

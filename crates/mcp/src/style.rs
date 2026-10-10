@@ -262,9 +262,12 @@ pub struct StyleVersion {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StyleAction {
-    /// Puts suggested rules into the style.
+    /// Puts suggested rules into the style. `seen` is each one's text as the caller showed it, in
+    /// the same order, so a suggestion learned anew meanwhile is not accepted unseen.
     Accept {
         titles: Vec<String>,
+        #[serde(default)]
+        seen: Vec<String>,
     },
     /// Keeps a suggestion out of the style until the creator asks to learn it again.
     Reject {
@@ -364,30 +367,22 @@ impl Store {
         self.show(&versions)
     }
 
-    /// Keeps what was learned from one video, replacing what was learned from it before, and
-    /// shows the style with it.
-    pub fn add_evidence(&self, evidence: Evidence) -> Result<StyleView> {
-        self.keep_evidence(evidence)?;
-        self.view()
-    }
-
     /// Keeps what was learned from one video. Suggestions are worked out only when the style is
     /// shown, so learning in the background stays cheap.
     pub fn keep_evidence(&self, mut evidence: Evidence) -> Result<()> {
         let _lock = self.lock()?;
         let all = self.evidence()?;
-        evidence.seq = all
-            .iter()
-            .find(|e| e.key == evidence.key)
-            .map_or_else(|| all.iter().map(|e| e.seq).max().unwrap_or(0) + 1, |e| e.seq);
+        // Learned again, a video is the newest one, so the newest 12 are those learned last.
+        evidence.seq = all.iter().map(|e| e.seq).max().unwrap_or(0) + 1;
         let dir = self.evidence_dir();
         fs::create_dir_all(&dir).with_context(|| format!("Cannot create {}", dir.display()))?;
         write_whole(&dir.join(format!("{:06}.json", evidence.seq)), &serde_json::to_vec(&evidence)?)?;
-        let mut seqs: Vec<u64> = all.iter().map(|e| e.seq).chain([evidence.seq]).collect();
-        seqs.sort_unstable();
-        seqs.dedup();
-        for old in seqs.iter().rev().skip(MAX_EVIDENCE) {
-            fs::remove_file(dir.join(format!("{old:06}.json"))).context("Forgetting an old video")?;
+        let replaced = all.iter().filter(|e| e.key == evidence.key).map(|e| e.seq);
+        let mut others: Vec<u64> = all.iter().filter(|e| e.key != evidence.key).map(|e| e.seq).collect();
+        others.sort_unstable();
+        let oldest = others.iter().rev().skip(MAX_EVIDENCE - 1).copied();
+        for old in replaced.chain(oldest) {
+            fs::remove_file(dir.join(format!("{old:06}.json"))).context("Forgetting what was learned before")?;
         }
         Ok(())
     }
@@ -434,12 +429,20 @@ impl Store {
             })
         };
         let label = match action {
-            StyleAction::Accept { titles } => {
+            StyleAction::Accept { titles, seen } => {
                 ensure!(!titles.is_empty(), "INVALID_ARGUMENTS: name the rules to accept");
+                ensure!(
+                    seen.is_empty() || seen.len() == titles.len(),
+                    "INVALID_ARGUMENTS: give the text of every rule or none"
+                );
                 let learned = learned.as_ref().context("NOT_SUGGESTED: nothing was learned yet")?;
-                for title in &titles {
+                for (i, title) in titles.iter().enumerate() {
                     let rule =
                         suggested(title).with_context(|| format!("NOT_SUGGESTED: {title} is not a suggestion now"))?;
+                    ensure!(
+                        seen.get(i).is_none_or(|text| *text == rule.text),
+                        "STYLE_CHANGED: the suggestion {title} changed meanwhile; look at it again"
+                    );
                     doc.set(doc::rule_heading(rule.title).expect("learned rules have headings"), rule.text.clone());
                     doc.rebuild_settings(Some((rule.title, &rule.settings)));
                     accepted.insert(rule.title.to_owned(), accept(rule));
@@ -718,11 +721,21 @@ impl Store {
         let rules = doc
             .rules()
             .into_iter()
-            .map(|title| ActiveRule {
-                title: title.to_owned(),
-                summary: current.accepted.get(title).map(|a| a.summary.clone()).unwrap_or_default(),
-                by_you: current.frozen.get(title) == Some(&Frozen::Edited),
-                confidence: rules_now(title).map(confidence),
+            .map(|title| {
+                // A rule changed by hand says what the creator wrote, which neither the summary
+                // nor what learning finds now describes.
+                let by_you = current.frozen.get(title) == Some(&Frozen::Edited);
+                ActiveRule {
+                    title: title.to_owned(),
+                    summary: current
+                        .accepted
+                        .get(title)
+                        .filter(|_| !by_you)
+                        .map(|a| a.summary.clone())
+                        .unwrap_or_default(),
+                    by_you,
+                    confidence: rules_now(title).filter(|_| !by_you).map(confidence),
+                }
             })
             .collect();
         let suggestions = learned
@@ -1055,7 +1068,8 @@ pub fn project_evidence(project: &Project, path: &Path, transcripts: &Transcript
             places[i] = Some((piece, word.start_us, word.end_us));
         }
     }
-    if places.iter().all(Option::is_some) {
+    // Every word, each file in one piece: the recording as it was, nothing cut.
+    if places.iter().all(Option::is_some) && clips.len() <= records.len() {
         return Ok(None);
     }
     let cut_words: Vec<Word> = derived
@@ -1111,7 +1125,7 @@ pub fn project_evidence(project: &Project, path: &Path, transcripts: &Transcript
 fn project_picture(project: &Project, clips: &[&nuzky_engine::model::Clip]) -> Picture {
     let mut captions: Vec<Caption> = Vec::new();
     let mut heights: Vec<f32> = Vec::new();
-    for clip in project.tracks.iter().filter(|t| t.is_captions()).flat_map(|t| &t.clips) {
+    for clip in project.tracks.iter().filter(|t| t.is_captions() && !t.hidden).flat_map(|t| &t.clips) {
         let ClipContent::Text { text, transform, .. } = &clip.content else { continue };
         captions.push(Caption {
             start_us: clip.start_us,
@@ -1289,6 +1303,11 @@ mod tests {
         }
     }
 
+    fn add(store: &Store, evidence: Evidence) -> StyleView {
+        store.keep_evidence(evidence).unwrap();
+        store.view().unwrap()
+    }
+
     fn store() -> (Store, PathBuf) {
         let dir = std::env::temp_dir().join(format!("nuzky-style-{}", nuzky_engine::edit::new_id()));
         (Store::at(&dir), dir)
@@ -1305,24 +1324,33 @@ mod tests {
     #[test]
     fn learning_suggests_and_accepting_all_writes_what_the_cli_writes() {
         let (store, dir) = store();
-        let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
+        let view = add(&store, evidence("talk", 120_000));
         assert_eq!(file(&dir), None, "learning alone never writes the style");
         assert!(view.suggestions.len() >= 4 && view.versions.is_empty(), "{:?}", titles(&view));
         assert!(view.suggestions.iter().all(|s| !s.update && s.confidence.level == Level::Low && s.confidence.of == 1));
         let restart = view.suggestions.iter().find(|s| s.title == "Restarted sentences").unwrap();
         assert!(restart.moments.len() == 3 && restart.moments[0].video == "talk.mov", "{:?}", restart.moments);
 
-        let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let seen: Vec<String> = view.suggestions.iter().map(|s| s.text.clone()).collect();
+        let changed = StyleAction::Accept {
+            titles: titles(&view),
+            seen: seen.iter().map(|t| t.replace("120 ms", "90 ms")).collect(),
+        };
+        assert!(
+            store.act(changed).unwrap_err().to_string().starts_with("STYLE_CHANGED"),
+            "only what was shown is accepted"
+        );
+        let view = store.act(StyleAction::Accept { titles: titles(&view), seen }).unwrap();
         let cli = learning::learn(&[evidence("talk", 120_000).source()]);
         assert_eq!(file(&dir).unwrap(), cli, "accepting every suggestion gives the CLI's EDIT.md byte for byte");
         assert!(view.suggestions.is_empty() && view.versions[0].label.starts_with("Accepted "), "{:?}", view.versions);
 
         // The same video learned again with a few more milliseconds of pause is no news; a much
         // longer pause is, and only for Pauses.
-        let view = store.add_evidence(evidence("talk", 130_000)).unwrap();
+        let view = add(&store, evidence("talk", 130_000));
         assert!(view.suggestions.is_empty(), "{:?}", titles(&view));
         assert_eq!(view.sources.len(), 1, "learning a video again replaces it");
-        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        let view = add(&store, evidence("talk", 400_000));
         assert_eq!(titles(&view), ["Pauses"]);
         let pauses = &view.suggestions[0];
         assert!(
@@ -1339,13 +1367,13 @@ mod tests {
     #[test]
     fn rejected_and_removed_rules_stay_out_until_learned_again() {
         let (store, dir) = store();
-        store.add_evidence(evidence("talk", 120_000)).unwrap();
+        add(&store, evidence("talk", 120_000));
         let view = store.act(StyleAction::Reject { title: "Pauses".into() }).unwrap();
         assert!(!titles(&view).contains(&"Pauses".to_owned()));
         assert_eq!(file(&dir), None, "rejecting writes no style");
-        let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let view = store.act(StyleAction::Accept { titles: titles(&view), seen: Vec::new() }).unwrap();
         assert!(!file(&dir).unwrap().contains("## Pauses") && view.suggestions.is_empty());
-        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        let view = add(&store, evidence("talk", 400_000));
         assert!(view.suggestions.is_empty(), "a rejected rule is not suggested again: {:?}", titles(&view));
 
         let view = store.act(StyleAction::Remove { title: "Captions".into() }).unwrap();
@@ -1362,8 +1390,8 @@ mod tests {
         let (store, dir) = store();
         store.act(StyleAction::SetOwn { index: None, text: "Never cut  the product name.".into(), was: None }).unwrap();
         assert!(file(&dir).unwrap().contains("## Your rules\n\nThe creator's own instructions."), "{:?}", file(&dir));
-        let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
-        let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let view = add(&store, evidence("talk", 120_000));
+        let view = store.act(StyleAction::Accept { titles: titles(&view), seen: Vec::new() }).unwrap();
         assert_eq!(view.own, ["Never cut the product name."]);
         let text = file(&dir).unwrap();
         assert!(text.find("## Your rules").unwrap() < text.find("## Settings").unwrap(), "{text}");
@@ -1377,8 +1405,9 @@ mod tests {
         let stale = store.act(StyleAction::SetText { text: edited.clone(), base_version: view.version - 1 });
         assert!(stale.unwrap_err().to_string().starts_with("STYLE_CHANGED"));
         let view = store.act(StyleAction::SetText { text: edited.clone(), base_version: view.version }).unwrap();
-        assert!(view.rules.iter().any(|r| r.title == "Pauses" && r.by_you));
-        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        let pauses = view.rules.iter().find(|r| r.title == "Pauses").unwrap();
+        assert!(pauses.by_you && pauses.summary.is_empty() && pauses.confidence.is_none(), "{pauses:?}");
+        let view = add(&store, evidence("talk", 400_000));
         assert!(view.suggestions.is_empty(), "{:?}", titles(&view));
         assert_eq!(file(&dir).unwrap(), edited);
 
@@ -1394,8 +1423,8 @@ mod tests {
     #[test]
     fn a_change_outside_nuzky_is_a_version_and_any_version_comes_back() {
         let (store, dir) = store();
-        let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
-        let accepted = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let view = add(&store, evidence("talk", 120_000));
+        let accepted = store.act(StyleAction::Accept { titles: titles(&view), seen: Vec::new() }).unwrap();
         let learned = file(&dir).unwrap();
         let outside = learned.replace("Cut every earlier attempt", "Cut each earlier attempt");
         assert_ne!(outside, learned);
@@ -1522,6 +1551,14 @@ mod tests {
         vec![serde_json::from_value(serde_json::json!({"type": "rippleDeleteRanges", "ranges": [{"startUs": start, "endUs": start + 2_000_000}]})).unwrap()]
     }
 
+    /// Cuts the silence between the first two sentences, 3 s to 5.9 s.
+    fn cut_silence() -> Vec<nuzky_engine::edit::EditCmd> {
+        vec![
+            serde_json::from_value(serde_json::json!({"type": "rippleDeleteRanges", "ranges": [{"startUs": 3_000_000, "endUs": 5_900_000}]}))
+                .unwrap(),
+        ]
+    }
+
     /// Which of the six sentences the evidence says were kept.
     fn kept(evidence: &Evidence) -> Vec<bool> {
         let places = evidence.places.as_ref().unwrap();
@@ -1537,6 +1574,11 @@ mod tests {
             moment.and_then(|m| m.lesson(&host.transcripts).unwrap())
         };
         assert!(learn(false).is_none(), "a project that plays everything recorded teaches nothing");
+        // Silence cut between two sentences: every word stays, and that is a cut too.
+        host.session.edit(cut_silence(), None, Default::default()).unwrap();
+        let taught = learn(false).unwrap();
+        assert!(taught.places.as_ref().unwrap().iter().all(Option::is_some) && taught.alignment.pieces.len() == 2);
+        host.session.undo().unwrap();
         host.session.edit(cut(5, 0), None, Default::default()).unwrap();
         assert!(learn(true).is_none(), "edits teach only after an AI cut");
         assert_eq!(kept(&learn(false).unwrap()), [true, true, true, true, true, false], "an export does");
@@ -1601,7 +1643,15 @@ mod tests {
             captions.clips.push(clip);
         }
         project.tracks.push(captions);
-        let evidence = project_evidence(&project, &dir.join("talk.nuzky"), &host.transcripts).unwrap().unwrap();
+        let path = dir.join("talk.nuzky");
+        project.tracks.last_mut().unwrap().hidden = true;
+        let hidden = project_evidence(&project, &path, &host.transcripts).unwrap().unwrap();
+        assert!(
+            hidden.picture.captions.is_empty() && hidden.picture.caption_band.is_none(),
+            "hidden captions are not exported"
+        );
+        project.tracks.last_mut().unwrap().hidden = false;
+        let evidence = project_evidence(&project, &path, &host.transcripts).unwrap().unwrap();
         let picture = &evidence.picture;
         assert_eq!(
             (picture.captions.len(), picture.captions[0].words, picture.caption_band),
@@ -1629,10 +1679,10 @@ mod tests {
             .replace("## Pauses\n", "## My brand\n\nSay Nuzky, never Nůžky.\n\n## Pauses\n");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("EDIT.md"), &mine).unwrap();
-        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        let view = add(&store, evidence("talk", 400_000));
         assert_eq!(view.versions[0].label, "Found EDIT.md");
         assert!(view.suggestions.iter().all(|s| s.update), "{:?}", titles(&view));
-        store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        store.act(StyleAction::Accept { titles: titles(&view), seen: Vec::new() }).unwrap();
         let text = file(&dir).unwrap();
         assert!(
             text.contains("Always keep my intro.") && text.contains("## My brand\n\nSay Nuzky, never Nůžky.\n\n"),
@@ -1641,6 +1691,21 @@ mod tests {
         assert!(text.contains("| edit_transcript shorten_pauses_us | 400000 |"), "{text}");
         store.act(StyleAction::Remove { title: "Cuts".into() }).unwrap();
         assert!(file(&dir).unwrap().contains("## My brand\n\nSay Nuzky"), "{}", file(&dir).unwrap());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_video_learned_again_is_the_newest_and_the_newest_12_stay() {
+        let (store, dir) = store();
+        for i in 0..12 {
+            store.keep_evidence(evidence(&format!("take{i}"), 120_000)).unwrap();
+        }
+        store.keep_evidence(evidence("take0", 130_000)).unwrap();
+        store.keep_evidence(evidence("take12", 120_000)).unwrap();
+        let titles: Vec<String> = store.view().unwrap().sources.iter().map(|s| s.title.clone()).collect();
+        assert_eq!(titles.len(), 12);
+        assert_eq!(titles[..2], ["take12.mov and reel.mp4", "take0.mov and reel.mp4"]);
+        assert!(!titles.contains(&"take1.mov and reel.mp4".to_owned()), "the one learned longest ago goes: {titles:?}");
         fs::remove_dir_all(dir).unwrap();
     }
 

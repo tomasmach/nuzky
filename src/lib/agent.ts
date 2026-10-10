@@ -81,6 +81,8 @@ interface AgentState {
   /** When the current answer started, in ms; it survives moving the panel. */
   startedAt: number | null;
   draft: string;
+  /** What the last message was about, so a choice or Try again stays on it. */
+  about: AiAbout;
   /** Context chips the user removed from the next message. */
   dropSelection: boolean;
   dropPlayhead: boolean;
@@ -103,6 +105,7 @@ export const useAgent = create<AgentState>(() => ({
   items: [],
   status: "idle",
   startedAt: null,
+  about: "project",
   draft: "",
   dropSelection: false,
   dropPlayhead: false,
@@ -232,7 +235,7 @@ export function sendBlocked(): string | null {
   return null;
 }
 
-export async function send(text = useAgent.getState().draft.trim(), about: AiAbout = "project") {
+export async function send(text = useAgent.getState().draft.trim(), about: AiAbout = useAgent.getState().about) {
   const s = useAgent.getState();
   if (!text || sendBlocked()) return;
   const context = promptContext(about);
@@ -247,6 +250,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
     items: [...s.items.filter((i) => i.kind !== "error"), { kind: "user", text, context: describeContext(context) }],
     status: "working",
     startedAt: Date.now(),
+    about,
     draft: fromDraft ? "" : s.draft,
     dropSelection: false,
     dropPlayhead: false,

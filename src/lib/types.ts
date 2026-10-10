@@ -676,6 +676,7 @@ export type SpeechModel = {
 export type StyleAction = {
   "type": "accept",
   titles: Array<string>,
+  seen: Array<string>,
 } | {
   "type": "reject",
   title: string,

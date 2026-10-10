@@ -108,8 +108,10 @@ impl Doc {
 
     /// Writes the block again, keeping the creator's own sections in it, or puts it where its
     /// heading belongs.
-    pub fn set(&mut self, heading: &'static str, text: String) {
+    pub fn set(&mut self, heading: &'static str, mut text: String) {
         if let Some(block) = self.blocks.iter_mut().find(|b| b.heading == Some(heading)) {
+            // The creator's sections stay as they are here, never doubled by ones the new text brings.
+            text.truncate(foreign(&text));
             block.text = text + &block.text[foreign(&block.text)..];
             return;
         }
@@ -353,6 +355,20 @@ mod tests {
             text.contains("## Settings\n\n\nKeep the brand name.\n\n## Brand") && !text.contains("| Setting"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_creators_sections_under_their_rules_stay_once() {
+        let mut doc = Doc::parse(&format!("{PREAMBLE}{OWN}\n\n{OWN_INTRO}\n\n- One.\n\n## Brand\n\nSay Nuzky.\n\n"));
+        doc.set_own(Some(0), Some("Uno."));
+        doc.set_own(None, Some("Two."));
+        let text = doc.text();
+        assert_eq!(text.matches("## Brand").count(), 1, "{text}");
+        assert_eq!(doc.own(), ["Uno.", "Two."]);
+        // A block put back from another version brings its own sections only once, too.
+        let block = doc.get(OWN).unwrap().to_owned();
+        doc.set(OWN, block);
+        assert_eq!(doc.text(), text);
     }
 
     #[test]

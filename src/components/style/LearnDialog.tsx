@@ -40,7 +40,8 @@ export function LearnDialog() {
   const running = job?.status === "running";
   const ended = !!learning && !!job && !running;
   const rows = useStyle((s) => s.draft);
-  const setRows = (change: (rows: StylePair[]) => StylePair[]) => useStyle.setState((s) => ({ draft: change(s.draft) }));
+  // Choosing other files after learning ended leaves its results, which were about the old ones.
+  const setRows = (change: (rows: StylePair[]) => StylePair[]) => useStyle.setState((s) => ({ draft: change(s.draft), ...(running ? {} : { learning: null }) }));
   const dialog = useRef<HTMLDivElement>(null);
   const pairs = learning && (running || ended) ? learning.pairs : rows;
   const close = () => useStyle.setState({ learnOpen: false });

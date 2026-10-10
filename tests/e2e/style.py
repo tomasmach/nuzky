@@ -47,9 +47,8 @@ def duration(path):
     return float(run('ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', str(path)).stdout)
 
 
-def pair(dir):
-    """The recording and the creator's cut of it: retakes, a filler, a side remark and a call to action left out,
-    every other piece zoomed in and two-word captions burned in."""
+def record(dir):
+    """The recording, and the pieces of it the creator keeps."""
     parts = dir / 'parts'
     parts.mkdir(parents=True)
     listing, pieces, t = [], [], 0.0
@@ -63,10 +62,18 @@ def pair(dir):
         t += spoken + pause
         listing += [f"file '{wav}'", f"file '{silence}'"]
     (parts / 'list.txt').write_text('\n'.join(listing) + '\n')
-    speech, recording, cut = dir / 'speech.wav', dir / 'talk.mp4', dir / 'reel.mp4'
+    speech, recording = dir / 'speech.wav', dir / 'talk.mp4'
     run('ffmpeg', '-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', str(parts / 'list.txt'), str(speech))
     run('ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=540x960:r=30', '-i', str(speech), '-shortest',
         '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', str(recording))
+    return recording, pieces
+
+
+def pair(dir):
+    """The recording and the creator's cut of it: retakes, a filler, a side remark and a call to action left out,
+    every other piece zoomed in and two-word captions burned in."""
+    recording, pieces = record(dir)
+    cut = dir / 'reel.mp4'
     graph = ''
     for k, (start, end) in enumerate(pieces):
         zoom = f',crop=iw/{ZOOM}:ih/{ZOOM},scale=540:960' if k % 2 == 1 else ''
@@ -278,7 +285,7 @@ def project_setup(r):
     if missing:
         raise RuntimeError(f'run scripts/fixtures.sh first, missing: {missing}')
     link_models(r)
-    recording, _ = pair(r.work / 'pair')
+    recording, _ = record(r.work / 'pair')
     run(str(CLI), 'new', str(r.work / 'data/nuzky/projects/talk.nuzky'), str(recording), env=r.env)
 
 
