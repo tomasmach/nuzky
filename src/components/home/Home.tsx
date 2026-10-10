@@ -61,6 +61,7 @@ import { Button, IconButton, Menu, type MenuEntry } from "../ui";
 import { ProjectCard } from "./ProjectCard";
 import { Poster } from "./Poster";
 import { VersionRow } from "../Updates";
+import { FeedbackRow } from "../Feedback";
 
 type MenuState = { items: MenuEntry[]; at: { x: number; y: number; align?: "start" | "end"; above?: boolean }; label: string; keyboard: boolean; back: HTMLElement | null; /** The card it acts on. */ target?: string };
 
@@ -882,6 +883,7 @@ function Sidebar({
         )}
       </nav>
       <div className="shrink-0 p-2 pt-0">
+        <FeedbackRow showMenu={showMenu} />
         <VersionRow showMenu={showMenu} />
       </div>
     </div>

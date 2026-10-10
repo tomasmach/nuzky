@@ -16,6 +16,7 @@ use crate::{CmdResult, err};
 const LATEST_JSON: &str = "https://github.com/tomasmach/nuzky/releases/latest/download/latest.json";
 /// Download opens this fixed page, never an address from the file.
 const RELEASE_PAGE: &str = "https://github.com/tomasmach/nuzky/releases/latest";
+const X_PROFILE: &str = "https://x.com/mach_builds";
 /// Tests serve the file locally through `NUZKY_UPDATE_URL`; no other address replaces GitHub.
 const TEST_SERVER: &str = "http://127.0.0.1:";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -78,9 +79,78 @@ pub fn open_release_page(app: AppHandle) -> CmdResult<()> {
     app.opener().open_url(RELEASE_PAGE, None::<&str>).map_err(err)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FeedbackKind {
+    Bug,
+    Idea,
+    Message,
+}
+
+fn feedback_url(kind: FeedbackKind, version: &str, os: &str, arch: &str) -> String {
+    let (label, questions) = match kind {
+        FeedbackKind::Bug => {
+            ("bug", "**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to reproduce**\n1. \n")
+        }
+        FeedbackKind::Idea => {
+            ("enhancement", "**What would you like Nuzky to do?**\n\n\n**How would it help you?**\n\n")
+        }
+        FeedbackKind::Message => return X_PROFILE.into(),
+    };
+    let body = format!("{questions}\n---\nNuzky {version} · {os} · {arch}");
+    let mut url = tauri::Url::parse("https://github.com/tomasmach/nuzky/issues/new").unwrap();
+    url.query_pairs_mut().append_pair("labels", label).append_pair("body", &body);
+    url.into()
+}
+
+fn feedback_os() -> String {
+    match std::env::consts::OS {
+        "linux" => {
+            let pretty = std::fs::read_to_string("/etc/os-release").ok().and_then(|release| {
+                release.lines().find_map(|line| {
+                    line.strip_prefix("PRETTY_NAME=").map(|name| name.trim().trim_matches(['\"', '\'']).to_owned())
+                })
+            });
+            pretty.map_or_else(|| "Linux".into(), |name| format!("Linux ({name})"))
+        }
+        "macos" => "macOS".into(),
+        "windows" => "Windows".into(),
+        os => os.into(),
+    }
+}
+
+/// Opens a prefilled issue or the X profile in the browser; the person reads and submits the issue there.
+#[tauri::command]
+pub fn open_feedback(app: AppHandle, kind: FeedbackKind) -> CmdResult<()> {
+    let url = feedback_url(kind, &app.package_info().version.to_string(), &feedback_os(), std::env::consts::ARCH);
+    if cfg!(debug_assertions)
+        && let Some(path) = std::env::var_os("NUZKY_OPENED_URLS")
+    {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(err)?;
+        return writeln!(file, "{url}").map_err(err);
+    }
+    app.opener().open_url(url, None::<&str>).map_err(err)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feedback_links_include_labels_and_system_details() {
+        for (kind, label) in [(FeedbackKind::Bug, "bug"), (FeedbackKind::Idea, "enhancement")] {
+            let url = tauri::Url::parse(&feedback_url(kind, "0.2.0", "Linux (Fedora Linux 44)", "x86_64")).unwrap();
+            assert_eq!(url.origin().ascii_serialization(), "https://github.com");
+            assert_eq!(url.path(), "/tomasmach/nuzky/issues/new");
+            let pairs: Vec<_> = url.query_pairs().collect();
+            assert_eq!(pairs.len(), 2);
+            assert_eq!(pairs[0], ("labels".into(), label.into()));
+            assert_eq!(pairs[1].0, "body");
+            assert!(pairs[1].1.ends_with("\n---\nNuzky 0.2.0 · Linux (Fedora Linux 44) · x86_64"));
+        }
+        assert_eq!(feedback_url(FeedbackKind::Message, "0.2.0", "macOS", "aarch64"), X_PROFILE);
+    }
 
     fn check(json: &str, current: &str) -> Option<String> {
         newer(json, &Version::parse(current).unwrap()).unwrap().map(|v| v.to_string())

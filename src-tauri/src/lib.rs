@@ -1070,6 +1070,7 @@ pub fn run() {
             style::style_use_learned,
             updates::check_for_update,
             updates::open_release_page,
+            updates::open_feedback,
         ])
         .build(context)
         .expect("error while building Nuzky")
