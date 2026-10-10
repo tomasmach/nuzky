@@ -5,6 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, plainError } from "./lib/api";
 import { setLimits } from "./lib/limits";
+import { onReframeJob } from "./lib/reframe";
 import { useSpeech } from "./lib/speech";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
@@ -172,6 +173,7 @@ function onJob(job: JobEvent) {
   const { toast, exportOpen, exportJobId } = useEditor.getState();
   useEditor.setState({ jobs: { ...useEditor.getState().jobs, [job.id]: job } });
   if (job.kind === "cover" || job.kind === "vision-models") onCoverJob(job);
+  if (job.kind === "reframe") onReframeJob(job);
   if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
   if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${job.message}` });
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });

@@ -1,5 +1,5 @@
-//! Local face and subject analysis of the rendered timeline, for covers and thumbnails: which
-//! frames are worth one and where the person is. Runs ONNX models on the CPU with ONNX Runtime;
+//! Local face and subject analysis of the rendered timeline, for covers and thumbnails (which
+//! frames are worth one and where the person is) and for reframing clips to follow a face. Runs ONNX models on the CPU with ONNX Runtime;
 //! the models are downloaded by the app or the CLI, never here.
 mod frame;
 pub mod framing;
@@ -7,6 +7,7 @@ pub mod mask;
 pub mod matte;
 pub mod models;
 mod nets;
+pub mod reframe;
 pub mod runtime;
 pub mod thumbnails;
 mod timeline;

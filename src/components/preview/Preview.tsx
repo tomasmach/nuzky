@@ -9,6 +9,7 @@ import { CoverBar, CoverStage } from "../cover/CoverStage";
 import { IconButton } from "../ui";
 import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
+import { ReframeStatus } from "./ReframeStatus";
 
 const HEADER = 24;
 const SAFE_ZONE_KEY = "nuzky.safeZone";
@@ -152,6 +153,7 @@ export function Preview() {
       {/* Clips the selection box of a layer scaled or rotated past the frame to the preview area. */}
       <div ref={boxRef} className="relative mx-4 mt-3 min-h-0 flex-1 overflow-hidden">
         {cover && box.w > 0 && <CoverStage format={cover} box={box} />}
+        {!cover && <ReframeStatus />}
         <div className="absolute inset-0 flex items-center justify-center" hidden={!!cover}>
           <div className="relative" style={{ width: fit.w, height: fit.h }}>
             {/* Square corners and no blurred shadow: a rounded clip would cost a mask on every frame, and in

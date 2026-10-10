@@ -243,6 +243,15 @@ talking_head() {
   rm -rf "$dir"
 }
 media talking-head.mov talking_head
+# The same interview filmed wide, for reframing to 9:16 (crates/vision/src/reframe.rs, tests/e2e/reframe.py): 10 s
+# at 1920x1080 and 30 fps, slid so her face sits a third of the way across for 5 s, crosses to two thirds in the
+# next second and stays there.
+wide_head() {
+  ff -ss 1 -t 10 -i "$(epps_mp4)" -an \
+    -vf "scale=1920:1080:flags=lanczos,crop=1280:720:x='541-426*clip(t-5\,0\,1)':y=120,scale=1920:1080:flags=lanczos,fps=30" \
+    -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p "$1"
+}
+media wide-head.mp4 wide_head
 # Twelve seconds at 30 fps in 3 s segments the tests rely on: [0,3) open eyes under a strong blur, [3,6) the
 # blink, [6,12) sharp open eyes (two segments of identical frames). A keyframe starts every segment.
 face_thumb() {

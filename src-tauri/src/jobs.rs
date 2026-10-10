@@ -33,7 +33,7 @@ pub struct JobEvent {
     #[cfg_attr(
         test,
         ts(
-            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover""#
+            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe""#
         )
     )]
     pub kind: &'static str,
@@ -105,7 +105,7 @@ pub(crate) fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
         match kind {
             "export" => running == "export",
             "captions" | "transcript" | "style" => matches!(running, "captions" | "transcript" | "style"),
-            "vision-models" | "cover-pick" | "cover-mask" | "cover-export" => running == kind,
+            "vision-models" | "cover-pick" | "cover-mask" | "cover-export" | "reframe" => running == kind,
             // Each one decodes a whole video; the next file waits, so the preview keeps some of the machine.
             "proxy" => running == "proxy",
             "matte" => running == "matte",
@@ -600,6 +600,85 @@ struct SpeechRequest {
     /// Recognise every heard file again, not only those without a transcript.
     refresh: bool,
     captions: Option<CaptionRequest>,
+}
+
+#[tauri::command]
+pub fn start_reframe(
+    app: AppHandle,
+    width: u32,
+    height: u32,
+    clip_ids: Option<Vec<String>>,
+    expected_epoch: Option<String>,
+) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let (host, view) = {
+        let current = crate::lock_session(&state.session, expected_epoch.as_deref())?;
+        (Arc::downgrade(&current.host), current.host.session.state().map_err(crate::err)?)
+    };
+    let project = view.project;
+    nuzky_vision::runtime::require().map_err(crate::err)?;
+    let id = format!("reframe:{}", new_id());
+    let cancel = register(&app, &id).ok_or("Reframe is already running")?;
+    let (worker, job) = (app.clone(), id.clone());
+    let spawned = std::thread::Builder::new().name("reframe".into()).spawn(move || {
+        let mut rep = Reporter::new(&worker, &job, "reframe", "Following the face".into());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::cover::download_models(
+                nuzky_vision::models::REFRAME,
+                false,
+                "Downloading the face model",
+                &cancel,
+                &mut rep,
+            )?;
+            let result = nuzky_vision::reframe::reframe(
+                &project,
+                &models_dir(),
+                (width, height),
+                clip_ids.as_deref(),
+                &cancel,
+                &mut |p| rep.progress(p, Some("Following the face")),
+            )?;
+            check_cancelled(&cancel)?;
+            let state = worker.state::<AppState>();
+            let current = state.session.lock().unwrap();
+            const SWITCHED: &str = "Another project was opened, so the reframe result was not applied.";
+            anyhow::ensure!(host.ptr_eq(&Arc::downgrade(&current.host)), SWITCHED);
+            let edited = current
+                .host
+                .session
+                .edit(
+                    result.commands,
+                    None,
+                    nuzky_session::Expect { revision: Some(view.stamp.revision), speech_layout_key: None },
+                )
+                .map_err(|error| {
+                    if error.to_string().starts_with("STALE_REVISION") {
+                        anyhow::anyhow!("The project changed while following the face. Reframe again.")
+                    } else {
+                        error
+                    }
+                })?;
+            if let Ok(snap) = current.snapshot(Vec::new()) {
+                worker.emit("project-changed", snap).ok();
+            }
+            // The step to undo, or none when the clips were already placed so.
+            let step = (edited.stamp.revision != view.stamp.revision).then_some(&edited.stamp);
+            Ok(Some(
+                serde_json::json!({"width":width, "height":height,
+                "followed":result.followed.len(), "centred":result.centred.len(),
+                "revision":step.map(|s| s.revision), "sessionEpoch":step.map(|s| &s.session_epoch)})
+                .to_string(),
+            ))
+        }))
+        .unwrap_or_else(|p| Err(anyhow::anyhow!("Reframe crashed: {}", panic_text(&p))));
+        rep.finish(result, cancel.load(Ordering::Relaxed));
+        unregister(&worker, &job);
+    });
+    if let Err(error) = spawned {
+        unregister(&app, &id);
+        return Err(format!("Starting reframe: {error}"));
+    }
+    Ok(id)
 }
 
 #[tauri::command]

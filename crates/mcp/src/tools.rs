@@ -256,6 +256,7 @@ impl Backend {
             "activity" => self.activity(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "segment_subject" => self.segment_subject(parse(arguments)?, state),
+            "reframe" => self.reframe(parse(arguments)?, state),
             "transcribe" => self.transcribe(parse(arguments)?, state),
             "get_transcript" => self.get_transcript(parse(arguments)?, state),
             "edit_transcript" => self.edit_transcript(parse(arguments)?, state),
@@ -619,6 +620,57 @@ impl Backend {
                     progress.set(phase, Some(done))
                 })?;
                 Ok(json!({"kind": "thumbnail_frames", "time_basis": "timeline", "format": format, "candidates": candidates}))
+            },
+        )
+    }
+
+    fn reframe(&self, args: Reframe, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let (width, height) = match args.format.as_str() {
+            "9:16" => (1080, 1920),
+            "4:5" => (1080, 1350),
+            "1:1" => (1080, 1080),
+            _ => anyhow::bail!("INVALID_ARGUMENTS: format is \"9:16\", \"4:5\" or \"1:1\""),
+        };
+        let project = self.media_project(&state.project);
+        let models = nuzky_analysis::models_dir();
+        nuzky_vision::models::require(nuzky_vision::models::REFRAME, &models)?;
+        let host = Arc::downgrade(&self.host);
+        let revision = state.stamp.revision;
+        let run_id = args.run_id.clone();
+        self.host.start_job(
+            &self.client.id,
+            Some(&args.run_id),
+            "reframe",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                let result = nuzky_vision::reframe::reframe(
+                    &project,
+                    &models,
+                    (width, height),
+                    args.clip_ids.as_deref(),
+                    &cancel,
+                    &mut |p| progress.set("following_the_face", Some(p)),
+                )?;
+                check_cancel(&cancel)?;
+                let host = host.upgrade().context("APP_CLOSED: project is closed")?;
+                let applied = host
+                    .session
+                    .apply_edits(
+                        &run_id,
+                        &new_id(),
+                        result.commands,
+                        Expect { revision: Some(revision), ..Expect::default() },
+                    )
+                    .map_err(|error| {
+                        if error.to_string().starts_with("STALE_REVISION") {
+                            anyhow!("STALE_REVISION: The project changed while following the face. Call reframe again.")
+                        } else {
+                            error
+                        }
+                    })?;
+                Ok(json!({"format":args.format, "width":width, "height":height,
+                "followed":result.followed, "centred":result.centred, "revision":applied.stamp.revision}))
             },
         )
     }

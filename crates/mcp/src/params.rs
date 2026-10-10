@@ -27,6 +27,14 @@ pub struct Apply {
     pub expected_speech_layout_key: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Reframe {
+    pub run_id: String,
+    /// Target canvas: "9:16", "4:5" or "1:1".
+    pub format: String,
+    pub clip_ids: Option<Vec<String>>,
+}
+#[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EndAction {
     Keep,
