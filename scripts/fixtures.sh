@@ -18,9 +18,14 @@ for tool in ffmpeg espeak-ng curl sha256sum; do
 done
 
 # A clone shares disk blocks until one side changes; a hard link where the file system cannot clone.
-# The old file goes first, so a hard link never writes through into the shared copy.
+# Placed under a temporary name and renamed, so an interrupted copy is never taken for a whole file and a hard
+# link never writes through into the shared copy.
 place() {
-  mkdir -p "$(dirname "$2")" && rm -f "$2" && { cp --reflink=always "$1" "$2" 2>/dev/null || ln "$1" "$2" 2>/dev/null || cp "$1" "$2"; }
+  local part=$2.part.$$
+  mkdir -p "$(dirname "$2")"
+  rm -f "$part"
+  cp --reflink=always "$1" "$part" 2>/dev/null || ln "$1" "$part" 2>/dev/null || cp "$1" "$part"
+  mv -f "$part" "$2"
 }
 
 takes=tests/e2e/reel_takes.tsv
@@ -41,7 +46,7 @@ media() {
   part=$(dirname "$file")/.part-$(basename "$file")
   "$@" "$part"
   mv "$part" "$file"
-  place "$file" "$cached.part.$$" && mv "$cached.part.$$" "$cached"
+  place "$file" "$cached"
 }
 ff() { ffmpeg -v error -y "$@"; }
 
