@@ -7,7 +7,9 @@ app then reframes over MCP and exports the vertical Reels video. The face model 
 downloaded."""
 import subprocess, time
 
-from e2e.harness import FIXTURES, Bridge, ffprobe, flow, link_models, preview_crop, preview_rect, preview_redraw, press, wait
+import json
+
+from e2e.harness import CLI, FIXTURES, Bridge, changed_share, ffprobe, flow, link_models, preview_crop, preview_rect, press, wait
 from e2e.home import resize
 
 RATIO = 'section[aria-label=Preview] button[aria-haspopup=menu]'
@@ -61,6 +63,20 @@ def faces(project):
     return out
 
 
+def unlike_export(r, name, seconds):
+    """Share of the upper part of the preview that differs from the export renderer's frame of the saved project at
+    `seconds`; the lower part has the chip over it."""
+    from PIL import Image
+    out = r.work / f'{name}-export.png'
+    subprocess.run([str(CLI), 'frame', str(r.saved_project()), f'{seconds:.3f}', str(out), '540'], env=r.env, check=True,
+                   capture_output=True)
+    r.shot(name)
+    preview = preview_crop(r.work / f'{name}.png', preview_rect(r))
+    frame = Image.open(out).convert('RGB').resize(preview.size)
+    top = (0, 0, preview.width, int(preview.height * 0.7))
+    return changed_share(preview.crop(top), frame.crop(top))
+
+
 @flow('reframe', 'Reframe a wide talking head to 9:16 from the Ratio menu: the face stays inside the frame and the '
       'safe area at every quarter second, the picture moves once and jumps at the cut, Undo brings it back, and an agent '
       'reframes over MCP and exports it',
@@ -110,11 +126,14 @@ def reframe(r):
             outside or placed)
     chip = wait(lambda: (t := r.s.run('return document.querySelector("section[aria-label=Preview] [role=status]")?.innerText')) and 'Reframed 2 clips' in t and t, 10)
     r.check('the preview says what changed and offers Undo', chip and 'Undo' in chip, chip)
-    before = preview_crop(r.work / 'reframe-before.png', preview_rect(r))
-    for seconds in (2, 5.5, 8):
+    saved = wait(lambda: json.loads(r.saved_project().read_text())['canvas']['height'] == 1920, 10)
+    unlike = wait(lambda: (d := unlike_export(r, 'reframe-2s', 2)) < 0.05 and d, 10) if saved else None
+    r.check('without a seek the preview shows the reframed picture as the export renderer draws it', unlike,
+            unlike_export(r, 'reframe-2s', 2) if saved and not unlike else unlike)
+    for seconds in (5.5, 8):
         r.seek(int(seconds * 1_000_000))
-        # Each moment shows another frame of her; waiting for it keeps the shot from showing the one before.
-        before, _ = preview_redraw(r, f'reframe-{seconds}s', before)
+        time.sleep(1.5)
+        r.shot(f'reframe-{seconds}s')
 
     if r.check('the window goes to its smallest size', resize(r, 1024, 640)):
         time.sleep(1)
