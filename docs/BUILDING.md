@@ -72,7 +72,7 @@ npm ci
 npm run tauri dev
 ```
 
-Use the [versioned Homebrew formula](https://formulae.brew.sh/formula/ffmpeg@8) so a future `brew ffmpeg` upgrade does not silently change the FFmpeg major version. The [GitHub runner catalog](https://github.com/actions/runner-images) maps `macos-14` to arm64; CI also asserts `uname -m` is `arm64`.
+Use the [versioned Homebrew formula](https://formulae.brew.sh/formula/ffmpeg@8) so a future `brew ffmpeg` upgrade does not silently change the FFmpeg major version. CI installs plain `ffmpeg`, FFmpeg 9.0 on 10 October 2026: the Homebrew metadata of the `macos-14` runner image predates `ffmpeg@8`. Current Homebrew has no bottles for macOS 14, so updating Homebrew on that runner would build FFmpeg and its dependencies from source. The engine tests in CI take `drawtext` from `ffmpeg-full`, as below. The [GitHub runner catalog](https://github.com/actions/runner-images) maps `macos-14` to arm64; CI also asserts `uname -m` is `arm64`.
 
 If every C link fails with `ld: tapi error: malformed file … libSystem.tbd … unknown architecture arm64e.x1-macos`, the selected Xcode is older than the Command Line Tools SDK the compiler picks (Xcode 26 on macOS 27). Update Xcode, or give the toolchain its own SDK: `export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"`. Switching to the Command Line Tools 27 instead builds in debug, but its `strip` with the macOS 27 SDK and the 14.0 deployment target writes proc-macro libraries that dyld rejects (`mis-aligned LINKEDIT string pool`), so release builds fail.
 
