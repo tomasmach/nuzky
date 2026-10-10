@@ -5,12 +5,13 @@ import type { Clip, TextStyle } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
 import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch, useLockReason } from "../ui";
 
-/** Label column of the inspector's property rows, next to a full-width control. */
+/** A label above a full-width control, like the sliders' in the inspector. */
 export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="w-[78px] shrink-0 truncate text-[12px] text-muted">{label}</span>
-      {children}
+    <div className="flex flex-col gap-0.5">
+      <span className="truncate text-[12px] leading-4 text-muted">{label}</span>
+      {/* A row, so a control that fills it with flex-1 keeps its own height. */}
+      <div className="flex">{children}</div>
     </div>
   );
 }

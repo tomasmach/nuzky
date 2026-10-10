@@ -307,7 +307,7 @@ export function RangeInput({
   );
 }
 
-/** Label, slider and a typeable value on one row, like CapCut's property rows. */
+/** The label above, then the slider and a typeable value on one row, like CapCut's property rows. */
 export function Slider({
   label,
   value,
@@ -339,23 +339,26 @@ export function Slider({
   const lock = useLockReason();
   disabled = disabled || !!lock;
   return (
-    <div className="flex items-center gap-2" title={lock ?? title}>
-      <span className={`w-[78px] shrink-0 truncate text-[12px] ${disabled && !lock ? "text-subtle" : "text-muted"}`}>{label}</span>
-      <RangeInput
-        label={label}
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={onChange}
-        disabled={disabled}
-        valueText={mixed ? "Mixed" : `${format(value)}${unit && ` ${unit}`}`}
-        className="min-w-0 flex-1"
-      />
-      <span className="flex shrink-0 items-center gap-0.5">
-        <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} mixed={mixed} />
-        <span className="w-3 text-[11px] text-muted">{unit}</span>
-      </span>
+    // 8 px between two sliders instead of the section's 12 px, so a column of them reads as one list.
+    <div className="flex flex-col gap-0.5 [&+&]:-mt-1" title={lock ?? title}>
+      <span className={`truncate text-[12px] leading-4 ${disabled && !lock ? "text-subtle" : "text-muted"}`}>{label}</span>
+      <div className="flex items-center gap-2">
+        <RangeInput
+          label={label}
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          onChange={onChange}
+          disabled={disabled}
+          valueText={mixed ? "Mixed" : `${format(value)}${unit && ` ${unit}`}`}
+          className="min-w-0 flex-1"
+        />
+        <span className="flex shrink-0 items-center gap-0.5">
+          <NumberInput label={`${label} value`} value={value} min={min} max={max} step={step} onChange={onChange} format={format} parse={parse} disabled={disabled} mixed={mixed} />
+          <span className="w-3 text-[11px] text-muted">{unit}</span>
+        </span>
+      </div>
     </div>
   );
 }
