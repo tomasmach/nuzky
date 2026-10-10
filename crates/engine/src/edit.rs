@@ -1358,18 +1358,20 @@ fn retext_words(words: &mut [CaptionWord], old: &str, new: &str) {
     }
 }
 
-/// The words of a generated caption heard before `from` and from `to` on (clip time), each where its middle
-/// is; None for other text and for a caption whose text no longer is its words.
+/// The words of a generated caption heard in it before `from` and from `to` on (clip time), each where its
+/// middle is; None for other text and for a caption whose text no longer is its words. Words a split or a
+/// trim left outside the clip are not heard there, so they go.
 fn heard_sides(clip: &Clip, from: i64, to: i64) -> Option<(Vec<CaptionWord>, Vec<CaptionWord>)> {
     let ClipContent::Text { text, words, .. } = &clip.content else { return None };
     if words.is_empty() || words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") != *text {
         return None;
     }
-    let middle = |w: &&CaptionWord| (w.start_us + w.end_us) / 2;
-    Some((
-        words.iter().filter(|w| middle(w) < from).cloned().collect(),
-        words.iter().filter(|w| middle(w) >= to).cloned().collect(),
-    ))
+    let heard: Vec<_> =
+        words.iter().filter(|w| (0..clip.duration_us).contains(&((w.start_us + w.end_us) / 2))).collect();
+    let side = |keep: &dyn Fn(i64) -> bool| {
+        heard.iter().filter(|w| keep((w.start_us + w.end_us) / 2)).map(|&w| w.clone()).collect()
+    };
+    Some((side(&|middle| middle < from), side(&|middle| middle >= to)))
 }
 
 /// Makes a generated caption say exactly `kept`.
@@ -2623,8 +2625,8 @@ mod tests {
         for offset in (0..3_000_000).step_by(50_000) {
             assert_eq!(spoken_at(&copied, copy_start + offset), spoken_at(&p, 1_000_000 + offset), "copy at {offset}");
         }
-        // Ripple cuts inside the caption (keeping its later or earlier part) and across its start: every word
-        // left on the timeline moves with the picture.
+        // Ripple cuts inside the caption and across its start: every word left on the timeline moves with the
+        // picture, in whichever caption keeps it.
         for (cut_start, cut_end) in [(1_300_000, 2_000_000), (3_000_000, 3_500_000), (500_000, 1_600_000)] {
             let mut cut = p.clone();
             let ranges = vec![TimeRange { start_us: cut_start, end_us: cut_end }];
@@ -2632,7 +2634,6 @@ mod tests {
             let length = cut_end - cut_start;
             for (i, word) in before.iter().enumerate() {
                 let t = i as i64 * 50_000;
-                let caption = cut.tracks[1].clips[0].clone();
                 let at = if t < cut_start {
                     t
                 } else if t >= cut_end {
@@ -2640,7 +2641,7 @@ mod tests {
                 } else {
                     continue;
                 };
-                if caption.contains(at) {
+                if cut.tracks[1].clips.iter().any(|c| c.contains(at)) {
                     assert_eq!(spoken_at(&cut, at), *word, "cut [{cut_start}, {cut_end}) at {t}");
                 }
             }
@@ -2668,6 +2669,12 @@ mod tests {
         assert_eq!(cut(&p, 500, 1950), [(500, 2550, "ukážu jak".into())]);
         // With every word cut, the caption goes too, though a moment of it is left after the cut.
         assert_eq!(cut(&p, 900, 3900), []);
+        // After a split each half carries every word, but a half a cut reaches says only those heard in it;
+        // the other half keeps the whole text, as the split left it.
+        let mut split = p.clone();
+        split.apply(EditCmd::SplitClip { clip_id: id.clone(), at_us: 2_200_000 }).unwrap();
+        let halves = [(1000, 1950, "Dneska vám".into()), (2000, 3800, "Dneska vám ukážu jak".into())];
+        assert_eq!(cut(&split, 1950, 2150), halves);
         // Typed text is no longer the words: it keeps its longer side whole, as before.
         let mut typed = p.clone();
         typed

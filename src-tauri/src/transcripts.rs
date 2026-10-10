@@ -38,7 +38,7 @@ pub struct TranscriptView {
     pauses: Vec<Pause>,
     /// Heard media without a transcript yet.
     untranscribed: Vec<String>,
-    /// Earlier attempts of restarted sentences, unfinished ones included, and filler words that
+    /// Earlier attempts of restarted sentences, unfinished ones included, and the filler words that
     /// start a sentence: what removing retakes cuts besides the pauses.
     retakes: usize,
     fillers: usize,
@@ -88,8 +88,13 @@ fn view(host: &Host, pause_us: i64) -> Result<TranscriptView> {
         pauses,
         untranscribed: derived.untranscribed,
         retakes: deleted.len() + found.unfinished.len(),
-        // A filler opening an attempt that goes anyway is not counted twice.
-        fillers: found.fillers.iter().filter(|f| !deleted.iter().any(|&[a, b]| a <= f.from && f.to <= b)).count(),
+        // Words; a filler opening an attempt that goes anyway is not counted twice.
+        fillers: found
+            .fillers
+            .iter()
+            .filter(|f| !deleted.iter().any(|&[a, b]| a <= f.from && f.to <= b))
+            .map(|f| f.to + 1 - f.from)
+            .sum(),
     })
 }
 
