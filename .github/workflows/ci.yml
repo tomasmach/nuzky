@@ -39,9 +39,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           test "$(uname -m)" = arm64
-          brew install ffmpeg@8 pkg-config cmake
-          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg@8)/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "$(brew --prefix ffmpeg@8)/bin" >> "$GITHUB_PATH"
+          brew install ffmpeg pkg-config cmake
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$(brew --prefix ffmpeg)/bin" >> "$GITHUB_PATH"
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         shell: pwsh
