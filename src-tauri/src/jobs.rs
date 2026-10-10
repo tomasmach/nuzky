@@ -359,7 +359,8 @@ pub struct ExportRequest {
     pub fps: u32,
     /// "high" | "recommended" | "small"
     pub quality: Quality,
-    /// "reels" fixes the format and levels the sound; resolution and fps are then its own.
+    /// Delivery format and -14 LUFS sound level. Resolution must match the preset; YouTube and
+    /// Shorts accept fps up to 60, the others require 30.
     #[serde(default)]
     #[cfg_attr(test, ts(optional = nullable))]
     pub preset: Option<Delivery>,
@@ -1023,6 +1024,12 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(reels.options(false).delivery, Some(Delivery::Reels));
+        let youtube: ExportRequest = serde_json::from_value(serde_json::json!({
+            "resolution": 2160, "fps": 25, "quality": "recommended", "preset": "youtube_4k"
+        }))
+        .unwrap();
+        assert_eq!(youtube.options(false).delivery, Some(Delivery::Youtube4k));
+        assert_eq!(youtube.options(false).fps, Some(25));
     }
 
     #[test]

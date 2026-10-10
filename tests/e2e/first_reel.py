@@ -139,7 +139,10 @@ def first_reel(r):
     # The Reels preset as the user picks it in the export dialog.
     r.key('e', ctrlKey=True)
     time.sleep(0.8)
-    r.s.run("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim().startsWith('Reels')).click()")
+    r.s.run("document.querySelector('[role=dialog] button[aria-haspopup=menu]').click()")
+    time.sleep(0.3)
+    r.s.run("[...document.querySelectorAll('[role=menu][aria-label=Preset] [role=menuitemradio]')]"
+            ".find((i) => i.textContent.startsWith('Reels')).click()")
     time.sleep(0.5)
     r.shot('export-dialog')
     dialog = r.s.run("return document.querySelector('[role=dialog]')?.textContent ?? ''")

@@ -2,15 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { videoDir, join } from "@tauri-apps/api/path";
-import { AlertCircle, AlertTriangle, AudioLines, CheckCircle2, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, AudioLines, CheckCircle2, ChevronDown, X } from "lucide-react";
 import { api, errorText, plainError } from "../lib/api";
 import { formatLabel } from "../lib/presets";
 import { useCover } from "../lib/cover";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
 import { CoverExport } from "./cover/CoverExport";
+import { FormatShape } from "./home/Home";
 import { US, formatTime } from "../lib/time";
-import type { Canvas, ExportRequest } from "../lib/types";
-import { Button, IconButton, ProgressBar, Segmented, trapTab } from "./ui";
+import type { Canvas, Delivery, ExportRequest } from "../lib/types";
+import { Button, IconButton, Menu, type MenuEntry, ProgressBar, Segmented, trapTab } from "./ui";
 
 const RESOLUTIONS = [
   { id: 720, label: "720p" },
@@ -26,14 +27,34 @@ const QUALITIES: { id: ExportRequest["quality"]; label: string; bitsPerPixel: nu
 ];
 const AUDIO_BPS = 192_000;
 const STORAGE_KEY = "nuzky.export";
-const PRESETS: { id: "custom" | "reels"; label: string }[] = [
-  { id: "custom", label: "Custom" },
-  { id: "reels", label: "Reels & TikTok" },
+/**
+ * What each preset fixes, as `Delivery` in the engine's export.rs, which refuses anything else with it. `fps: null`
+ * keeps the frame rate free, starting from the project's: YouTube wants the rate the video was shot at.
+ */
+const PRESETS: { id: Delivery; label: string; ratio: [number, number]; resolution: number; fps: number | null }[] = [
+  { id: "reels", label: "Reels & TikTok", ratio: [9, 16], resolution: 1080, fps: 30 },
+  { id: "shorts", label: "YouTube Shorts", ratio: [9, 16], resolution: 1080, fps: null },
+  { id: "youtube_1080p", label: "YouTube 1080p", ratio: [16, 9], resolution: 1080, fps: null },
+  { id: "youtube_4k", label: "YouTube 4K", ratio: [16, 9], resolution: 2160, fps: null },
+  { id: "instagram_feed", label: "Instagram feed", ratio: [4, 5], resolution: 1080, fps: 30 },
+  { id: "square", label: "Square", ratio: [1, 1], resolution: 1080, fps: 30 },
 ];
-/** What the Reels & TikTok preset fixes; the engine refuses anything else with it. */
-const REELS = { resolution: 1080, fps: 30 } as const;
-const REELS_NEEDS_916 = "Reels & TikTok needs a 9:16 video. Switch Ratio under the preview to 9:16.";
-const isNineSixteen = (canvas: Canvas) => canvas.width * 16 === canvas.height * 9;
+const presetOf = (id: Delivery) => PRESETS.find((p) => p.id === id)!;
+const fits = (id: Delivery, canvas: Canvas) => {
+  const [w, h] = presetOf(id).ratio;
+  return canvas.width * h === canvas.height * w;
+};
+/** Why the preset cannot export this canvas, or null when it can. */
+function blockedReason(id: Delivery | null | undefined, canvas: Canvas) {
+  if (!id || fits(id, canvas)) return null;
+  const { label, ratio } = presetOf(id);
+  return `${label} needs a ${ratio.join(":")} video. Switch Ratio under the preview to ${ratio.join(":")}.`;
+}
+/** The settings a preset sets when picked: its own size and frame rate, the project's rate where it keeps one. */
+function presetOptions(id: Delivery, canvas: Canvas): Partial<ExportRequest> {
+  const { resolution, fps } = presetOf(id);
+  return { resolution, fps: fps ?? (FRAME_RATES.includes(canvas.fps) ? canvas.fps : 30), quality: "recommended", preset: id };
+}
 
 /** Output size for a short side, keeping the canvas aspect and even dimensions. */
 export function outputSize(canvas: Canvas, shortSide: number) {
@@ -68,7 +89,8 @@ function loadOptions(canvas: Canvas): ExportRequest {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<ExportRequest> | null;
     const options = { ...fallback, ...(saved?.resolution && { resolution: saved.resolution }), ...(saved?.quality && { quality: saved.quality }) };
     // The preset comes back where it applies; a project in another format starts from its own settings.
-    return saved?.preset === "reels" && isNineSixteen(canvas) ? { ...options, ...REELS, preset: "reels" } : options;
+    const preset = PRESETS.find((p) => p.id === saved?.preset)?.id;
+    return preset && fits(preset, canvas) ? { ...options, ...presetOptions(preset, canvas) } : options;
   } catch {
     return fallback;
   }
@@ -92,6 +114,8 @@ export function ExportDialog() {
   const last = useRef<{ path: string; replace: boolean; credits: boolean } | null>(null);
   const startedAt = useRef(0);
   const dialog = useRef<HTMLDivElement>(null);
+  const [presetMenu, setPresetMenu] = useState<{ x: number; y: number; width: number; keyboard: boolean } | null>(null);
+  const presetButton = useRef<HTMLButtonElement>(null);
   const running = job?.status === "running";
 
   // Options start from the project each time the dialog opens; preset, resolution and quality are remembered.
@@ -125,7 +149,8 @@ export function ExportDialog() {
     if (!open) return;
     // Esc closes the dialog; while an export runs, Cancel export and Keep editing say what happens to it.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // The preset menu closes on its own Esc, and the dialog stays.
+      if (e.key !== "Escape" || presetMenu) return;
       e.stopPropagation();
       if (!running || what === "cover") close();
     };
@@ -148,13 +173,32 @@ export function ExportDialog() {
   const size = outputSize(project.canvas, options.resolution);
   const setOption = (patch: Partial<ExportRequest>) => {
     const next = { ...options, ...patch };
-    // Another resolution or frame rate is no longer the preset; quality may change within it.
-    if (next.preset === "reels" && (next.resolution !== REELS.resolution || next.fps !== REELS.fps)) next.preset = null;
+    // Another resolution or a frame rate the preset fixes is no longer the preset; quality may change within it.
+    const preset = next.preset && presetOf(next.preset);
+    if (preset && (next.resolution !== preset.resolution || (preset.fps !== null && next.fps !== preset.fps))) next.preset = null;
     setOptions(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ resolution: next.resolution, quality: next.quality, preset: next.preset ?? null }));
   };
-  const pickPreset = (id: "custom" | "reels") => setOption(id === "reels" ? { ...REELS, quality: "recommended", preset: "reels" } : { preset: null });
-  const reelsBlocked = options.preset === "reels" && !isNineSixteen(project.canvas);
+  const blocked = blockedReason(options.preset, project.canvas);
+  const presetItem = (p: (typeof PRESETS)[number]): MenuEntry => {
+    const reason = blockedReason(p.id, project.canvas);
+    const size = outputSize({ ...project.canvas, width: p.ratio[0], height: p.ratio[1] }, p.resolution);
+    return {
+      label: p.label,
+      icon: <FormatShape width={p.ratio[0]} height={p.ratio[1]} size={14} />,
+      shortcut: reason ? `Needs ${p.ratio.join(":")}` : `${size.w}×${size.h}${p.fps ? ` · ${p.fps} fps` : ""}`,
+      checked: options.preset === p.id,
+      disabled: reason,
+      run: () => setOption(presetOptions(p.id, project.canvas)),
+    };
+  };
+  // The presets for this format come first; the others stay listed, each saying what it needs.
+  const group = (items: MenuEntry[]): MenuEntry[] => (items.length ? ["separator", ...items] : []);
+  const presetItems: MenuEntry[] = [
+    { label: "Custom", checked: !options.preset, run: () => setOption({ preset: null }) },
+    ...group(PRESETS.filter((p) => fits(p.id, project.canvas)).map(presetItem)),
+    ...group(PRESETS.filter((p) => !fits(p.id, project.canvas)).map(presetItem)),
+  ];
 
   /**
    * `epoch`: the project the export was asked for, taken before any wait. `replace`: overwriting the file was confirmed;
@@ -249,12 +293,39 @@ export function ExportDialog() {
           <fieldset disabled={settingsLocked} className="min-w-0 disabled:opacity-50">
             <div className="grid grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3">
               <span className="text-right text-[13px] text-muted">Preset</span>
-              <Segmented label="Preset" value={options.preset ?? "custom"} onChange={pickPreset} options={PRESETS} />
-              {options.preset === "reels" &&
-                (reelsBlocked ? (
+              <button
+                ref={presetButton}
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={!!presetMenu}
+                onClick={(e) => {
+                  const box = e.currentTarget.getBoundingClientRect();
+                  // A click has a pointer position; Enter and Space have none.
+                  setPresetMenu(presetMenu ? null : { x: box.left, y: box.bottom + 4, width: box.width, keyboard: e.detail === 0 });
+                }}
+                className="flex h-8 min-w-0 items-center gap-2 rounded-[8px] bg-white/[.09] px-2.5 text-left text-[13px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out enabled:hover:bg-white/[.13]"
+              >
+                <span className="min-w-0 flex-1 truncate">{options.preset ? presetOf(options.preset).label : "Custom"}</span>
+                <ChevronDown size={14} className="shrink-0 text-muted" />
+              </button>
+              {presetMenu && (
+                <Menu
+                  items={presetItems}
+                  label="Preset"
+                  at={presetMenu}
+                  keyboard={presetMenu.keyboard}
+                  minWidth={presetMenu.width}
+                  onClose={() => {
+                    setPresetMenu(null);
+                    presetButton.current?.focus();
+                  }}
+                />
+              )}
+              {options.preset &&
+                (blocked ? (
                   <p className="col-start-2 -mt-1 flex items-start gap-1.5 text-[12px] text-fg" role="alert">
                     <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
-                    {REELS_NEEDS_916}
+                    {blocked}
                   </p>
                 ) : (
                   <p className="tabular col-start-2 -mt-1 flex items-center gap-1.5 text-[12px] text-muted">
@@ -358,11 +429,11 @@ export function ExportDialog() {
                   Close
                 </Button>
                 {failed && last.current ? (
-                  <Button pill variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={() => run(last.current!.path, last.current!.replace, last.current!.credits)}>
+                  <Button pill variant="primary" data-autofocus disabled={!!blocked} disabledReason={blocked ?? undefined} onClick={() => run(last.current!.path, last.current!.replace, last.current!.credits)}>
                     Retry
                   </Button>
                 ) : (
-                  <Button pill variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={pickAndRun}>
+                  <Button pill variant="primary" data-autofocus disabled={!!blocked} disabledReason={blocked ?? undefined} onClick={pickAndRun}>
                     Export…
                   </Button>
                 )}

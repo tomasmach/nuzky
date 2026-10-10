@@ -937,7 +937,7 @@ impl Backend {
         ensure!(!state.read_only, "READ_ONLY: --allow-write is required to write an export");
         ensure!(
             args.preset.is_some() || (args.resolution.is_some() && args.fps.is_some()),
-            "INVALID_ARGUMENTS: give resolution and fps, or preset \"reels\""
+            "INVALID_ARGUMENTS: give resolution and fps, or a preset"
         );
         ensure!(
             args.resolution.is_none_or(|r| (2..=7680).contains(&r)) && args.fps.is_none_or(|f| (1..=240).contains(&f)),
@@ -1458,6 +1458,12 @@ mod tests {
             wrong_format.starts_with("INVALID_ARGUMENTS: Reels & TikTok needs a 9:16 video and this one is 16:9"),
             "{wrong_format}"
         );
+        let shorts = error(json!({"path": "out.mp4", "preset": "shorts"}));
+        assert!(shorts.starts_with("INVALID_ARGUMENTS: YouTube Shorts needs a 9:16 video"), "{shorts}");
+        let small = error(json!({"path": "out.mp4", "preset": "youtube_4k", "resolution": 1080}));
+        assert!(small.starts_with("INVALID_ARGUMENTS: YouTube 4K exports at resolution 2160"), "{small}");
+        let fast = error(json!({"path": "out.mp4", "preset": "youtube_1080p", "fps": 120}));
+        assert!(fast.starts_with("INVALID_ARGUMENTS") && fast.contains("at most 60"), "{fast}");
         assert!(error(json!({"path": "out.mp4", "preset": "youtube"})).contains("unknown variant"));
         drop(backend);
         std::fs::write(&path, serde_json::to_vec(&Project::new("tall")).unwrap()).unwrap();
