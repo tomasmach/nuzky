@@ -10,14 +10,6 @@ DEPS="${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}"
 ROOT="$DEPS/root"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-mkdir -p "$DEPS/rpms"
-if ! ls "$DEPS"/rpms/libavcodec-free-devel-*.x86_64.rpm >/dev/null 2>&1; then
-  dnf download --arch x86_64 --destdir "$DEPS/rpms" \
-    libavcodec-free-devel libavformat-free-devel libavutil-free-devel \
-    libswscale-free-devel libswresample-free-devel libavfilter-free-devel \
-    libavdevice-free-devel alsa-lib-devel
-fi
-
 # Point the unversioned .so symlinks at the installed runtime libraries. Each link changes in one rename,
 # because other checkouts may be linking against this tree right now.
 link_runtime() {
@@ -30,13 +22,27 @@ link_runtime() {
   done
 }
 
-# One setup at a time. The tree is extracted once, aside, and swapped in with a single rename, so a checkout
-# that builds meanwhile always finds a whole tree.
+# One setup at a time. Packages are downloaded aside and moved in whole, and the tree is extracted once,
+# aside, and swapped in with a single rename, so a checkout that builds meanwhile always finds a whole tree.
+mkdir -p "$DEPS/rpms"
 exec 7>"$DEPS/.setup.lock"
 flock 7
+fetched='' fresh=''
+trap 'rm -rf "$fetched" "$fresh"' EXIT
+missing=()
+for package in libavcodec-free-devel libavformat-free-devel libavutil-free-devel libswscale-free-devel \
+  libswresample-free-devel libavfilter-free-devel libavdevice-free-devel alsa-lib-devel; do
+  ls "$DEPS"/rpms/"$package"-[0-9]*.x86_64.rpm >/dev/null 2>&1 || missing+=("$package")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+  fetched="$(mktemp -d "$DEPS/rpms.XXXXXX")"
+  dnf download --arch x86_64 --destdir "$fetched" "${missing[@]}"
+  mv "$fetched"/*.rpm "$DEPS/rpms/"
+  # The tree must take in the new packages too.
+  rm -f "$ROOT/.complete"
+fi
 if [ ! -f "$ROOT/.complete" ]; then
   fresh="$(mktemp -d "$DEPS/root.XXXXXX")"
-  trap 'rm -rf "$fresh"' EXIT
   (cd "$fresh" && for r in "$DEPS"/rpms/*.x86_64.rpm; do rpm2cpio "$r" | cpio -idm --quiet; done)
   # Rewrite pkg-config paths to where the tree will live.
   for pc in "$fresh"/usr/lib64/pkgconfig/*.pc; do
@@ -47,8 +53,6 @@ if [ ! -f "$ROOT/.complete" ]; then
   touch "$fresh/.complete"
   # Afterwards $fresh holds the tree an older setup left, or nothing.
   if [ -e "$ROOT" ]; then mv --exchange -T "$fresh" "$ROOT"; else mv -T "$fresh" "$ROOT"; fi
-  rm -rf "$fresh"
-  trap - EXIT
 fi
 link_runtime "$ROOT"
 exec 7>&-
