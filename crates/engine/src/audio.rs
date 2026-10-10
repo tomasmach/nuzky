@@ -134,6 +134,11 @@ pub(crate) fn lock_cache(path: &Path, progress: &mut impl FnMut(f32) -> Result<(
 /// starts it again.
 pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
     let path = pcm_path(cache_dir, asset);
+    // A cache appears whole by a rename, so one that exists needs no lock. Its lock may still be held
+    // after its owner let go: a process that another thread is starting keeps a copy until it runs.
+    if path.exists() {
+        return Ok(path);
+    }
     let _lock = lock_cache(&path, &mut progress)?;
     if !path.exists() {
         extract_pcm_with_peaks(Path::new(&asset.path), &path, &peaks_for(&path), progress)?;
@@ -893,7 +898,13 @@ mod tests {
         assert_ne!(first, second);
         assert_ne!(std::fs::read(&second).unwrap(), old_audio);
         assert_eq!(std::fs::read(&first).unwrap(), old_audio);
-        assert_eq!(ensure_pcm(&cache, &asset, |_| panic!("unchanged source extracted again")).unwrap(), second);
+        // A process that another thread is starting holds a copy of the lock until it runs its program.
+        let held = lock_cache(&second, &mut |_| Ok(())).unwrap();
+        assert_eq!(
+            ensure_pcm(&cache, &asset, |_| panic!("unchanged source waited or extracted again")).unwrap(),
+            second
+        );
+        drop(held);
         write_test_wav(&source, 16_384, 9_600);
         File::options().write(true).open(&source).unwrap().set_modified(modified).unwrap();
         let third = ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
