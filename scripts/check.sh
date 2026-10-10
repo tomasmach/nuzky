@@ -2,7 +2,7 @@
 # Local gate before every merge to main and every release. GitHub runs the faster part of it on every pull
 # request (.github/workflows/checks.yml); the tests with media and models, the check without AVX2, the audits and
 # the UI flows run only here. A pull request that changes only the website in site/ and no dependencies skips it
-# (AGENTS.md). On macOS it runs everything except the UI flows and the check without AVX2, which need Linux.
+# (AGENTS.md). On macOS it runs everything except the check without AVX2, which needs x86-64 Linux.
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -127,14 +127,10 @@ if [ "$os" != Darwin ]; then
 fi
 step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
-if [ "$os" = Darwin ]; then
-  step "Rust tests with media and models" isolated cargo test --workspace --locked -- --ignored
-else
-  step "Rust tests with media and models, and the UI flows" media_tests_and_flows
-fi
+step "Rust tests with media and models, and the UI flows" media_tests_and_flows
 
 echo
 echo "check passed in $((SECONDS / 60))m $((SECONDS % 60))s"
 if [ "$os" = Darwin ]; then
-  echo "On macOS it left out the UI flows and the check without AVX2; they need Linux."
+  echo "On macOS it left out the check without AVX2, which needs x86-64 Linux."
 fi

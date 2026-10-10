@@ -8,11 +8,12 @@ and result.json under tmp-test/repro/<flow>/.
 
 A new flow is a file in tests/e2e/ with a function decorated with @flow; this script finds it.
 Each flow gets fresh data, cache and runtime directories, so the app never opens the user's projects or
-joins their running Nuzky. It runs inside headless gamescope with D-Bus switched off, so no window,
-dialog or notification reaches the desktop. Media and models come from scripts/fixtures.sh.
+joins their running Nuzky. On Linux it runs inside headless gamescope with D-Bus switched off, so no window,
+dialog or notification reaches the desktop. On macOS the app keeps its window off every screen and never
+becomes the active app (src-tauri/src/test_bridge.rs). Media and models come from scripts/fixtures.sh.
 
-Needs gamescope, WebKitWebDriver, Pillow and python-xlib. Vite takes port 1420 (the app's dev URL) and
-WebKitWebDriver 4444. Runs on one machine take turns: a second one waits for the first. A port that something
+Needs Pillow and numpy, and on Linux gamescope, WebKitWebDriver and python-xlib. Vite takes port 1420 (the app's
+dev URL) and on Linux WebKitWebDriver 4444. Runs on one machine take turns: a second one waits for the first. A port that something
 else holds, such as a dev server, stops the run instead of touching it.
 """
 import fcntl, importlib, json, os, shutil, signal, subprocess, sys
@@ -21,7 +22,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 TESTS = Path(__file__).resolve().parent.parent / 'tests'
 sys.path.insert(0, str(TESTS))
-from e2e.harness import FIXTURES, FLOWS, MODELS, OUT, ROOT, WEBKIT_DRIVER, port_busy, run_flow, start, started, stop  # noqa: E402
+from e2e.harness import FIXTURES, FLOWS, MACOS, MODELS, OUT, ROOT, WEBKIT_DRIVER, port_busy, run_flow, start, started, stop  # noqa: E402
 
 for module in sorted(p.stem for p in (TESTS / 'e2e').glob('*.py') if p.stem != 'harness'):
     importlib.import_module(f'e2e.{module}')
@@ -30,9 +31,11 @@ for module in sorted(p.stem for p in (TESTS / 'e2e').glob('*.py') if p.stem != '
 # --- Entry point ------------------------------------------------------------------------------------------
 
 def preflight(names):
-    problems = [f'{tool} is missing' for tool in ('gamescope', 'ffmpeg', 'npx') if not shutil.which(tool)]
-    problems += [f'{path} is missing' for path in (WEBKIT_DRIVER,) if not Path(path).exists()]
-    for module, package in (('PIL', 'Pillow'), ('Xlib', 'python-xlib')):
+    tools = ('ffmpeg', 'npx') if MACOS else ('gamescope', 'ffmpeg', 'npx')
+    problems = [f'{tool} is missing' for tool in tools if not shutil.which(tool)]
+    problems += [] if MACOS else [f'{path} is missing' for path in (WEBKIT_DRIVER,) if not Path(path).exists()]
+    packages = (('PIL', 'Pillow'), ('numpy', 'numpy')) + (() if MACOS else (('Xlib', 'python-xlib'),))
+    for module, package in packages:
         try:
             __import__(module)
         except ImportError:
@@ -42,7 +45,7 @@ def preflight(names):
             or ('reel' in names and not all((FIXTURES / f).exists() for f in (
                 'reel-1.mp4', 'reel-2.mp4', 'reel-3.mp4', 'xdg/data/nuzky/models/ggml-large-v3-turbo-q5_0.bin')))):
         problems.append('test media or models are missing: run scripts/fixtures.sh')
-    problems += [f'port {port} is in use by another session' for port in (1420, 4444) if port_busy(port)]
+    problems += [f'port {port} is in use by another session' for port in ((1420,) if MACOS else (1420, 4444)) if port_busy(port)]
     return problems
 
 
@@ -90,6 +93,12 @@ def main(args):
     if problems:
         print('repro cannot run:\n  ' + '\n  '.join(problems), file=sys.stderr)
         return 1
+    if MACOS:
+        # The same build scripts/check.sh makes, against Homebrew's FFmpeg as docs/BUILDING.md describes.
+        brew = lambda formula: subprocess.run(['brew', '--prefix', formula], capture_output=True, text=True).stdout.strip()
+        os.environ.setdefault('PKG_CONFIG_PATH', brew('ffmpeg@8') + '/lib/pkgconfig')
+        os.environ.setdefault('SDKROOT', subprocess.run(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], capture_output=True,
+                                                        text=True).stdout.strip())
     # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too. Every target
     # of the workspace resolves the features `cargo test` does, so this adds only the app's binary to its build.
     subprocess.run(['cargo', 'build', '--locked', '--workspace', '--all-targets'], cwd=ROOT, check=True)
@@ -98,16 +107,18 @@ def main(args):
     for name in names:
         (OUT / name / 'result.json').unlink(missing_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    print(f'Running {", ".join(names)} in headless gamescope; its output goes to tmp-test/repro/gamescope.log', flush=True)
-    with open(OUT / 'gamescope.log', 'w') as log:
-        gamescope = subprocess.Popen(['gamescope', '--backend', 'headless', '-W', '1440', '-H', '900', '--', sys.executable,
-                                      __file__, *names], cwd=ROOT, env=dict(os.environ, NUZKY_REPRO_INNER='1'), stdout=log,
-                                     stderr=subprocess.STDOUT, start_new_session=True)
+    where, log_name = ('off screen', 'flows.log') if MACOS else ('in headless gamescope', 'gamescope.log')
+    print(f'Running {", ".join(names)} {where}; its output goes to tmp-test/repro/{log_name}', flush=True)
+    inner = [sys.executable, __file__, *names]
+    with open(OUT / log_name, 'w') as log:
+        runner = subprocess.Popen(inner if MACOS else ['gamescope', '--backend', 'headless', '-W', '1440', '-H', '900', '--', *inner],
+                                  cwd=ROOT, env=dict(os.environ, NUZKY_REPRO_INNER='1'), stdout=log, stderr=subprocess.STDOUT,
+                                  start_new_session=True)
         try:
-            gamescope.wait()
+            runner.wait()
         finally:
-            if gamescope.poll() is None:
-                stop(gamescope, timeout=20)
+            if runner.poll() is None:
+                stop(runner, timeout=20)
     failed = []
     for name in names:
         result_file = OUT / name / 'result.json'
@@ -117,7 +128,7 @@ def main(args):
             detail = '' if check['ok'] or check['detail'] is None else f": {check['detail']}"
             print(f"  {'ok  ' if check['ok'] else 'FAIL'} {check['check']}{detail}")
         if not result or result['error']:
-            print('  ' + (result['error'] if result else 'no result; see tmp-test/repro/gamescope.log').strip().replace('\n', '\n  '))
+            print('  ' + (result['error'] if result else f'no result; see tmp-test/repro/{log_name}').strip().replace('\n', '\n  '))
         failed += [] if result and result['passed'] else [name]
     return 1 if failed else 0
 

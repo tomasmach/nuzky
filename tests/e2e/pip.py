@@ -6,8 +6,7 @@ import json, subprocess, time
 
 from PIL import Image, ImageStat
 
-from e2e.harness import CLI, FIXTURES, changed_share, flow, preview_crop, preview_rect, preview_redraw, wait, webdriver
-from e2e.voice import press
+from e2e.harness import CLI, FIXTURES, changed_share, flow, press, preview_crop, preview_rect, preview_redraw, wait, webdriver
 
 AT_US = 1_000_000
 PROJECT = 'return window.__nuzky.store.getState().snap.project'
