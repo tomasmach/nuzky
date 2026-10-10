@@ -17,11 +17,13 @@ const SEEK: i64 = 512;
 /// The search first compares averages of 4 samples, then the samples around the best.
 const COARSE: i64 = 4;
 /// In every block of this many pieces (5.5 s at 1x) the quietest starts where speed puts it when it
-/// is at least 10 dB below the loudest, as a pause between words in a noisy room is. A piece is
-/// then found from at most two blocks back. Sound without such a dip, as steady music, never
-/// starts over, since a join out of step would be heard there.
+/// is at least 10 dB below the loudest, as a pause between words in a noisy room is.
 const BLOCK: i64 = 512;
 const RESTART_BELOW_LOUDEST: f32 = 0.1;
+/// Where no block of a span of this many (22 s at 1x) has such a dip, as in steady music, where a
+/// join out of step can be heard, only the quietest piece of the span starts over. A piece is
+/// found from at most two spans back.
+const SPAN: i64 = 4;
 /// Pieces remembered at most; any piece can be found again.
 const REMEMBERED: usize = 1 << 16;
 
@@ -37,8 +39,8 @@ pub(crate) struct Stretch {
     anchor: i64,
     speed: f64,
     found: HashMap<i64, i64>,
-    /// The piece of each block that starts over, if any.
-    restarts: HashMap<i64, Option<i64>>,
+    /// Each block's piece that starts over at a dip, if any, and its quietest piece with its loudness.
+    blocks: HashMap<i64, (Option<i64>, (f32, i64))>,
     /// The pieces `reach` found last, from piece `first` on, for `sample` to read.
     first: i64,
     reached: Vec<i64>,
@@ -47,7 +49,7 @@ pub(crate) struct Stretch {
 impl Stretch {
     /// `anchor` is the file frame speed puts at the anchor's place on the timeline.
     pub(crate) fn new(anchor: i64, speed: f64) -> Self {
-        Self { anchor, speed, found: HashMap::new(), restarts: HashMap::new(), first: 0, reached: Vec::new() }
+        Self { anchor, speed, found: HashMap::new(), blocks: HashMap::new(), first: 0, reached: Vec::new() }
     }
 
     /// Where speed puts piece `k`: its middle on the straight line through the anchor.
@@ -65,8 +67,8 @@ impl Stretch {
         self.reached = (self.first..=(to - 1).div_euclid(HOP)).map(|k| self.piece(samples, k)).collect();
     }
 
-    /// Piece `k`. Piece 0, pieces among quiet sound and the quiet piece of a block start where speed
-    /// puts them; the others continue their neighbour towards piece 0, found first.
+    /// Piece `k`. Piece 0, pieces among quiet sound and the pieces that start over in a block or span
+    /// start where speed puts them; the others continue their neighbour towards piece 0, found first.
     fn piece(&mut self, samples: &[f32], k: i64) -> i64 {
         let inwards = -k.signum();
         let mut j = k;
@@ -90,20 +92,32 @@ impl Stretch {
 
     /// Whether piece `k` starts where speed puts it, whatever comes before it.
     fn free(&mut self, samples: &[f32], k: i64) -> bool {
-        let level = |k: i64| loudness(samples, self.nominal(k));
-        if level(k) <= QUIET_RMS * QUIET_RMS {
+        if loudness(samples, self.nominal(k)) <= QUIET_RMS * QUIET_RMS {
             return true;
         }
         let block = k.div_euclid(BLOCK);
-        if let Some(&restart) = self.restarts.get(&block) {
+        let (restart, _) = self.block(samples, block);
+        if restart.is_some() {
             return restart == Some(k);
         }
-        let levels: Vec<_> = (block * BLOCK..(block + 1) * BLOCK).map(|j| (level(j), j)).collect();
+        let span = block.div_euclid(SPAN) * SPAN;
+        let blocks: Vec<_> = (span..span + SPAN).map(|b| self.block(samples, b)).collect();
+        let quietest = blocks.iter().map(|b| b.1).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        blocks.iter().all(|b| b.0.is_none()) && quietest.1 == k
+    }
+
+    /// The piece of `block` that starts over at a dip, if any, and its quietest piece with its loudness.
+    fn block(&mut self, samples: &[f32], block: i64) -> (Option<i64>, (f32, i64)) {
+        if let Some(&found) = self.blocks.get(&block) {
+            return found;
+        }
+        let pieces = block * BLOCK..(block + 1) * BLOCK;
+        let levels: Vec<_> = pieces.map(|j| (loudness(samples, self.nominal(j)), j)).collect();
         let loudest = levels.iter().map(|l| l.0).fold(0.0, f32::max);
-        let (quietest, piece) = levels.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
-        let restart = (quietest <= loudest * RESTART_BELOW_LOUDEST).then_some(piece);
-        self.restarts.insert(block, restart);
-        restart == Some(k)
+        let quietest = levels.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        let found = ((quietest.0 <= loudest * RESTART_BELOW_LOUDEST).then_some(quietest.1), quietest);
+        self.blocks.insert(block, found);
+        found
     }
 
     /// The sound `at` frames after the anchor's place; `reach` must have found its pieces. Pieces
@@ -188,10 +202,10 @@ mod tests {
 
     /// A steady tone at 1.25x stays steady over 12 s, past two blocks: pieces before the anchor, which a
     /// transition plays, join like those after it, nothing starts over out of step, and each piece is the same
-    /// whichever buffer asks for it first.
+    /// whichever buffer asks for it first. Late in the tone, finding a piece takes bounded work.
     #[test]
     fn a_steady_tone_stays_steady_on_both_sides_of_the_anchor_and_across_blocks() {
-        let tone: Vec<f32> = (0..16 * 48_000)
+        let tone: Vec<f32> = (0..100 * 48_000)
             .flat_map(|i| [(std::f64::consts::TAU * 440.0 * i as f64 / 48_000.0).sin() as f32 * 0.25; 2])
             .collect();
         let (before, after) = (24_000, 12 * 48_000);
@@ -201,7 +215,7 @@ mod tests {
             for &(from, to) in buffers {
                 stretch.reach(&tone, from, to);
                 for at in from..to {
-                    out[(at + before) as usize] = stretch.sample(&tone, at, 0, (0, 16 * 48_000));
+                    out[(at + before) as usize] = stretch.sample(&tone, at, 0, (0, 100 * 48_000));
                 }
             }
             out
@@ -214,5 +228,9 @@ mod tests {
             let rms = (window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32).sqrt();
             assert!((rms / (0.25 / 2f32.sqrt()) - 1.0).abs() < 0.02, "window {index} is at {rms}");
         }
+        // Playback started 70 s into the tone finds its pieces from at most two spans back.
+        let mut stretch = Stretch::new(48_000, 1.25);
+        stretch.reach(&tone, 70 * 48_000, 70 * 48_000 + 1024);
+        assert!(stretch.found.len() as i64 <= 2 * SPAN * BLOCK + 4, "{} pieces found", stretch.found.len());
     }
 }
