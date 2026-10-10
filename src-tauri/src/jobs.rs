@@ -701,10 +701,13 @@ fn run_speech_job(
     let note = if estimated { ". Word times are estimated: the word timing model could not be loaded" } else { "" };
     let app = rep.app.clone();
     let state = app.state::<AppState>();
-    let current = state.session.lock().unwrap();
-    anyhow::ensure!(host.ptr_eq(&Arc::downgrade(&current.host)), SWITCHED);
-    let view = current.host.session.state()?;
-    let derived = transcript::derive(&view.project, &current.host.transcripts)?;
+    let (view, derived) = {
+        let current = state.session.lock().unwrap();
+        anyhow::ensure!(host.ptr_eq(&Arc::downgrade(&current.host)), SWITCHED);
+        let view = current.host.session.state()?;
+        let derived = transcript::derive(&view.project, &current.host.transcripts)?;
+        (view, derived)
+    };
     anyhow::ensure!(!derived.words.is_empty(), "No speech was recognised.");
     let Some(captions) = &request.captions else {
         return Ok(Some(count_label(derived.words.len(), "word", "words") + note));
@@ -723,6 +726,10 @@ fn run_speech_job(
         anim_out: captions.anim_out,
     };
     let (cmd, count) = transcript::caption_edit(&derived.words, &keys, &view.project, look, captions.grouping())?;
+    check_cancelled(cancel)?;
+    // Edits made meanwhile that move the speech refuse the captions through the speech layout key.
+    let current = state.session.lock().unwrap();
+    anyhow::ensure!(host.ptr_eq(&Arc::downgrade(&current.host)), SWITCHED);
     current
         .host
         .session

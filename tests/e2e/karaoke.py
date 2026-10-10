@@ -325,7 +325,8 @@ def caption_styles(r):
     r.check('regenerating marks the same words as key', any(map(any, keys)) and [[w.get('key', False) for w in c['words']] for c in again] == keys)
     # Correcting a key word keeps it key.
     view = json.loads(r.s.call('window.__nuzky.api.transcriptView(500000).then(JSON.stringify)')['value'])
-    word = next((w for w in view['words'] for _, text in keyed[:1] if w['text'].strip() == text), None)
+    # By its time: a take may say the same word twice.
+    word = next((w for w in view['words'] for at, text in keyed[:1] if w['text'].strip() == text and abs(w['startUs'] - at) < 50_000), None)
     if r.check('the transcript has the first key word', word, keyed):
         fixed = word['text'].strip().upper()
         done = r.s.call('window.__nuzky.api.correctWords(arguments[0], arguments[1], arguments[2])', view['key'],
@@ -336,6 +337,7 @@ def caption_styles(r):
         words = [w for t in saved['tracks'] if t['name'] == 'Captions' for c in t['clips'] for w in c['content'].get('words', [])]
         r.check(f'the key word corrected to "{fixed}" stays key', any(w['text'] == fixed and w.get('key') for w in words),
                 [w for w in words if w['text'] == fixed])
+        r.check('the other words keep their key marks', sum(1 for w in words if w.get('key')) == len(keyed), len(keyed))
     time.sleep(1.5)
     regenerated = green(engine_frame(r, settled_us, 'engine-regenerated'))
     r.check('the regenerated caption shows its key word in the same place', same_place(regenerated[0], engine[0]),
