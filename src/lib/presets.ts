@@ -62,7 +62,8 @@ export function sameStyle(a: TextStyle, b: TextStyle) {
   );
 }
 
-const sameAnimation = (a: Animation | null | undefined, b: Animation | null | undefined) => a?.kind === b?.kind && (a?.durationUs ?? 0) === (b?.durationUs ?? 0);
+// By kind only: the engine shortens an animation to a short caption.
+const sameAnimation = (a: Animation | null | undefined, b: Animation | null | undefined) => (a?.kind ?? null) === (b?.kind ?? null);
 
 /** Whether captions in `style` with these animations look like `preset`: its font counts only when it brings one. */
 export function isLook(preset: CaptionPreset, style: TextStyle, animIn: Animation | null | undefined, animOut: Animation | null | undefined) {
