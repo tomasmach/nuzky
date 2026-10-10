@@ -47,14 +47,15 @@ def spans(samples, gap_s):
     return [tuple(s) for s in found]
 
 
-def truth():
+def truth(files=None):
     """Every phrase where it really is in its take, measured in the sound: (take, role, text, start_s, end_s).
-    A sentence that starts with a filler becomes the filler and the rest, split at its first pause."""
+    A sentence that starts with a filler becomes the filler and the rest, split at its first pause.
+    `files`: [(path, its phrases)], numbered as takes from 1; by default the three takes."""
     found = []
-    for n, path in enumerate(TAKES, 1):
+    files = files or [(path, [p for p in phrases() if p[0] == n]) for n, path in enumerate(TAKES, 1)]
+    for n, (path, mine) in enumerate(files, 1):
         samples = pcm(path)
         pieces = spans(samples, 0.5)  # Every pause of the takes is longer than half a second.
-        mine = [p for p in phrases() if p[0] == n]
         assert len(pieces) == len(mine), f'take {n}: {len(pieces)} spoken phrases for {len(mine)} in the list'
         for (_, _, role, text), (start, end) in zip(mine, pieces):
             if role != 'filler-lead':
@@ -207,27 +208,7 @@ def rough_cut(r, bridge, truths):
     r.check('the lock ends with the run', wait(lambda: not r.state()['aiRun'], 10))
 
     state = bridge.call('get_state', {})
-    ranges, order = played(state, assets)
-    whole = [(t, text, round(heard(ranges[t], s, e) - (e - s), 3)) for t, role, text, s, e in truths if role == 'keep']
-    r.check('every kept phrase plays whole', all(missing > -0.002 for *_, missing in whole),
-            [w for w in whole if w[2] <= -0.002])
-    gone = [(t, role, text, round(heard(ranges[t], s, e), 3)) for t, role, text, s, e in truths if role != 'keep']
-    r.check('earlier attempts and fillers are cut', all(h <= 0.01 for *_, h in gone), [g for g in gone if g[3] > 0.01])
-    timeline = []
-    for t, role, text, s, e in truths:
-        if role == 'keep':
-            at = next((c + (max(s, a) - a) for take, a, b, c in order if take == t and b > s and a < e), None)
-            timeline.append((at, text, e - s))
-    r.check('kept phrases play in the order they were said', [x[0] for x in timeline] == sorted(x[0] for x in timeline), timeline)
-    pauses = [round(b[0] - (a[0] + a[2]), 2) for a, b in zip(timeline, timeline[1:])]
-    slivers = [(take, round(b - a, 3)) for take, a, b, _ in order if b - a < 0.3]
-    r.check('no sliver of a clip is left between the takes', not slivers, slivers)
-    r.check('no long pause is left between sentences', all(p <= 0.45 for p in pauses), pauses)
-    # Where the sound jumps: between takes, or where the cut skipped part of a take. Each side counts
-    # only where something was cut away from it: a take that starts speaking at once is not cut there.
-    length = {n: next(a['durationUs'] for a in state['assets'] if a['id'] == asset) / 1e6 for asset, n in assets.items()}
-    cuts = [(b[3], a[2] < length[a[0]] - 0.001, b[1] > 0.001) for a, b in zip(order, order[1:])
-            if a[0] != b[0] or abs(a[2] - b[1]) > 0.001]
+    cuts = check_cut(r, state, assets, truths, 0.45)
     tracks = [t for t in state['tracks'] if t['kind'] == 'text']
     r.check('captions sit on one Captions track', len(tracks) == 1 and tracks[0]['name'] == 'Captions', [t['name'] for t in tracks])
 
@@ -263,6 +244,33 @@ def rough_cut(r, bridge, truths):
     check_words(r, out, transcript, truths)
     check_captions(r, out, tracks[0]['clips'])
     r.check('no error toast', not r.errors(), r.errors())
+
+
+def check_cut(r, state, assets, truths, longest_pause):
+    """What the main track plays of the takes in `state`, the project: the kept phrases whole and in order, nothing
+    of the cut ones, no sliver of a clip and no pause longer than `longest_pause` s. Returns where the sound jumps,
+    (timeline s, whether something was cut before, whether something was cut after), for check_file."""
+    ranges, order = played(state, assets)
+    whole = [(t, text, round(heard(ranges[t], s, e) - (e - s), 3)) for t, role, text, s, e in truths if role == 'keep']
+    r.check('every kept phrase plays whole', all(missing > -0.002 for *_, missing in whole),
+            [w for w in whole if w[2] <= -0.002])
+    gone = [(t, role, text, round(heard(ranges[t], s, e), 3)) for t, role, text, s, e in truths if role != 'keep']
+    r.check('earlier attempts and fillers are cut', all(h <= 0.01 for *_, h in gone), [g for g in gone if g[3] > 0.01])
+    timeline = []
+    for t, role, text, s, e in truths:
+        if role == 'keep':
+            at = next((c + (max(s, a) - a) for take, a, b, c in order if take == t and b > s and a < e), None)
+            timeline.append((at, text, e - s))
+    r.check('kept phrases play in the order they were said', [x[0] for x in timeline] == sorted(x[0] for x in timeline), timeline)
+    pauses = [round(b[0] - (a[0] + a[2]), 2) for a, b in zip(timeline, timeline[1:])]
+    slivers = [(take, round(b - a, 3)) for take, a, b, _ in order if b - a < 0.3]
+    r.check('no sliver of a clip is left between the takes', not slivers, slivers)
+    r.check('no long pause is left between sentences', all(p <= longest_pause for p in pauses), pauses)
+    # Where the sound jumps: between takes, or where the cut skipped part of a take. Each side counts
+    # only where something was cut away from it: a take that starts speaking at once is not cut there.
+    length = {n: next(a['durationUs'] for a in state['assets'] if a['id'] == asset) / 1e6 for asset, n in assets.items()}
+    return [(b[3], a[2] < length[a[0]] - 0.001, b[1] > 0.001) for a, b in zip(order, order[1:])
+            if a[0] != b[0] or abs(a[2] - b[1]) > 0.001]
 
 
 def check_file(r, out, duration, cuts):

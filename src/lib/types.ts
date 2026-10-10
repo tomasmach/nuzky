@@ -759,6 +759,12 @@ export type TranscriptView = {
    * Heard media without a transcript yet.
    */
   untranscribed: Array<string>,
+  /**
+   * Earlier attempts of restarted sentences, unfinished ones included, and the filler words that
+   * start a sentence: what removing retakes cuts besides the pauses.
+   */
+  retakes: number,
+  fillers: number,
 };
 
 /**

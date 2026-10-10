@@ -977,6 +977,7 @@ pub fn run() {
             transcripts::transcript_view,
             transcripts::cut_words,
             transcripts::remove_pauses,
+            transcripts::remove_retakes,
             zooms::suggest_zooms,
             zooms::apply_zooms,
             agent_connections,

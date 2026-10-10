@@ -38,6 +38,10 @@ pub struct TranscriptView {
     pauses: Vec<Pause>,
     /// Heard media without a transcript yet.
     untranscribed: Vec<String>,
+    /// Earlier attempts of restarted sentences, unfinished ones included, and the filler words that
+    /// start a sentence: what removing retakes cuts besides the pauses.
+    retakes: usize,
+    fillers: usize,
 }
 
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -55,6 +59,8 @@ enum Target {
     Words(Vec<[usize; 2]>),
     /// The pauses of the view with this pause length, by index, or all of them.
     Pauses { pause_us: i64, only: Option<Vec<usize>> },
+    /// What the retake analysis suggests deleting, as for agents, and every pause longer than `pause_us`.
+    Retakes { pause_us: i64 },
 }
 
 fn view(host: &Host, pause_us: i64) -> Result<TranscriptView> {
@@ -62,6 +68,8 @@ fn view(host: &Host, pause_us: i64) -> Result<TranscriptView> {
     let derived = transcript::derive(&project, &host.transcripts)?;
     // Without words, or with voices overlapping so that no pause can be cut, there are none to show.
     let pauses = transcript::pauses(&project, &derived, pause_us).unwrap_or_default();
+    let found = nuzky_analysis::retakes(&derived.words);
+    let deleted: Vec<[usize; 2]> = found.groups.iter().flat_map(|g| g.delete.iter().copied()).collect();
     Ok(TranscriptView {
         key: transcript::word_key(&project, &derived.words),
         words: derived
@@ -79,6 +87,14 @@ fn view(host: &Host, pause_us: i64) -> Result<TranscriptView> {
             .collect(),
         pauses,
         untranscribed: derived.untranscribed,
+        retakes: deleted.len() + found.unfinished.len(),
+        // Words; a filler opening an attempt that goes anyway is not counted twice.
+        fillers: found
+            .fillers
+            .iter()
+            .filter(|f| !deleted.iter().any(|&[a, b]| a <= f.from && f.to <= b))
+            .map(|f| f.to + 1 - f.from)
+            .sum(),
     })
 }
 
@@ -101,6 +117,12 @@ fn cut(host: &Host, key: &str, target: Target) -> Result<(Vec<String>, i64, i64)
                 None => pauses.iter().collect(),
             };
             picked.into_iter().map(|p| TimeRange { start_us: p.start_us, end_us: p.end_us }).collect()
+        }
+        Target::Retakes { pause_us } => {
+            // An untranscribed clip could hold the attempt worth keeping.
+            ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe every heard clip first");
+            let delete = nuzky_analysis::retakes(&derived.words).suggested_delete;
+            transcript::edit_ranges(&state.project, &derived, Some(delete.as_slice()), None, Some(pause_us))?
         }
     };
     ensure!(!ranges.is_empty(), "Nothing to cut");
@@ -175,6 +197,16 @@ pub async fn remove_pauses(
     expected_epoch: Option<String>,
 ) -> CmdResult<TranscriptCut> {
     apply_cut(app, key, Target::Pauses { pause_us, only }, expected_epoch).await
+}
+
+#[tauri::command]
+pub async fn remove_retakes(
+    app: AppHandle,
+    key: String,
+    pause_us: i64,
+    expected_epoch: Option<String>,
+) -> CmdResult<TranscriptCut> {
+    apply_cut(app, key, Target::Retakes { pause_us }, expected_epoch).await
 }
 
 #[derive(Deserialize)]

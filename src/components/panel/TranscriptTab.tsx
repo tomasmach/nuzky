@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { AlertCircle, AlertTriangle, RefreshCw, ScrollText, Scissors } from "lucide-react";
-import { correctWord, cutWords, removePauses, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
+import { correctWord, cutWords, removePauses, removeRetakes, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
 import { useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
-import type { Clip, Project } from "../../lib/types";
+import type { Clip, Project, TranscriptView } from "../../lib/types";
 import { Button, Checkbox, IconButton, NumberInput } from "../ui";
 import { JobError, SpeechFields, SpeechJobCard, useSpeechJobs } from "./SpeechControls";
 import { TranscriptText } from "./TranscriptText";
@@ -50,6 +50,14 @@ const describe = (tokens: Token[]) => (removedUs: number) => {
 
 const total = (tokens: Token[]) => tokens.reduce((s, t) => s + t.endUs - t.startUs, 0);
 
+const count = (n: number, what: string) => (n > 0 ? `${n} ${what}${n === 1 ? "" : "s"}` : null);
+
+/** What removing retakes cuts, "2 retakes, 3 filler words and pauses over 0.5 s", or null when nothing. */
+function retakeParts(view: TranscriptView, pauses: number, pauseUs: number): string | null {
+  const parts = [count(view.retakes, "retake"), count(view.fillers, "filler word"), pauses > 0 ? `pauses over ${formatDuration(pauseUs)}` : null].filter((p) => p !== null);
+  return parts.length ? parts.slice(0, -1).join(", ") + (parts.length > 1 ? " and " : "") + parts[parts.length - 1] : null;
+}
+
 /** Text-based editing: the timeline's speech as text; deleting words cuts the video. */
 export function TranscriptTab() {
   const project = useEditor((s) => s.snap!.project);
@@ -65,6 +73,8 @@ export function TranscriptTab() {
   const zooms = useZoomSuggestions(view);
 
   const removeAll = () => view && removePauses(view.key, pauseUs, null, describe(pauses));
+  const retakes = view ? retakeParts(view, pauses.length, pauseUs) : null;
+  const removeAllRetakes = () => view && retakes && removeRetakes(view.key, pauseUs, (removedUs) => `${retakes} (${formatDuration(removedUs)})`);
   const deleteRange = async (lo: number, hi: number) => {
     if (!view) return false;
     const picked = tokens.slice(lo, hi + 1);
@@ -143,6 +153,15 @@ export function TranscriptTab() {
             <Scissors size={14} /> {pauses.length > 0 ? `Remove ${pauses.length} pause${pauses.length === 1 ? "" : "s"} · ${formatDuration(total(pauses))}` : "Remove pauses"}
           </Button>
         </div>
+        <Button
+          variant="primary"
+          disabled={!retakes || !!cutBlocker}
+          disabledReason={cutBlocker ?? `No retakes, filler words or pauses over ${formatDuration(pauseUs)}`}
+          title={`Cut earlier attempts of repeated sentences, filler words that open a sentence and pauses over ${formatDuration(pauseUs)}`}
+          onClick={removeAllRetakes}
+        >
+          <Scissors size={15} /> Remove retakes and pauses
+        </Button>
         <KeepTracks project={project} />
         {!running && <JobError job={last} />}
         {errorNote}

@@ -82,18 +82,24 @@ media engine-evidence/identity.png ff -f lavfi -i testsrc2=s=540x960 -frames:v 1
 # The Czech talking head of the reel flow, spoken from tests/e2e/reel_takes.tsv: one file per take, each
 # phrase followed by its pause. Quiet pink room tone, so pauses are not digital silence, and speech around
 # -25 LUFS, so the export has to raise it to the Reels level. A changed list makes the takes again.
-reel_take() {
-  local take=$1 colour=$2 out=$3 dir n=0 inputs=()
+# reel_speech <take numbers, separated by spaces> <out.wav>
+reel_speech() {
+  local numbers=$1 out=$2 dir n=0 inputs=()
   dir=$(mktemp -d)
   while IFS=$'\t' read -r number pause _ phrase; do
-    [ "$number" = "$take" ] || continue
+    [[ " $numbers " == *" $number "* ]] || continue
     espeak-ng -v cs -s 150 -w "$dir/$n.wav" "$phrase"
     ff -i "$dir/$n.wav" -af "aresample=48000,apad=pad_dur=$pause" -ac 1 "$dir/p$n.wav"
     inputs+=(-i "$dir/p$n.wav")
     n=$((n + 1))
   done < <(grep -v '^#' "$takes")
-  ff "${inputs[@]}" -filter_complex "concat=n=$n:v=0:a=1,volume=-5dB" "$dir/speech.wav"
-  local seconds
+  ff "${inputs[@]}" -filter_complex "concat=n=$n:v=0:a=1,volume=-5dB" "$out"
+  rm -rf "$dir"
+}
+reel_take() {
+  local take=$1 colour=$2 out=$3 dir seconds
+  dir=$(mktemp -d)
+  reel_speech "$take" "$dir/speech.wav"
   seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dir/speech.wav")
   ff -i "$dir/speech.wav" -f lavfi -i "anoisesrc=color=pink:amplitude=0.004:seed=$take:sample_rate=48000:duration=$seconds" \
     -f lavfi -i "color=c=$colour:s=1080x1920:r=30:d=$seconds,noise=alls=10:allf=u" \
@@ -104,6 +110,25 @@ reel_take() {
 media reel-1.mp4 reel_take 1 0x2b3a4a
 media reel-2.mp4 reel_take 2 0x3a2b4a
 media reel-3.mp4 reel_take 3 0x2b4a3a
+# A new user's first reel (tests/e2e/first_reel.py): the first two takes in one recording, stored as an iPhone
+# stores a portrait video. HEVC at 30 fps, the picture on its side at 1920x1080 and a display matrix that
+# turns it upright to 1080x1920. A yellow square marks the top-left corner of the upright picture, above the
+# Reels safe area.
+first_reel() {
+  local dir seconds
+  dir=$(mktemp -d)
+  # Take 3 is left out: in one recording, recognition hears its opening "Prostě" as "Proske".
+  reel_speech "1 2" "$dir/speech.wav"
+  seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dir/speech.wav")
+  ff -i "$dir/speech.wav" -f lavfi -i "anoisesrc=color=pink:amplitude=0.004:seed=4:sample_rate=48000:duration=$seconds" \
+    -f lavfi -i "color=c=0x2b3a4a:s=1080x1920:r=30:d=$seconds,noise=alls=10:allf=u,drawbox=x=40:y=40:w=160:h=160:color=0xf0c81e:t=fill,transpose=2" \
+    -filter_complex "[0:a][1:a]amix=inputs=2:normalize=0,aformat=channel_layouts=mono[a]" -map 2:v -map "[a]" \
+    -c:v libx265 -preset veryfast -x265-params log-level=error -tag:v hvc1 -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 \
+    -shortest "$dir/sideways.mov"
+  ff -display_rotation:v:0 -90 -i "$dir/sideways.mov" -c copy "$1"
+  rm -rf "$dir"
+}
+media first-reel.mov first_reel
 
 # A talking head in a noisy room for the voice flow: four phrases with a second of pause after each, pink
 # room noise around -40 dBFS and 50 Hz mains hum around -30 dBFS under them, the sound Clean voice is for.

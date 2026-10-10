@@ -145,6 +145,8 @@ export const cutWords = (key: string, ranges: [number, number][], what: (removed
 export const removePauses = (key: string, pauseUs: number, only: number[] | null, what: (removedUs: number) => string) =>
   cut((epoch) => api.removePauses(key, pauseUs, only, epoch), what);
 
+export const removeRetakes = (key: string, pauseUs: number, what: (removedUs: number) => string) => cut((epoch) => api.removeRetakes(key, pauseUs, epoch), what);
+
 /**
  * Corrects how a word reads, in the transcript and in the captions that show it, after the edits
  * queued before it, as one undo step, and offers Undo. Resolves to whether it was corrected.
