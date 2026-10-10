@@ -1032,11 +1032,12 @@ mod tests {
                 json!({"run_id":run["run_id"],"request_id":request,"edits":[{"type":"addAssets","assets":[asset]}]}),
             )
         };
+        let missing = dir.join("missing.mp4").to_string_lossy().into_owned();
         for (path, code) in [
             ("http://127.0.0.1:9/x.mp4", "INVALID_ASSET_PATH"),
             ("concat:/a.mp4|/b.mp4", "INVALID_ASSET_PATH"),
             ("still.ppm", "INVALID_ASSET_PATH"),
-            ("/nonexistent-nuzky-asset.mp4", "MEDIA_MISSING"),
+            (missing.as_str(), "MEDIA_MISSING"),
         ] {
             let mut bad = asset.clone();
             bad.path = path.into();

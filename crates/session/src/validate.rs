@@ -341,7 +341,7 @@ mod tests {
         project.assets.push(Asset {
             id: "clip".into(),
             name: "Clip".into(),
-            path: "/missing/clip.mp4".into(),
+            path: std::env::temp_dir().join("missing/clip.mp4").to_string_lossy().into(),
             kind: AssetKind::Video,
             duration_us: 1_000_000,
             width: 1080,
@@ -454,7 +454,7 @@ mod tests {
         project.assets.push(Asset {
             id: "clip".into(),
             name: "Clip".into(),
-            path: "/clip.mp4".into(),
+            path: std::env::temp_dir().join("clip.mp4").to_string_lossy().into(),
             kind: AssetKind::Video,
             duration_us: 1_000_000,
             width: 1080,
@@ -479,7 +479,7 @@ mod tests {
         project.assets.push(Asset {
             id: "ramp".into(),
             name: "Ramp".into(),
-            path: "/ramp.ppm".into(),
+            path: std::env::temp_dir().join("ramp.ppm").to_string_lossy().into(),
             kind: AssetKind::Image,
             duration_us: 0,
             width: 256,
@@ -517,7 +517,7 @@ mod tests {
             project.assets.push(Asset {
                 id: id.into(),
                 name: id.into(),
-                path: format!("/{id}"),
+                path: std::env::temp_dir().join(id).to_string_lossy().into(),
                 kind,
                 duration_us: if sound { 2_000_000 } else { 0 },
                 width: 16,
