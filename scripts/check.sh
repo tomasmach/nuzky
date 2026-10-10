@@ -67,6 +67,21 @@ without_avx2() (
     isolated cargo test --locked --workspace --lib -- --include-ignored runtime:: the_face_models
 )
 
+# The Rust tests with media and the UI flows spend their time waiting for speech recognition on the GPU, the app
+# and real time, each with about a tenth of the CPU, so they run side by side. The flows' report follows the tests'.
+media_tests_and_flows() {
+  local flows=tmp-test/ui-flows.log tests_failed=0 flows_failed=0
+  python3 scripts/repro.py --all >"$flows" 2>&1 &
+  local pid=$!
+  isolated cargo test --workspace --locked -- --ignored || tests_failed=1
+  wait "$pid" || flows_failed=1
+  echo
+  cat "$flows"
+  [ "$tests_failed" = 0 ] || echo "Rust tests with media and models FAILED" >&2
+  [ "$flows_failed" = 0 ] || echo "UI flows FAILED" >&2
+  [ "$tests_failed$flows_failed" = 00 ]
+}
+
 step "Own node_modules" own_node_modules
 step "npm install from the lockfile" npm ci --no-audit --no-fund
 step "Rust format" cargo fmt --all --check
@@ -77,11 +92,10 @@ step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
 step "ONNX Runtime" node scripts/fetch-onnxruntime.mjs
 step "Rust tests" isolated cargo test --workspace --locked
 step "Test media and models" scripts/fixtures.sh
-step "Rust tests with media and models" isolated cargo test --workspace --locked -- --ignored
 step "Starts and finds faces without AVX2" without_avx2
 step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
-step "UI flows" python3 scripts/repro.py --all
+step "Rust tests with media and models, and the UI flows" media_tests_and_flows
 
 echo
 echo "check passed in $((SECONDS / 60))m $((SECONDS % 60))s"

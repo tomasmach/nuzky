@@ -2,29 +2,46 @@
 # Creates the media and models that `cargo test -- --ignored` and scripts/repro.py read from tmp-test/.
 # Media are synthetic (FFmpeg test patterns, espeak-ng speech) or public-domain recordings pinned by SHA-256;
 # nothing is committed.
-# Models are downloaded once per machine into ~/.cache/nuzky/deps/fixtures (or $NUZKY_DEPS/fixtures) and checked
-# against the SHA-256 the app pins in src-tauri/src/jobs.rs.
-# Existing files are kept; delete one to create it again.
+# Models are downloaded and media made once per machine, in ~/.cache/nuzky/deps/fixtures (or $NUZKY_DEPS/fixtures),
+# and every checkout takes a copy-on-write clone. Models are checked against the SHA-256 the app pins in
+# src-tauri/src/jobs.rs. Media are made again when this script, the reel takes or the FFmpeg or espeak-ng version
+# change. Otherwise existing files are kept; delete one to create it again.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 out=tmp-test
 models=$out/xdg/data/nuzky/models
-mkdir -p "$out/engine-evidence" "$models"
+shared=${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}/fixtures
+mkdir -p "$out/engine-evidence" "$models" "$shared"
 for tool in ffmpeg espeak-ng curl sha256sum; do
   command -v "$tool" >/dev/null || { echo "fixtures: $tool is required" >&2; exit 1; }
 done
 
+# A clone shares disk blocks until one side changes; a hard link where the file system cannot clone.
+# The old file goes first, so a hard link never writes through into the shared copy.
+place() {
+  mkdir -p "$(dirname "$2")" && rm -f "$2" && { cp --reflink=always "$1" "$2" 2>/dev/null || ln "$1" "$2" 2>/dev/null || cp "$1" "$2"; }
+}
+
+takes=tests/e2e/reel_takes.tsv
+key=$({ cat scripts/fixtures.sh "$takes"; ffmpeg -version | head -1; espeak-ng --version; } | sha256sum | cut -c1-16)
+made=$shared/media-$key
+current=$([ "$(cat "$out/.media-key" 2>/dev/null)" = "$key" ] && echo yes || echo no)
 # Writes to a temporary name next to the target, so an interrupted run leaves no half file behind.
 media() {
-  local file=$out/$1
+  local file=$out/$1 cached=$made/$1
   shift
-  [ -s "$file" ] && return
+  [ "$current" = yes ] && [ -s "$file" ] && return
+  if [ -s "$cached" ]; then
+    place "$cached" "$file"
+    return
+  fi
   echo "> $file"
   local part
   part=$(dirname "$file")/.part-$(basename "$file")
   "$@" "$part"
   mv "$part" "$file"
+  place "$file" "$cached.part.$$" && mv "$cached.part.$$" "$cached"
 }
 ff() { ffmpeg -v error -y "$@"; }
 
@@ -57,7 +74,6 @@ media engine-evidence/identity.png ff -f lavfi -i testsrc2=s=540x960 -frames:v 1
 # The Czech talking head of the reel flow, spoken from tests/e2e/reel_takes.tsv: one file per take, each
 # phrase followed by its pause. Quiet pink room tone, so pauses are not digital silence, and speech around
 # -25 LUFS, so the export has to raise it to the Reels level. A changed list makes the takes again.
-takes=tests/e2e/reel_takes.tsv
 reel_take() {
   local take=$1 colour=$2 out=$3 dir n=0 inputs=()
   dir=$(mktemp -d)
@@ -77,9 +93,6 @@ reel_take() {
     -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 128k -ar 48000 -shortest "$out"
   rm -rf "$dir"
 }
-for take in 1 2 3; do
-  [ "$takes" -nt "$out/reel-$take.mp4" ] && rm -f "$out/reel-$take.mp4"
-done
 media reel-1.mp4 reel_take 1 0x2b3a4a
 media reel-2.mp4 reel_take 2 0x3a2b4a
 media reel-3.mp4 reel_take 3 0x2b4a3a
@@ -109,21 +122,19 @@ media voice.mp4 noisy_talk
 
 # Compares digests directly: macOS ships a BSD sha256sum without GNU's --check from stdin.
 sha256_is() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
-# Every download is kept once per machine under its SHA-256, so a new checkout links the gigabytes of models
+# Every download is kept once per machine under its SHA-256, so a new checkout clones the gigabytes of models
 # instead of fetching them again. fetch <file> <sha256> <curl arguments ending with the URL>
-downloads=${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}/fixtures
-mkdir -p "$downloads"
 fetch() {
-  local file=$1 sha=$2 shared=$downloads/$2
+  local file=$1 sha=$2 stored=$shared/$2
   shift 2
-  if ! { [ -f "$shared" ] && sha256_is "$shared" "$sha"; }; then
+  if ! { [ -f "$stored" ] && sha256_is "$stored" "$sha"; }; then
     local part
-    part=$(mktemp "$shared.part.XXXXXX")
+    part=$(mktemp "$stored.part.XXXXXX")
     curl --fail --location --silent --show-error --output "$part" "$@"
     sha256_is "$part" "$sha" || { rm -f "$part"; echo "fixtures: $file does not match its SHA-256" >&2; exit 1; }
-    mv "$part" "$shared"
+    mv "$part" "$stored"
   fi
-  ln -f "$shared" "$file" 2>/dev/null || cp "$shared" "$file"
+  place "$stored" "$file"
 }
 model() {
   local file=$models/$1 sha=$2 url=$3
@@ -194,3 +205,4 @@ face_thumb() {
     -c:v libx264 -preset veryfast -crf 18 -r 30 -force_key_frames 0,3,6,9 -an "$1"
 }
 media face-thumb.mp4 face_thumb
+echo "$key" >"$out/.media-key"
