@@ -6,6 +6,7 @@ mod engine;
 mod jobs;
 mod library;
 mod preview_server;
+mod sounds;
 mod store;
 mod style;
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -58,6 +59,7 @@ pub struct AppState {
     /// Why the most recent project was not opened at startup.
     startup_notice: Option<String>,
     library: Arc<library::Library>,
+    sounds: sounds::Sounds,
 }
 
 /// Per asset id: the source file its cached previews show, and the lock of their decoding.
@@ -790,9 +792,11 @@ fn start_export(
     path: String,
     options: jobs::ExportRequest,
     replace_existing: Option<bool>,
+    replace_credits: Option<bool>,
     expected_epoch: Option<String>,
 ) -> CmdResult<String> {
-    jobs::start_export(&app, PathBuf::from(path), options, replace_existing.unwrap_or(true), expected_epoch.as_deref())
+    let (replace, credits) = (replace_existing.unwrap_or(true), replace_credits.unwrap_or(false));
+    jobs::start_export(&app, PathBuf::from(path), options, replace, credits, expected_epoch.as_deref())
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.
@@ -949,6 +953,7 @@ pub fn run() {
                 fonts: OnceLock::new(),
                 startup_notice,
                 library: Arc::default(),
+                sounds: Default::default(),
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
@@ -964,6 +969,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             boot,
             set_ui_context,
+            sounds::sound_library,
+            sounds::sound_search,
+            sounds::sound_preview,
+            sounds::sound_stop,
+            sounds::sound_cancel,
+            sounds::sound_add,
+            sounds::sound_credits,
+            sounds::sound_settings,
+            sounds::set_sound_settings,
+            sounds::open_sound_page,
             resolve_recovery,
             stop_run,
             apply_edit,

@@ -143,6 +143,9 @@ fn generate() -> String {
     types.visit::<crate::jobs::StylePairResult>();
     types.visit::<crate::cover::CoverView>();
     types.visit::<crate::cover::CoverPick>();
+    types.visit::<nuzky_mcp::sounds::Page>();
+    types.visit::<crate::sounds::PreviewStarted>();
+    types.visit::<crate::sounds::SoundSettings>();
     let mut out = HEADER.to_string();
     for declaration in types.by_name.values() {
         out.push('\n');

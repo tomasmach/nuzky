@@ -87,7 +87,9 @@ export function ExportDialog() {
   const [error, setError] = useState<string | null>(null);
   /** The file asked for already exists; Replace exports over it. */
   const [exists, setExists] = useState<string | null>(null);
-  const last = useRef<{ path: string; replace: boolean } | null>(null);
+  /** The credits file the video's CC BY sounds bring is already there; Replace writes over it. */
+  const [creditsExist, setCreditsExist] = useState<string | null>(null);
+  const last = useRef<{ path: string; replace: boolean; credits: boolean } | null>(null);
   const startedAt = useRef(0);
   const dialog = useRef<HTMLDivElement>(null);
   const running = job?.status === "running";
@@ -102,6 +104,7 @@ export function ExportDialog() {
   const close = () => {
     setError(null);
     setExists(null);
+    setCreditsExist(null);
     // A finished job is shown once; a running one keeps reporting in the top bar.
     if (job && job.status !== "running") useEditor.setState({ exportJobId: null });
     const cover = useCover.getState().exportJob;
@@ -134,10 +137,11 @@ export function ExportDialog() {
   // A file that appeared at the destination while rendering is asked about like one that was there before.
   const appeared = !exists && jobFailed?.startsWith("OUTPUT_EXISTS") && last.current ? last.current.path : null;
   const replacing = exists ?? appeared;
+  const asking = creditsExist ?? (replacing && fileName(replacing));
   // The question replaces the buttons that were focused, so focus moves to its safe answer.
   useEffect(() => {
-    if (replacing) dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
-  }, [replacing]);
+    if (asking) dialog.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+  }, [asking]);
 
   if (!open || !project || !options) return null;
   const duration = projectDuration(project);
@@ -152,17 +156,22 @@ export function ExportDialog() {
   const pickPreset = (id: "custom" | "reels") => setOption(id === "reels" ? { ...REELS, quality: "recommended", preset: "reels" } : { preset: null });
   const reelsBlocked = options.preset === "reels" && !isNineSixteen(project.canvas);
 
-  /** `epoch`: the project the export was asked for, taken before any wait. `replace`: overwriting the file was confirmed. */
-  const run = async (path: string, replace: boolean, epoch = currentEpoch()) => {
+  /**
+   * `epoch`: the project the export was asked for, taken before any wait. `replace`: overwriting the file was confirmed;
+   * `credits`: overwriting the credits file beside it was, which is asked on its own.
+   */
+  const run = async (path: string, replace: boolean, credits = false, epoch = currentEpoch()) => {
     setError(null);
     setExists(null);
-    last.current = { path, replace };
+    setCreditsExist(null);
+    last.current = { path, replace, credits };
     try {
       startedAt.current = Date.now();
-      useEditor.setState({ exportJobId: await api.startExport(path, options, epoch, replace) });
+      useEditor.setState({ exportJobId: await api.startExport(path, options, epoch, replace, credits) });
     } catch (e) {
       const text = errorText(e);
       if (text.startsWith("DESTINATION_EXISTS")) setExists(path);
+      else if (text.startsWith("CREDITS_EXIST")) setCreditsExist(/^CREDITS_EXIST: (.+) already exists/.exec(text)?.[1] ?? "The credits file");
       else setError(text);
     }
   };
@@ -180,7 +189,7 @@ export function ExportDialog() {
     if (!picked) return;
     const path = picked.endsWith(".mp4") ? picked : `${picked}.mp4`;
     // The save dialog asked before replacing the name it returned, not one with ".mp4" added.
-    await run(path, path === picked, epoch);
+    await run(path, path === picked, false, epoch);
   };
 
   const eta = (() => {
@@ -189,7 +198,7 @@ export function ExportDialog() {
     const left = (elapsed / job.progress) * (1 - job.progress);
     return left < 60 ? `${Math.ceil(left)} s left` : `${Math.ceil(left / 60)} min left`;
   })();
-  const failed = replacing ? null : (error ?? jobFailed);
+  const failed = asking ? null : (error ?? jobFailed);
   const settingsLocked = running || job?.status === "done";
 
   return (
@@ -292,10 +301,10 @@ export function ExportDialog() {
               <span className="break-all">Saved to {job.output}</span>
             </div>
           )}
-          {replacing && (
+          {asking && (
             <div className="flex items-start gap-2 rounded-xl bg-warn/10 p-3 text-[13px] text-fg" role="alert">
               <AlertTriangle size={16} className="mt-px shrink-0 text-warn" />
-              <span className="break-all">{fileName(replacing)} already exists. Replace it?</span>
+              <span className="break-all">{asking} already exists. Replace it?</span>
             </div>
           )}
           {failed && (
@@ -330,12 +339,16 @@ export function ExportDialog() {
                   Done
                 </Button>
               </>
-            ) : replacing ? (
+            ) : asking ? (
               <>
-                <Button pill data-autofocus onClick={() => (setExists(null), pickAndRun())}>
+                <Button pill data-autofocus onClick={() => (setExists(null), setCreditsExist(null), pickAndRun())}>
                   Choose another name…
                 </Button>
-                <Button pill variant="danger" onClick={() => run(replacing, true)}>
+                <Button
+                  pill
+                  variant="danger"
+                  onClick={() => (creditsExist ? run(last.current!.path, last.current!.replace, true) : run(replacing!, true, last.current?.credits))}
+                >
                   Replace
                 </Button>
               </>
@@ -345,7 +358,7 @@ export function ExportDialog() {
                   Close
                 </Button>
                 {failed && last.current ? (
-                  <Button pill variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={() => run(last.current!.path, last.current!.replace)}>
+                  <Button pill variant="primary" data-autofocus disabled={reelsBlocked} disabledReason={REELS_NEEDS_916} onClick={() => run(last.current!.path, last.current!.replace, last.current!.credits)}>
                     Retry
                   </Button>
                 ) : (

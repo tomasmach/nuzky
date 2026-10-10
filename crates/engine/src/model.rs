@@ -234,6 +234,55 @@ pub struct Asset {
     /// Mirrored left to right after the rotation, as front-camera photos can ask in EXIF.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mirror: bool,
+    /// Where a sound from the sound library came from, so the video can credit it. None for the
+    /// user's own files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<Credit>,
+}
+
+/// The licences the sound library offers: both allow monetized videos.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum License {
+    /// Public domain dedication; no credit needed.
+    #[serde(rename = "cc0")]
+    Cc0,
+    /// Creative Commons Attribution: the video must credit the author.
+    #[serde(rename = "by")]
+    CcBy,
+}
+
+/// A sound from the library: its source, author and licence.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Credit {
+    /// "nuzky" for the sounds built into Nuzky, "openverse" or "freesound".
+    pub source: String,
+    /// The sound's id at its source.
+    pub id: String,
+    pub title: String,
+    pub author: String,
+    pub license: License,
+    /// Such as "4.0" or "1.0".
+    pub license_version: String,
+    /// The licence's page at Creative Commons.
+    pub license_url: String,
+    /// The sound's page at its source; empty for built-in sounds.
+    #[serde(default)]
+    pub url: String,
+}
+
+impl Credit {
+    /// "CC BY 4.0".
+    pub fn license_name(&self) -> String {
+        match self.license {
+            License::Cc0 => format!("CC0 {}", self.license_version),
+            License::CcBy => format!("CC BY {}", self.license_version),
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

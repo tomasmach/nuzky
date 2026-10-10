@@ -95,4 +95,4 @@ Nuzky is young, so a bug report helps as much as a pull request. When something 
 
 ## License
 
-GPL-3.0-or-later. FFmpeg with x264 is GPL and compatible with this licence. The export uses FFmpeg's native AAC encoder because `libfdk_aac` is not GPL compatible.
+GPL-3.0-or-later. FFmpeg with x264 is GPL and compatible with this licence. The export uses FFmpeg's native AAC encoder because `libfdk_aac` is not GPL compatible. The sound effects built into Nuzky are CC0 1.0; `assets/sounds/manifest.json` lists their authors and sources.

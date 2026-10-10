@@ -297,6 +297,7 @@ fn asset() -> Asset {
         has_audio: true,
         rotation: 0,
         mirror: false,
+        credit: None,
     }
 }
 fn media_clip() -> Clip {

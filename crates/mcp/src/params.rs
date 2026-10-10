@@ -87,6 +87,28 @@ pub struct Import {
     /// Reuse this id with the same paths to retry a failed save without importing twice.
     pub request_id: Option<String>,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSounds {
+    /// What to look for, in English: "whoosh", "upbeat", "cinematic piano". Empty lists the built-in sound effects.
+    pub query: String,
+    pub kind: crate::sounds::Kind,
+    /// Only this licence: "cc0" (no credit needed) or "by" (credit needed). Both by default.
+    pub license: Option<nuzky_engine::model::License>,
+    /// 1 to 12; online results only.
+    pub page: Option<u32>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddSound {
+    pub run_id: String,
+    /// A sound id from search_sounds.
+    pub id: String,
+    /// Where the clip starts on the timeline.
+    pub at_us: i64,
+    /// Reuse this id with the same sound to retry a failed save without adding it twice.
+    pub request_id: Option<String>,
+}
 /// Choices offered to the user; the Nuzky AI panel shows them as buttons.
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

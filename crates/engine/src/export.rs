@@ -12,7 +12,7 @@ use ffmpeg_next as ff;
 use crate::audio::{Mixer, ensure_pcm, has_audio};
 use crate::loudness::{Limiter, Meter, db_to_gain};
 use crate::media::{init, set_sws_colorspace};
-use crate::model::{CHANNELS, ClipContent, Project, SAMPLE_RATE, TrackKind};
+use crate::model::{CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
 use crate::render::{Renderer, Wait};
 use crate::voice::ensure_voice_pcm;
 
@@ -87,6 +87,9 @@ impl Delivery {
 pub struct ExportOptions {
     pub crf: u8,
     pub replace_existing: bool,
+    /// The credits file of CC BY sounds may replace one beside the video. Asked apart from the video,
+    /// since a creator may keep their own notes in a file of that name.
+    pub replace_credits: bool,
     /// x264 speed preset.
     pub preset: String,
     /// Short side of the output in pixels (720, 1080, 1440, 2160); `None` keeps the canvas size.
@@ -102,6 +105,7 @@ impl Default for ExportOptions {
         Self {
             crf: Quality::Recommended.crf(),
             replace_existing: false,
+            replace_credits: false,
             preset: "veryfast".into(),
             resolution: None,
             fps: None,
@@ -154,16 +158,16 @@ pub fn export(
     }
     check_options(project, options)?;
     check_source_path(project, out)?;
+    // CC BY sounds go out with their credits, beside the video and under the same consent.
+    let credits = crate::credits::credits(project);
+    let credits_out = crate::credits::credits_path(out);
+    if credits.is_some() && !options.replace_credits && credits_out.symlink_metadata().is_ok() {
+        bail!("OUTPUT_EXISTS: {} already exists; choose a new export path", credits_out.display());
+    }
     // Each heard file, and whether a clip of it cleans the voice: the file then has the cleaned sound.
     let mut heard = std::collections::HashMap::<&str, bool>::new();
-    for clip in
-        project.tracks.iter().filter(|track| !track.muted && track.kind != TrackKind::Text).flat_map(|t| &t.clips)
-    {
-        if let ClipContent::Media { asset_id, volume, clean_voice, .. } = &clip.content
-            && *volume > 0.0
-            && clip.end_us() > 0
-            && clip.start_us < duration
-        {
+    for clip in heard_clips(project) {
+        if let ClipContent::Media { asset_id, clean_voice, .. } = &clip.content {
             *heard.entry(asset_id.as_str()).or_default() |= *clean_voice;
         }
     }
@@ -191,6 +195,35 @@ pub fn export(
         if let Err(e) = std::fs::remove_file(&tmp) {
             log::warn!("Cannot remove temporary export {}: {e}", tmp.display());
         }
+    }
+    result?;
+    match credits {
+        Some(text) => write_credits(&text, &credits_out, options.replace_credits).with_context(|| {
+            format!("The video is saved, but its credits could not be written to {}", credits_out.display())
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Media clips whose sound is in the export: on a heard track, above zero volume, inside the timeline.
+pub fn heard_clips(project: &Project) -> impl Iterator<Item = &Clip> {
+    let duration = project.duration_us();
+    project.tracks.iter().filter(|track| !track.muted && track.kind != TrackKind::Text).flat_map(|t| &t.clips).filter(
+        move |clip| {
+            matches!(&clip.content, ClipContent::Media { volume, .. } if *volume > 0.0)
+                && clip.end_us() > 0
+                && clip.start_us < duration
+        },
+    )
+}
+
+/// Through a temporary file beside it, like the video.
+fn write_credits(text: &str, out: &Path, replace_existing: bool) -> Result<()> {
+    let tmp = out.with_file_name(format!(".nuzky-part-{}.txt", uuid::Uuid::new_v4()));
+    std::fs::write(&tmp, text).with_context(|| format!("Cannot write {}", tmp.display()))?;
+    let result = publish(&tmp, out, replace_existing, &AtomicBool::new(false));
+    if result.is_err() {
+        std::fs::remove_file(&tmp).ok();
     }
     result
 }

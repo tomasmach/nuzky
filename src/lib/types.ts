@@ -86,6 +86,11 @@ export type Asset = {
    * Mirrored left to right after the rotation, as front-camera photos can ask in EXIF.
    */
   mirror?: boolean,
+  /**
+   * Where a sound from the sound library came from, so the video can credit it. None for the
+   * user's own files.
+   */
+  credit?: Credit | null,
 };
 
 export type AssetKind = "video" | "audio" | "image";
@@ -286,6 +291,35 @@ export type CoverView = {
    * without: text behind the person in front of them and no outline.
    */
   maskMissing: boolean,
+};
+
+/**
+ * A sound from the library: its source, author and licence.
+ */
+export type Credit = {
+  /**
+   * "nuzky" for the sounds built into Nuzky, "openverse" or "freesound".
+   */
+  source: string,
+  /**
+   * The sound's id at its source.
+   */
+  id: string,
+  title: string,
+  author: string,
+  license: License,
+  /**
+   * Such as "4.0" or "1.0".
+   */
+  licenseVersion: string,
+  /**
+   * The licence's page at Creative Commons.
+   */
+  licenseUrl: string,
+  /**
+   * The sound's page at its source; empty for built-in sounds.
+   */
+  url: string,
 };
 
 /**
@@ -572,6 +606,11 @@ export type LibraryProject = {
 };
 
 /**
+ * The licences the sound library offers: both allow monetized videos.
+ */
+export type License = "cc0" | "by";
+
+/**
  * Editing limits the engine enforces, sent to the UI at start so it never copies them.
  */
 export type Limits = {
@@ -588,6 +627,10 @@ export type Limits = {
 };
 
 export type MotionKind = "pushIn" | "pullOut" | "kenBurns";
+
+export type PreviewStarted = {
+  durationUs: number,
+};
 
 export type Project = {
   version: number,
@@ -716,6 +759,57 @@ export type Snapshot = {
    * Set when agents cannot attach to this project live; editing works without them.
    */
   agentBridgeError: string | null,
+};
+
+/**
+ * A sound the library offers.
+ */
+export type Sound = {
+  /**
+   * `nuzky:whoosh` for a built-in sound, `openverse:<uuid>` or `freesound:<number>`.
+   */
+  id: string,
+  kind: SoundKind,
+  title: string,
+  author: string,
+  /**
+   * 0 when the source does not say.
+   */
+  durationUs: number,
+  license: License,
+  licenseVersion: string,
+  licenseUrl: string,
+  /**
+   * The sound's page at its source, where its licence can be checked; empty for built-in sounds.
+   */
+  url: string,
+  /**
+   * "Built in", "Jamendo", "Freesound", "Wikimedia Commons"…
+   */
+  provider: string,
+  /**
+   * The group of a built-in sound, such as "Whoosh".
+   */
+  category?: string | null,
+};
+
+export type SoundKind = "music" | "effect";
+
+/**
+ * One page of online results.
+ */
+export type SoundPage = {
+  sounds: Array<Sound>,
+  more: boolean,
+  /**
+   * "Openverse" or "Freesound": the service the results come from, which the library names.
+   */
+  service: string,
+};
+
+export type SoundSettings = {
+  freesound: boolean,
+  hasKey: boolean,
 };
 
 export type SpeechModel = {

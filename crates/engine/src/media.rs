@@ -182,6 +182,7 @@ pub fn probe(path: &Path, id: String) -> Result<Asset> {
         has_audio: audio.is_some() && !is_image,
         rotation: 0,
         mirror: false,
+        credit: None,
     };
 
     if let Some(stream) = video {
@@ -873,6 +874,7 @@ mod tests {
             has_audio: false,
             rotation: 90,
             mirror: true,
+            credit: None,
         };
         let (out, w, h) = orient(&pixels, 3, 2, &asset);
         assert_eq!(

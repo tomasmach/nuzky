@@ -37,6 +37,9 @@ pub(crate) const TOOLS: &[Rules] = &[
     // Restoring the same version again changes nothing more.
     rules("undo_to", Never, true, true, false),
     rules("import_media", Never, false, false, false),
+    // Searching reads catalogues only; adding downloads the one sound, then edits like import_media.
+    rules("search_sounds", Always, false, true, false),
+    rules("add_sound", Never, false, false, false),
     rules("inspect_frames", Always, false, true, false),
     // Only renders and mixes the timeline; preparing missing sound runs as a job.
     rules("activity", Always, false, true, true),
@@ -72,6 +75,9 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("get_style", Always, false, true, false),
     rules("change_style", Never, false, false, false),
 ];
+
+/// Tools that reach the internet: the sound library's catalogues and its downloads.
+pub(crate) const ONLINE: &[&str] = &["search_sounds", "add_sound"];
 
 pub(crate) fn find(name: &str) -> Option<&'static Rules> {
     TOOLS.iter().find(|rules| rules.name == name)
@@ -113,7 +119,8 @@ mod tests {
                 "inspect_thumbnail",
                 "suggest_options",
                 "list_history",
-                "get_style"
+                "get_style",
+                "search_sounds"
             ])
         );
         assert_eq!(
@@ -143,7 +150,8 @@ mod tests {
                 "suggest_options",
                 "list_history",
                 "undo_to",
-                "get_style"
+                "get_style",
+                "search_sounds"
             ])
         );
         assert_eq!(

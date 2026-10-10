@@ -63,7 +63,11 @@ pub struct Backend {
     export_queue: Arc<Mutex<()>>,
     transcript_requests: Mutex<HashMap<(String, String), PreparedTranscriptEdit>>,
     import_requests: Mutex<HashMap<(String, String), PreparedImport>>,
+    sound_requests: Mutex<HashMap<(String, String), (String, PreparedSound)>>,
 }
+
+/// The asset the sound became and the edits that add it.
+type PreparedSound = (String, Vec<EditCmd>, Expect);
 
 impl Backend {
     pub fn open(project: &Path, allow_write: bool, cache: PathBuf) -> Result<Self> {
@@ -89,6 +93,7 @@ impl Backend {
             export_queue: Arc::default(),
             transcript_requests: Mutex::default(),
             import_requests: Mutex::default(),
+            sound_requests: Mutex::default(),
         })
     }
 
@@ -246,6 +251,8 @@ impl Backend {
                 )
             }
             "import_media" => self.import(parse(arguments)?, state),
+            "search_sounds" => search_sounds(parse(arguments)?),
+            "add_sound" => self.add_sound(parse(arguments)?, state),
             "activity" => self.activity(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "segment_subject" => self.segment_subject(parse(arguments)?, state),
@@ -450,6 +457,64 @@ impl Backend {
             prepared.expect.clone(),
         )?;
         Ok(json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch, "asset_ids": ids}))
+    }
+
+    /// Downloads the sound when needed, then adds it and its clip as one edit of the run.
+    fn add_sound(&self, args: AddSound, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        ensure!(args.at_us >= 0, "INVALID_ARGUMENTS: at_us must not be negative");
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let prepared = {
+            let mut requests = self.sound_requests.lock().unwrap();
+            requests.retain(|(run, _), _| run == &args.run_id);
+            match requests.get(&key) {
+                Some((id, prepared)) => {
+                    ensure!(id == &args.id, "REQUEST_CONFLICT: request_id was used with another sound");
+                    prepared.clone()
+                }
+                None => {
+                    // A retry after a failed save reuses this, so the asset is never added twice.
+                    let mut edits = Vec::new();
+                    let asset_id = match crate::sounds::existing(&state.project.assets, &args.id) {
+                        Some(asset) => asset.id.clone(),
+                        None => {
+                            // Stop in the app ends the run, and with it the download.
+                            let stopped = || {
+                                self.closed.load(Ordering::Acquire)
+                                    || self.host.session.check_run(&args.run_id).is_err()
+                            };
+                            let asset = crate::sounds::asset(&args.id, &self.host.cache_dir, stopped, |_| {})?;
+                            let id = asset.id.clone();
+                            edits.push(EditCmd::AddAssets { assets: vec![asset] });
+                            id
+                        }
+                    };
+                    edits.push(EditCmd::AddClip {
+                        asset_id: asset_id.clone(),
+                        start_us: Some(args.at_us),
+                        track_id: None,
+                    });
+                    let prepared =
+                        (asset_id, edits, Expect { revision: Some(state.stamp.revision), speech_layout_key: None });
+                    requests.insert(key, (args.id.clone(), prepared.clone()));
+                    prepared
+                }
+            }
+        };
+        let (asset_id, edits, expect) = prepared;
+        let result = self.host.session.apply_edits(&args.run_id, &request_id, edits, expect)?;
+        let snapshot = self.host.session.state()?.project;
+        let asset = snapshot.asset(&asset_id).context("Added sound is missing")?;
+        let clip = result.clips.iter().find(|c| matches!(&c.clip.content, nuzky_engine::model::ClipContent::Media { asset_id: a, .. } if a == &asset_id));
+        let credit = asset.credit.as_ref();
+        Ok(json!({
+            "revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch,
+            "asset_id": asset_id, "clip_id": clip.map(|c| &c.clip.id), "track_id": clip.map(|c| &c.track_id),
+            "start_us": clip.map(|c| c.clip.start_us), "duration_us": clip.map(|c| c.clip.duration_us),
+            "needs_credit": credit.is_some_and(|c| c.license == nuzky_engine::model::License::CcBy),
+            "credit": credit,
+        }))
     }
 
     fn analyze(&self, args: Analyze, state: &SessionState) -> Result<Value> {
@@ -1098,6 +1163,31 @@ fn texts(thumbnail: &Thumbnail, hidden: &[f32]) -> Value {
     )
 }
 
+/// Built-in sound effects first, then a page from online; offline the built-in ones still come back.
+fn search_sounds(args: SearchSounds) -> Result<Value> {
+    use crate::sounds::{Kind, built_in, search};
+    let page = args.page.unwrap_or(1);
+    let mut sounds =
+        if args.kind == Kind::Effect && page == 1 && args.license != Some(nuzky_engine::model::License::CcBy) {
+            built_in(&args.query)
+        } else {
+            Vec::new()
+        };
+    if args.query.trim().is_empty() {
+        return Ok(json!({"sounds": sounds, "more": false}));
+    }
+    match search(&args.query, args.kind, args.license, page) {
+        Ok(found) => {
+            sounds.extend(found.sounds);
+            Ok(json!({"sounds": sounds, "more": found.more, "online": found.service}))
+        }
+        Err(error) if !sounds.is_empty() => {
+            Ok(json!({"sounds": sounds, "more": false, "online_error": format!("{error:#}")}))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn owns_run(state: &SessionState, id: &str) -> Result<()> {
     ensure!(!state.read_only, "READ_ONLY: restart with --allow-write");
     ensure!(state.open_run.as_ref().is_some_and(|r| r.run_id == id), "INVALID_RUN: begin a run first");
@@ -1426,6 +1516,7 @@ mod transcript_tests {
             export_queue: Arc::default(),
             transcript_requests: Mutex::default(),
             import_requests: Mutex::default(),
+            sound_requests: Mutex::default(),
         };
         (dir, backend, project)
     }

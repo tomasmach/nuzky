@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, Prefix};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use nuzky_engine::{
     Project,
     model::{
@@ -37,6 +37,9 @@ pub fn validate(project: &Project) -> Result<()> {
             asset.id
         );
         local_media_path(&asset.path)?;
+        if let Some(credit) = &asset.credit {
+            sound_credit(credit).with_context(|| format!("INVALID_PROJECT: credit of asset {}", asset.id))?;
+        }
     }
     for track in &project.tracks {
         let mut clips: Vec<_> = track.clips.iter().collect();
@@ -104,6 +107,24 @@ pub fn local_media_path(path: &str) -> Result<()> {
         !path.contains('\0') && local.is_absolute() && !device,
         "INVALID_ASSET_PATH: media must be an absolute local file path, not {path:?}"
     );
+    Ok(())
+}
+
+/// The app shows these and opens their links, and export writes them beside the video: short single
+/// lines, and links only to web pages.
+fn sound_credit(credit: &nuzky_engine::model::Credit) -> Result<()> {
+    let text = |value: &str, max: usize| value.chars().count() <= max && !value.chars().any(char::is_control);
+    let link = |value: &str| text(value, 2048) && value.starts_with("https://") && !value.contains(char::is_whitespace);
+    ensure!(
+        text(&credit.source, 32)
+            && text(&credit.id, 200)
+            && text(&credit.title, 300)
+            && text(&credit.author, 300)
+            && text(&credit.license_version, 16),
+        "text too long or with control characters"
+    );
+    ensure!(link(&credit.license_url), "licence link must be an https address");
+    ensure!(credit.url.is_empty() || link(&credit.url), "source link must be an https address");
     Ok(())
 }
 
@@ -398,6 +419,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         });
         validate(&project).unwrap();
         for path in [
@@ -420,6 +442,44 @@ mod tests {
         let assets = project.assets.clone();
         assert!(editor.apply_batch_checked(vec![EditCmd::AddAssets { assets }], None, validate).is_err());
         assert_eq!(editor.project, before);
+    }
+
+    /// A shared project could carry links the app would open; only web pages pass.
+    #[test]
+    fn sound_credits_link_only_to_web_pages() {
+        let mut project = Project::new("credits");
+        project.assets.push(Asset {
+            id: "song".into(),
+            name: "Song".into(),
+            path: std::env::temp_dir().join("song.mp3").to_string_lossy().into(),
+            kind: AssetKind::Audio,
+            duration_us: 1_000_000,
+            width: 0,
+            height: 0,
+            fps: 0.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+            credit: Some(nuzky_engine::model::Credit {
+                source: "openverse".into(),
+                id: "b386828e".into(),
+                title: "Lofy".into(),
+                author: "macouno".into(),
+                license: nuzky_engine::model::License::CcBy,
+                license_version: "3.0".into(),
+                license_url: "https://creativecommons.org/licenses/by/3.0/".into(),
+                url: "https://www.jamendo.com/track/317391".into(),
+            }),
+        });
+        validate(&project).unwrap();
+        for bad in ["javascript:alert(1)", "file:///etc/passwd", "http://example.org", "https://a b"] {
+            project.assets[0].credit.as_mut().unwrap().url = bad.into();
+            let error = format!("{:#}", validate(&project).unwrap_err());
+            assert!(error.starts_with("INVALID_PROJECT: credit of asset song"), "{bad}: {error}");
+        }
+        project.assets[0].credit.as_mut().unwrap().url = String::new();
+        project.assets[0].credit.as_mut().unwrap().title = "line\nbreak".into();
+        assert!(validate(&project).is_err());
     }
 
     #[test]
@@ -511,6 +571,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         });
         let mut editor = nuzky_engine::edit::Editor::new(project.clone());
         let correct = |text: &str| vec![EditCmd::CorrectWords { corrections: vec![fix("word", text)] }];
@@ -536,6 +597,7 @@ mod tests {
             has_audio: false,
             rotation: 0,
             mirror: false,
+            credit: None,
         });
         project.apply(EditCmd::AddClip { asset_id: "ramp".into(), start_us: None, track_id: None }).unwrap();
         validate(&project).unwrap();
@@ -621,6 +683,7 @@ mod tests {
                 has_audio: sound,
                 rotation: 0,
                 mirror: false,
+                credit: None,
             });
             project.apply(EditCmd::AddClip { asset_id: id.into(), start_us: None, track_id: None }).unwrap();
         }

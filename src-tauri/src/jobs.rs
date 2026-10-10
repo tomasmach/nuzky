@@ -330,6 +330,7 @@ pub fn start_export(
     out: PathBuf,
     request: ExportRequest,
     replace_existing: bool,
+    replace_credits: bool,
     expected_epoch: Option<&str>,
 ) -> Result<String, String> {
     check_destination(&out, replace_existing)?;
@@ -344,7 +345,14 @@ pub fn start_export(
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
-    check_options(&project, &request.options(replace_existing)).map_err(|e| e.to_string())?;
+    // CC BY sounds bring a credits file beside the video; replacing one there is asked on its own.
+    let credits = nuzky_engine::credits::credits_path(&out);
+    if nuzky_engine::credits::credits(&project).is_some() && !replace_credits && credits.symlink_metadata().is_ok() {
+        let name = credits.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        return Err(format!("CREDITS_EXIST: {name} already exists"));
+    }
+    let options = ExportOptions { replace_credits, ..request.options(replace_existing) };
+    check_options(&project, &options).map_err(|e| e.to_string())?;
     let id = format!("export:{}", new_id());
     let cancel = register(app, &id).ok_or("An export is already running")?;
     let (app, cache, job_id) = (app.clone(), state.cache_dir.clone(), id.clone());
@@ -354,7 +362,7 @@ pub fn start_export(
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let mut rep = Reporter::new(&app, &job_id, "export", format!("Exporting {name}"));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                export(&project, &cache, &out, &request.options(replace_existing), &cancel, |p| {
+                export(&project, &cache, &out, &options, &cancel, |p| {
                     rep.progress(p.fraction, Some(p.phase.label()));
                 })
             }))
