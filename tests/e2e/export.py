@@ -90,6 +90,10 @@ def youtube(r, start_export):
     active = r.s.run("const m = document.querySelector('[role=menu][aria-label=Preset]');"
                      "return document.getElementById(m.getAttribute('aria-activedescendant'))?.textContent ?? null")
     r.check('the preset menu opened from the keyboard starts on the current preset', (active or '').startswith('YouTube 1080p'), active)
+    r.key('Enter')
+    r.check('Enter on the current preset keeps the chosen frame rate', wait(lambda: not r.s.run(PRESETS), 5)
+            and r.s.run(PRESSED, 'Frame rate') == '25', r.s.run(PRESSED, 'Frame rate'))
+    open_presets(r)
     r.s.run("document.querySelector('[data-scrim]').dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))")
     r.check('a click beside the menu closes only the menu', wait(lambda: not r.s.run(PRESETS), 5) and r.s.run(DIALOG))
     dialog = r.s.run(DIALOG)

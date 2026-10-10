@@ -44,7 +44,6 @@ const fits = (id: Delivery, canvas: Canvas) => {
   const [w, h] = presetOf(id).ratio;
   return canvas.width * h === canvas.height * w;
 };
-/** Why the preset cannot export this canvas, or null when it can. */
 function blockedReason(id: Delivery | null | undefined, canvas: Canvas) {
   if (!id || fits(id, canvas)) return null;
   const { label, ratio } = presetOf(id);
@@ -90,7 +89,7 @@ function loadOptions(canvas: Canvas): ExportRequest {
     const options = { ...fallback, ...(saved?.resolution && { resolution: saved.resolution }), ...(saved?.quality && { quality: saved.quality }) };
     // The preset comes back where it applies; a project in another format starts from its own settings.
     const preset = PRESETS.find((p) => p.id === saved?.preset)?.id;
-    return preset && fits(preset, canvas) ? { ...options, ...presetOptions(preset, canvas) } : options;
+    return preset && fits(preset, canvas) ? { ...options, ...presetOptions(preset, canvas), quality: options.quality } : options;
   } catch {
     return fallback;
   }
@@ -189,10 +188,9 @@ export function ExportDialog() {
       shortcut: reason ? `Needs ${p.ratio.join(":")}` : `${size.w}×${size.h}${p.fps ? ` · ${p.fps} fps` : ""}`,
       checked: options.preset === p.id,
       disabled: reason,
-      run: () => setOption(presetOptions(p.id, project.canvas)),
+      run: () => options.preset !== p.id && setOption(presetOptions(p.id, project.canvas)),
     };
   };
-  // The presets for this format come first; the others stay listed, each saying what it needs.
   const group = (items: MenuEntry[]): MenuEntry[] => (items.length ? ["separator", ...items] : []);
   const presetItems: MenuEntry[] = [
     { label: "Custom", checked: !options.preset, run: () => setOption({ preset: null }) },
