@@ -110,7 +110,7 @@ export function CaptionsTab() {
               openMenu({ x: r.left, y: r.bottom + 4 }, true);
             }
           }}
-          className={`relative flex h-11 w-full min-w-0 items-center justify-center rounded-[10px] border bg-line transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40 ${own ? "px-5" : "px-1"} ${
+          className={`relative flex h-11 w-full min-w-0 items-center justify-center rounded-[10px] border bg-line transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40 px-1 ${
             current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : disabled ? "border-white/[.08]" : "border-white/[.08] hover:border-white/30"
           }`}
         >
