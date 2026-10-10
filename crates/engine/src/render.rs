@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use crate::effects::{max_animation_scale, source_time, transform_at, transition_at, transition_window};
 use crate::gpu::{Draw, Fill, Gpu, Image, Layer, Mask, Matte};
 use crate::matte::{Mattes, SIDE};
-use crate::media::{RgbaFrame, Transfer, VideoDecoder, decode_size, orient};
+use crate::media::{RgbaFrame, Transfer, VideoDecoder, decode_size, file_key, orient};
 use crate::model::{
     Adjust, Asset, AssetKind, Background, Clip, ClipContent, Crop, MAX_BORDER_WIDTH, Project, Track, TrackKind,
     Transform, TransitionKind, parse_color, spoken_word,
@@ -63,7 +63,7 @@ pub struct Renderer {
     mattes: Option<(Mattes, Pending)>,
     /// Each frame's copy blurred behind its person, kept while the frame is drawn.
     behind: HashMap<(usize, usize), (Image, Image)>,
-    /// Background images, upright, by path.
+    /// Background images, upright, by the file as it is now (`media::file_key`), so an image saved again is read again.
     pictures: HashMap<String, Image>,
     pub late_layers: u64,
 }
@@ -346,14 +346,19 @@ impl Renderer {
         let k = out_w as f32 / canvas.width.max(1) as f32;
         let mut draws = Vec::new();
         let mut blur_used = Vec::new();
-        self.pictures.retain(|path, _| {
-            project.tracks.iter().flat_map(|t| &t.clips).any(|c| match &c.content {
-                ClipContent::Media { background: Background::Image { asset_id }, .. } => {
-                    project.asset(asset_id).is_some_and(|a| a.path == *path)
-                }
-                _ => false,
-            })
-        });
+        if !self.pictures.is_empty() {
+            let shown: HashSet<String> = project
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .filter_map(|c| match &c.content {
+                    ClipContent::Media { background: Background::Image { asset_id }, .. } => project.asset(asset_id),
+                    _ => None,
+                })
+                .map(|a| file_key(&a.path))
+                .collect();
+            self.pictures.retain(|key, _| shown.contains(key));
+        }
         for track in &project.tracks {
             let mut visible = visible_clips(track, t_us);
             let Some(first) = visible.next() else { continue };
@@ -641,7 +646,8 @@ impl Renderer {
 
     /// A background image, upright, at most `PICTURE_MAX_SIDE` pixels on its longer side; decoded once.
     fn picture(&mut self, asset: &Asset) -> Option<Image> {
-        if let Some(image) = self.pictures.get(&asset.path) {
+        let key = file_key(&asset.path);
+        if let Some(image) = self.pictures.get(&key) {
             return Some(image.clone());
         }
         let decoded = (|| -> Result<Image> {
@@ -655,7 +661,7 @@ impl Renderer {
         })();
         match decoded {
             Ok(image) => {
-                self.pictures.insert(asset.path.clone(), image.clone());
+                self.pictures.insert(key, image.clone());
                 Some(image)
             }
             Err(error) => {

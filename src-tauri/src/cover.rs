@@ -37,6 +37,8 @@ struct Frame {
     image: Image,
     /// The person's mask, once it is in the cache.
     mask: Option<Vec<u8>>,
+    /// Every clip background in it was drawn: their person outlines were made. Once they are, it is drawn again.
+    backgrounds: bool,
 }
 
 /// What the cover canvas shows besides its pixels.
@@ -132,12 +134,16 @@ impl Covers {
         // Only what the frame is drawn from: the cover's own texts and settings do not change it.
         let mut shown = picture(project);
         shown.thumbnails.clear();
-        let fresh = !self.frame.as_ref().is_some_and(|f| f.time_us == thumbnail.time_us && f.picture == shown);
+        let backgrounds = nuzky_engine::matte::missing(cache, &shown).is_empty();
+        let fresh = !self
+            .frame
+            .as_ref()
+            .is_some_and(|f| f.time_us == thumbnail.time_us && f.picture == shown && f.backgrounds == backgrounds);
         if fresh {
             self.frame = None;
             let image = renderer.thumbnail_frame(project, thumbnail)?;
             let mask = nuzky_vision::cached_alpha(&image.data, (image.width, image.height), cache);
-            self.frame = Some(Frame { picture: shown, time_us: thumbnail.time_us, image, mask });
+            self.frame = Some(Frame { picture: shown, time_us: thumbnail.time_us, image, mask, backgrounds });
         }
         let frame = self.frame.as_mut().unwrap();
         if refresh_mask && frame.mask.is_none() {

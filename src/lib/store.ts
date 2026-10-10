@@ -809,7 +809,6 @@ export function setCleanVoice(ids: string[], on: boolean) {
   return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));
 }
 
-/** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */
 /** Sets what shows behind the person on video and image clips, as one undo step. */
 export function setBackground(ids: string[], background: Background, coalesce?: string) {
   return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, background } : null), coalesce);
@@ -831,6 +830,7 @@ export function useMatteJob(paths: string[]) {
   );
 }
 
+/** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */
 export function useVoicePreparation(assetIds: string[]) {
   return useEditor((s) => {
     const running = assetIds.map((id) => s.jobs[`voice:${id}`]).filter((j) => j?.status === "running");

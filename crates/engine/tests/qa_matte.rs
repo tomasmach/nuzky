@@ -272,3 +272,88 @@ fn back_to_back(project: &Project) {
         assert_eq!(pair[0].end_us(), pair[1].start_us);
     }
 }
+
+#[test]
+fn a_frame_held_across_a_chunk_boundary_finds_its_matte() {
+    if !available() {
+        return;
+    }
+    let dir = dir("matte-gap");
+    let cache = dir.join("cache");
+    let _ = std::fs::remove_dir_all(&cache);
+    // No frames from 3.7 s to 4.6 s: the one at 3.667 s shows until then.
+    let path = dir.join("gap.mp4");
+    ff(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=black:s={W}x{H}:r=30:d=6"),
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=white:s={SQUARE}x{SQUARE}:r=30:d=6"),
+            "-filter_complex",
+            &format!("[0:v][1:v]overlay=x='20+{STEP}*mod(n\\,8)':y={SQUARE_Y},select='not(between(t\\,3.7\\,4.6))'"),
+            "-fps_mode",
+            "vfr",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "10",
+            "-pix_fmt",
+            "yuv420p",
+        ],
+        &path,
+    );
+    let asset = probe(&path, "a".into()).unwrap();
+    let mut project = project_with(&asset, green());
+    let clip = &mut project.tracks[0].clips[0];
+    clip.duration_us = 300_000;
+    if let ClipContent::Media { source_in_us, .. } = &mut clip.content {
+        *source_in_us = 4_200_000;
+    }
+    assert_eq!(matte::needed(&project)[0].1, BTreeSet::from([2]), "the clip shows source from chunk 2 only");
+    prepare(&cache, &project);
+    let (times, xs) = (pts(&path), square_xs(&path));
+    let held = times.partition_point(|&t| t <= 4_200_000) - 1;
+    assert!(times[held] < 4_000_000, "the frame shown is from chunk 1: {}", times[held]);
+    let mut strict = Renderer::new().unwrap();
+    strict.use_mattes(cache.clone(), Pending::Fail);
+    let frame = strict.render(&project, 0, W, H, Wait::Exact, false).unwrap();
+    assert_eq!(wrong_pixels(&frame, xs[held]), 0);
+}
+
+#[test]
+fn a_blur_transition_leaves_a_picked_colour_as_picked() {
+    if !available() {
+        return;
+    }
+    let dir = dir("matte-transition");
+    let cache = dir.join("cache");
+    let _ = std::fs::remove_dir_all(&cache);
+    let path = phone_video(&dir, "phone.mov", 3);
+    let asset = probe(&path, "a".into()).unwrap();
+    let grey = Background::Color { color: "#808080".into() };
+    let mut project = project_with(&asset, grey.clone());
+    let mut second = project.tracks[0].clips[0].clone();
+    (second.id, second.start_us) = ("b".into(), asset.duration_us);
+    project.tracks[0].clips.push(second);
+    for clip in &mut project.tracks[0].clips {
+        if let ClipContent::Media { adjust, .. } = &mut clip.content {
+            adjust.brightness = 1.0;
+        }
+    }
+    project.tracks[0].clips[1].transition_in = Some(Transition { kind: TransitionKind::Blur, duration_us: 600_000 });
+    prepare(&cache, &project);
+    let mut strict = Renderer::new().unwrap();
+    strict.use_mattes(cache.clone(), Pending::Fail);
+    // The top corner is far from the square: only the grey shows there, before and in the middle of the transition.
+    for t in [1_000_000, asset.duration_us] {
+        let frame = strict.render(&project, t, W, H, Wait::Exact, false).unwrap();
+        let corner = &frame[(20 * W as usize + 20) * 4..][..3];
+        assert!(corner.iter().all(|&v| v.abs_diff(128) <= 2), "at {t} us the grey is {corner:?}");
+    }
+}

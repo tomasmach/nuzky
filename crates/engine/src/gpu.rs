@@ -194,8 +194,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
     let matte = layer.matte.x > 0.5;
+    // A colour or picture shows as picked, after the clip's own adjustments.
+    let picked = layer.matte.x > 1.5;
     var c = sample_premultiplied(in.uv);
     var person_a = 1.0;
+    // What a blur transition takes of a picked fill, added after the adjustments.
+    var picked_fill = vec4<f32>(0.0);
     if layer.effects.y > 0.0 {
         let step = vec2<f32>(layer.effects.y) / vec2<f32>(textureDimensions(tex));
         c = vec4<f32>(0.0);
@@ -206,7 +210,13 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
                 if matte {
                     // A blur transition blurs the finished picture, so no part of the room shows around the person.
                     let a = person(in.uv + offset, false);
-                    tap = tap * a + fill_at(in.uv + offset, in.layer_uv + offset) * (1.0 - a);
+                    let fill = fill_at(in.uv + offset, in.layer_uv + offset) * (1.0 - a);
+                    tap *= a;
+                    if picked {
+                        picked_fill += fill / 25.0;
+                    } else {
+                        tap += fill;
+                    }
                 }
                 c += tap / 25.0;
             }
@@ -259,9 +269,10 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * c.a;
     }
     var color = vec4<f32>(rgb, c.a);
-    if matte && layer.matte.x > 1.5 && layer.effects.y <= 0.0 {
-        // A colour or picture shows as picked, after the clip's own adjustments.
+    if picked && layer.effects.y <= 0.0 {
         color = color * person_a + fill_at(in.uv, in.layer_uv) * (1.0 - person_a);
+    } else if picked {
+        color += picked_fill;
     }
     if layer.mask.x > 0.0 {
         // Coverage of the visible part and of it with the border, smoothed over one pixel.

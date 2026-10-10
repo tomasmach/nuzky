@@ -19,8 +19,9 @@ use anyhow::{Context as _, Result, bail};
 use crate::audio::lock_cache;
 use crate::effects::{source_time, transition_window};
 use crate::gpu::texture_uv;
-use crate::media::file_key;
+use crate::media::{VideoDecoder, file_key};
 use crate::model::{Asset, AssetKind, ClipContent, Project, TrackKind};
+use ffmpeg_next as ff;
 
 /// Raised whenever mattes are made differently, so ones made before are made again.
 pub const MATTE_VERSION: &str = "m1";
@@ -31,8 +32,6 @@ const CHUNK_US: i64 = 2_000_000;
 const RADIUS: usize = 3;
 /// Decoded around a run of chunks, so the frames at its edges have neighbours to smooth with.
 const CONTEXT_US: i64 = 300_000;
-/// Read before a chunk's first frame and after its last, as a frame shown there can start a little earlier.
-const MARGIN_US: i64 = 100_000;
 /// Most frames a chunk can hold: 2 s at 240 fps, with room for odd timestamps.
 const MAX_FRAMES: usize = 1024;
 const MAGIC: &[u8; 4] = b"NZM1";
@@ -64,9 +63,8 @@ pub fn needed(project: &Project) -> Vec<(Asset, BTreeSet<i64>)> {
                 let next = track.clips.get(i + 1).filter(|_| track.id == crate::edit::MAIN_TRACK);
                 let end = next.and_then(transition_window).map_or(clip.end_us(), |w| w.1.max(clip.end_us()));
                 let last = (asset.duration_us - 1).max(0);
-                let from = source_time(clip, clip.start_us).clamp(0, last) - MARGIN_US;
-                let to = source_time(clip, end).clamp(0, last) + MARGIN_US;
-                chunk_of(from)..=chunk_of(to.min(last))
+                chunk_of(source_time(clip, clip.start_us).clamp(0, last))
+                    ..=chunk_of(source_time(clip, end).clamp(0, last))
             };
             match files.iter_mut().find(|(a, _)| a.path == asset.path) {
                 Some((_, set)) => set.extend(chunks),
@@ -93,8 +91,9 @@ pub fn missing(cache_dir: &Path, project: &Project) -> Vec<(Asset, BTreeSet<i64>
 /// The person model: an upright `SIDE` × `SIDE` RGBA frame in, the probability of a person in each cell out.
 pub type Segment<'a> = dyn FnMut(&[u8]) -> Result<Vec<f32>> + 'a;
 
-/// Makes the `chunks` of `asset`'s matte that are not made yet, from its preview proxy when there is one. Other
-/// callers for the same file wait for this one. An error from `progress` stops it and leaves no unfinished chunk.
+/// Makes the `chunks` of `asset`'s matte that are not made yet, from the file itself, whose frames export shows.
+/// Other callers for the same file wait for this one. An error from `progress` stops it and leaves no unfinished
+/// chunk.
 pub fn prepare(
     cache_dir: &Path,
     asset: &Asset,
@@ -109,7 +108,7 @@ pub fn prepare(
         return Ok(());
     }
     let source = Path::new(&asset.path);
-    let mut decoder = crate::proxy::open_decoder(cache_dir, source)?;
+    let mut decoder = VideoDecoder::open(source)?;
     // Runs of consecutive chunks decode in one pass.
     let mut runs: Vec<(i64, i64)> = Vec::new();
     for c in todo {
@@ -129,21 +128,32 @@ pub fn prepare(
     let mut done = 0.0;
     for (first, last) in runs {
         let (start, end) = (first * CHUNK_US, (last + 1) * CHUNK_US);
-        let mut writer = ChunkWriter { dir: cache_dir, key: &key, current: first, frames: Vec::new() };
+        let mut writer = ChunkWriter { dir: cache_dir, key: &key, current: first, frames: Vec::new(), held: None };
         let mut window = Window::default();
         if !decoder.is_image() {
             decoder.seek((start - CONTEXT_US).max(0))?;
         }
-        let mut last_t = i64::MIN;
-        while let Some((t, frame)) = decoder.next_frame()? {
-            // A frame at the time of the one before is never shown.
-            if t <= last_t || t < start - CONTEXT_US {
+        // The frame waiting to be looked at. A decoder shows the last of frames at one time, and the last frame before
+        // the run is the one shown at its start, so a later frame at the same time, or before the context, takes its place.
+        let mut pending: Option<(i64, ff::frame::Video)> = None;
+        loop {
+            let next = if decoder.is_image() && pending.is_some() { None } else { decoder.next_frame()? };
+            if let (Some((t, _)), Some((waiting, _))) = (&next, &pending) {
+                // A frame stamped before the one waiting is never shown.
+                if *t < *waiting {
+                    continue;
+                }
+                if *t == *waiting || *t < start - CONTEXT_US {
+                    pending = next;
+                    continue;
+                }
+            }
+            let Some((t, frame)) = std::mem::replace(&mut pending, next) else {
+                if pending.is_none() {
+                    break;
+                }
                 continue;
-            }
-            last_t = t;
-            if t >= end + CONTEXT_US && !decoder.is_image() {
-                break;
-            }
+            };
             let small = decoder.convert(&frame, t, SIDE, SIDE)?;
             let pixels = small.data.as_chunks::<4>().0;
             let person = segment(upright.iter().flat_map(|&cell| pixels[cell]).collect::<Vec<u8>>().as_slice())?;
@@ -158,7 +168,7 @@ pub fn prepare(
             }
             done += 1.0;
             progress((done / total).min(1.0) as f32)?;
-            if decoder.is_image() {
+            if pending.as_ref().is_some_and(|(t, _)| *t >= end + CONTEXT_US) {
                 break;
             }
         }
@@ -295,17 +305,17 @@ struct ChunkWriter<'a> {
     /// The chunk the frames collected so far belong to.
     current: i64,
     frames: Vec<(i64, Vec<u8>)>,
+    /// The last frame before the run, shown at its start until the first frame of it: kept in its first chunk too,
+    /// where the renderer looks when the chunk of the frame's own time was never made.
+    held: Option<(i64, Vec<u8>)>,
 }
 
 impl ChunkWriter<'_> {
     /// Keeps a finished frame of the run of chunks up to `last`; frames of the context around it only
     /// smoothed others.
     fn add(&mut self, t: i64, alpha: &[f32], last: i64) -> Result<()> {
-        if !(self.current..=last).contains(&chunk_of(t)) {
+        if chunk_of(t) > last {
             return Ok(());
-        }
-        while chunk_of(t) > self.current {
-            self.flush()?;
         }
         let bytes: Vec<u8> = alpha.iter().map(|a| (a * 255.0).round().clamp(0.0, 255.0) as u8).collect();
         let mut png = Vec::new();
@@ -313,12 +323,25 @@ impl ChunkWriter<'_> {
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_compression(png::Compression::Fast);
         encoder.write_header()?.write_image_data(&bytes).context("Encoding a matte")?;
+        if chunk_of(t) < self.current {
+            self.held = Some((t, png));
+            return Ok(());
+        }
+        while chunk_of(t) > self.current {
+            self.flush()?;
+        }
+        if let Some(held) = self.held.take() {
+            self.frames.push(held);
+        }
         self.frames.push((t, png));
         Ok(())
     }
 
     /// Writes the current chunk beside its final name and renames it into place, then moves on to the next.
     fn flush(&mut self) -> Result<()> {
+        if let Some(held) = self.held.take() {
+            self.frames.insert(0, held);
+        }
         let path = chunk_path(self.dir, self.key, self.current);
         let mut bytes = Vec::from(&MAGIC[..]);
         for v in [SIDE, SIDE, self.frames.len() as u32] {
@@ -422,9 +445,11 @@ impl Mattes {
     }
 
     /// The matte of the frame of `source` the decoder gave at `t_us`, `SIDE` × `SIDE` white RGBA with the person
-    /// in alpha.
+    /// in alpha. A frame held into a chunk whose own chunk was never made is in the next one.
     pub(crate) fn alpha(&mut self, source: &str, t_us: i64) -> Option<Arc<Vec<u8>>> {
-        let path = chunk_path(&self.dir, &file_key(source), chunk_of(t_us));
+        let key = file_key(source);
+        let own = chunk_path(&self.dir, &key, chunk_of(t_us));
+        let path = if own.exists() { own } else { chunk_path(&self.dir, &key, chunk_of(t_us) + 1) };
         if let Some((p, t, alpha)) = self.last.get(source)
             && (p, *t) == (&path, t_us)
         {
