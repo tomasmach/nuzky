@@ -29,9 +29,10 @@ jobs:
       - name: Install Rust
         shell: bash
         run: rustup update stable --no-self-update && rustup default stable
+      # The root Cargo.toml with the build profiles is not in rust-cache's own key (checks.yml).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-v1
+          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-v1-${{ hashFiles('Cargo.toml') }}
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: bash scripts/setup-ubuntu-deps.sh
