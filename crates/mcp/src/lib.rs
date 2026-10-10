@@ -140,7 +140,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::GetTranscript>(
             "get_transcript",
-            "Read derived timeline speech: transcript_key, revision, words {i,start_us,end_us,text,p}, sentences {from,to,start_us,end_us,text}, pauses {after_word,gap_us}, untranscribed asset ids. i/from/to are global zero-based INCLUSIVE word indices valid for this transcript_key; p is recognition probability. Sentences split at phrase punctuation or gaps >=600000 us; pauses include gaps >=300000 us. Optional range_us=[start,end) filters results without renumbering. Use word indices with edit_transcript; never map source times by hand.",
+            "Read derived timeline speech: transcript_key, revision, words {i,start_us,end_us,text,p}, sentences {from,to,start_us,end_us,text}, pauses {after_word,gap_us}, untranscribed asset ids. i/from/to are global zero-based INCLUSIVE word indices valid for this transcript_key; p is recognition probability. Sentences split at phrase punctuation or gaps >=600000 us; pauses include gaps >=300000 us. Optional range_us=[start,end) filters results without renumbering. Read long videos cheaply with detail: \"sentences\" and limit (1-500), passing next_cursor as cursor until it is null; pass the same range_us on each page. Request full word-level detail only for the part you cut. Use word indices with edit_transcript; never map source times by hand.",
         )?,
         tool::<params::EditTranscript>(
             "edit_transcript",

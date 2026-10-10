@@ -762,9 +762,47 @@ impl Backend {
     }
 
     fn get_transcript(&self, args: GetTranscript, state: &SessionState) -> Result<Value> {
+        let limit = args.limit.unwrap_or(100);
+        ensure!((1..=500).contains(&limit), "INVALID_ARGUMENTS: limit is 1 to 500");
         let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        let key = transcript::word_key(&state.project, &derived.words);
         let mut result = transcript::summary(&derived, args.range_us)?;
-        result["transcript_key"] = json!(transcript::word_key(&state.project, &derived.words));
+        if args.limit.is_some() || args.cursor.is_some() {
+            let from = if let Some(cursor) = &args.cursor {
+                let (word, cursor_key) = cursor
+                    .split_once('.')
+                    .and_then(|(word, key)| word.parse::<usize>().ok().map(|word| (word, key)))
+                    .context("INVALID_ARGUMENTS: cursor is not a next_cursor from get_transcript")?;
+                ensure!(
+                    cursor_key == key,
+                    "SPEECH_CHANGED: the transcript changed since this cursor; start again without cursor"
+                );
+                word
+            } else {
+                0
+            };
+            let sentences = result["sentences"].as_array_mut().unwrap();
+            sentences.retain(|sentence| sentence["from"].as_u64().unwrap() >= from as u64);
+            let next = sentences.get(limit).map(|sentence| format!("{}.{}", sentence["from"], key));
+            sentences.truncate(limit);
+            let span = sentences
+                .first()
+                .zip(sentences.last())
+                .map(|(first, last)| (first["from"].as_u64().unwrap(), last["to"].as_u64().unwrap()));
+            for (field, index) in [("words", "i"), ("pauses", "after_word")] {
+                result[field]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|entry| span.is_some_and(|(a, b)| (a..=b).contains(&entry[index].as_u64().unwrap())));
+            }
+            result["next_cursor"] = json!(next);
+        }
+        if matches!(args.detail, Some(TranscriptDetail::Sentences)) {
+            let object = result.as_object_mut().unwrap();
+            object.remove("words");
+            object.remove("pauses");
+        }
+        result["transcript_key"] = json!(key);
         Ok(result)
     }
 
@@ -1640,7 +1678,7 @@ mod transcript_tests {
         let (dir, backend, project) = fixture();
         let run = backend.host.session.begin_run("remove slips".into()).unwrap();
         let state = backend.host.session.state().unwrap();
-        let initial = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap();
+        let initial = backend.get_transcript(GetTranscript::default(), &state).unwrap();
         let args = json!({"run_id":run.run_id,"transcript_key":initial["transcript_key"],"delete":[[1,2],[6,6]],"dry_run":true});
         let preview = backend.dispatch("edit_transcript", args.clone(), &state).unwrap();
         assert_eq!(backend.host.session.state().unwrap().project, project);
@@ -1653,12 +1691,12 @@ mod transcript_tests {
         let changed = backend.host.session.state().unwrap();
         assert_eq!(
             result["transcript_key"],
-            backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap()["transcript_key"]
+            backend.get_transcript(GetTranscript::default(), &changed).unwrap()["transcript_key"]
         );
         assert!(
             backend.dispatch("edit_transcript", apply, &changed).unwrap_err().to_string().contains("SPEECH_CHANGED")
         );
-        let transcript = backend.get_transcript(GetTranscript { range_us: None }, &changed).unwrap();
+        let transcript = backend.get_transcript(GetTranscript::default(), &changed).unwrap();
         assert_eq!(transcript["words"].as_array().unwrap().len(), 5);
         backend.host.session.end_run(&run.run_id, nuzky_session::EndAction::Keep).unwrap();
         backend.host.session.undo_run(&run.run_id).unwrap();
@@ -1681,7 +1719,7 @@ mod transcript_tests {
         let (dir, backend, before) = fixture();
         let run = backend.host.session.begin_run("retry transcript".into()).unwrap();
         let initial = backend.host.session.state().unwrap();
-        let transcript = backend.get_transcript(GetTranscript { range_us: None }, &initial).unwrap();
+        let transcript = backend.get_transcript(GetTranscript::default(), &initial).unwrap();
         let args = json!({"run_id":run.run_id,"request_id":"cut-once","transcript_key":transcript["transcript_key"],"delete":[[1,2]]});
         std::fs::remove_file(&backend.project_path).unwrap();
         std::fs::create_dir(&backend.project_path).unwrap();
@@ -1713,7 +1751,7 @@ mod transcript_tests {
     fn dry_run_plans_before_a_run_even_for_read_only_clients() {
         let (dir, backend, before) = fixture();
         let state = backend.host.session.state().unwrap();
-        let key = backend.get_transcript(GetTranscript { range_us: None }, &state).unwrap()["transcript_key"].clone();
+        let key = backend.get_transcript(GetTranscript::default(), &state).unwrap()["transcript_key"].clone();
         let plan_args = json!({"transcript_key":key,"delete":[[1,2]],"dry_run":true});
         let plan = backend.call("edit_transcript", plan_args.clone()).unwrap().structured_content.unwrap();
         assert_eq!(plan["dry_run"], true);

@@ -210,11 +210,23 @@ pub struct Transcribe {
     /// Installed model name or absolute local .bin path. Defaults to best installed.
     pub model: Option<String>,
 }
-#[derive(Deserialize, JsonSchema)]
+#[derive(Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GetTranscript {
     /// Half-open timeline interval; word indices remain global.
     pub range_us: Option<[i64; 2]>,
+    /// sentences leaves out words and pauses, to read a long video cheaply.
+    pub detail: Option<TranscriptDetail>,
+    /// Sentences per page, 1-500; with limit or cursor the result is a page with next_cursor.
+    pub limit: Option<usize>,
+    /// next_cursor of the page before.
+    pub cursor: Option<String>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptDetail {
+    Full,
+    Sentences,
 }
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

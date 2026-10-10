@@ -1337,3 +1337,158 @@ fn decode_gray(bytes: &[u8]) -> Vec<u8> {
     assert_eq!(frame.color_type, png::ColorType::Grayscale);
     gray
 }
+
+#[cfg(target_os = "linux")]
+fn long_talk(c: &mut Client) -> Vec<Value> {
+    use nuzky_session::transcripts::{Record, TranscriptStore, VERSION};
+    let video = c.dir.join("long-talk.mp4");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=s=192x108:r=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=8000:cl=stereo",
+            "-t",
+            "1060",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+        ])
+        .arg(&video)
+        .status()
+        .expect("ffmpeg makes the long test video");
+    assert!(status.success());
+    let run = c.call("begin_run", json!({"label": "Place long talk"}))["run_id"].clone();
+    let ids = c.call("import_media", json!({"run_id": run, "paths": [video]}))["asset_ids"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id": run, "request_id": "place", "edits": [{"type": "addClip", "assetId": ids[0]}]}),
+    );
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+    let mut words = Vec::new();
+    let mut start = 0i64;
+    for i in 0..2200 {
+        let end = if i % 10 == 9 { "." } else { "" };
+        let text = ["a", "story", "continues", "here"][i % 4];
+        words.push(json!({"start_us": start, "end_us": start + 300_000,
+            "text": format!(" {text}{end}"), "probability": 0.9}));
+        start += 300_000 + if i % 10 == 9 { 700_000 } else { 100_000 };
+    }
+    let asset: nuzky_engine::model::Asset =
+        serde_json::from_value(c.call("get_state", json!({}))["assets"][0].clone()).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/nuzky/transcripts")).unwrap();
+    store
+        .put(
+            &asset,
+            &Record {
+                version: VERSION,
+                fingerprint: store.fingerprint(&asset).unwrap(),
+                duration_us: asset.duration_us,
+                model: "fixture".into(),
+                language: "en".into(),
+                words: serde_json::from_value(json!(words)).unwrap(),
+                segments: vec![],
+                alignment: None,
+            },
+        )
+        .unwrap();
+    words
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn transcript_sentences_and_pages_preserve_long_talk_over_stdio() {
+    let mut c = Client::start(true, None, Some(None));
+    let stored = long_talk(&mut c);
+    let full = c.call("get_transcript", json!({}));
+    assert_eq!(
+        full.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(),
+        ["pauses", "revision", "sentences", "session_epoch", "transcript_key", "untranscribed", "words"]
+    );
+    assert_eq!(full["words"].as_array().unwrap().len(), 2200);
+    for (i, word) in full["words"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(word["i"], i);
+        assert_eq!(word["text"], stored[i]["text"]);
+        assert_eq!(word["start_us"], stored[i]["start_us"]);
+        assert_eq!(word["end_us"], stored[i]["end_us"]);
+        assert_eq!(word["p"], json!(stored[i]["probability"].as_f64().unwrap() as f32));
+    }
+    assert_eq!(full["sentences"].as_array().unwrap().len(), 220);
+    assert_eq!(c.call("get_transcript", json!({"detail": "full"})), full);
+    let sentences = c.call("get_transcript", json!({"detail": "sentences"}));
+    assert_eq!(sentences["sentences"], full["sentences"]);
+    assert!(sentences.get("words").is_none() && sentences.get("pauses").is_none());
+    assert!(sentences.get("next_cursor").is_none());
+    let full_bytes = serde_json::to_vec(&full).unwrap().len();
+    let sentence_bytes = serde_json::to_vec(&sentences).unwrap().len();
+    eprintln!("Transcript JSON bytes: full={full_bytes}, sentences={sentence_bytes}");
+    assert!(sentence_bytes * 3 <= full_bytes);
+
+    let mut collected = Vec::new();
+    let mut cursor = Value::Null;
+    loop {
+        let page = c.call("get_transcript", json!({"detail": "sentences", "limit": 37, "cursor": cursor}));
+        let batch = page["sentences"].as_array().unwrap();
+        assert!(!batch.is_empty() && batch.len() <= 37);
+        assert!(page.get("words").is_none() && page.get("pauses").is_none());
+        collected.extend(batch.iter().cloned());
+        cursor = page["next_cursor"].clone();
+        assert!(cursor.is_string() || cursor.is_null());
+        if cursor.is_null() {
+            break;
+        }
+        assert!(collected.len() <= 220);
+    }
+    assert_eq!(collected.len(), 220);
+    assert_eq!(json!(collected), full["sentences"]);
+    collected.clear();
+    cursor = Value::Null;
+    loop {
+        let page = c.call("get_transcript", json!({"limit": 50, "cursor": cursor}));
+        let batch = page["sentences"].as_array().unwrap();
+        assert!(!batch.is_empty() && batch.len() <= 50);
+        let from = batch.first().unwrap()["from"].as_u64().unwrap();
+        let to = batch.last().unwrap()["to"].as_u64().unwrap();
+        assert!(
+            page["pauses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| { (from..=to).contains(&p["after_word"].as_u64().unwrap()) })
+        );
+        collected.extend(page["words"].as_array().unwrap().iter().cloned());
+        cursor = page["next_cursor"].clone();
+        if cursor.is_null() {
+            break;
+        }
+        assert!(collected.len() <= 2200);
+    }
+    assert_eq!(collected.len(), 2200);
+    assert_eq!(json!(collected), full["words"]);
+    let first = c.call("get_transcript", json!({"detail": "sentences", "limit": 37}));
+    let next = c.call("get_transcript", json!({"detail": "sentences", "cursor": first["next_cursor"]}));
+    assert_eq!(next["sentences"], json!(full["sentences"].as_array().unwrap()[37..137]));
+    let range = [150_000, 25_150_000];
+    let ranged = c.call("get_transcript", json!({"range_us": range}));
+    let page = c.call("get_transcript", json!({"range_us": range, "limit": 500}));
+    for field in ["words", "sentences", "pauses"] {
+        assert_eq!(page[field], ranged[field]);
+    }
+    assert!(page["next_cursor"].is_null());
+    assert!(c.error("get_transcript", json!({"cursor": "garbage"})).contains("INVALID_ARGUMENTS"));
+    assert!(c.error("get_transcript", json!({"limit": 0})).contains("INVALID_ARGUMENTS"));
+    assert!(c.error("get_transcript", json!({"limit": 501})).contains("INVALID_ARGUMENTS"));
+    assert!(c.error("get_transcript", json!({"cursor": "370.stale"})).contains("SPEECH_CHANGED"));
+}
