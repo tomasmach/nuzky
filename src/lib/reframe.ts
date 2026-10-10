@@ -1,11 +1,9 @@
 import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
-import { formatLabel } from "./presets";
 import { aiLocked, currentEpoch, useEditor, whenIdle } from "./store";
 import type { JobEvent, Project, Snapshot } from "./types";
 
 interface ReframeState {
-  /** The running reframe. */
   job: string | null;
   /** What the last reframe did, offered for Undo while it is the newest step. */
   done: { snap: Snapshot; text: string } | null;
@@ -35,7 +33,11 @@ export async function reframe(width: number, height: number) {
   const ids = picturedClips(snap.project, selection);
   useReframe.setState({ done: null });
   try {
-    useReframe.setState({ job: await api.startReframe(width, height, ids.length > 0 ? ids : null, currentEpoch()) });
+    const id = await api.startReframe(width, height, ids.length > 0 ? ids : null, currentEpoch());
+    useReframe.setState({ job: id });
+    // A job that failed at once may have ended before its id came back.
+    const ended = useEditor.getState().jobs[id];
+    if (ended && ended.status !== "running") onReframeJob(ended);
   } catch (e) {
     toast({ kind: "error", text: plainError(errorText(e)) });
   }
@@ -45,14 +47,16 @@ export function onReframeJob(job: JobEvent) {
   if (job.id !== useReframe.getState().job || job.status === "running") return;
   useReframe.setState({ job: null });
   const { snap, toast } = useEditor.getState();
-  if (job.status === "done" && snap && job.output) {
-    const out = JSON.parse(job.output) as { width: number; height: number; followed: number; centred: number };
+  if (job.status === "done" && job.output) {
+    const out = JSON.parse(job.output) as { followed: number; centred: number; revision: number | null; sessionEpoch: string | null };
+    if (out.revision === null) {
+      toast({ kind: "info", text: "Nothing to change: the clips already follow the face." });
+      return;
+    }
     const clips = out.followed + out.centred;
-    const text =
-      `Reframed ${clips} clip${clips === 1 ? "" : "s"} to ${formatLabel(out.width, out.height)}` +
-      (out.centred > 0 ? `, ${out.centred} without a face centred` : "");
-    // The edit arrived just before its job ended, so this is its snapshot.
-    useReframe.setState({ done: { snap, text } });
+    const text = `Reframed ${clips} clip${clips === 1 ? "" : "s"}` + (out.centred > 0 ? `, ${out.centred} had no face` : "");
+    // The project-changed event of the edit came before the job's end; a later edit already moved past it.
+    if (snap && snap.revision === out.revision && snap.sessionEpoch === out.sessionEpoch) useReframe.setState({ done: { snap, text } });
   }
   if (job.status === "failed") {
     const message = job.message ?? "";

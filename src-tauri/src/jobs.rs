@@ -14,7 +14,7 @@ use nuzky_analysis::models_dir;
 use nuzky_engine::audio::{ensure_pcm, has_audio};
 use nuzky_engine::edit::new_id;
 use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
-use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project, TextStyle, TrackKind};
+use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project, TextStyle};
 use nuzky_engine::proxy;
 use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use nuzky_mcp::model_download::{self, Integrity};
@@ -616,22 +616,6 @@ pub fn start_reframe(
         (Arc::downgrade(&current.host), current.host.session.state().map_err(crate::err)?)
     };
     let project = view.project;
-    let pictures: Vec<_> = project
-        .tracks
-        .iter()
-        .filter(|t| t.kind == TrackKind::Video)
-        .flat_map(|t| &t.clips)
-        .filter_map(|c| match &c.content {
-            ClipContent::Media { asset_id, .. } => project.asset(asset_id).filter(|a| a.kind != AssetKind::Audio),
-            _ => None,
-        })
-        .collect();
-    if pictures.is_empty() {
-        return Err("Add a video or image to the timeline first.".into());
-    }
-    if let Some(asset) = pictures.iter().find(|a| !Path::new(&a.path).is_file()) {
-        return Err(format!("MEDIA_MISSING: {}", asset.name));
-    }
     nuzky_vision::runtime::require().map_err(crate::err)?;
     let id = format!("reframe:{}", new_id());
     let cancel = register(&app, &id).ok_or("Reframe is already running")?;
@@ -659,7 +643,7 @@ pub fn start_reframe(
             let current = state.session.lock().unwrap();
             const SWITCHED: &str = "Another project was opened, so the reframe result was not applied.";
             anyhow::ensure!(host.ptr_eq(&Arc::downgrade(&current.host)), SWITCHED);
-            current
+            let edited = current
                 .host
                 .session
                 .edit(
@@ -677,9 +661,12 @@ pub fn start_reframe(
             if let Ok(snap) = current.snapshot(Vec::new()) {
                 worker.emit("project-changed", snap).ok();
             }
+            // The step to undo, or none when the clips were already placed so.
+            let step = (edited.stamp.revision != view.stamp.revision).then_some(&edited.stamp);
             Ok(Some(
                 serde_json::json!({"width":width, "height":height,
-                "followed":result.followed.len(), "centred":result.centred.len()})
+                "followed":result.followed.len(), "centred":result.centred.len(),
+                "revision":step.map(|s| s.revision), "sessionEpoch":step.map(|s| &s.session_epoch)})
                 .to_string(),
             ))
         }))

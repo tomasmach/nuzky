@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use nuzky_engine::{
     Project, Renderer, Wait,
     edit::{EditCmd, MAIN_TRACK},
@@ -44,8 +44,8 @@ struct Face {
 }
 
 /// Changes the canvas to `width`×`height` and places the clips `clip_ids`, by default every video and image clip of
-/// the main track and any other that filled the canvas, to follow the face. A clip's zoom beyond filling the canvas
-/// stays, and so do its rotation, opacity and crop; its keyframes are replaced.
+/// the main track and any other that filled the canvas, to follow a face its crop leaves visible. A clip's zoom beyond
+/// filling the canvas stays, and so do its opacity and crop; it is set upright and its keyframes are replaced.
 pub fn reframe(
     project: &Project,
     models_dir: &Path,
@@ -56,6 +56,9 @@ pub fn reframe(
 ) -> Result<Reframe> {
     models::require(models::REFRAME, models_dir)?;
     let clips = targets(project, clip_ids)?;
+    if let Some((_, asset)) = clips.iter().find(|(_, asset)| !Path::new(&asset.path).is_file()) {
+        bail!("MEDIA_MISSING: {}", asset.path);
+    }
     let mut canvas = project.canvas.clone();
     (canvas.width, canvas.height) = (width & !1, height & !1);
     let total: i64 = clips.iter().map(|(clip, _)| clip.duration_us).sum();
@@ -91,16 +94,24 @@ pub fn reframe(
         centred: Vec::new(),
     };
     for (i, (clip, asset)) in clips.iter().enumerate() {
-        let (times, faces): (Vec<i64>, Vec<Vec<Face>>) =
-            looks.iter().zip(&found).filter(|((c, _), _)| *c == i).map(|((_, u), f)| (*u, f.clone())).unzip();
         let base = base(clip);
         let placement = Placement::new(&project.canvas, &canvas, asset, &base);
+        // Only the faces the clip's crop leaves can be followed.
+        let [left, top, right, bottom] = placement.visible;
+        let shown = |f: &&Face| (left..=right).contains(&f.at[0]) && (top..=bottom).contains(&f.at[1]);
+        let (times, faces): (Vec<i64>, Vec<Vec<Face>>) = looks
+            .iter()
+            .zip(&found)
+            .filter(|((c, _), _)| *c == i)
+            .map(|((_, u), f)| (*u, f.iter().filter(shown).copied().collect()))
+            .unzip();
         let track = smooth(&follow(&faces));
         let positions: Vec<[f32; 2]> = match &track {
             Some(track) => track.iter().map(|&face| placement.position(face, placement.aim)).collect(),
             None => vec![placement.centred()],
         };
-        let at = |[x, y]: [f32; 2]| Transform { x, y, scale: placement.scale, ..base };
+        // Upright, as the picture is placed to fill the frame.
+        let at = |[x, y]: [f32; 2]| Transform { x, y, scale: placement.scale, rotation: 0.0, ..base };
         out.commands.push(update(&clip.id, at(positions[0])));
         out.commands.push(EditCmd::SetKeyframes {
             clip_id: clip.id.clone(),
@@ -402,6 +413,11 @@ mod tests {
         let at = p.position([1.0 / 3.0, 0.4], p.aim);
         assert!((landing(&p, at, [1.0 / 3.0, 0.4])[0] - 480.0).abs() < 0.5, "{at:?}");
         assert!(at[1].abs() < 1e-5, "the picture is exactly as tall as the canvas: {at:?}");
+        // Without a face, the middle of the picture in the middle of the canvas; with a crop, the middle of what it leaves.
+        assert_eq!(p.centred(), [0.0, 0.0]);
+        let cropped = Transform { crop: Some(Crop { left: 0.5, ..Crop::default() }), ..Transform::default() };
+        let half = Placement::new(&wide, &tall, &asset(1920, 1080), &cropped);
+        assert!((landing(&half, half.centred(), [0.75, 0.5])[0] - 540.0).abs() < 0.5);
         // A face at the very edge: the picture stops at its own edge.
         let edge = p.position([0.02, 0.4], p.aim);
         assert!(landing(&p, edge, [0.0, 0.0])[0].abs() < 0.01, "{edge:?}");

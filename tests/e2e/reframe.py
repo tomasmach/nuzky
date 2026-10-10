@@ -2,11 +2,12 @@
 face a third of the way across until 5 s, crossing to two thirds by 6 s; the clip is cut at 7 s. Reframe, reached by
 keyboard beside 9:16, changes the canvas and writes keyframes that hold still, follow the face once and jump at the
 cut, so at every quarter second her face sits whole inside the frame and inside what Reels leaves free. The preview
-shows the result with Undo, which brings back the wide canvas and the clips as they were. The face model is linked
-from tmp-test, so nothing is downloaded."""
-import time
+shows the result with Undo, which brings back the wide canvas and the clips as they were. An agent attached to the open
+app then reframes over MCP and exports the vertical Reels video. The face model is linked from tmp-test, so nothing is
+downloaded."""
+import subprocess, time
 
-from e2e.harness import FIXTURES, flow, link_models, press, wait
+from e2e.harness import FIXTURES, Bridge, ffprobe, flow, link_models, preview_crop, preview_rect, preview_redraw, press, wait
 from e2e.home import resize
 
 RATIO = 'section[aria-label=Preview] button[aria-haspopup=menu]'
@@ -61,7 +62,8 @@ def faces(project):
 
 
 @flow('reframe', 'Reframe a wide talking head to 9:16 from the Ratio menu: the face stays inside the frame and the '
-      'safe area at every quarter second, the picture moves once and jumps at the cut, and Undo brings it back',
+      'safe area at every quarter second, the picture moves once and jumps at the cut, Undo brings it back, and an agent '
+      'reframes over MCP and exports it',
       before=reframe_setup)
 def reframe(r):
     r.import_media(FIXTURES / 'wide-head.mp4')
@@ -84,6 +86,7 @@ def reframe(r):
         return a?.getAttribute('role') === 'menuitem' && a.textContent.trim() === 'Reframe'
             && a.closest('div.group')?.textContent.startsWith('9:16') && getComputedStyle(a.parentElement).opacity === '1'"""), 5)
     r.check('↑ from 16:9 reaches the Reframe of 9:16, which shows while focused', focused)
+    time.sleep(0.3)
     r.shot('reframe-menu')
     press('Return')
     running = wait(lambda: next((j for j in r.state()['jobs'] if j['kind'] == 'reframe'), None), 10)
@@ -105,12 +108,13 @@ def reframe(r):
     outside = [f for f in placed if f[1] < 0 or f[2] > 1080 or not SAFE[0] < (f[1] + f[2]) / 2 < SAFE[1]]
     r.check('at every quarter second the face is whole in the frame and centred inside the safe area', not outside,
             outside or placed)
-    chip = wait(lambda: (t := r.s.run('return document.querySelector("section[aria-label=Preview] [role=status]")?.innerText')) and 'Reframed 2 clips to 9:16' in t and t, 10)
+    chip = wait(lambda: (t := r.s.run('return document.querySelector("section[aria-label=Preview] [role=status]")?.innerText')) and 'Reframed 2 clips' in t and t, 10)
     r.check('the preview says what changed and offers Undo', chip and 'Undo' in chip, chip)
+    before = preview_crop(r.work / 'reframe-before.png', preview_rect(r))
     for seconds in (2, 5.5, 8):
         r.seek(int(seconds * 1_000_000))
-        time.sleep(1)
-        r.shot(f'reframe-{seconds}s')
+        # Each moment shows another frame of her; waiting for it keeps the shot from showing the one before.
+        before, _ = preview_redraw(r, f'reframe-{seconds}s', before)
 
     if r.check('the window goes to its smallest size', resize(r, 1024, 640)):
         time.sleep(1)
@@ -125,4 +129,23 @@ def reframe(r):
             back and [c['content']['transform'] for c in back['tracks'][0]['clips']] == [c['content']['transform'] for c in wide['tracks'][0]['clips']]
             and all(not c['keyframes'] for c in back['tracks'][0]['clips']), back and back['canvas'])
     r.check('the chip is gone after Undo', wait(lambda: not r.s.run('return document.querySelector("section[aria-label=Preview] [role=status]")'), 5))
+
+    # An agent attached to the open app does the same inside its run, and the export is the vertical video.
+    bridge = Bridge(r, r.saved_project())
+    try:
+        run = bridge.call('begin_run', {'label': 'Reframe for Reels'})['run_id']
+        job = bridge.call('reframe', {'run_id': run, 'format': '9:16'})
+        done = wait(lambda: (s := bridge.call('job', {'job_id': job['job_id'], 'action': 'get'}))['status'] != 'running' and s, 120, 0.5)
+        r.check('an agent reframes over MCP and the open app shows it', done and done['status'] == 'done'
+                and wait(lambda: r.s.run(PROJECT)['canvas']['height'] == 1920, 10), done)
+        out = r.work / 'reframed.mp4'
+        export_job = bridge.call('export_video', {'path': str(out), 'preset': 'reels'})
+        exported = wait(lambda: (s := bridge.call('job', {'job_id': export_job['job_id'], 'action': 'get'}))['status'] != 'running' and s, 180, 0.5)
+        bridge.call('end_run', {'run_id': run, 'action': 'keep'})
+    finally:
+        bridge.close()
+    size = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', str(out)],
+                          capture_output=True, text=True).stdout.strip()
+    r.check('the Reels export is the vertical video', exported and exported['status'] == 'done' and size == '1080,1920'
+            and abs(ffprobe(out)[0] - 10) < 0.2, [exported, size])
     r.check('nothing went wrong on the way', not r.errors(), r.errors())

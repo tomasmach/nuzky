@@ -135,7 +135,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Reframe>(
             "reframe",
-            "Reframe a wide talking head for Reels, TikTok or Shorts inside run_id as a job; poll job. format is \"9:16\" (1080x1920), \"4:5\" (1080x1350) or \"1:1\" (1080x1080). Optional clip_ids selects video/image clips; by default moves main-track clips and overlays that filled the canvas. Follows the speaker's face, centres clips without a face, keeps a punch-in zoom and replaces the moved clips' keyframes. Applies the canvas and clips as one edit, undone with the run. Result: format, width, height, followed and centred clip ids, new revision. If the project changed meanwhile, call reframe again. Needs the installed face model; MODEL_MISSING says how to install it, nothing is downloaded here. Stopping the run cancels the job.",
+            "Reframe a wide talking head for Reels, TikTok or Shorts inside run_id as a job; poll job. format is \"9:16\" (1080x1920), \"4:5\" (1080x1350) or \"1:1\" (1080x1080). Optional clip_ids selects video/image clips; by default moves main-track clips and overlays that filled the canvas. Follows the speaker's face its crop leaves visible, centres clips without a face, sets the picture upright, keeps a punch-in zoom and replaces the moved clips' keyframes. Applies the canvas and clips as one edit, undone with the run. Result: format, width, height, followed and centred clip ids, new revision. If the project changed meanwhile, call reframe again. Needs the installed face model; MODEL_MISSING says how to install it, nothing is downloaded here. Stopping the run cancels the job.",
         )?,
         tool::<params::Transcribe>(
             "transcribe",

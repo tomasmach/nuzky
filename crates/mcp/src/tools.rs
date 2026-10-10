@@ -633,7 +633,6 @@ impl Backend {
             _ => anyhow::bail!("INVALID_ARGUMENTS: format is \"9:16\", \"4:5\" or \"1:1\""),
         };
         let project = self.media_project(&state.project);
-        media::check_media(&project)?;
         let models = nuzky_analysis::models_dir();
         nuzky_vision::models::require(nuzky_vision::models::REFRAME, &models)?;
         let host = Arc::downgrade(&self.host);

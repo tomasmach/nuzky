@@ -59,6 +59,7 @@ export function RatioMenu() {
       <button
         ref={trigger}
         type="button"
+        data-ratio
         aria-haspopup="menu"
         aria-expanded={open}
         title={locked ? AI_EDITING : "Canvas ratio"}
@@ -78,7 +79,7 @@ export function RatioMenu() {
           {FORMATS.map((f) => {
             const on = f.width === canvas.width && f.height === canvas.height;
             const why = !pictures ? "Add a video to the timeline first" : reframing ? "Already following the face" : null;
-            const which = selected > 0 ? `the ${selected} selected clip${selected === 1 ? "" : "s"}` : "every clip";
+            const which = selected > 0 ? `the ${selected} selected clip${selected === 1 ? "" : "s"}` : "every full-frame clip";
             return (
               <div key={f.label} className="group flex items-center gap-1 rounded-md pr-1 hover:bg-white/[.08] has-[:focus-visible]:bg-white/[.08]">
                 <button
@@ -95,12 +96,12 @@ export function RatioMenu() {
                   <span className="flex-1 truncate text-[12px] text-muted">{f.hint}</span>
                   {on && <Check size={14} className="shrink-0 text-accent" />}
                 </button>
-                <span className="shrink-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100">
+                <span className="shrink-0 opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100">
                   <Button
                     pill
                     role="menuitem"
                     className="h-6 px-2.5 text-[12px]"
-                    title={`Change to ${f.label} and keep the face in the picture of ${which}`}
+                    title={on ? `Keep the speaker's face in ${which}` : `Switch to ${f.label} and keep the speaker's face in ${which}`}
                     disabled={!!why}
                     disabledReason={why ?? undefined}
                     onClick={() => {
