@@ -6,7 +6,7 @@ import { type CaptionLook, speechBlocker, startSpeech, useSpeech } from "../../l
 import { applyCaptionLook, isCaptionTrack, restyleCaptions, useEditor } from "../../lib/store";
 import type { CaptionPreset, KeywordPick, TextStyle } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
-import { Button, ColorInput, IconButton, Menu, Segmented, TextSwatch, lockedProps, useLockReason } from "../ui";
+import { Button, ColorInput, IconButton, LockReason, Menu, Segmented, TextSwatch, lockedProps, useLockReason } from "../ui";
 import { JobError, SpeechFields, SpeechJobCard, useSpeechJobs } from "./SpeechControls";
 
 const WORDS = [
@@ -72,9 +72,10 @@ export function CaptionsTab() {
   // Regenerating keeps the look of the captions already there, edits included.
   const start = () => startSpeech(look);
   const apply = (preset: CaptionPreset) => {
-    const next: CaptionLook = { style: { ...preset.style, fontFamily: preset.style.fontFamily ?? font }, animIn: preset.animIn ?? null, animOut: preset.animOut ?? null };
+    const next: CaptionLook = { style: preset.style, animIn: preset.animIn ?? null, animOut: preset.animOut ?? null };
+    // Captions on the timeline each keep their own font when the style brings none.
     if (hasCaptions) applyCaptionLook(next);
-    else useSpeech.setState({ captionLook: next });
+    else useSpeech.setState({ captionLook: { ...next, style: { ...preset.style, fontFamily: preset.style.fontFamily ?? font } } });
   };
   const restyle = (patch: Partial<TextStyle>) => (hasCaptions ? restyleCaptions(patch) : useSpeech.setState({ captionLook: { ...pending, style: { ...pending.style, ...patch } } }));
   const pick = look.style.keywords?.pick ?? "off";
@@ -156,7 +157,11 @@ export function CaptionsTab() {
         <div className="flex flex-col gap-1.5">
           <span className="text-[12px] text-muted">Key words</span>
           <Segmented label="Key words" value={pick} onChange={setPick} options={KEYWORD_PICKS} disabled={busy} disabledReason={BUSY} />
-          {look.style.keywords && <ColorInput label="Key word color" value={look.style.keywords.color} onChange={(color) => restyle({ keywords: { ...look.style.keywords!, color } })} />}
+          {look.style.keywords && (
+            <LockReason.Provider value={lock ?? (busy ? BUSY : null)}>
+              <ColorInput label="Key word color" value={look.style.keywords.color} onChange={(color) => restyle({ keywords: { ...look.style.keywords!, color } })} />
+            </LockReason.Provider>
+          )}
         </div>
         <div className="flex flex-col gap-1.5">
           <span className="text-[12px] text-muted">Font</span>
@@ -190,7 +195,6 @@ function MyStyles({ look, mine, tile }: { look: CaptionLook; mine: ReturnType<ty
   const [menu, setMenu] = useState<{ name: string; at: { x: number; y: number }; keyboard: boolean } | null>(null);
   const add = useRef<HTMLButtonElement>(null);
   const tiles = useRef(new Map<string, HTMLButtonElement>());
-  // Where focus goes once naming, a menu or deleting ends: a tile by name, else +.
   const [focus, setFocus] = useState<{ name: string | null } | null>(null);
   useEffect(() => {
     if (!focus) return;
@@ -219,7 +223,11 @@ function MyStyles({ look, mine, tile }: { look: CaptionLook; mine: ReturnType<ty
     if (error) return useEditor.getState().toast({ kind: "error", text: error });
     const rest = mine.styles.filter((s) => s.name !== name);
     setFocus({ name: (rest[at] ?? rest[at - 1])?.name ?? null });
-    useEditor.getState().toast({ kind: "info", text: `Deleted “${name}”`, action: { label: "Undo", run: () => void mine.change(() => api.saveCaptionStyle(style)) } });
+    useEditor.getState().toast({ kind: "info", text: `Deleted “${name}”`, action: { label: "Undo", run: () => void undo(style) } });
+  };
+  const undo = async (style: CaptionPreset) => {
+    const error = await mine.change(() => api.saveCaptionStyle(style));
+    if (error) useEditor.getState().toast({ kind: "error", text: error });
   };
 
   return (
@@ -276,7 +284,6 @@ function MyStyles({ look, mine, tile }: { look: CaptionLook; mine: ReturnType<ty
   );
 }
 
-/** A name typed in place: Enter saves, Esc or leaving it empty cancels. A refused name says why under it. */
 function NameField({ initial, error, onSave, onCancel }: { initial: string; error?: string; onSave: (name: string) => void; onCancel: () => void }) {
   const [name, setName] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);

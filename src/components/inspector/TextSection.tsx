@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { CAPTION_STYLES, KEYWORD_COLOR, KEYWORD_PICKS, TEXT_PRESETS, sameStyle } from "../../lib/presets";
+import { CAPTION_STYLES, KEYWORD_COLOR, KEYWORD_PICKS, TEXT_PRESETS, isLook, sameStyle } from "../../lib/presets";
 import { editClip, useEditor } from "../../lib/store";
-import type { Clip, TextStyle } from "../../lib/types";
+import type { Animation, CaptionPreset, Clip, EditCmd, TextStyle } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
 import { Checkbox, ColorInput, PresetTile, Section, Segmented, Slider, TextSwatch, useLockReason } from "../ui";
 
@@ -65,7 +65,19 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
         <TextField clipId={clip.id} text={text} />
         <div className="grid grid-cols-3 gap-2">
           {presets.map((p) => (
-            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: p.style.fontFamily ?? style.fontFamily, maxWidth: style.maxWidth } })}>
+            <PresetTile
+              key={p.name}
+              label={p.name}
+              selected={caption ? isLook(p, style, clip.animIn, clip.animOut) : sameStyle(p.style, style)}
+              title={`Apply ${p.name} style`}
+              onClick={() => {
+                const restyle: EditCmd = { type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: p.style.fontFamily ?? style.fontFamily, maxWidth: style.maxWidth } };
+                // A caption style brings its animations too.
+                const animate = (slot: "in" | "out", animation: Animation | null | undefined): EditCmd => ({ type: "setAnimation", clipId: clip.id, slot, animation: animation ?? null });
+                const look = p as CaptionPreset;
+                edit(caption ? [restyle, animate("in", look.animIn), animate("out", look.animOut)] : restyle);
+              }}
+            >
               <span className="absolute inset-0 flex items-center justify-center bg-line">
                 <TextSwatch style={{ ...p.style, fontFamily: p.style.fontFamily ?? style.fontFamily }} label="Aa" />
               </span>

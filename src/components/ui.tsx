@@ -21,7 +21,8 @@ const variants: Record<Variant, string> = {
 const idle = (classes: string) => classes.split(" ").filter((c) => !c.startsWith("hover:")).join(" ");
 
 /** Why the controls inside an `AiLock` are locked, or null. */
-const LockReason = createContext<string | null>(null);
+/** Why the controls inside cannot change anything now, or null. */
+export const LockReason = createContext<string | null>(null);
 export const useLockReason = () => useContext(LockReason);
 
 /** For a plain button inside an `AiLock`: focusable, inert to clicks, the reason as its tooltip. */

@@ -89,7 +89,8 @@
       "strokeColor": "#000000",
       "background": null,
       "keywords": {
-        "color": "#ffd400"
+        "color": "#ffd400",
+        "pick": "emphasis"
       }
     },
     "animIn": {
@@ -108,7 +109,8 @@
       "strokeColor": "#000000",
       "background": null,
       "keywords": {
-        "color": "#3ce35a"
+        "color": "#3ce35a",
+        "pick": "emphasis"
       }
     },
     "animIn": {
@@ -128,7 +130,8 @@
       "background": null,
       "highlight": "#ffe14d",
       "keywords": {
-        "color": "#3ce35a"
+        "color": "#3ce35a",
+        "pick": "emphasis"
       }
     },
     "animIn": {
@@ -147,7 +150,8 @@
       "strokeColor": "#000000",
       "background": null,
       "keywords": {
-        "color": "#ff4d4d"
+        "color": "#ff4d4d",
+        "pick": "emphasis"
       }
     },
     "animIn": {
@@ -206,7 +210,8 @@
       "strokeColor": "#5b0a52",
       "background": null,
       "keywords": {
-        "color": "#ffffff"
+        "color": "#ffffff",
+        "pick": "emphasis"
       }
     },
     "animIn": {
@@ -225,7 +230,8 @@
       "strokeColor": "#053b66",
       "background": null,
       "keywords": {
-        "color": "#ffffff"
+        "color": "#ffffff",
+        "pick": "emphasis"
       }
     },
     "animIn": {
@@ -244,7 +250,8 @@
       "strokeColor": "#000000",
       "background": "#ffd400ee",
       "keywords": {
-        "color": "#d61f1f"
+        "color": "#d61f1f",
+        "pick": "emphasis"
       }
     },
     "animIn": {

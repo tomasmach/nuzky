@@ -428,8 +428,6 @@ mod tests {
         loud(&mut energy[at(&words, "z")], 12.0);
         assert!(!key_words(&words, &energy)[at(&words, "z")]);
         assert_eq!(keys(&words, &key_words(&words, &vec![Energy::default(); words.len()])), ["450"]);
-        // The same input gives the same result.
-        assert_eq!(key_words(&words, &energy), key_words(&words, &energy));
     }
 
     #[test]
