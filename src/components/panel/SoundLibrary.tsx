@@ -1,5 +1,5 @@
 import { AudioLines, Check, Copy, ExternalLink, Loader2, Pause, Play, Plus, Search, SlidersHorizontal, WifiOff, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorText, plainError } from "../../lib/api";
 import { addSound, copyCredits, loadBuiltIn, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
 import { useEditor } from "../../lib/store";
@@ -12,8 +12,8 @@ const ACTION = "flex h-7 w-7 shrink-0 items-center justify-center rounded-full t
 const MUSIC_IDEAS = ["Upbeat", "Chill", "Cinematic", "Happy", "Lofi", "Epic", "Acoustic", "Electronic"];
 const FREESOUND_KEYS = "https://freesound.org/apiv2/apply/";
 
-/** One sound: the picture plays it, + adds it at the playhead, the licence opens its page at the source. */
-function SoundRow({ sound, inProject }: { sound: Sound; inProject: boolean }) {
+/** One sound: clicking it plays it, + or a double click adds it at the playhead, the licence opens its page. */
+function SoundRow({ sound, inProject, showKind = true }: { sound: Sound; inProject: boolean; showKind?: boolean }) {
   const preview = useSounds((s) => (s.preview?.id === sound.id ? s.preview : null));
   const adding = useSounds((s) => s.adding.includes(sound.id));
   const progress = useSounds((s) => s.progress[sound.id] ?? 0);
@@ -23,8 +23,9 @@ function SoundRow({ sound, inProject }: { sound: Sound; inProject: boolean }) {
   return (
     <div
       data-sound={sound.id}
-      onDoubleClick={() => !lock && addSound(sound)}
-      className="group relative flex items-center gap-2.5 rounded-xl p-1.5 focus-within:bg-raised hover:bg-raised"
+      onClick={(e) => e.detail === 1 && !(e.target as Element).closest("button") && togglePreview(sound)}
+      onDoubleClick={(e) => !lock && !(e.target as Element).closest("button") && addSound(sound)}
+      className={`group relative flex cursor-pointer items-center gap-2.5 rounded-xl p-1.5 focus-within:bg-raised hover:bg-raised ${preview ? "bg-raised" : ""}`}
     >
       <button
         type="button"
@@ -47,13 +48,14 @@ function SoundRow({ sound, inProject }: { sound: Sound; inProject: boolean }) {
       </button>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[13px] text-fg">{sound.title}</span>
-        <span className="truncate text-[12px] text-muted">{online ? `${sound.author} · ${sound.provider}` : sound.category}</span>
+        {(online || showKind) && <span className="truncate text-[12px] text-muted">{online ? `${sound.author} · ${sound.provider}` : sound.category}</span>}
       </div>
       {online && (
         <button
           type="button"
           onClick={() => api.openSoundPage(sound.url).catch((e) => useEditor.getState().toast({ kind: "error", text: errorText(e) }))}
           title={`${license} ${sound.licenseVersion}${sound.license === "by" ? ", needs credit" : ", no credit needed"}. Open its page at ${sound.provider} to check the licence.`}
+          aria-label={`${license}: open ${sound.title} at ${sound.provider}`}
           className="shrink-0 rounded-[4px] px-[5px] py-px text-[11px] font-medium text-muted shadow-[inset_0_0_0_1px_rgb(255_255_255/.14)] hover:text-fg"
         >
           {license}
@@ -61,19 +63,26 @@ function SoundRow({ sound, inProject }: { sound: Sound; inProject: boolean }) {
       )}
       <span className="tabular shrink-0 text-[12px] text-muted">{sound.durationUs > 0 ? formatDuration(sound.durationUs) : ""}</span>
       {adding ? (
-        <button type="button" aria-label={`Stop adding ${sound.title}`} title="Downloading. Click to stop." onClick={() => api.soundCancel(sound.id)} className={`text-muted hover:text-fg ${ACTION}`}>
-          {progress > 0 && progress < 1 ? <span className="tabular text-[10px]">{Math.round(progress * 100)}</span> : <Loader2 size={15} className="animate-spin" />}
+        <button
+          type="button"
+          aria-label={`Stop adding ${sound.title}`}
+          title="Downloading. Click to stop."
+          // The second click of a double click on + must not stop the add it started.
+          onClick={(e) => e.detail === 1 && api.soundCancel(sound.id)}
+          className={`text-muted shadow-[inset_0_0_0_1.5px_rgb(255_255_255/.14)] hover:text-fg ${ACTION}`}
+        >
+          {progress > 0 && progress < 1 ? <span className="tabular text-[11px]">{Math.round(progress * 100)}%</span> : <Loader2 size={15} className="animate-spin" />}
         </button>
       ) : (
         <>
           {inProject && (
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center text-ok group-focus-within:hidden group-hover:hidden" title="In this project">
+            <span aria-hidden className="flex h-7 w-7 shrink-0 items-center justify-center text-ok group-focus-within:hidden group-hover:hidden" title="In this project">
               <Check size={16} />
             </span>
           )}
           <button
             type="button"
-            aria-label={`Add ${sound.title} at playhead`}
+            aria-label={inProject ? `Add ${sound.title} at playhead again, it is in this project` : `Add ${sound.title} at playhead`}
             title={inProject ? "In this project. Add it again at the playhead" : "Add at playhead"}
             onClick={() => addSound(sound)}
             {...lockedProps(lock)}
@@ -88,7 +97,7 @@ function SoundRow({ sound, inProject }: { sound: Sound; inProject: boolean }) {
 }
 
 /** Where online results come from, and the user's own Freesound key. */
-function Sources({ onClose }: { onClose: () => void }) {
+function Sources({ onClose }: { onClose: (keyboard: boolean) => void }) {
   const [settings, setSettings] = useState<SoundSettings | null>(null);
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +105,7 @@ function Sources({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     api.soundSettings().then(setSettings);
     ref.current?.focus();
-    const outside = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && !(e.target as Element).closest?.("[data-sources-button]") && onClose();
+    const outside = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && !(e.target as Element).closest?.("[data-sources-button]") && onClose(false);
     window.addEventListener("pointerdown", outside, true);
     return () => window.removeEventListener("pointerdown", outside, true);
   }, [onClose]);
@@ -120,7 +129,7 @@ function Sources({ onClose }: { onClose: () => void }) {
       aria-label="Where to search"
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Escape") onClose();
+        if (e.key === "Escape") onClose(true);
         trapTab(e);
       }}
       className="overlay absolute top-[44px] right-3.5 z-20 flex w-[300px] flex-col gap-3 rounded-[12px] p-3 text-[12px] outline-none"
@@ -131,8 +140,16 @@ function Sources({ onClose }: { onClose: () => void }) {
         <p className="text-muted">Music and sounds from Jamendo, Freesound and Wikimedia Commons. Only CC0 and CC BY.</p>
       </div>
       <div className="flex flex-col gap-2 border-t border-white/[.07] pt-3">
-        {settings && <Checkbox label="Freesound for sound effects" checked={settings.freesound} onChange={(on) => save(on)} />}
-        <p className="text-muted">Needs your own free API key. Freesound allows its API for non-commercial use only.</p>
+        {settings && (
+          <Checkbox
+            label="Search effects on Freesound instead"
+            checked={settings.freesound && settings.hasKey}
+            onChange={(on) => save(on)}
+            disabled={!settings.hasKey}
+            title={settings.hasKey ? undefined : "Save your Freesound API key first"}
+          />
+        )}
+        <p className="text-muted">Needs your own free API key. Freesound offers its API free only for non-commercial use; the sounds stay CC0 or CC BY.</p>
         {settings?.hasKey ? (
           <div className="flex items-center justify-between gap-2">
             <span className="text-fg">Your key is saved</span>
@@ -193,9 +210,11 @@ function SearchField({ kind }: { kind: SoundKind }) {
         aria-label={kind === "music" ? "Search free music" : "Search sound effects"}
         onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
+          // Typing must not reach the editor's shortcuts; Escape on an empty field still does.
+          if (e.key === "Escape" && !query) return;
           e.stopPropagation();
           if (e.key === "Enter") change(query, true);
-          else if (e.key === "Escape" && query) change("");
+          else if (e.key === "Escape") change("");
         }}
         className={`h-8 w-full text-ellipsis rounded-lg border border-white/[.08] bg-white/[.055] pl-8 text-[13px] text-fg outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden ${query ? "pr-7" : "pr-2"}`}
       />
@@ -225,22 +244,34 @@ function OnlineResults({ kind }: { kind: SoundKind }) {
       {search.sounds.map((sound) => (
         <SoundRow key={sound.id} sound={sound} inProject={inProject.has(sound.id)} />
       ))}
-      {search.loading &&
-        [0, 1, 2].map((i) => (
-          <div key={i} className="flex items-center gap-2.5 p-1.5" role="status" aria-label="Searching">
+      {search.loading && (
+        <div role="status" aria-label="Searching">
+          {[0, 1, 2].map((i) => (
+          <div key={i} className="flex items-center gap-2.5 p-1.5">
             <div className="skeleton h-10 w-10 shrink-0 rounded-md" />
             <div className="flex flex-1 flex-col gap-1.5">
               <div className="skeleton h-3 w-2/3 rounded" />
               <div className="skeleton h-2.5 w-1/3 rounded" />
             </div>
           </div>
-        ))}
-      {search.error && (
+          ))}
+        </div>
+      )}
+      {search.error && offline && kind === "effect" && (
+        <div className="mx-1.5 flex items-center gap-2 text-[12px] text-muted" role="alert">
+          <WifiOff size={14} className="shrink-0" />
+          <span className="min-w-0 flex-1">You're offline.</span>
+          <Button className="h-7 text-[12px]" onClick={() => searchSounds(kind, search.query)}>
+            Try again
+          </Button>
+        </div>
+      )}
+      {search.error && !(offline && kind === "effect") && (
         <div className="mx-1.5 my-2 flex flex-col items-center gap-2 rounded-xl p-4 text-center" role="alert">
           {offline && <WifiOff size={24} className="text-muted" />}
           <p className="text-[13px] font-semibold text-fg">{offline ? "You're offline" : "Search didn't work"}</p>
           <p className="text-[12px] text-muted">
-            {offline ? `${kind === "music" ? "Music search" : "Online search"} needs the internet.${kind === "effect" ? " Built-in sounds still work." : ""}` : plainError(search.error)}
+            {offline ? "Music search needs the internet. Built-in sound effects still work." : plainError(search.error)}
           </p>
           <Button className="mt-1 h-7 text-[12px]" onClick={() => searchSounds(kind, search.query)}>
             Try again
@@ -257,7 +288,7 @@ function OnlineResults({ kind }: { kind: SoundKind }) {
       )}
       {search.service && (
         <p className="mx-1.5 mt-3 text-[11px] leading-[15px] text-muted">
-          {search.service === "Openverse" ? "Search uses Openverse. Nuzky is not endorsed or certified by Openverse." : "Results from Freesound with your API key."} Licence data can be wrong, so check a sound's page before you publish.
+          {search.service === "Openverse" && "Search uses Openverse. Nuzky is not endorsed or certified by Openverse. "}Licence data can be wrong, so check a sound's page before you publish.
         </p>
       )}
     </section>
@@ -270,13 +301,12 @@ function Effects() {
   const [category, setCategory] = useState<string | null>(null);
   const inProject = useInProject();
   const categories = [...new Set(builtIn.map((s) => s.category ?? ""))];
-  const shown = builtIn.filter((s) =>
-    query ? [s.title, s.category ?? "", s.id].some((t) => t.toLowerCase().includes(query)) : !category || s.category === category,
-  );
+  const shown = builtIn.filter((s) => (query ? [s.title, s.category ?? ""].some((t) => t.toLowerCase().includes(query)) : !category || s.category === category));
+  // Kinds and the list scroll together, so the smallest window still shows several sounds.
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
       {!query && (
-        <div role="group" aria-label="Kinds of sound effects" className="flex shrink-0 flex-wrap gap-1.5 px-3.5 pb-2">
+        <div role="group" aria-label="Kinds of sound effects" className="flex flex-wrap gap-1.5 px-1.5 pb-2">
           {[null, ...categories].map((c) => (
             <button
               key={c ?? "all"}
@@ -292,41 +322,38 @@ function Effects() {
           ))}
         </div>
       )}
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
-        {shown.length > 0 && (
-          <section aria-label="Built in" className="flex flex-col gap-0.5">
+      {shown.length > 0 && (
+        <section aria-label="Built in" className="flex flex-col gap-0.5">
+          {query && (
             <h3 className="mx-1.5 mb-1 flex items-baseline gap-1.5 text-[13px] font-semibold text-fg">
               Built in <span className="tabular text-[12px] font-normal text-muted">{shown.length}</span>
             </h3>
-            {shown.map((sound) => (
-              <SoundRow key={sound.id} sound={sound} inProject={inProject.has(sound.id)} />
-            ))}
-          </section>
-        )}
-        <OnlineResults kind="effect" />
-      </div>
-    </>
+          )}
+          {shown.map((sound) => (
+            <SoundRow key={sound.id} sound={sound} inProject={inProject.has(sound.id)} showKind={!!query || !category} />
+          ))}
+        </section>
+      )}
+      <OnlineResults kind="effect" />
+    </div>
   );
 }
 
 function Music() {
   const query = useSounds((s) => s.search.music.query);
-  if (!query.trim())
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 pb-6 text-center">
-        <p className="text-[13px] text-muted">Free music you can use in videos you monetize.</p>
-        <div className="flex flex-wrap justify-center gap-1.5">
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
+      {query.trim() ? (
+        <OnlineResults kind="music" />
+      ) : (
+        <div role="group" aria-label="Music ideas" className="flex flex-wrap gap-1.5 px-1.5">
           {MUSIC_IDEAS.map((idea) => (
             <button key={idea} type="button" onClick={() => searchSounds("music", idea)} className="h-[26px] rounded-full bg-white/[.06] px-2.5 text-[12px] font-medium text-muted transition-colors duration-[120ms] ease-out hover:text-fg">
               {idea}
             </button>
           ))}
         </div>
-      </div>
-    );
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
-      <OnlineResults kind="music" />
+      )}
     </div>
   );
 }
@@ -334,8 +361,9 @@ function Music() {
 /** Music or sound effects to search, preview and add at the playhead. */
 export function SoundLibrary({ kind }: { kind: SoundKind }) {
   const [sources, setSources] = useState(false);
+  const sourcesButton = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    loadBuiltIn().catch(() => {});
+    loadBuiltIn().catch((e) => useEditor.getState().toast({ kind: "error", text: `The built-in sound effects could not be read: ${errorText(e)}` }));
     return () => {
       if (useSounds.getState().preview) stopPreview();
     };
@@ -344,11 +372,20 @@ export function SoundLibrary({ kind }: { kind: SoundKind }) {
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1.5 px-3.5 pt-1 pb-2">
         <SearchField kind={kind} />
-        <IconButton label="Where to search" data-sources-button active={sources} onClick={() => setSources((open) => !open)}>
-          <SlidersHorizontal size={16} />
-        </IconButton>
+        <div ref={sourcesButton} className="contents">
+          <IconButton label="Where to search" data-sources-button aria-haspopup="dialog" aria-expanded={sources} onClick={() => setSources((open) => !open)}>
+            <SlidersHorizontal size={16} />
+          </IconButton>
+        </div>
       </div>
-      {sources && <Sources onClose={() => setSources(false)} />}
+      {sources && (
+        <Sources
+          onClose={(keyboard) => {
+            setSources(false);
+            if (keyboard) sourcesButton.current?.querySelector("button")?.focus();
+          }}
+        />
+      )}
       {kind === "music" ? <Music /> : <Effects />}
     </div>
   );
@@ -356,15 +393,22 @@ export function SoundLibrary({ kind }: { kind: SoundKind }) {
 
 /** How many CC BY sounds play on the timeline; their credits go in the video's description. */
 export function CreditsBar() {
+  const bar = useRef<HTMLDivElement>(null);
   const count = useEditor((s) => {
     const project = s.snap?.project;
     if (!project) return 0;
     const used = new Set(project.tracks.flatMap((t) => t.clips.flatMap((c) => (c.content.type === "media" ? [c.content.assetId] : []))));
     return project.assets.filter((a) => a.credit?.license === "by" && used.has(a.id)).length;
   });
+  // Toasts move above the bar while it shows, so they never cover Copy credits.
+  useLayoutEffect(() => {
+    if (count === 0) return;
+    useEditor.setState({ toastLift: bar.current?.offsetHeight ?? 0 });
+    return () => useEditor.setState({ toastLift: 0 });
+  }, [count]);
   if (count === 0) return null;
   return (
-    <div className="flex shrink-0 items-center gap-2 border-t border-white/[.07] px-3.5 py-2.5 text-[12px] text-muted">
+    <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-white/[.07] px-3.5 py-2.5 text-[12px] text-muted">
       <span className="min-w-0 flex-1">{count === 1 ? "1 sound needs credit" : `${count} sounds need credit`}</span>
       <Button pill className="h-7 gap-1.5 text-[12px]" onClick={copyCredits} title="Copy the credits for the video's description">
         <Copy size={13} /> Copy credits

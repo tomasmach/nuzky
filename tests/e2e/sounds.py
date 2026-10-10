@@ -4,6 +4,7 @@ playhead as one undo step and remembers its author and licence; Copy credits and
 the CC BY ones; the built-in effects need no network, and offline the panel says so. An agent finds and adds sounds
 through the same library."""
 import json, subprocess, threading, time, urllib.parse
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from e2e.harness import FIXTURES, Bridge, export, ffprobe, flow, press, wait
@@ -14,6 +15,8 @@ LANTERNS = 'aaaaaaaa-0000-4000-8000-000000000002'
 NC = 'aaaaaaaa-0000-4000-8000-000000000003'
 ND = 'aaaaaaaa-0000-4000-8000-000000000004'
 SA = 'aaaaaaaa-0000-4000-8000-000000000005'
+# Found only by id, its file answers after 15 s: a download the user stops.
+SLOW = 'aaaaaaaa-0000-4000-8000-000000000006'
 DEED = {'by': 'https://creativecommons.org/licenses/{}/4.0/', 'cc0': 'https://creativecommons.org/publicdomain/zero/1.0/'}
 
 TEXTS = """return [...document.querySelectorAll('[data-sound]')].map((row) => ({id: row.dataset.sound,
@@ -41,7 +44,7 @@ class Openverse:
 
     def __init__(self, work):
         self.requests, self.files = [], {}
-        for name, seconds, hz in (('rainy.mp3', 6, 440), ('lanterns.mp3', 3, 660)):
+        for name, seconds, hz in (('rainy.mp3', 6, 440), ('lanterns.mp3', 3, 660), ('slow.mp3', 3, 330)):
             path = work / name
             subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', f'sine=frequency={hz}:duration={seconds}',
                             '-ac', '2', '-c:a', 'libmp3lame', '-b:a', '128k', str(path)], check=True)
@@ -53,7 +56,13 @@ class Openverse:
                 server.requests.append(self.path)
                 url = urllib.parse.urlparse(self.path)
                 if url.path.startswith('/files/') and url.path[7:] in server.files:
+                    if url.path == '/files/slow.mp3':
+                        time.sleep(15)
                     return self.reply(server.files[url.path[7:]], 'audio/mpeg')
+                if url.path == f'/v1/audio/{SLOW}/':
+                    slow = audio(SLOW, 'Slow Song', 'Slow Band', 'by', 'slow.mp3')
+                    slow['url'], slow['duration'] = f"{server.base}/files/{slow.pop('file')}", 3000
+                    return self.reply(json.dumps(slow).encode())
                 if url.path == '/v1/audio/':
                     return self.reply(json.dumps({'result_count': 5, 'page_count': 1, 'page': 1, 'results': server.results()}).encode())
                 found = [a for a in server.results() if url.path == f"/v1/audio/{a['id']}/"]
@@ -197,6 +206,28 @@ def sounds(r):
         r.check('add_sound places Paper Lanterns at 8 s and says it needs no credit',
                 agent['start_us'] == 8_000_000 and agent['needs_credit'] is False, agent)
         r.check('the app shows the agent\'s sound at once', wait(lambda: len(library_assets(r)) == 2, 5), r.state()['assets'])
+
+        # Stop in the app ends an agent's download within seconds, even while the server keeps silent.
+        run = bridge.call('begin_run', {'label': 'Add a slow song'})['run_id']
+        outcome = {}
+
+        def slow_add():
+            try:
+                outcome['result'] = bridge.call('add_sound', {'run_id': run, 'id': f'openverse:{SLOW}', 'at_us': 0})
+            except Exception as e:
+                outcome['error'] = str(e)
+        adding = threading.Thread(target=slow_add)
+        adding.start()
+        wait(lambda: '/files/slow.mp3' in r.openverse.requests, 10)
+        stopped_at = time.time()
+        r.s.call("window.__nuzky.api.stopRun(window.__nuzky.store.getState().snap.sessionEpoch)"
+                 ".then((s) => window.__nuzky.store.getState().setSnap(s))")
+        adding.join(10)
+        took = time.time() - stopped_at
+        r.check('Stop ends the agent\'s download within seconds and adds nothing',
+                'CANCELLED' in outcome.get('error', '') and took < 3 and len(library_assets(r)) == 2, (outcome, round(took, 1)))
+        kept = [p.name for p in Path(r.work / 'data/nuzky/sounds').glob('*slow*')] + [p.name for p in Path(r.work / 'cache').rglob('*000006*')]
+        r.check('no part of the stopped download is left behind', kept == [], kept)
     finally:
         bridge.close()
 
@@ -207,7 +238,8 @@ def sounds(r):
     r.check('Sound effects lists the built-in sounds', len(effects) >= 40, len(effects))
     r.s.run("[...document.querySelectorAll('[aria-label=\"Kinds of sound effects\"] button')].find((b) => b.textContent === 'Whoosh').click()")
     whooshes = wait(lambda: (x := rows(r)) and len(x) < 10 and x, 5) or []
-    r.check('the Whoosh group shows only whooshes and swishes', whooshes and all('Whoosh' in x['text'] for x in whooshes), whooshes)
+    kinds = r.s.run("return Object.fromEntries(window.__nuzky.sounds.getState().builtIn.map((s) => [s.id, s.category]))")
+    r.check('the Whoosh group shows only whooshes and swishes', whooshes and all(kinds[x['id']] == 'Whoosh' for x in whooshes), whooshes)
     shot(r, 'effects')
     r.seek(0)
     r.s.run(CLICK, '[data-sound="nuzky:whoosh"] button[aria-label^="Add"]')
@@ -220,6 +252,10 @@ def sounds(r):
     text = beside.read_text() if beside.exists() else ''
     r.check('the export writes reel.credits.txt with the CC BY song and the CC0 one as a courtesy',
             text.startswith('Music and sound effects:\n"Rainy Window" by Lumen Drift') and 'Paper Lanterns' in text and 'Whoosh' not in text, text)
+    again = r.s.call('window.__nuzky.api.startExport(arguments[0], arguments[1], arguments[2], true)', str(video),
+                     {'resolution': 720, 'fps': 30, 'quality': 'small'}, r.state()['epoch'])
+    r.check('exporting over the video again asks before replacing its credits file',
+            not again['ok'] and 'CREDITS_EXIST: reel.credits.txt already exists' in again['error'], again)
     duration, codecs = ffprobe(video)
     r.check('the video has the sound, as long as the timeline', 'aac' in codecs and abs(duration - 14.53) < 0.2, (duration, codecs))
 

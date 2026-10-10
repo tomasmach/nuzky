@@ -56,6 +56,7 @@ fn render_options(rest: &[&str]) -> Result<ExportOptions> {
         delivery,
         // The output path was typed on purpose, as with any command-line tool.
         replace_existing: true,
+        replace_credits: true,
         ..ExportOptions::default()
     })
 }

@@ -73,8 +73,9 @@ export const api = {
   setSoundSettings: (freesound: boolean, key?: string) => invoke<SoundSettings>("set_sound_settings", { freesound, key: key ?? null }),
   openSoundPage: (url: string) => invoke<void>("open_sound_page", { url }),
   /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */
-  startExport: (path: string, options: ExportRequest, epoch: Epoch, replaceExisting: boolean) =>
-    invoke<string>("start_export", { path, options, expectedEpoch: epoch, replaceExisting }),
+  /** CC BY sounds bring `<name>.credits.txt`; without `replaceCredits` an existing one fails with CREDITS_EXIST. */
+  startExport: (path: string, options: ExportRequest, epoch: Epoch, replaceExisting: boolean, replaceCredits = false) =>
+    invoke<string>("start_export", { path, options, expectedEpoch: epoch, replaceExisting, replaceCredits }),
   filmstrip: (assetId: string) => invoke<Filmstrip | null>("filmstrip", { assetId }),
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
@@ -185,8 +186,8 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   SOURCE_FAILED: (detail) => detail.replace(/ \(.*\)$/, ""),
   SOUND_UNAVAILABLE: (detail) => detail.replace(/ \(.*\)$/, ""),
   UNLICENSED: (detail) => sentence(detail) + ".",
-  KEY_REJECTED: (detail) => `${detail} Check it under Sources.`,
-  KEY_MISSING: "Turn on Freesound and add your API key under Sources.",
+  KEY_REJECTED: (detail) => `${detail} Check it under Where to search, the sliders button beside the search field.`,
+  KEY_MISSING: "Add your Freesound API key under Where to search, the sliders button beside the search field.",
   INVALID_KEY: "A Freesound API key has only letters and digits. Copy it again from Freesound.",
 };
 

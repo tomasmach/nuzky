@@ -479,7 +479,12 @@ impl Backend {
                     let asset_id = match crate::sounds::existing(&state.project.assets, &args.id) {
                         Some(asset) => asset.id.clone(),
                         None => {
-                            let asset = crate::sounds::asset(&args.id, &self.host.cache_dir, &self.closed, |_| {})?;
+                            // Stop in the app ends the run, and with it the download.
+                            let stopped = || {
+                                self.closed.load(Ordering::Acquire)
+                                    || self.host.session.check_run(&args.run_id).is_err()
+                            };
+                            let asset = crate::sounds::asset(&args.id, &self.host.cache_dir, stopped, |_| {})?;
                             let id = asset.id.clone();
                             edits.push(EditCmd::AddAssets { assets: vec![asset] });
                             id

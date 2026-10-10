@@ -87,6 +87,9 @@ impl Delivery {
 pub struct ExportOptions {
     pub crf: u8,
     pub replace_existing: bool,
+    /// The credits file of CC BY sounds may replace one beside the video. Asked apart from the video,
+    /// since a creator may keep their own notes in a file of that name.
+    pub replace_credits: bool,
     /// x264 speed preset.
     pub preset: String,
     /// Short side of the output in pixels (720, 1080, 1440, 2160); `None` keeps the canvas size.
@@ -102,6 +105,7 @@ impl Default for ExportOptions {
         Self {
             crf: Quality::Recommended.crf(),
             replace_existing: false,
+            replace_credits: false,
             preset: "veryfast".into(),
             resolution: None,
             fps: None,
@@ -157,7 +161,7 @@ pub fn export(
     // CC BY sounds go out with their credits, beside the video and under the same consent.
     let credits = crate::credits::credits(project);
     let credits_out = crate::credits::credits_path(out);
-    if credits.is_some() && !options.replace_existing && credits_out.symlink_metadata().is_ok() {
+    if credits.is_some() && !options.replace_credits && credits_out.symlink_metadata().is_ok() {
         bail!("OUTPUT_EXISTS: {} already exists; choose a new export path", credits_out.display());
     }
     // Each heard file, and whether a clip of it cleans the voice: the file then has the cleaned sound.
@@ -194,7 +198,7 @@ pub fn export(
     }
     result?;
     match credits {
-        Some(text) => write_credits(&text, &credits_out, options.replace_existing).with_context(|| {
+        Some(text) => write_credits(&text, &credits_out, options.replace_credits).with_context(|| {
             format!("The video is saved, but its credits could not be written to {}", credits_out.display())
         }),
         None => Ok(()),

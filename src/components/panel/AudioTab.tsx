@@ -107,7 +107,7 @@ export function AudioTab() {
   return (
     <div className="flex min-h-0 flex-1 flex-col pt-3">
       <TabBar group="audio" label="Audio" tabs={TABS} value={tab} onChange={(id) => useSounds.setState({ tab: id })} />
-      <TabPanel group="audio" id={tab} className="flex min-h-0 flex-1 flex-col gap-3.5 pt-2.5">
+      <TabPanel group="audio" id={tab} className="flex min-h-0 flex-1 flex-col gap-2 pt-2.5">
         {tab === "project" && <InProject />}
         {tab === "music" && <SoundLibrary kind="music" />}
         {tab === "effects" && <SoundLibrary kind="effect" />}

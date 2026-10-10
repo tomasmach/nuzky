@@ -792,9 +792,11 @@ fn start_export(
     path: String,
     options: jobs::ExportRequest,
     replace_existing: Option<bool>,
+    replace_credits: Option<bool>,
     expected_epoch: Option<String>,
 ) -> CmdResult<String> {
-    jobs::start_export(&app, PathBuf::from(path), options, replace_existing.unwrap_or(true), expected_epoch.as_deref())
+    let (replace, credits) = (replace_existing.unwrap_or(true), replace_credits.unwrap_or(false));
+    jobs::start_export(&app, PathBuf::from(path), options, replace, credits, expected_epoch.as_deref())
 }
 
 /// Filmstrip for timeline clips: one horizontal sprite of evenly spaced frames.

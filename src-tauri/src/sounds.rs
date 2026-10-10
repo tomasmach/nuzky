@@ -74,7 +74,7 @@ pub async fn sound_preview(app: AppHandle, id: String) -> CmdResult<PreviewStart
     let cache = state.cache_dir.clone();
     let (app2, id2, stop2) = (app.clone(), id.clone(), stop.clone());
     let (project, duration_us) = blocking(move || {
-        let (path, _) = sounds::fetch(&id2, &cache, &stop2, progress(&app2, &id2))?;
+        let (path, _) = sounds::fetch(&id2, &cache, || stop2.load(Ordering::Relaxed), progress(&app2, &id2))?;
         let asset = nuzky_engine::media::probe(&path, "sound-preview".into())?;
         anyhow::ensure!(asset.kind == AssetKind::Audio, "SOUND_UNAVAILABLE: this file is not a sound");
         nuzky_engine::audio::ensure_pcm(&cache, &asset, |_| nuzky_session::jobs::check_cancel(&stop2))?;
@@ -140,7 +140,9 @@ pub async fn sound_add(
                 return Err("BUSY: this sound is already being added".into());
             }
             let (cache, app2, id2) = (state.cache_dir.clone(), app.clone(), id.clone());
-            let result = blocking(move || sounds::asset(&id2, &cache, &cancel, progress(&app2, &id2))).await;
+            let result =
+                blocking(move || sounds::asset(&id2, &cache, || cancel.load(Ordering::Relaxed), progress(&app2, &id2)))
+                    .await;
             state.sounds.downloads.lock().unwrap().remove(&id);
             Some(result?)
         }

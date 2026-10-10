@@ -270,8 +270,8 @@ fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
-/// A CC BY song's credits go beside the video under the video's consent: an existing credits file stops an
-/// export that may not replace files before anything is written, and one that may replaces both.
+/// A CC BY song's credits go beside the video: an existing credits file stops the export before anything is
+/// written until someone agreed to replace that file, apart from the video.
 #[test]
 fn export_writes_the_credits_of_cc_by_sounds_beside_the_video() {
     if !available() {
@@ -309,7 +309,12 @@ fn export_writes_the_credits_of_cc_by_sounds_beside_the_video() {
     assert_eq!(std::fs::read_to_string(&credits).unwrap(), "notes the user keeps");
     assert!(!out.exists(), "nothing is written before the credits file is cleared");
 
-    export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap();
+    // Replacing the video is not consent to replace the credits file.
+    let error = export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap_err();
+    assert!(format!("{error:#}").starts_with("OUTPUT_EXISTS"), "{error:#}");
+    assert_eq!(std::fs::read_to_string(&credits).unwrap(), "notes the user keeps");
+    let both = ExportOptions { replace_credits: true, ..options() };
+    export(&p, &d.join("cache"), &out, &both, &AtomicBool::new(false), |_| {}).unwrap();
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
     assert_eq!(
         std::fs::read_to_string(&credits).unwrap(),

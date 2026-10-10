@@ -5,11 +5,12 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use nuzky_engine::edit::new_id;
 use nuzky_engine::model::{Asset, AssetKind, Credit, License};
 use nuzky_session::jobs::check_cancel;
@@ -640,9 +641,44 @@ fn download(sound: &Sound, path: &Path, cancel: &AtomicBool, mut progress: impl 
     })
 }
 
+/// What the download thread reports.
+enum Step {
+    Progress(f32),
+    Done(Result<(PathBuf, Sound)>),
+}
+
 /// The sound as a local file: a built-in one in the library, a downloaded one in `cache_dir` until
-/// a project uses it. A file already there is used again.
-pub fn fetch(id: &str, cache_dir: &Path, cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<(PathBuf, Sound)> {
+/// a project uses it. A file already there is used again. The network work runs on its own thread, so
+/// `cancelled` stops this within 100 ms even while a server keeps silent; the thread then drops its part.
+pub fn fetch(
+    id: &str,
+    cache_dir: &Path,
+    cancelled: impl Fn() -> bool,
+    mut progress: impl FnMut(f32),
+) -> Result<(PathBuf, Sound)> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let (id, cache_dir, worker_stop) = (id.to_owned(), cache_dir.to_owned(), stop.clone());
+    std::thread::Builder::new().name("sound-download".into()).spawn(move || {
+        let steps = tx.clone();
+        let result = fetch_here(&id, &cache_dir, &worker_stop, |p| drop(steps.send(Step::Progress(p))));
+        tx.send(Step::Done(result)).ok();
+    })?;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Step::Progress(p)) => progress(p),
+            Ok(Step::Done(result)) => return result,
+            Err(RecvTimeoutError::Timeout) if cancelled() => {
+                stop.store(true, Ordering::Relaxed);
+                bail!("CANCELLED: the download stopped");
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => bail!("SOURCE_FAILED: the download stopped unexpectedly"),
+        }
+    }
+}
+
+fn fetch_here(id: &str, cache_dir: &Path, cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<(PathBuf, Sound)> {
     let sound = sound(id)?;
     if sound.provider == "Built in" {
         let path = library_dir().join("nuzky").join(&sound.file);
@@ -665,9 +701,9 @@ pub fn fetch(id: &str, cache_dir: &Path, cancel: &AtomicBool, progress: impl FnM
 
 /// The sound as a project asset, its file moved from the cache into the library first, since a cache
 /// may be emptied while the project still needs the file.
-pub fn asset(id: &str, cache_dir: &Path, cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<Asset> {
-    let (fetched, sound) = fetch(id, cache_dir, cancel, progress)?;
-    check_cancel(cancel)?;
+pub fn asset(id: &str, cache_dir: &Path, cancelled: impl Fn() -> bool, progress: impl FnMut(f32)) -> Result<Asset> {
+    let (fetched, sound) = fetch(id, cache_dir, &cancelled, progress)?;
+    ensure!(!cancelled(), "CANCELLED: the download stopped");
     let path = if fetched.starts_with(library_dir()) {
         fetched
     } else {
@@ -779,6 +815,32 @@ mod tests {
         ] {
             assert!(license_of(deed).is_none(), "{deed}");
         }
+    }
+
+    /// A server that accepts and then says nothing never holds up a stop, and nothing is left behind.
+    #[test]
+    fn a_silent_server_never_holds_up_a_stop() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let _held: Vec<_> = listener.incoming().take(1).collect();
+            std::thread::sleep(Duration::from_secs(60));
+        });
+        // Only this module reads the test server's address.
+        unsafe { std::env::set_var("NUZKY_OPENVERSE_URL", format!("http://127.0.0.1:{port}/v1/")) };
+        let mut silent = built_in("whoosh").remove(0);
+        (silent.id, silent.provider, silent.file) =
+            ("openverse:silent".into(), "Jamendo".into(), format!("http://127.0.0.1:{port}/song.mp3"));
+        remember(&[silent]);
+        let cache = std::env::temp_dir().join(format!("nuzky-silent-{}", new_id()));
+        let started = std::time::Instant::now();
+        let error =
+            fetch("openverse:silent", &cache, || started.elapsed() > Duration::from_millis(300), |_| {}).unwrap_err();
+        assert!(error.to_string().starts_with("CANCELLED"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(std::fs::read_dir(cache.join("sounds")).map_or(true, |mut d| d.next().is_none()));
+        std::fs::remove_dir_all(cache).ok();
     }
 
     #[test]
