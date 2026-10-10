@@ -83,7 +83,12 @@ export function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
   const running = Object.values(jobs).filter((j) => j.status === "running");
   if (running.length === 0) return null;
-  const j = running.find((x) => x.kind === "export") ?? running.find((x) => x.kind === "captions" || x.kind === "transcript") ?? running[0];
+  const j =
+    running.find((x) => x.kind === "export") ??
+    running.find((x) => x.kind === "captions" || x.kind === "transcript") ??
+    // Ahead of the audio prepared beside it on import, so its Stop is there.
+    running.find((x) => x.kind === "proxy") ??
+    running[0];
   const pct = j.progress > 0 ? `${Math.round(j.progress * 100)}%` : null;
   const body = (
     <>

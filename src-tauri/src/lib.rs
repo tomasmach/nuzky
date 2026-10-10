@@ -832,6 +832,11 @@ async fn filmstrip(app: AppHandle, asset_id: String) -> CmdResult<Option<Filmstr
 fn cancel_job(state: State<'_, AppState>, id: String) {
     if let Some(flag) = state.jobs.lock().unwrap().get(&id) {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        // A preview proxy the user stopped stays stopped until the app restarts.
+        if let Some(source) = id.strip_prefix("proxy:") {
+            let proxy = nuzky_engine::proxy::proxy_path(&state.cache_dir, Path::new(source));
+            state.proxy_skipped.lock().unwrap().insert(proxy);
+        }
     }
 }
 

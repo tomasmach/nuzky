@@ -228,13 +228,14 @@ fn ensure_voice(state: &AppState, project: &Project) {
 }
 
 /// Makes the preview proxy of each video that decodes slowly (`nuzky_engine::proxy`), one file at a time; the
-/// preview switches to it once it is there. A file that leaves the project stops its proxy, and starts it
-/// again when it comes back. One the user stopped, or that failed, is not tried again until the app restarts.
+/// preview switches to it once it is there. Jobs are per file. A file that leaves the project stops its proxy,
+/// and starts it again when it comes back. One that failed, or that the user stopped (`cancel_job`), is not
+/// tried again until the app restarts.
 fn ensure_proxies(state: &AppState, project: &Project) {
     let app = state.app.clone();
-    let wanted: HashSet<&str> = project.assets.iter().map(|a| a.id.as_str()).collect();
+    let wanted: HashSet<&str> = project.assets.iter().map(|a| a.path.as_str()).collect();
     for (id, cancel) in state.jobs.lock().unwrap().iter() {
-        if id.strip_prefix("proxy:").is_some_and(|asset| !wanted.contains(asset)) {
+        if id.strip_prefix("proxy:").is_some_and(|source| !wanted.contains(source)) {
             cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -243,7 +244,7 @@ fn ensure_proxies(state: &AppState, project: &Project) {
         if path.exists() || state.proxy_skipped.lock().unwrap().contains(&path) {
             continue;
         }
-        let id = format!("proxy:{}", asset.id);
+        let id = format!("proxy:{}", asset.path);
         let Some(flag) = register(&app, &id) else { continue };
         let (worker, job, asset, cache) = (app.clone(), id.clone(), asset.clone(), state.cache_dir.clone());
         let spawned = std::thread::Builder::new().name("preview-proxy".into()).spawn(move || {
@@ -264,17 +265,16 @@ fn ensure_proxies(state: &AppState, project: &Project) {
                 }))
                 .unwrap_or_else(|p| Err(anyhow::anyhow!("Preparing the preview crashed: {}", panic_text(&p))));
                 let cancelled = flag.load(Ordering::Relaxed);
-                let in_project =
-                    app.state::<AppState>().project().is_ok_and(|p| p.assets.iter().any(|a| a.path == asset.path));
-                if result.is_err() && (!cancelled || in_project) {
+                if result.is_err() && !cancelled {
                     skip(path);
                 }
                 rep.finish(result.map(|_| None), cancelled);
             }
             unregister(&app, &id);
-            // The next file was waiting for this one.
+            // The next file was waiting for this one, unless the app is quitting.
             let state = app.state::<AppState>();
-            if let Ok(open) = state.project() {
+            let quitting = state.session.lock().unwrap().stopped.load(Ordering::Acquire);
+            if !quitting && let Ok(open) = state.project() {
                 ensure_proxies(&state, &open);
             }
         });
