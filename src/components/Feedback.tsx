@@ -18,7 +18,6 @@ const feedbackMenu = (): MenuEntry[] => [
   { label: "Message me on X…", icon: <AtSign size={15} />, run: () => open("message") },
 ];
 
-/** In the foot of the home sidebar, above the version. */
 export function FeedbackRow({ showMenu }: { showMenu: ShowMenu }) {
   const openMenu = (e: MouseEvent<HTMLButtonElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -37,7 +36,6 @@ export function FeedbackRow({ showMenu }: { showMenu: ShowMenu }) {
   );
 }
 
-/** In the editor's top bar, next to Projects. */
 export function FeedbackButton() {
   const [menu, setMenu] = useState<{ at: { x: number; y: number }; keyboard: boolean; back: HTMLElement } | null>(null);
   return (

@@ -70,6 +70,7 @@ def feedback(r):
     menu = wait(lambda: r.s.run(MENU), 3)
     r.check('it opens a menu: Report a bug, Share an idea and Message me on X', menu == ITEMS, menu)
     r.check('opened from the keyboard, the menu has the focus', wait(lambda: r.s.run(IN_MENU), 3))
+    time.sleep(0.3)  # The menu shows once it has been placed.
     r.shot('home-menu')
     r.key('Escape')
     r.check('Esc closes the menu and focus returns to the row', wait(lambda: not r.s.run(MENU) and r.s.run(FOCUSED, ROW), 3))
@@ -107,6 +108,7 @@ def feedback(r):
     r.s.run(OPEN, BUTTON)
     menu = wait(lambda: r.s.run(MENU), 3)
     r.check('it opens the same menu, with the focus in it', menu == ITEMS and wait(lambda: r.s.run(IN_MENU), 3), menu)
+    time.sleep(0.3)
     r.shot('editor-menu')
     r.key('Escape')
     r.check('Esc closes it and focus returns to the button', wait(lambda: not r.s.run(MENU) and r.s.run(FOCUSED, BUTTON), 3))
