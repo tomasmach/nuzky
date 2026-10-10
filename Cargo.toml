@@ -28,3 +28,11 @@ opt-level = 2
 
 [profile.dev]
 opt-level = 1
+# Backtraces keep their files and lines; full debug info made every test binary ten times larger and the build
+# and linking slower.
+debug = "line-tables-only"
+
+# Build scripts and their dependencies get the same debug info as the rest, so `cargo clippy` and `cargo test`
+# share them: with none, whisper.cpp and the FFmpeg bindings built twice in every new checkout.
+[profile.dev.build-override]
+debug = "line-tables-only"

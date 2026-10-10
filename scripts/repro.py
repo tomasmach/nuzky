@@ -79,9 +79,9 @@ def main(args):
     if problems:
         print('repro cannot run:\n  ' + '\n  '.join(problems), file=sys.stderr)
         return 1
-    # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too.
-    subprocess.run(['cargo', 'build', '--locked', '-p', 'nuzky-app', '-p', 'nuzky-cli', '-p', 'nuzky-analysis'], cwd=ROOT,
-                   check=True)
+    # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too. Every target
+    # of the workspace resolves the features `cargo test` does, so this adds only the app's binary to its build.
+    subprocess.run(['cargo', 'build', '--locked', '--workspace', '--all-targets'], cwd=ROOT, check=True)
     # The debug app opens ONNX Runtime from the build dependencies when covers run.
     subprocess.run(['node', 'scripts/fetch-onnxruntime.mjs'], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     for name in names:

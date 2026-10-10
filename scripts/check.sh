@@ -7,12 +7,21 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# One gate at a time per machine, whichever checkout it runs in: two at once take longer than one after the
+# other, fail on timing checks and collide on the UI flows' ports. A second gate waits here.
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/nuzky-check.lock"
+if ! flock -n 9; then
+  echo "Another scripts/check.sh runs on this machine; this one starts when it ends."
+  flock 9
+fi
+
 step() {
   local name=$1 started=$SECONDS
   shift
   echo
   echo "==> $name"
-  if ! "$@"; then
+  # The steps do not inherit the lock, so a process one of them leaves behind cannot hold it.
+  if ! "$@" 9>&-; then
     echo
     echo "check FAILED at: $name ($((SECONDS - started))s)" >&2
     exit 1
@@ -40,7 +49,9 @@ isolated() {
 without_avx2() (
   # A program that dies under qemu would leave a core dump in the checkout.
   ulimit -c 0
-  cargo build --locked -p nuzky-app -p nuzky-cli || return 1
+  # The same build as scripts/repro.py: every target of the workspace resolves the features `cargo test` does,
+  # so it adds only the app's binary instead of building the Nuzky crates again.
+  cargo build --locked --workspace --all-targets || return 1
   for program in nuzky-app nuzky; do
     # `mcp` without a project reaches main and refuses with INVALID_ARGUMENTS and exit code 1.
     local said
@@ -50,8 +61,10 @@ without_avx2() (
       return 1
     }
   done
+  # Selecting the whole workspace reuses the test build; `-p nuzky-vision` alone resolves other features and
+  # builds the engine and its dependencies a second time. The filters match tests in nuzky-vision only.
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="qemu-x86_64-static -cpu Nehalem" \
-    isolated cargo test --locked -p nuzky-vision --lib -- --include-ignored runtime:: the_face_models
+    isolated cargo test --locked --workspace --lib -- --include-ignored runtime:: the_face_models
 )
 
 step "Own node_modules" own_node_modules
