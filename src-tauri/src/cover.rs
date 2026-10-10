@@ -13,7 +13,7 @@ use nuzky_engine::edit::new_id;
 use nuzky_engine::gpu::Image;
 use nuzky_engine::model::{ClipContent, Project, Thumbnail, ThumbnailFormat, TrackKind};
 use nuzky_engine::thumbnail::{ImageKind, RenderedThumbnail, picture};
-use nuzky_engine::{Renderer, Wait};
+use nuzky_engine::{Pending, Renderer, Wait};
 use nuzky_vision::models::{self, Model};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -123,7 +123,10 @@ impl Covers {
             anyhow::bail!("MEDIA_MISSING: {name}");
         }
         if self.renderer.is_none() {
-            self.renderer = Some(Renderer::new().context("Starting the cover renderer")?);
+            let mut renderer = Renderer::new().context("Starting the cover renderer")?;
+            // A clip whose person is not found yet shows as recorded, as in the preview.
+            renderer.use_mattes(cache.to_path_buf(), Pending::Original);
+            self.renderer = Some(renderer);
         }
         let renderer = self.renderer.as_mut().unwrap();
         // Only what the frame is drawn from: the cover's own texts and settings do not change it.
@@ -256,7 +259,13 @@ fn spawn(
 
 /// Downloads the models that are missing, each checked against its pinned SHA-256. `repair` checks the
 /// installed ones too and downloads again any whose contents are damaged.
-pub fn download_models(list: &[Model], repair: bool, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<()> {
+pub fn download_models(
+    list: &[Model],
+    repair: bool,
+    phase: &str,
+    cancel: &AtomicBool,
+    rep: &mut Reporter,
+) -> anyhow::Result<()> {
     let dir = models_dir();
     let missing = if repair { list.to_vec() } else { models::missing(list, &dir) };
     let total = missing.iter().map(|m| m.size).sum::<u64>().max(1) as f32;
@@ -264,11 +273,23 @@ pub fn download_models(list: &[Model], repair: bool, cancel: &AtomicBool, rep: &
     for model in &missing {
         let integrity = nuzky_mcp::model_download::Integrity { size: model.size, sha256: model.sha256 };
         nuzky_mcp::model_download::download(model.url, &model.path(&dir), integrity, cancel, |part| {
-            rep.progress((before as f32 + part * model.size as f32) / total, Some("Downloading cover models"))
+            rep.progress((before as f32 + part * model.size as f32) / total, Some(phase))
         })?;
         before += model.size;
     }
     Ok(())
+}
+
+/// Finds the person behind whom the project's clip backgrounds go, downloading the person model first when they
+/// need it, so the cover's frame is drawn as the video exports it.
+fn prepare_mattes(project: &Project, cache: &Path, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<()> {
+    if nuzky_engine::matte::missing(cache, project).is_empty() {
+        return Ok(());
+    }
+    download_models(models::BACKGROUND, false, "Downloading the person model", cancel, rep)?;
+    nuzky_vision::matte::prepare(project, cache, &models_dir(), cancel, &mut |p| {
+        rep.progress(p, Some("Finding the person"))
+    })
 }
 
 fn mask_progress(rep: &mut Reporter) -> impl FnMut(nuzky_vision::mask::Phase) + '_ {
@@ -296,13 +317,16 @@ pub fn start_cover_pick(app: AppHandle, format: ThumbnailFormat, expected_epoch:
         "Picking a cover frame".into(),
         "A cover frame is already being picked",
         move |cancel, rep| {
-            download_models(models::ALL, false, cancel, rep)?;
+            download_models(models::ALL, false, "Downloading cover models", cancel, rep)?;
+            prepare_mattes(&project, &cache, cancel, rep)?;
             let dir = models_dir();
             let vision = match format {
                 ThumbnailFormat::Cover9x16 => nuzky_vision::Format::Vertical,
                 ThumbnailFormat::Youtube16x9 => nuzky_vision::Format::Wide,
             };
-            let found = nuzky_vision::thumbnail_frames(&project, &dir, Some(vision), cancel, &mut |phase, done| {
+            // Which frame suits a cover does not depend on what is behind the person.
+            let plain = nuzky_engine::matte::without_backgrounds(&project);
+            let found = nuzky_vision::thumbnail_frames(&plain, &dir, Some(vision), cancel, &mut |phase, done| {
                 let label = match phase {
                     nuzky_vision::thumbnails::Phase::Looking => "Looking through the video",
                     nuzky_vision::thumbnails::Phase::Scoring => "Scoring frames",
@@ -311,6 +335,7 @@ pub fn start_cover_pick(app: AppHandle, format: ThumbnailFormat, expected_epoch:
             })?;
             let shown = picture(&project);
             let mut renderer = Renderer::new().context("Starting the cover renderer")?;
+            renderer.use_mattes(cache.clone(), Pending::Fail);
             let (w, h) = still_size(&project);
             let mut candidates = Vec::with_capacity(found.len());
             for candidate in &found {
@@ -365,7 +390,8 @@ pub fn start_cover_mask(app: AppHandle, time_us: i64, expected_epoch: Option<Str
     }
     let cache = app.state::<AppState>().cache_dir.clone();
     spawn(&app, "cover-mask", "Finding the person".into(), "The person is already being found", move |cancel, rep| {
-        download_models(models::MASK, false, cancel, rep)?;
+        download_models(models::MASK, false, "Downloading cover models", cancel, rep)?;
+        prepare_mattes(&project, &cache, cancel, rep)?;
         let mask =
             nuzky_vision::segment_subject(&project, time_us, &models_dir(), &cache, cancel, &mut mask_progress(rep))?;
         Ok(Some(serde_json::json!({"person": mask.person, "found": mask.subject_box.is_some()}).to_string()))
@@ -399,11 +425,13 @@ pub fn start_cover_export(
     let cache = app.state::<AppState>().cache_dir.clone();
     let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     spawn(&app, "cover-export", format!("Exporting {name}"), "A cover is already being exported", move |cancel, rep| {
+        prepare_mattes(&project, &cache, cancel, rep)?;
         rep.progress(0.0, Some("Rendering"));
         let mut renderer = Renderer::new().context("Starting the cover renderer")?;
+        renderer.use_mattes(cache.clone(), Pending::Fail);
         let frame = renderer.thumbnail_frame(&project, &thumbnail)?;
         let mask = if thumbnail.needs_mask() {
-            download_models(models::MASK, false, cancel, rep)?;
+            download_models(models::MASK, false, "Downloading cover models", cancel, rep)?;
             let size = (frame.width, frame.height);
             let (alpha, _) =
                 nuzky_vision::subject_alpha(&frame.data, size, &models_dir(), &cache, cancel, &mut mask_progress(rep))?;

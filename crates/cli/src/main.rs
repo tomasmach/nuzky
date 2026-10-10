@@ -11,7 +11,7 @@ use nuzky_engine::export::{Delivery, ExportOptions, check_source_path, export};
 use nuzky_engine::media::probe;
 use nuzky_engine::model::{AssetKind, ThumbnailFormat};
 use nuzky_engine::thumbnail::ImageKind;
-use nuzky_engine::{Project, Renderer, Wait, proxy};
+use nuzky_engine::{Pending, Project, Renderer, Wait, proxy};
 
 mod style;
 
@@ -24,6 +24,8 @@ const USAGE: &str = "Usage:
       plays and scrubs the preview; --proxy first makes the preview proxies of heavy video and plays from them
   nuzky render <project.json> <out.mp4> [resolution] [fps] [--preset reels]
       reels: Instagram Reels and TikTok, 1080x1920 at 30 fps, sound levelled to -14 LUFS (9:16 only)
+      frame, bench, render, mask and thumbnail first find the person behind whom clip backgrounds go,
+      downloading the person model when it is missing
   nuzky vision-models                     download the face and subject models
   nuzky thumbnail-frames <project.json> [--format 9:16|16:9]
       frames worth a cover, best first, as JSON; downloads missing face models first
@@ -197,6 +199,30 @@ fn install_models(models: &[nuzky_vision::models::Model]) -> Result<()> {
     Ok(())
 }
 
+/// Finds the person in the frames that clips with a background show, downloading the person model first.
+fn prepare_mattes(project: &Project) -> Result<()> {
+    let missing = nuzky_engine::matte::missing(&cache_dir(), project);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    install_models(nuzky_vision::models::BACKGROUND)?;
+    let seconds: usize = missing.iter().map(|(_, chunks)| chunks.len() * 2).sum();
+    let (start, cancel, mut shown) = (Instant::now(), AtomicBool::new(false), 0);
+    nuzky_vision::matte::prepare(project, &cache_dir(), &nuzky_analysis::models_dir(), &cancel, &mut |done| {
+        let pct = (done * 100.0) as u32;
+        if pct >= shown + 10 {
+            shown = pct;
+            eprintln!("{pct}%  Finding the person");
+        }
+    })?;
+    let took = start.elapsed().as_secs_f64();
+    eprintln!(
+        "Found the person in up to {seconds} s of video in {took:.1} s ({:.1} s per minute)",
+        took / seconds as f64 * 60.0
+    );
+    Ok(())
+}
+
 /// Playhead jumps the bench scrubs, spread over the timeline out of order.
 const SCRUB_JUMPS: i64 = 20;
 
@@ -262,7 +288,9 @@ fn main() -> Result<()> {
             let width: u32 = rest.first().map(|w| w.parse()).transpose()?.unwrap_or(project.canvas.width);
             let (width, height) = frame_size(&project, width)?;
             let t = (secs.parse::<f64>()? * 1e6) as i64;
+            prepare_mattes(&project)?;
             let mut renderer = Renderer::new()?;
+            renderer.use_mattes(cache_dir(), Pending::Fail);
             let start = Instant::now();
             let rgba = renderer.render(&project, t, width, height, Wait::Exact, false)?;
             eprintln!("Rendered {width}x{height} at {secs}s in {:?} on {}", start.elapsed(), renderer.adapter_name());
@@ -280,7 +308,9 @@ fn main() -> Result<()> {
             let (width, height) = frame_size(&project, width)?;
             let fps = project.canvas.fps.max(1) as u64;
             let frames = ((seconds * fps as f64).ceil() as u64).max(1);
+            prepare_mattes(&project)?;
             let mut renderer = Renderer::new()?;
+            renderer.use_mattes(cache_dir(), Pending::Fail);
             if proxies {
                 for asset in project.assets.iter().filter(|a| a.kind == AssetKind::Video) {
                     let source = Path::new(&asset.path);
@@ -326,6 +356,7 @@ fn main() -> Result<()> {
             let options = render_options(rest)?;
             check_render_output(Path::new(project), Path::new(out))?;
             let project = load(project)?;
+            prepare_mattes(&project)?;
             let start = Instant::now();
             let cancel = AtomicBool::new(false);
             let mut last = None;
@@ -346,7 +377,8 @@ fn main() -> Result<()> {
                 ["--format", "16:9"] => Some(nuzky_vision::Format::Wide),
                 _ => bail!("{USAGE}"),
             };
-            let project = load(project)?;
+            // Which frame suits a cover does not depend on what is behind the person.
+            let project = nuzky_engine::matte::without_backgrounds(&load(project)?);
             install_models(nuzky_vision::models::FRAMES)?;
             let (start, cancel) = (Instant::now(), AtomicBool::new(false));
             let mut clock = PhaseClock { phase: None };
@@ -366,6 +398,7 @@ fn main() -> Result<()> {
             let project = load(project)?;
             check_source_path(&project, Path::new(out))?;
             install_models(nuzky_vision::models::MASK)?;
+            prepare_mattes(&project)?;
             let t = (secs.parse::<f64>()? * 1e6) as i64;
             let (start, cancel) = (Instant::now(), AtomicBool::new(false));
             let mut clock = PhaseClock { phase: None };
@@ -398,7 +431,9 @@ fn main() -> Result<()> {
             let project = load(project)?;
             check_source_path(&project, Path::new(out))?;
             let thumbnail = project.thumbnail(format).context("The project has no thumbnail in this format")?;
+            prepare_mattes(&project)?;
             let mut renderer = Renderer::new()?;
+            renderer.use_mattes(cache_dir(), Pending::Fail);
             let frame = renderer.thumbnail_frame(&project, thumbnail)?;
             let cancel = AtomicBool::new(false);
             let mask = if thumbnail.needs_mask() {

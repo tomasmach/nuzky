@@ -4,6 +4,7 @@
 mod frame;
 pub mod framing;
 pub mod mask;
+pub mod matte;
 pub mod models;
 mod nets;
 pub mod runtime;

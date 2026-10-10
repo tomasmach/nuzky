@@ -731,6 +731,7 @@ pub fn plan_correction(project: &Project, derived: &Derived, fixes: &[(usize, St
         clean_voice: None,
         shape: None,
         duck_db: None,
+        background: None,
     }));
     Ok(Correction { edits, words, captions: changed })
 }

@@ -10,6 +10,7 @@ import { CoverInspector } from "../cover/CoverInspector";
 import { TransitionSettings } from "../panel/TransitionsTab";
 import { AiLock, TabBar, TabPanel } from "../ui";
 import { AnimationSection } from "./AnimationSection";
+import { BackgroundSection } from "./BackgroundSection";
 import { InspectorHeader } from "./Header";
 import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
 import { MotionSection } from "./MotionSection";
@@ -64,6 +65,7 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
           {tab === "video" && c.type === "media" && (
             <>
               <ShapeSection clip={clip} content={c} asset={asset} />
+              <BackgroundSection clips={[clip]} />
               <MotionSection clip={clip} />
             </>
           )}

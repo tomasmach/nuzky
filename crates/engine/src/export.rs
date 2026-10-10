@@ -13,7 +13,7 @@ use crate::audio::{Mixer, ensure_pcm, has_audio};
 use crate::loudness::{Limiter, Meter, db_to_gain};
 use crate::media::{init, set_sws_colorspace};
 use crate::model::{CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
-use crate::render::{Renderer, Wait};
+use crate::render::{Pending, Renderer, Wait};
 use crate::voice::ensure_voice_pcm;
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -179,6 +179,8 @@ pub fn export(
             ensure_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
         }
     }
+    // A clip with a background needs its person outlines made first (`nuzky_vision::matte::prepare`).
+    crate::matte::check(cache_dir, project)?;
     // Reserve beside the destination so rename stays on the same filesystem.
     let tmp = loop {
         let path = out.with_file_name(format!(".nuzky-part-{}.mp4", uuid::Uuid::new_v4()));
@@ -365,6 +367,7 @@ fn encode(
         bail!("Export frame rate must be between 1 and 240");
     }
     let mut renderer = Renderer::new()?;
+    renderer.use_mattes(cache_dir.to_path_buf(), Pending::Fail);
     let (w, h) = output_size(project, options, renderer.max_texture_dimension())?;
     let total_frames = frame_count(duration, fps);
     let total_samples = crate::audio::us_to_samples(duration);

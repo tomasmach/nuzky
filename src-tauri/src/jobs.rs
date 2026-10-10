@@ -32,7 +32,9 @@ pub struct JobEvent {
     pub id: String,
     #[cfg_attr(
         test,
-        ts(type = r#""audio" | "proxy" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover""#)
+        ts(
+            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover""#
+        )
     )]
     pub kind: &'static str,
     pub label: String,
@@ -106,6 +108,7 @@ pub(crate) fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
             "vision-models" | "cover-pick" | "cover-mask" | "cover-export" => running == kind,
             // Each one decodes a whole video; the next file waits, so the preview keeps some of the machine.
             "proxy" => running == "proxy",
+            "matte" => running == "matte",
             _ => false,
         }
     };
@@ -164,6 +167,65 @@ pub fn prepare_media(state: &AppState, project: &Project) {
     }
     ensure_voice(state, project);
     ensure_proxies(state, project);
+    ensure_mattes(state, project);
+}
+
+/// Finds the person in the frames that clips with a background show (`nuzky_engine::matte`), one file at a time as
+/// a job per file; the preview shows them as recorded until then and switches as parts get done. Work no clip needs
+/// any more stops (the background turned off, the clip deleted, another project opened); what is done stays. Nothing
+/// starts while the person model is missing, and a file that failed is not tried again until the app restarts.
+fn ensure_mattes(state: &AppState, project: &Project) {
+    let app = state.app.clone();
+    let missing = nuzky_engine::matte::missing(&state.cache_dir, project);
+    let wanted: HashSet<&str> = missing.iter().map(|(asset, _)| asset.path.as_str()).collect();
+    for (id, cancel) in state.jobs.lock().unwrap().iter() {
+        if id.strip_prefix("matte:").is_some_and(|source| !wanted.contains(source)) {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    if missing.is_empty() || nuzky_vision::models::require(nuzky_vision::models::BACKGROUND, &models_dir()).is_err() {
+        return;
+    }
+    for (asset, chunks) in missing {
+        if !Path::new(&asset.path).is_file() || state.matte_failed.lock().unwrap().contains(&asset.path) {
+            continue;
+        }
+        let id = format!("matte:{}", asset.path);
+        let Some(flag) = register(&app, &id) else { continue };
+        let (worker, job, cache) = (app.clone(), id.clone(), state.cache_dir.clone());
+        let spawned = std::thread::Builder::new().name("person-matte".into()).spawn(move || {
+            let (app, id) = (worker, job);
+            let mut rep = Reporter::new(&app, &id, "matte", format!("Finding the person in {}", asset.name));
+            let mut drawn = Instant::now();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                nuzky_vision::matte::prepare_file(&asset, &chunks, &cache, &models_dir(), &flag, &mut |p| {
+                    rep.progress(p, None);
+                    // A paused preview shows each part as it gets done.
+                    if drawn.elapsed() > Duration::from_secs(1) {
+                        drawn = Instant::now();
+                        app.state::<AppState>().engine.send(crate::engine::Msg::Redraw);
+                    }
+                })
+            }))
+            .unwrap_or_else(|p| Err(anyhow::anyhow!("Finding the person crashed: {}", panic_text(&p))));
+            let cancelled = flag.load(Ordering::Relaxed);
+            if result.is_err() && !cancelled {
+                app.state::<AppState>().matte_failed.lock().unwrap().insert(asset.path.clone());
+            }
+            rep.finish(result.map(|()| None), cancelled);
+            unregister(&app, &id);
+            let state = app.state::<AppState>();
+            state.engine.send(crate::engine::Msg::Redraw);
+            // The next file was waiting for this one, or the background came back meanwhile.
+            let quitting = state.session.lock().unwrap().stopped.load(Ordering::Acquire);
+            if !quitting && let Ok(open) = state.project() {
+                ensure_mattes(&state, &open);
+            }
+        });
+        if spawned.is_err() {
+            unregister(&app, &id);
+        }
+    }
 }
 
 /// Files a clip with Clean voice plays.
@@ -362,6 +424,10 @@ pub fn start_export(
             let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let mut rep = Reporter::new(&app, &job_id, "export", format!("Exporting {name}"));
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Clips with a background need the person found in every frame they show first.
+                nuzky_vision::matte::prepare(&project, &cache, &models_dir(), &cancel, &mut |p| {
+                    rep.progress(p, Some("Finding the person"));
+                })?;
                 export(&project, &cache, &out, &options, &cancel, |p| {
                     rep.progress(p.fraction, Some(p.phase.label()));
                 })
@@ -445,11 +511,19 @@ pub struct VisionModels {
     pub unavailable: Option<String>,
 }
 
-/// The face and subject models covers need: whether they can run, are installed and what is left
-/// to get. Async, so loading ONNX Runtime the first time never holds up the window.
+/// The models of a set: "background" for a clip's background, otherwise every model, which covers need.
+fn vision_set(set: Option<&str>) -> &'static [nuzky_vision::models::Model] {
+    match set {
+        Some("background") => nuzky_vision::models::BACKGROUND,
+        _ => nuzky_vision::models::ALL,
+    }
+}
+
+/// The face and subject models covers need, or the person model of a clip's background: whether they can run,
+/// are installed and what is left to get. Async, so loading ONNX Runtime the first time never holds up the window.
 #[tauri::command]
-pub async fn vision_models() -> VisionModels {
-    let missing = nuzky_vision::models::missing(nuzky_vision::models::ALL, &models_dir());
+pub async fn vision_models(set: Option<String>) -> VisionModels {
+    let missing = nuzky_vision::models::missing(vision_set(set.as_deref()), &models_dir());
     VisionModels {
         size_mb: missing.iter().map(|m| m.size).sum::<u64>().div_ceil(1_000_000),
         downloaded: missing.is_empty(),
@@ -457,19 +531,30 @@ pub async fn vision_models() -> VisionModels {
     }
 }
 
-/// Downloads the missing cover models as one job, each checked against its pinned SHA-256; `repair` also
-/// downloads again the installed ones whose contents are damaged.
+/// Downloads the missing models of the set as one job, each checked against its pinned SHA-256; `repair` also
+/// downloads again the installed ones whose contents are damaged. Then finds the person for backgrounds that
+/// waited for the model.
 #[tauri::command]
-pub fn start_vision_models(app: AppHandle, repair: Option<bool>) -> Result<String, String> {
+pub fn start_vision_models(app: AppHandle, repair: Option<bool>, set: Option<String>) -> Result<String, String> {
     nuzky_vision::runtime::require().map_err(|e| format!("{e:#}"))?;
     let id = format!("vision-models:{}", new_id());
     let cancel = register(&app, &id).ok_or("The cover models are already downloading")?;
     let (worker_app, job_id) = (app.clone(), id.clone());
     let spawn = std::thread::Builder::new().name("vision-models".into()).spawn(move || {
-        let mut rep = Reporter::new(&worker_app, &job_id, "vision-models", "Cover models".into());
-        let result = crate::cover::download_models(nuzky_vision::models::ALL, repair == Some(true), &cancel, &mut rep);
+        let (label, phase) = match set.as_deref() {
+            Some("background") => ("Person model", "Downloading the person model"),
+            _ => ("Cover models", "Downloading cover models"),
+        };
+        let mut rep = Reporter::new(&worker_app, &job_id, "vision-models", label.into());
+        let list = vision_set(set.as_deref());
+        let result = crate::cover::download_models(list, repair == Some(true), phase, &cancel, &mut rep);
+        let done = result.is_ok();
         rep.finish(result.map(|()| None), cancel.load(Ordering::Relaxed));
         unregister(&worker_app, &job_id);
+        let state = worker_app.state::<AppState>();
+        if done && let Ok(open) = state.project() {
+            ensure_mattes(&state, &open);
+        }
     });
     if let Err(error) = spawn {
         unregister(&app, &id);

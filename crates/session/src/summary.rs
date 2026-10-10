@@ -4,7 +4,7 @@
 
 use nuzky_engine::Project;
 use nuzky_engine::edit::MAIN_TRACK;
-use nuzky_engine::model::{Clip, ClipContent, Crop, Thumbnail, ThumbnailFormat, TrackKind};
+use nuzky_engine::model::{Background, Clip, ClipContent, Crop, Thumbnail, ThumbnailFormat, TrackKind};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -278,6 +278,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 clean_voice: cv1,
                 shape: sh1,
                 duck_db: d1,
+                background: b1,
                 ..
             },
             ClipContent::Media {
@@ -290,6 +291,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 clean_voice: cv2,
                 shape: sh2,
                 duck_db: d2,
+                background: b2,
                 ..
             },
         ) = (&o.content, &clip.content)
@@ -328,6 +330,13 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                     (false, true) => "Turned on Lower under speech for",
                     (true, false) => "Turned off Lower under speech for",
                     _ => "Changed how much speech lowers",
+                });
+            }
+            if b1 != b2 {
+                push(match b2 {
+                    Background::None => "Removed the background of",
+                    Background::Blur { .. } => "Blurred the background of",
+                    Background::Color { .. } | Background::Image { .. } => "Replaced the background of",
                 });
             }
         }

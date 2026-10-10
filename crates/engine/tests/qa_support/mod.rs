@@ -85,6 +85,7 @@ pub fn clip(id: &str, asset: &str, start: i64, duration: i64) -> Clip {
             clean_voice: false,
             shape: None,
             duck_db: 0.0,
+            background: Default::default(),
         },
     )
 }

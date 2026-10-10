@@ -44,6 +44,8 @@ pub struct AppState {
     jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Sound caches whose extraction failed, not retried on every edit; a changed file gets a new one.
     audio_failed: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Files whose person could not be found, by path; not tried again until the app restarts.
+    matte_failed: Mutex<std::collections::HashSet<String>>,
     /// Preview proxies not to make: of video that decodes fast enough, that failed or that the user stopped.
     proxy_skipped: Mutex<std::collections::HashSet<PathBuf>>,
     /// Saving failed when the window was closed; the next close quits without retrying the warning.
@@ -856,6 +858,13 @@ async fn filmstrip(app: AppHandle, asset_id: String) -> CmdResult<Option<Filmstr
     .map_err(err)?
 }
 
+/// Files of the open project whose clips with a background still wait for the person to be found in them.
+#[tauri::command]
+fn mattes_missing(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let project = state.project()?;
+    Ok(nuzky_engine::matte::missing(&state.cache_dir, &project).into_iter().map(|(asset, _)| asset.path).collect())
+}
+
 #[tauri::command]
 fn cancel_job(state: State<'_, AppState>, id: String) {
     if let Some(flag) = state.jobs.lock().unwrap().get(&id) {
@@ -933,7 +942,7 @@ pub fn run() {
         .setup(|app| {
             // GTK has set the process's locale from the system, so on a Czech or German system C code reads numbers
             // with a decimal comma. ONNX Runtime read its operators' default values that way when the first model
-            // loaded, and the person model then saw nobody, so covers lost where the person is. Numbers stay C; the
+            // loaded, and the person model then saw nobody (clip backgrounds, cover framing). Numbers stay C; the
             // interface formats its own in the webview, and native file dialogs show sizes with a point.
             #[cfg(target_os = "linux")]
             // SAFETY: setlocale is not thread-safe. This runs before the app starts any thread of its own, so only
@@ -955,6 +964,7 @@ pub fn run() {
                 cache_dir,
                 jobs: Mutex::new(HashMap::new()),
                 audio_failed: Mutex::new(Default::default()),
+                matte_failed: Mutex::new(Default::default()),
                 proxy_skipped: Mutex::new(Default::default()),
                 close_failed: AtomicBool::new(false),
                 quit_confirmed: AtomicBool::new(false),
@@ -1033,6 +1043,7 @@ pub fn run() {
             jobs::speech_models,
             jobs::vision_models,
             jobs::start_vision_models,
+            mattes_missing,
             jobs::start_transcript,
             cover::cover_view,
             cover::cover_close,
@@ -1110,8 +1121,8 @@ pub fn run() {
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl AppState {
-    /// Running work that closing the window would cancel. Preparing audio or a preview proxy is
-    /// not asked about: it starts again with the project.
+    /// Running work that closing the window would cancel. Preparing audio, a preview proxy or a person
+    /// outline is not asked about: it starts again with the project.
     fn running_work(&self) -> Option<&'static str> {
         let mut kinds: Vec<String> =
             self.jobs.lock().unwrap().keys().map(|id| id.split(':').next().unwrap_or(id).to_owned()).collect();
@@ -1144,7 +1155,7 @@ impl AppState {
 fn quit_question(kinds: &[String]) -> Option<&'static str> {
     if kinds.iter().any(|kind| kind == "export" || kind == "cover-export") {
         Some("An export is still running. Quitting cancels it and removes the unfinished file.")
-    } else if kinds.iter().any(|kind| kind != "audio" && kind != "proxy") {
+    } else if kinds.iter().any(|kind| !matches!(kind.as_str(), "audio" | "proxy" | "matte")) {
         Some("Speech recognition or analysis is still running. Quitting cancels it.")
     } else {
         None

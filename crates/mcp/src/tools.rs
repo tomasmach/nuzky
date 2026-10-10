@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use nuzky_analysis::{SceneParams, SilenceParams};
 use nuzky_engine::{
-    Project, Renderer,
+    Pending, Project, Renderer,
     edit::{EditCmd, TimeRange, new_id},
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
@@ -322,7 +322,8 @@ impl Backend {
                 found.times
             }
         };
-        let bytes = media::contact_sheet(&project, &times, args.width, args.safe_area)?;
+        self.require_mattes(&project, state)?;
+        let bytes = media::contact_sheet(&project, &times, args.width, args.safe_area, &self.host.cache_dir)?;
         info["times_us"] = json!(times);
         Ok(CallToolResult::success(vec![
             ContentBlock::text(info.to_string()),
@@ -602,6 +603,8 @@ impl Backend {
         let models = nuzky_analysis::models_dir();
         nuzky_vision::models::require(nuzky_vision::models::FRAMES, &models)?;
         let format = format.unwrap_or(nuzky_vision::Format::of(&project.canvas));
+        // Which frame suits a cover does not depend on what is behind the person.
+        let project = nuzky_engine::matte::without_backgrounds(&project);
         self.host.start_job(
             &self.client.id,
             state.open_run.as_ref().map(|run| run.run_id.as_str()),
@@ -636,6 +639,9 @@ impl Backend {
             "segment",
             state.stamp.clone(),
             move |cancel, progress| {
+                nuzky_vision::matte::prepare(&project, &cache, &models, &cancel, &mut |p| {
+                    progress.set("finding_the_person", Some(p))
+                })?;
                 let mask = nuzky_vision::segment_subject(&project, t, &models, &cache, &cancel, &mut |phase| {
                     progress.set(
                         match phase {
@@ -974,6 +980,9 @@ impl Backend {
                 progress.set("waiting_for_export", None);
                 let _export = queue.lock().unwrap();
                 check_cancel(&cancel)?;
+                nuzky_vision::matte::prepare(&project, &cache, &nuzky_analysis::models_dir(), &cancel, &mut |p| {
+                    progress.set("finding_the_person", Some(p))
+                })?;
                 export(&project, &cache, &out, &options, &cancel, |p| {
                     let phase = match p.phase {
                         ExportPhase::Loudness => "measuring_loudness",
@@ -1007,7 +1016,9 @@ impl Backend {
         let width = args.width.unwrap_or(full / 2);
         ensure!((96..=full).contains(&width), "INVALID_ARGUMENTS: width must be 96..={full}");
         media::check_media(&project)?;
+        self.require_mattes(&project, state)?;
         let mut renderer = Renderer::new().context("Starting frame renderer")?;
+        renderer.use_mattes(self.host.cache_dir.clone(), Pending::Fail);
         let frame = renderer.thumbnail_frame(&project, thumbnail)?;
         let mask = match thumbnail.needs_mask() {
             false => None,
@@ -1065,8 +1076,12 @@ impl Backend {
             "export",
             state.stamp.clone(),
             move |cancel, progress| {
+                nuzky_vision::matte::prepare(&project, &cache, &models, &cancel, &mut |p| {
+                    progress.set("finding_the_person", Some(p))
+                })?;
                 progress.set("rendering", None);
                 let mut renderer = Renderer::new().context("Starting frame renderer")?;
+                renderer.use_mattes(cache.clone(), Pending::Fail);
                 let frame = renderer.thumbnail_frame(&project, &thumbnail)?;
                 let mask = match thumbnail.needs_mask() {
                     false => None,
@@ -1100,6 +1115,39 @@ impl Backend {
                 Ok(json!({"path": out, "format": args.format, "width": rendered.width, "height": rendered.height,
                     "bytes": bytes.len(), "texts": texts(&thumbnail, &rendered.hidden)}))
             },
+        )
+    }
+
+    /// Fails with `MATTE_NOT_READY` naming a job that finds the person in the frames the project's backgrounds
+    /// show, when some are not found yet; a running one is named again instead of starting the work twice.
+    fn require_mattes(&self, project: &Project, state: &SessionState) -> Result<()> {
+        let cache = self.host.cache_dir.clone();
+        if nuzky_engine::matte::missing(&cache, project).is_empty() {
+            return Ok(());
+        }
+        let models = nuzky_analysis::models_dir();
+        nuzky_vision::models::require(nuzky_vision::models::BACKGROUND, &models)?;
+        let job = match self.host.jobs.running_id("matte") {
+            Some(job) => job,
+            None => {
+                let project = project.clone();
+                let started = self.host.start_job(
+                    &self.client.id,
+                    state.open_run.as_ref().map(|run| run.run_id.as_str()),
+                    "matte",
+                    state.stamp.clone(),
+                    move |cancel, progress| {
+                        nuzky_vision::matte::prepare(&project, &cache, &models, &cancel, &mut |p| {
+                            progress.set("finding_the_person", Some(p))
+                        })?;
+                        Ok(json!({"prepared": true}))
+                    },
+                )?;
+                started["job_id"].as_str().unwrap_or_default().to_owned()
+            }
+        };
+        anyhow::bail!(
+            "MATTE_NOT_READY: finding the person behind whom the clips' backgrounds go, as job {job}; poll job until done, then try again"
         )
     }
 

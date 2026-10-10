@@ -7,7 +7,7 @@ import type { Asset } from "../../lib/types";
 import { lockedProps, useLockReason } from "../ui";
 
 export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
-const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 export const MEDIA_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts", ...AUDIO_EXTENSIONS, ...IMAGE_EXTENSIONS];
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -32,10 +32,10 @@ export function importFailures(failed: { path: string; error: string }[]) {
   return [lead, ...other].filter(Boolean).join(". ");
 }
 
-/** Imports files; optionally places them on the timeline one after another. */
-export async function importPaths(paths: string[], place?: { trackId: string | null; startUs: number | null }) {
+/** Imports files; optionally places them on the timeline one after another. Resolves to the ids of the new assets. */
+export async function importPaths(paths: string[], place?: { trackId: string | null; startUs: number | null }): Promise<string[]> {
   const { setSnap, toast, edit } = useEditor.getState();
-  if (paths.length === 0 || aiLocked()) return;
+  if (paths.length === 0 || aiLocked()) return [];
   const epoch = currentEpoch();
   // Placeholders show at once, while the files are probed.
   const kind = (p: string): Asset["kind"] => (AUDIO_EXTENSIONS.includes(extension(p)) ? "audio" : IMAGE_EXTENSIONS.includes(extension(p)) ? "image" : "video");
@@ -57,8 +57,10 @@ export async function importPaths(paths: string[], place?: { trackId: string | n
         if (added) startUs = added.clip.startUs + added.clip.durationUs;
       }
     }
+    return res.added;
   } catch (e) {
     toast({ kind: "error", text: errorText(e) });
+    return [];
   } finally {
     done();
   }

@@ -22,6 +22,8 @@ export const api = {
   listVersions: (limit: number) => invoke<ProjectVersion[]>("list_versions", { limit }),
   /** Restores a kept version as one undo step. */
   restoreVersion: (index: number, epoch: Epoch) => invoke<Snapshot>("restore_version", { index, expectedEpoch: epoch }),
+  /** Paths of files whose clips with a background still wait for the person to be found. */
+  mattesMissing: () => invoke<string[]>("mattes_missing"),
   importMedia: (paths: string[], epoch: Epoch) =>
     invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("import_media", { paths, expectedEpoch: epoch }),
   thumbnail: (assetId: string) => invoke<string | null>("thumbnail", { assetId }),
@@ -80,10 +82,11 @@ export const api = {
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   speechModels: () => invoke<SpeechModel[]>("speech_models"),
-  /** Whether the face and person models covers need can run here, are installed and what is left to download. */
-  visionModels: () => invoke<VisionModels>("vision_models"),
-  /** Downloads the missing cover models as a `vision-models` job; `repair` downloads damaged ones again too. */
-  startVisionModels: (repair = false) => invoke<string>("start_vision_models", { repair }),
+  /** Whether the face and person models covers need, or with "background" the person model of clip backgrounds,
+   * can run here, are installed and what is left to download. */
+  visionModels: (set?: "background") => invoke<VisionModels>("vision_models", { set }),
+  /** Downloads the missing cover models (or the "background" set) as a `vision-models` job; `repair` downloads damaged ones again too. */
+  startVisionModels: (repair = false, set?: "background") => invoke<string>("start_vision_models", { repair, set }),
   /** The cover of `format` `width` pixels wide, drawn as the export draws it, or `draft` in its place; `refreshMask` looks for a mask a job just made. */
   coverView: async (format: ThumbnailFormat, width: number, refreshMask: boolean, draft: Thumbnail | null) => {
     const buffer = await invoke<ArrayBuffer>("cover_view", { format, width: Math.round(width), refreshMask, draft });
@@ -174,8 +177,12 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   JOB_FAILED: "The task stopped unexpectedly. Try again.",
   MODEL_INVALID: "The model did not download completely. Try again to download it anew.",
   MEDIA_MISSING: (detail) => `${detail.split(/[\\/]/).pop()} is missing. Put the file back where it was, then try again.`,
-  VISION_UNAVAILABLE: "Covers can't find faces on this computer. You can still choose the frame and add text yourself.",
-  MODEL_MISSING: "The face and person models are not installed. Pick for me downloads them.",
+  VISION_UNAVAILABLE:
+    "Faces and people can't be found on this computer. Covers still let you choose the frame and add text, and a clip's background stays None.",
+  MODEL_MISSING: (detail) =>
+    detail.startsWith("person outline (selfie-segmenter.onnx) not installed")
+      ? "The background needs the person model. Download it in the clip's Background section."
+      : "The face and person models are not installed. Pick for me downloads them.",
   THUMBNAIL_MISSING: "This project has no cover in that format yet.",
   INVALID_RANGE: "The cover's frame is past the end of the video now. Choose its frame again.",
   STORE_UNREADABLE: "The saved transcripts could not be read. Transcribe the timeline again.",

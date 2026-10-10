@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use nuzky_engine::{Project, Renderer, Wait};
+use nuzky_engine::{Pending, Project, Renderer, Wait};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -25,6 +25,8 @@ pub enum Msg {
     Pause,
     /// Available preview box in device pixels.
     Resize(u32, u32),
+    /// Draws the frame again, as something it reads from the cache was made.
+    Redraw,
 }
 
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -77,6 +79,8 @@ impl Engine {
             let mut renderer = Renderer::new()?;
             log::info!("Preview renderer on {}", renderer.adapter_name());
             renderer.use_proxies(proxies.clone());
+            // Clips with a background show as recorded until their person outline is made.
+            renderer.use_mattes(proxies.clone(), Pending::Original);
             Ok(renderer)
         };
         Self::start_with(app, server, project, cache_dir, renderer)
@@ -228,6 +232,7 @@ fn run<F: Frames>(
                         st.box_size = (w.max(32), h.max(32));
                         st.dirty = true;
                     }
+                    Msg::Redraw => st.dirty = true,
                 }
             }
 

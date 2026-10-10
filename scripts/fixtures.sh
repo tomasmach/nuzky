@@ -219,16 +219,30 @@ media krysar-cs.wav krysar
 # crop below the black top rows, scaled to 1080x1920: at 8.992 s she looks into the camera, at 9.159 s both eyes
 # are shut mid-blink. Every -ss sits half a 59.94 fps frame before its frame. The outline of the person in
 # face-open.png, crates/vision/tests/data/face-open-person.json, was drawn by hand on this exact crop.
-epps() {
+epps_mp4() {
   local mp4=$out/.epps-2019-10-04.mp4 sha=0ceeb3bc5a834bbbc470b876ef959cf364da57d36a34b2b288704914202af105
   local id=iss061m2627771232_Live_Interviews_Jeanette_Epps_191004
   if ! { [ -f "$mp4" ] && sha256_is "$mp4" "$sha"; }; then
     fetch "$mp4" "$sha" --range 0-10485759 --max-filesize 10485760 "https://images-assets.nasa.gov/video/$id/$id~large.mp4"
   fi
-  ff -ss "$1" -i "$mp4" -frames:v 1 -vf "crop=396:704:447:8,scale=1080:1920:flags=lanczos,format=rgb24" "$2"
+  echo "$mp4"
+}
+epps() {
+  ff -ss "$1" -i "$(epps_mp4)" -frames:v 1 -vf "crop=396:704:447:8,scale=1080:1920:flags=lanczos,format=rgb24" "$2"
 }
 media face-open.png epps 8.984
 media face-blink.png epps 9.151
+# A phone talking head for clip backgrounds (tests/e2e/background.py): 8 s of the same interview in the same 9:16
+# crop at 30 fps, stored sideways in HEVC with a display rotation, as phones record portrait video.
+talking_head() {
+  local dir
+  dir=$(mktemp -d)
+  ff -ss 3 -t 8 -i "$(epps_mp4)" -an -vf "crop=396:704:447:8,scale=1080:1920:flags=lanczos,fps=30,transpose=2" \
+    -c:v libx265 -preset veryfast -x265-params log-level=error:crf=18 -tag:v hvc1 -pix_fmt yuv420p "$dir/sideways.mov"
+  ff -display_rotation:v:0 -90 -i "$dir/sideways.mov" -c copy "$1"
+  rm -rf "$dir"
+}
+media talking-head.mov talking_head
 # Twelve seconds at 30 fps in 3 s segments the tests rely on: [0,3) open eyes under a strong blur, [3,6) the
 # blink, [6,12) sharp open eyes (two segments of identical frames). A keyframe starts every segment.
 face_thumb() {

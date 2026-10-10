@@ -163,6 +163,7 @@ mod tests {
                 clean_voice: false,
                 shape: None,
                 duck_db: 0.0,
+                background: Default::default(),
             },
         )
     }
