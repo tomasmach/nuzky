@@ -33,6 +33,13 @@ sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib qe
 cargo install --locked cargo-deny@0.20.2
 ```
 
+On macOS the gate runs without the UI flows and the check without AVX2, which need Linux. Besides the build dependencies from [docs/BUILDING.md](docs/BUILDING.md) it needs:
+
+```sh
+brew install flock espeak-ng ffmpeg-full
+cargo install --locked cargo-deny@0.20.2
+```
+
 ## Check your change
 
 | What | Command |

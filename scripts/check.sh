@@ -2,14 +2,24 @@
 # Local gate before every merge to main and every release. GitHub runs the faster part of it on every pull
 # request (.github/workflows/checks.yml); the tests with media and models, the check without AVX2, the audits and
 # the UI flows run only here. A pull request that changes only the website in site/ and no dependencies skips it
-# (AGENTS.md).
+# (AGENTS.md). On macOS it runs everything except the UI flows and the check without AVX2, which need Linux.
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+os=$(uname -s)
+
+# On macOS the gate builds against Homebrew's FFmpeg as docs/BUILDING.md describes and runs the ffmpeg command of
+# ffmpeg-full, whose drawtext the engine tests draw frame numbers with.
+if [ "$os" = Darwin ]; then
+  export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$(brew --prefix ffmpeg@8)/lib/pkgconfig}"
+  export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+  PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+fi
 
 # One gate at a time per machine, whichever checkout it runs in: two at once take longer than one after the
 # other, fail on timing checks and collide on the UI flows' ports. A second gate waits here. The lock sits with
 # the build dependencies, not in XDG_RUNTIME_DIR, which a terminal running the app may have changed.
+command -v flock >/dev/null || { echo "check needs flock; on macOS: brew install flock" >&2; exit 1; }
 mkdir -p "$HOME/.cache/nuzky/deps"
 exec 9>"$HOME/.cache/nuzky/deps/check.lock"
 if ! flock -n 9; then
@@ -45,7 +55,19 @@ own_node_modules() {
 runtime=$(mktemp -d "${TMPDIR:-/tmp}/nuzky-check.XXXXXX")
 trap 'rm -rf "$runtime"' EXIT
 isolated() {
-  env XDG_DATA_HOME="$PWD/tmp-test/xdg/data" XDG_CACHE_HOME="$PWD/tmp-test/xdg/cache" XDG_RUNTIME_DIR="$runtime" "$@"
+  local data=$PWD/tmp-test/xdg/data cache=$PWD/tmp-test/xdg/cache
+  if [ "$os" = Darwin ]; then
+    # macOS ignores the XDG variables and keeps Nuzky's data and cache under ~/Library, so the tests get a home
+    # of their own whose Library folders lead to the same directories. Cargo, rustup and the build dependencies
+    # stay in the real home.
+    local home=$PWD/tmp-test/xdg/home
+    mkdir -p "$home/Library/Application Support" "$home/Library/Caches" "$data/nuzky" "$cache/nuzky"
+    ln -sfn "$data/nuzky" "$home/Library/Application Support/nuzky"
+    ln -sfn "$cache/nuzky" "$home/Library/Caches/nuzky"
+    set -- HOME="$home" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+      NUZKY_DEPS="${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}" "$@"
+  fi
+  env XDG_DATA_HOME="$data" XDG_CACHE_HOME="$cache" XDG_RUNTIME_DIR="$runtime" "$@"
 }
 
 # ONNX Runtime is opened at run time, never linked, so Nuzky starts on CPUs without AVX2. Both programs
@@ -100,10 +122,19 @@ step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
 step "ONNX Runtime" node scripts/fetch-onnxruntime.mjs
 step "Rust tests" isolated cargo test --workspace --locked
 step "Test media and models" scripts/fixtures.sh
-step "Starts and finds faces without AVX2" without_avx2
+if [ "$os" != Darwin ]; then
+  step "Starts and finds faces without AVX2" without_avx2
+fi
 step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
-step "Rust tests with media and models, and the UI flows" media_tests_and_flows
+if [ "$os" = Darwin ]; then
+  step "Rust tests with media and models" isolated cargo test --workspace --locked -- --ignored
+else
+  step "Rust tests with media and models, and the UI flows" media_tests_and_flows
+fi
 
 echo
 echo "check passed in $((SECONDS / 60))m $((SECONDS % 60))s"
+if [ "$os" = Darwin ]; then
+  echo "On macOS it left out the UI flows and the check without AVX2; they need Linux."
+fi
