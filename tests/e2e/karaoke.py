@@ -324,12 +324,13 @@ def caption_styles(r):
             [{k: c[k] for k in look} for c in again[:2]])
     r.check('regenerating marks the same words as key', any(map(any, keys)) and [[w.get('key', False) for w in c['words']] for c in again] == keys)
     # Correcting a key word keeps it key.
-    view = r.s.call('window.__nuzky.api.transcriptView(500000)')
+    view = json.loads(r.s.call('window.__nuzky.api.transcriptView(500000).then(JSON.stringify)')['value'])
     word = next((w for w in view['words'] for _, text in keyed[:1] if w['text'].strip() == text), None)
     if r.check('the transcript has the first key word', word, keyed):
         fixed = word['text'].strip().upper()
-        r.s.call('window.__nuzky.api.correctWords(arguments[0], arguments[1], arguments[2])', view['key'], [{'i': word['i'], 'text': fixed}],
-                 r.state()['epoch'])
+        done = r.s.call('window.__nuzky.api.correctWords(arguments[0], arguments[1], arguments[2])', view['key'],
+                        [{'i': word['i'], 'text': fixed}], r.state()['epoch'])
+        r.check('the correction is saved', done['ok'], done)
         time.sleep(1.5)
         saved = json.loads(r.saved_project().read_text())
         words = [w for t in saved['tracks'] if t['name'] == 'Captions' for c in t['clips'] for w in c['content'].get('words', [])]
