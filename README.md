@@ -31,7 +31,7 @@ Nuzky itself sends nothing you edit anywhere. It goes online only to download mo
 
 ## Build and run
 
-You need current stable Rust (at least 1.90), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. [docs/BUILDING.md](docs/BUILDING.md) lists the exact dependencies for each system, the installers and the runtime libraries.
+You need current stable Rust (at least 1.94), Node 22.12+, FFmpeg shared libraries with headers, clang (for bindgen) and cmake (for whisper.cpp). Linux also needs ALSA headers and WebKitGTK 4.1. [docs/BUILDING.md](docs/BUILDING.md) lists the exact dependencies for each system, the installers and the runtime libraries.
 
 On Fedora or Nobara:
 
