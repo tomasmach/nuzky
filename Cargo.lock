@@ -3444,6 +3444,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "block2",
  "cpal",
  "dirs 6.0.0",
  "env_logger",
@@ -3454,6 +3455,10 @@ dependencies = [
  "nuzky-mcp",
  "nuzky-session",
  "nuzky-vision",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "png 0.18.1",
  "rtrb",
  "semver",

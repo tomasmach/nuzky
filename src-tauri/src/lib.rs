@@ -6,6 +6,8 @@ mod jobs;
 mod library;
 mod preview_server;
 mod store;
+#[cfg(all(target_os = "macos", debug_assertions))]
+pub mod test_bridge;
 mod thumbs;
 mod transcripts;
 #[cfg(test)]
@@ -887,7 +889,10 @@ pub fn run() {
         env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
     )
     .init();
-    tauri::Builder::default()
+    let (builder, context) = (tauri::Builder::default(), tauri::generate_context!());
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    let (builder, context) = test_bridge::prepare(builder, context);
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -921,6 +926,8 @@ pub fn run() {
             app.state::<AppState>().session.lock().unwrap().start_pump(app.handle().clone(), events);
             jobs::ensure_audio(&app.state::<AppState>(), &project);
             app.emit("ready", ()).ok();
+            #[cfg(all(target_os = "macos", debug_assertions))]
+            test_bridge::start(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -981,7 +988,7 @@ pub fn run() {
             updates::check_for_update,
             updates::open_release_page,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Nuzky")
         .run(|app, event| match event {
             tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
@@ -1010,6 +1017,12 @@ pub fn run() {
                     for message in failed {
                         app.emit("trash-failed", message).ok();
                     }
+                }
+            }
+            #[cfg(all(target_os = "macos", debug_assertions))]
+            tauri::RunEvent::Ready => {
+                if let Err(error) = test_bridge::ready(app) {
+                    log::error!("UI flow bridge: {error:#}");
                 }
             }
             tauri::RunEvent::Exit => {

@@ -6,6 +6,8 @@ fn main() {
     if std::env::var_os("GGML_VK_DISABLE_F16").is_none() {
         unsafe { std::env::set_var("GGML_VK_DISABLE_F16", "1") };
     }
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    nuzky_app::test_bridge::take_token();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "mcp") {
         let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("nuzky");

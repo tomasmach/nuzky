@@ -457,14 +457,14 @@ impl Library {
     fn move_to_trash(&self, path: &Path) -> Result<()> {
         // Nobody may be editing it: another window or an agent could have opened it meanwhile.
         let lock = nuzky_session::lock_project(path, true)?;
-        trash::delete(path).context("Moving the project to the Trash")?;
+        to_trash(path).context("Moving the project to the Trash")?;
         let checkpoint = sidecar(path, ".checkpoint.json");
         if checkpoint.exists() {
-            trash::delete(&checkpoint).context("Moving the unfinished AI edit to the Trash")?;
+            to_trash(&checkpoint).context("Moving the unfinished AI edit to the Trash")?;
         }
         let versions = sidecar(path, nuzky_session::HISTORY_SUFFIX);
         if versions.exists() {
-            trash::delete(&versions).context("Moving the project's versions to the Trash")?;
+            to_trash(&versions).context("Moving the project's versions to the Trash")?;
         }
         drop(lock);
         let _ = std::fs::remove_file(sidecar(path, ".lock"));
@@ -874,6 +874,16 @@ pub fn restore_collection(state: State<'_, AppState>, deleted: DeletedCollection
 #[tauri::command]
 pub fn set_collection(state: State<'_, AppState>, paths: Vec<String>, collection: Option<String>) -> CmdResult<()> {
     state.library.set_collection(&paths, collection.as_deref()).map_err(err)
+}
+
+/// The system Trash. The UI flows on macOS use the Trash of their own home, since Finder would put their projects
+/// in the person's own Trash.
+fn to_trash(path: &Path) -> Result<()> {
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    if let Some(moved) = crate::test_bridge::trash(path) {
+        return moved;
+    }
+    Ok(trash::delete(path)?)
 }
 
 #[cfg(test)]
