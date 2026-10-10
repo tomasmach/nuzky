@@ -1,4 +1,4 @@
-"""Your style: Learn from videos compares a recording with the creator's cut and suggests rules; Accept all writes the
+"""Your style: Learn my style compares a recording with the creator's cut and suggests rules; Accept all writes the
 same EDIT.md as `nuzky style learn` and the agent reads exactly it; the creator's own rules, a removed and a rejected
 rule, an edit by hand, Back to default and Versions all change what the agent reads, and nothing else does."""
 import json, subprocess, time
@@ -132,7 +132,7 @@ def rule_menu(r, title, item):
     return r.s.run(CLICK_TEXT, item, '[role=menu]')
 
 
-@flow('style', 'Your style: Learn from videos suggests rules from a recording and its cut, Accept all writes what `nuzky style learn` '
+@flow('style', 'Your style: Learn my style suggests rules from a recording and its cut, Accept all writes what `nuzky style learn` '
                'writes and the agent reads it; own rules, Remove, Reject, editing as text, Back to default and Versions change '
                'what the agent reads', before=setup, home=True)
 def style(r):
@@ -142,8 +142,8 @@ def style(r):
     r.check('without a style the page says how Nuzky learns', wait(lambda: r.s.run(f"return document.querySelector('{PAGE}').textContent.includes('Nuzky learns how you edit')"), 10))
     r.shot('empty')
 
-    click(r, 'Learn from videos')
-    r.check('Learn from videos opens its dialog', wait(lambda: r.s.run(f"return !!document.querySelector('{DIALOG}')"), 5))
+    click(r, 'Learn my style')
+    r.check('Learn my style opens its dialog on Videos', wait(lambda: r.s.run(f"return !!document.querySelector('{DIALOG}')"), 5))
     r.s.run("window.__nuzky.style.setState({draft: arguments[0]})",
             [{'recording': str(recording), 'cut': str(cut)}, {'recording': str(recording), 'cut': str(OTHER)}])
     r.shot('learn-ready')

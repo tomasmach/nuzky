@@ -628,6 +628,19 @@ export type Limits = {
 
 export type MotionKind = "pushIn" | "pullOut" | "kenBurns";
 
+export type PlannedRecording = {
+  path: string,
+  name: string,
+  /**
+   * How many of its clips are heard.
+   */
+  clips: number,
+  /**
+   * Why it cannot be learned from, such as "not on this computer".
+   */
+  missing: string | null,
+};
+
 export type PreviewStarted = {
   durationUs: number,
 };
@@ -938,7 +951,27 @@ export type StyleSource = {
   matched: number | null,
 };
 
-export type StyleSourceKind = "pair" | "project";
+export type StyleSourceKind = "pair" | "project" | "timeline";
+
+/**
+ * How one timeline of a style learning job ended, sent as `style-timeline`.
+ */
+export type StyleTimelineResult = {
+  jobId: string,
+  index: number,
+  /**
+   * The recordings learned from.
+   */
+  learned: Array<string>,
+  /**
+   * Recordings not learned from, each with why.
+   */
+  skipped: Array<[string, string]>,
+  /**
+   * Why nothing was read from the file.
+   */
+  error: string | null,
+};
 
 export type StyleVersion = {
   index: number,
@@ -1123,6 +1156,32 @@ export type ThumbnailText = {
 export type TimeRange = {
   startUs: number,
   endUs: number,
+};
+
+/**
+ * What an imported timeline offers to learn from, read at once: the recordings it hears and what
+ * is missing or not read. Recognising their speech is left to learning.
+ */
+export type TimelinePlan = {
+  path: string,
+  /**
+   * The timeline's name, or its file's.
+   */
+  name: string,
+  durationUs: number,
+  recordings: Array<PlannedRecording>,
+  /**
+   * Captions and titles on it.
+   */
+  texts: number,
+  /**
+   * What the file holds that is not read, in plain words.
+   */
+  unread: Array<string>,
+  /**
+   * Why nothing can be read from it.
+   */
+  error: string | null,
 };
 
 export type Track = {

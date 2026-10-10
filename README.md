@@ -25,7 +25,7 @@ Cut a talking video by deleting words from its transcript, caption it with speec
 - Style text with an outline, a background box, size, colour, position, rotation and opacity.
 - Export MP4 (H.264 and AAC) from the same renderer as the preview, so the file matches what you saw. The Reels & TikTok preset writes 1080×1920 at 30 fps with the sound levelled to −14 LUFS and true peak at most −1 dBTP.
 - Let any MCP-capable AI agent edit the open project while you watch; each run undoes as one step. Connect agent sets up Claude Code and Codex in one click, and the AI panel chats with your own Claude Code.
-- Teach Nuzky a creator's style from raw recordings and their finished cuts, on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
+- Teach Nuzky a creator's style from raw recordings and their finished cuts, or from timelines they cut in another editor and exported as OpenTimelineIO (.otio), on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
 
 Nuzky itself sends nothing you edit anywhere. It goes online only to download models with a pinned checksum and, at most once a day, to read the latest version number from GitHub; you can turn that check off on the home screen. An AI agent you connect runs under your own account and sends what it reads to its provider.
 
@@ -57,12 +57,13 @@ cargo run -p nuzky-cli -- frame project.nuzky 2.5 frame.png 540
 cargo run -p nuzky-cli -- render project.nuzky out.mp4
 cargo run -p nuzky-cli -- render project.nuzky reel.mp4 --preset reels
 cargo run -p nuzky-cli -- style learn raw.mov reel.mp4 raw2.mov reel2.mp4
+cargo run -p nuzky-cli -- style learn --from reel.otio --from reel2.otio
 cargo run -p nuzky-cli -- style compare raw.mov reel.mp4 project.nuzky
 ```
 
 Projects are JSON files, so the same project renders identically in the app and on a server.
 
-`style learn` writes the creator's `EDIT.md` into Nuzky's data folder (`--out` elsewhere, `--replace` to overwrite an existing one) from pairs of a raw recording and the finished cut made from it. `style compare` prints how much of the creator's cut a project keeps, word by word (recall and precision). Both recognise speech locally and nothing leaves the computer.
+`style learn` writes the creator's `EDIT.md` into Nuzky's data folder (`--out` elsewhere, `--replace` to overwrite an existing one) from pairs of a raw recording and the finished cut made from it, or with `--from` from OpenTimelineIO timelines cut in another editor, whose recordings must be on this computer. `style compare` prints how much of the creator's cut a project keeps, word by word (recall and precision). Both recognise speech locally and nothing leaves the computer.
 
 ## How it works
 

@@ -146,6 +146,8 @@ fn generate() -> String {
     types.visit::<nuzky_mcp::sounds::Page>();
     types.visit::<crate::sounds::PreviewStarted>();
     types.visit::<crate::sounds::SoundSettings>();
+    types.visit::<crate::jobs::StyleTimelineResult>();
+    types.visit::<nuzky_mcp::style::TimelinePlan>();
     let mut out = HEADER.to_string();
     for declaration in types.by_name.values() {
         out.push('\n');

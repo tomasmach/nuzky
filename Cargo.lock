@@ -3431,6 +3431,7 @@ dependencies = [
  "dirs 6.0.0",
  "libm",
  "nuzky-engine",
+ "nuzky-interchange",
  "rayon",
  "serde",
  "serde_json",
@@ -3517,6 +3518,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuzky-interchange"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nuzky-mcp"
 version = "0.1.0"
 dependencies = [
@@ -3527,6 +3538,7 @@ dependencies = [
  "log",
  "nuzky-analysis",
  "nuzky-engine",
+ "nuzky-interchange",
  "nuzky-session",
  "nuzky-vision",
  "png 0.18.1",

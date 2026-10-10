@@ -13,7 +13,6 @@ use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail, ensure};
-use nuzky_analysis::Range;
 use nuzky_analysis::Word;
 use nuzky_analysis::style::doc::{self, Doc, OVERVIEW, RARE};
 use nuzky_analysis::style::{
@@ -82,6 +81,8 @@ pub enum EvidenceKind {
     Pair,
     /// A project the creator exported or cut after the AI.
     Project,
+    /// A recording in a timeline the creator cut in another editor.
+    Timeline,
 }
 
 /// Everything learning needs from one video, so the style can be learned again at any time.
@@ -387,18 +388,27 @@ impl Store {
         Ok(())
     }
 
-    /// Writes the style `nuzky style learn` learned, keeping the creator's own rules, as a version.
-    pub fn replace(&self, learned: &Learned) -> Result<()> {
+    /// Writes a style learned from given videos or timelines over the current one as a version,
+    /// keeping the creator's own rules. With `seen`, only over that version: the one the creator saw
+    /// when they agreed to replace it.
+    pub fn replace(&self, learned: &Learned, label: &str, seen: Option<u64>) -> Result<StyleView> {
         let _lock = self.lock()?;
         let versions = self.synced()?;
         let current = versions.last().cloned().unwrap_or_default();
-        let mut doc = Doc::parse(&learned.document());
-        let old = Doc::parse(current.text.as_deref().unwrap_or(""));
-        if let Some(own) = old.get(doc::OWN) {
-            doc.set(doc::OWN, own.to_owned());
-        }
+        ensure!(
+            seen.is_none_or(|v| v == current.index),
+            "STYLE_CHANGED: your style changed meanwhile; look at it again before replacing it"
+        );
         let accepted = learned.rules.iter().map(|r| (r.title.to_owned(), accept(r))).collect();
-        self.commit(&versions, "Learned with nuzky style learn", Some(doc.text()), accepted, BTreeMap::new())
+        self.commit(&versions, label, Some(replacing(&current, learned)), accepted, BTreeMap::new())?;
+        self.show(&self.read_versions()?)
+    }
+
+    /// EDIT.md as `replace` would write it now, and the version it would replace.
+    pub fn replacing(&self, learned: &Learned) -> Result<(String, u64)> {
+        let _lock = self.lock()?;
+        let current = self.synced()?.last().cloned().unwrap_or_default();
+        Ok((replacing(&current, learned), current.index))
     }
 
     pub fn act(&self, action: StyleAction) -> Result<StyleView> {
@@ -811,6 +821,16 @@ fn accept(rule: &Rule) -> Accepted {
     Accepted { summary: rule.summary.clone(), choices: rule.choices.clone() }
 }
 
+/// A learned style with the creator's own rules from `current`.
+fn replacing(current: &Version, learned: &Learned) -> String {
+    let mut doc = Doc::parse(&learned.document());
+    let old = Doc::parse(current.text.as_deref().unwrap_or(""));
+    if let Some(own) = old.get(doc::OWN) {
+        doc.set(doc::OWN, own.to_owned());
+    }
+    doc.text()
+}
+
 fn learned_from(evidence: &[Evidence]) -> Option<Learned> {
     let sources: Vec<Source> = evidence.iter().map(Evidence::source).collect();
     (!sources.is_empty()).then(|| learning::learned(&sources))
@@ -1003,8 +1023,6 @@ pub fn compare(
     })
 }
 
-/// Pauses shorter than this are gaps inside speech, as when sound is compared.
-const MIN_PAUSE_US: i64 = 80_000;
 /// Framing is read this often within a clip, and this far from its ends, as in a finished video.
 const SAMPLE_US: i64 = 500_000;
 const EDGE_US: i64 = 200_000;
@@ -1077,16 +1095,9 @@ pub fn project_evidence(project: &Project, path: &Path, transcripts: &Transcript
         .iter()
         .map(|w| Word { start_us: w.start_us, end_us: w.end_us, text: w.text.clone(), probability: w.probability })
         .collect();
-    let gaps = |words: &[Word]| -> Vec<Range> {
-        words
-            .windows(2)
-            .filter(|p| p[1].start_us - p[0].end_us >= MIN_PAUSE_US)
-            .map(|p| Range { start_us: p[0].end_us, end_us: p[1].start_us })
-            .collect()
-    };
     let alignment = Alignment {
-        recording_pauses: gaps(&words),
-        cut_pauses: gaps(&cut_words),
+        recording_pauses: learning::pauses_between(&words),
+        cut_pauses: learning::pauses_between(&cut_words),
         matched: 1.0,
         cut_duration_us: project.duration_us(),
         pieces,
@@ -1219,6 +1230,178 @@ impl Moment {
         }
         Ok(Some(evidence))
     }
+}
+
+/// What an imported timeline offers to learn from, read at once: the recordings it hears and what
+/// is missing or not read. Recognising their speech is left to learning.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct TimelinePlan {
+    pub path: String,
+    /// The timeline's name, or its file's.
+    pub name: String,
+    pub duration_us: i64,
+    pub recordings: Vec<PlannedRecording>,
+    /// Captions and titles on it.
+    pub texts: usize,
+    /// What the file holds that is not read, in plain words.
+    pub unread: Vec<String>,
+    /// Why nothing can be read from it.
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedRecording {
+    pub path: String,
+    pub name: String,
+    /// How many of its clips are heard.
+    pub clips: usize,
+    /// Why it cannot be learned from, such as "not on this computer".
+    pub missing: Option<String>,
+}
+
+/// An imported timeline with its media made canonical, so one file is one recording however its
+/// clips name it.
+fn read_timeline(path: &Path) -> Result<(nuzky_interchange::Read, String)> {
+    let mut read = nuzky_interchange::read(path)?;
+    for clip in read.timeline.tracks.iter_mut().flat_map(|t| &mut t.clips) {
+        if let Some(canonical) = clip.path.as_ref().and_then(|p| fs::canonicalize(p).ok()) {
+            clip.path = Some(canonical);
+        }
+    }
+    let name = match read.timeline.name.trim() {
+        "" => path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+        name => name.to_owned(),
+    };
+    Ok((read, name))
+}
+
+/// Why a recording a timeline names cannot be read.
+const NOT_HERE: &str = "not on this computer";
+
+fn file_name(path: &Path) -> String {
+    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
+}
+
+pub fn plan(path: &Path) -> TimelinePlan {
+    let mut plan = TimelinePlan {
+        path: path.display().to_string(),
+        name: path.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+        duration_us: 0,
+        recordings: Vec::new(),
+        texts: 0,
+        unread: Vec::new(),
+        error: None,
+    };
+    let (read, name) = match read_timeline(path) {
+        Ok(read) => read,
+        Err(error) => {
+            plan.error = Some(error.to_string());
+            return plan;
+        }
+    };
+    let timeline = &read.timeline;
+    plan.name = name;
+    plan.duration_us = timeline.duration_us();
+    plan.texts = timeline.tracks.iter().map(|t| t.texts.len()).sum();
+    plan.recordings = learning::heard_media(timeline)
+        .into_iter()
+        .map(|media| PlannedRecording {
+            path: media.display().to_string(),
+            name: file_name(media),
+            clips: learning::speech_clips(timeline, media).len(),
+            missing: if !media.is_file() {
+                Some(NOT_HERE.into())
+            } else {
+                match nuzky_engine::media::probe(media, String::new()) {
+                    Err(_) => Some("not a video Nuzky can read".into()),
+                    Ok(a) if a.kind != AssetKind::Video => Some("a sound file; style learns from videos".into()),
+                    Ok(a) if !nuzky_engine::audio::has_audio(&a) => Some("a video without sound".into()),
+                    Ok(_) => None,
+                }
+            },
+        })
+        .collect();
+    if plan.recordings.is_empty() {
+        plan.error = Some("It plays no media files on this computer".into());
+    }
+    plan.unread = read.unread;
+    plan
+}
+
+/// What an imported timeline teaches, recording by recording, in the order they are heard: the
+/// evidence, or why there is none. `video` reads a recording with its words, the slow part.
+pub fn timeline_lessons(
+    path: &Path,
+    transcripts: &TranscriptStore,
+    cancelled: &dyn Fn() -> bool,
+    mut video: impl FnMut(&Path) -> Result<Video>,
+) -> Result<Vec<(String, Result<Evidence, String>)>> {
+    let (read, name) = read_timeline(path)?;
+    let timeline = &read.timeline;
+    let media = learning::heard_media(timeline);
+    let mut videos = Vec::new();
+    for &m in &media {
+        ensure!(!cancelled(), "CANCELLED: learning was stopped");
+        // Anything but a regular file, such as a pipe a shared timeline names, would never end reading.
+        videos.push(if m.is_file() { video(m).map_err(|e| format!("{e:#}")) } else { Err(NOT_HERE.into()) });
+    }
+    ensure!(!cancelled(), "CANCELLED: learning was stopped");
+    let recordings: Vec<learning::Recording> = media
+        .iter()
+        .zip(&videos)
+        .filter_map(|(m, v)| {
+            let v = v.as_ref().ok()?;
+            Some(learning::Recording {
+                path: m,
+                name: v.asset.name.clone(),
+                language: v.record.language.clone(),
+                duration_us: v.asset.duration_us,
+                words: &v.record.words,
+            })
+        })
+        .collect();
+    let mut taught = learning::lessons(timeline, &name, &recordings).into_iter();
+    let key = format!("timeline:{}", fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()).display());
+    let mut out = Vec::new();
+    for (m, v) in media.iter().zip(videos) {
+        let video = match v {
+            Ok(video) => video,
+            Err(why) => {
+                out.push((file_name(m), Err(why)));
+                continue;
+            }
+        };
+        let lesson = taught.next().expect("a lesson for every recording read");
+        out.push((
+            video.asset.name.clone(),
+            match lesson {
+                Ok(l) => Ok(Evidence {
+                    seq: 0,
+                    key: format!("{key}:{}", transcripts.fingerprint(&video.asset)?),
+                    kind: EvidenceKind::Timeline,
+                    title: format!("{} in {name}", video.asset.name),
+                    at_ms: now_ms(),
+                    matched: None,
+                    recording: l.recording,
+                    cut: l.cut,
+                    language: l.language,
+                    recording_us: l.recording_us,
+                    words: l.words,
+                    cut_words: l.cut_words,
+                    alignment: l.alignment,
+                    picture: l.picture,
+                    places: Some(l.places),
+                    corrections: Vec::new(),
+                }),
+                Err(why) => Err(why.to_owned()),
+            },
+        ));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1411,11 +1594,18 @@ mod tests {
         assert!(view.suggestions.is_empty(), "{:?}", titles(&view));
         assert_eq!(file(&dir).unwrap(), edited);
 
-        // nuzky style learn replaces the learned rules and keeps the creator's own.
-        store.replace(&learning::learned(&[evidence("talk", 120_000).source()])).unwrap();
+        // Learning from given files replaces the learned rules and keeps the creator's own, over the
+        // version the creator saw only.
+        let learned = learning::learned(&[evidence("talk", 120_000).source()]);
+        let (preview, shown) = store.replacing(&learned).unwrap();
+        assert_eq!(shown, view.version);
+        let stale = store.replace(&learned, "Learned from 1 project", Some(view.version - 1));
+        assert!(stale.unwrap_err().to_string().starts_with("STYLE_CHANGED"));
+        assert_eq!(file(&dir).unwrap(), edited);
+        let view = store.replace(&learned, "Learned with nuzky style learn", Some(view.version)).unwrap();
         let text = file(&dir).unwrap();
+        assert_eq!(text, preview, "what was shown is what is written");
         assert!(text.contains("- Never cut the product name.") && text.contains("| 120000 |"), "{text}");
-        let view = store.view().unwrap();
         assert_eq!(view.versions[0].label, "Learned with nuzky style learn");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1595,7 +1785,7 @@ mod tests {
         assert_eq!(kept(&taught), [true, false, true, false, true, false]);
         assert_eq!(taught.alignment.pieces.len(), 4, "three cuts and the silence after the last");
         assert_eq!(taught.kind, EvidenceKind::Project);
-        assert!(taught.alignment.cut_pauses.iter().all(|p| p.end_us - p.start_us >= MIN_PAUSE_US));
+        assert!(taught.alignment.cut_pauses.iter().all(|p| p.end_us - p.start_us >= 80_000));
         host.session.undo().unwrap();
         assert!(learn(true).is_none(), "undoing the edit is the AI's cut again");
         host.session.undo_run(&run).unwrap();
