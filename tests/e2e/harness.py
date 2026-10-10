@@ -3,8 +3,12 @@
 A flow is a function decorated with @flow in its own file under tests/e2e/. It gets a Run, drives the real
 app through the dev-only `window.__nuzky` hook and the keyboard, and records what the user would see
 with r.check(...). Run flows with scripts/repro.py.
+
+On Linux WebKitWebDriver drives the app. macOS has no WebDriver for an app's webview, so there the debug app
+answers the same requests itself, over a private socket, when the harness starts it with a secret
+(src-tauri/src/test_bridge.rs).
 """
-import base64, datetime, json, os, queue, shutil, signal, socket, subprocess, tempfile, threading, time
+import base64, datetime, json, os, queue, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time
 import traceback, urllib.error, urllib.request
 from pathlib import Path
 
@@ -17,6 +21,8 @@ APP, CLI, ANALYZE = TARGET / 'debug/nuzky-app', TARGET / 'debug/nuzky', TARGET /
 WEBKIT_DRIVER = shutil.which('WebKitWebDriver') or '/usr/bin/WebKitWebDriver'
 AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
+MACOS = sys.platform == 'darwin'
+RUN = None  # The flow in progress; on macOS its app, socket and secret.
 
 
 def flow(name, description, before=None, home=False):
@@ -32,6 +38,8 @@ def flow(name, description, before=None, home=False):
 
 def webdriver(method, path, body=None, retries=0):
     """Retries only queries, which are safe to send twice when a connection drops."""
+    if MACOS:
+        return _bridge(method, path, body, retries)
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request('http://127.0.0.1:4444' + path, data=data, method=method,
                                      headers={'Content-Type': 'application/json'})
@@ -47,12 +55,40 @@ def webdriver(method, path, body=None, retries=0):
             time.sleep(0.3)
 
 
+def _bridge(method, path, body, retries):
+    """The same requests to the app's own socket on macOS, one JSON line each way."""
+    request = (json.dumps({'token': RUN.token, 'method': method, 'path': path, 'body': body}) + '\n').encode()
+    for attempt in range(retries + 1):
+        try:
+            with socket.socket(socket.AF_UNIX) as connection:
+                connection.settimeout(130)
+                connection.connect(str(RUN.socket))
+                connection.sendall(request)
+                reply = json.loads(connection.makefile().readline() or '{"error": "the app closed the connection"}')
+            break
+        except (ConnectionResetError, ConnectionRefusedError, FileNotFoundError):
+            if attempt == retries:
+                raise
+            time.sleep(0.3)
+    if 'error' in reply:
+        raise RuntimeError(f'WebDriver: {reply["error"][:500]}')
+    return reply['value']
+
+
 class Session:
     def __init__(self):
-        # What tauri-driver sends on Linux. Talking to WebKitWebDriver directly avoids tauri-driver's connection
-        # pool, whose stale connections now and then dropped a request mid-flow.
-        caps = {'capabilities': {'alwaysMatch': {'browserName': 'wry',
-                                                 'webkitgtk:browserOptions': {'binary': str(APP), 'args': []}}}}
+        if MACOS:
+            # The app itself, started for each session as WebKitWebDriver starts it on Linux.
+            RUN.socket.unlink(missing_ok=True)
+            RUN.app = start([str(APP)], RUN.work / 'app.log', dict(RUN.env, NUZKY_TEST_BRIDGE=RUN.token))
+            if not wait(lambda: RUN.app.poll() is not None or RUN.socket.exists(), 60) or RUN.app.poll() is not None:
+                raise RuntimeError('the app did not start, see app.log')
+            caps = {}
+        else:
+            # What tauri-driver sends on Linux. Talking to WebKitWebDriver directly avoids tauri-driver's connection
+            # pool, whose stale connections now and then dropped a request mid-flow.
+            caps = {'capabilities': {'alwaysMatch': {'browserName': 'wry',
+                                                     'webkitgtk:browserOptions': {'binary': str(APP), 'args': []}}}}
         self.path = '/session/' + webdriver('POST', '/session', caps)['sessionId']
 
     def run(self, script, *args, retries=0):
@@ -74,6 +110,8 @@ class Session:
             webdriver('DELETE', self.path)
         except Exception:
             pass
+        if MACOS:
+            stop(RUN.app)
 
 
 def wait(fn, timeout=30, step=0.2):
@@ -112,7 +150,17 @@ class Run:
                         # Flows never ask GitHub for a new version; tests/e2e/updates.py serves its own.
                         NUZKY_NO_UPDATE_CHECK='1',
                         PYTHONDONTWRITEBYTECODE='1')
-        self.checks, self.shots, self.s = [], [], None
+        self.checks, self.shots, self.s, self.app = [], [], None, None
+        if MACOS:
+            # macOS keeps Nuzky's data and cache under ~/Library and WebKit's storage under the home folder, whatever
+            # XDG_* say, so the app gets a home of its own whose Library folders are this run's.
+            home = self.work / 'home'
+            for folder in (home / 'Library/Application Support', home / 'Library/Caches', self.work / 'cache/nuzky'):
+                folder.mkdir(parents=True)
+            os.symlink(self.work / 'data/nuzky', home / 'Library/Application Support/nuzky')
+            os.symlink(self.work / 'cache/nuzky', home / 'Library/Caches/nuzky')
+            self.env.update(HOME=str(home), CFFIXED_USER_HOME=str(home))
+            self.socket, self.token = Path(runtime) / 'nuzky/webdriver.sock', secrets.token_hex(32)
 
     def check(self, name, ok, detail=None):
         self.checks.append({'check': name, 'ok': bool(ok), 'detail': detail})
@@ -172,6 +220,9 @@ def stop(process, timeout=5):
         process.wait(timeout)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        # macOS refuses to signal a group whose leader has ended unwaited, such as the app after its window closed.
+        process.wait(timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
 
@@ -194,20 +245,23 @@ def port_busy(port):
 def run_flow(name):
     description, before, body = FLOWS[name]
     print(f'\n==> {name}: {description}', flush=True)
-    runtime = tempfile.mkdtemp(prefix='nuzky-repro-')  # Unix socket paths must stay short.
-    r = Run(name, runtime)
+    # Unix socket paths must stay short, and macOS's TMPDIR is long.
+    runtime = tempfile.mkdtemp(prefix='nuzky-repro-', dir='/tmp' if MACOS else None)
+    global RUN
+    r = RUN = Run(name, runtime)
     error = driver = None
     try:
         if before:
             before(r)
-        # A WebDriver that is not ours would launch the app outside this run's directories.
-        if not wait(lambda: not port_busy(4444), 10):
-            raise RuntimeError('port 4444 is in use by another session')
-        # Tauri 2 lets WebDriver drive its webview only with this set, as tauri-driver does.
-        driver = start([WEBKIT_DRIVER, '--port=4444', '--host=127.0.0.1'], r.work / 'driver.log',
-                       dict(r.env, TAURI_WEBVIEW_AUTOMATION='true'))
-        if not started(driver, 4444, 20):
-            raise RuntimeError('WebKitWebDriver did not start, see driver.log')
+        if not MACOS:
+            # A WebDriver that is not ours would launch the app outside this run's directories.
+            if not wait(lambda: not port_busy(4444), 10):
+                raise RuntimeError('port 4444 is in use by another session')
+            # Tauri 2 lets WebDriver drive its webview only with this set, as tauri-driver does.
+            driver = start([WEBKIT_DRIVER, '--port=4444', '--host=127.0.0.1'], r.work / 'driver.log',
+                           dict(r.env, TAURI_WEBVIEW_AUTOMATION='true'))
+            if not started(driver, 4444, 20):
+                raise RuntimeError('WebKitWebDriver did not start, see driver.log')
         r.s = Session()
         if not wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60):
             raise RuntimeError('the app did not load a project')
@@ -223,6 +277,8 @@ def run_flow(name):
             r.s.close()
         if driver:
             stop(driver)
+        if r.app:
+            stop(r.app)
         shutil.rmtree(runtime, ignore_errors=True)
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(['git', 'status', '--porcelain'], cwd=ROOT, capture_output=True, text=True).stdout)
@@ -315,8 +371,36 @@ def _windows(d):
     return found
 
 
+def press(key):
+    """A real key press into the app window, an X11 key name or a character: a focused button acts on Enter and
+    focus moves on Tab as they do for a person, which key events made by the page do not do. Through XTest under
+    gamescope, through the window itself on macOS; WebKitWebDriver has no key input."""
+    if MACOS:
+        webdriver('POST', '/session/nuzky/nuzky/keys', {'keys': [key]})
+        return
+    from Xlib import X, XK, display
+    from Xlib.ext import xtest
+    d = display.Display()
+    for window, name in _windows(d):
+        if name == 'Nuzky':
+            window.set_input_focus(X.RevertToParent, X.CurrentTime)
+    code = d.keysym_to_keycode(XK.string_to_keysym(key))
+    for kind in (X.KeyPress, X.KeyRelease):
+        xtest.fake_input(d, kind, code)
+    d.sync()
+    d.close()
+
+
+def pointer(kind, x, y, clicks=1):
+    """macOS: the left mouse button `down` or `up` at a point of the page."""
+    webdriver('POST', '/session/nuzky/nuzky/pointer', {'kind': kind, 'x': x, 'y': y, 'clicks': clicks})
+
+
 def close_window(d=None):
     """Closes the app window like the title-bar button."""
+    if MACOS:
+        webdriver('DELETE', '/session/nuzky/window')
+        return None
     from Xlib import X, display
     from Xlib.protocol import event
     d = d or display.Display()
@@ -330,6 +414,20 @@ def close_window(d=None):
 
 def close_window_and_confirm(r):
     """Closes the app window like the title-bar button and confirms the native quit question with Enter."""
+    if MACOS:
+        close_window()
+
+        def question():
+            try:
+                return any('Quit Nuzky' in text for text in webdriver('GET', r.s.path + '/alert/text'))
+            except RuntimeError:
+                return False
+        # AppKit draws the dialog's glass only on screen, so the proof here is its text, not a picture.
+        if not wait(question, 5, 0.1):
+            return False
+        (r.work / 'quit-question.txt').write_text('\n'.join(webdriver('GET', r.s.path + '/alert/text')) + '\n')
+        webdriver('POST', r.s.path + '/alert/accept')
+        return True
     from Xlib import X, XK
     from Xlib.protocol import event
     d = close_window()

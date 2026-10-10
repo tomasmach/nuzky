@@ -5,7 +5,7 @@ same way. Opening another project while an agent edits asks whether to keep or u
 import json, os, subprocess, time
 from pathlib import Path
 
-from e2e.harness import CLI, FIXTURES, Bridge, close_window, flow, link_models, wait, webdriver
+from e2e.harness import CLI, FIXTURES, MACOS, Bridge, close_window, flow, link_models, wait, webdriver
 
 DAY = 86_400
 CARDS = """return [...document.querySelectorAll('[role=listbox][aria-label=Projects] [role=option][data-path]')].map((c) => ({
@@ -208,7 +208,8 @@ def home(r):
         time.sleep(max(0, first_move + 33 - time.time()))
         r.check('30 s after the first move, the copy moved again is still waiting for Undo', os.path.exists(copy['path'])
                 and not card(r, 'Croatia day two copy'))
-        trashed = r.work / 'data/Trash/files'
+        # On macOS the Trash of the home the run gives the app (src-tauri/src/test_bridge.rs), never the user's.
+        trashed = r.work / ('home/.Trash' if MACOS else 'data/Trash/files')
         r.check('30 s after the second move the copy is in the system Trash and gone from the projects',
                 wait(lambda: trashed.exists() and any(p.suffix == '.nuzky' for p in trashed.iterdir()), max(5, moved + 45 - time.time()))
                 and not os.path.exists(copy['path']), sorted(os.listdir(trashed)) if trashed.exists() else None)

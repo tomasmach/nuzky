@@ -5,8 +5,8 @@ the same over MCP. espeak speaks every sentence at about the same level, so the 
 much the picture is scaled."""
 import json, subprocess, time
 
-from e2e.harness import (AI_EDITING, FIXTURES, Bridge, flow, link_models, preview_crop, preview_rect, preview_redraw,
-                         wait)
+from e2e.harness import (AI_EDITING, FIXTURES, Bridge, flow, link_models, press, preview_crop, preview_rect,
+                         preview_redraw, wait)
 from e2e.reel import truth, words as plain
 
 MODEL = 'large-v3-turbo-q5_0'
@@ -40,19 +40,6 @@ def poll(bridge, job, timeout):
         if state['status'] != 'running' or time.time() > end:
             return state
         time.sleep(1)
-
-
-def press(key):
-    """A real key press through the X server (XTest), so a focused button acts on Enter as it does for a person.
-    WebKitWebDriver supports neither Element Send Keys on a button nor key actions."""
-    from Xlib import X, XK, display
-    from Xlib.ext import xtest
-    d = display.Display()
-    code = d.keysym_to_keycode(XK.string_to_keysym(key))
-    for kind in (X.KeyPress, X.KeyRelease):
-        xtest.fake_input(d, kind, code)
-    d.sync()
-    d.close()
 
 
 ENTER = 'Return'

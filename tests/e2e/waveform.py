@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from e2e.harness import APP, FIXTURES, flow, wait, webdriver
+from e2e.harness import APP, FIXTURES, MACOS, flow, wait, webdriver
 
 SOURCE = FIXTURES / 'hour.m4a'
 RATE, PER_SECOND = 48_000, 50
@@ -87,9 +87,11 @@ class Memory(threading.Thread):
 
     def __init__(self, r):
         super().__init__(daemon=True)
-        self.data_home, self.samples, self.stopped = str(r.work / 'data'), [], False
+        self.r, self.data_home, self.samples, self.stopped = r, str(r.work / 'data'), [], False
 
     def processes(self):
+        if MACOS:
+            return {self.r.app.pid: 'app', webdriver('GET', self.r.s.path + '/nuzky/web-process'): 'WebContent'}
         found = {}
         for proc in Path('/proc').iterdir():
             try:
@@ -103,6 +105,9 @@ class Memory(threading.Thread):
 
     @staticmethod
     def rss_mb(pid):
+        if MACOS:
+            kb = subprocess.run(['ps', '-o', 'rss=', '-p', str(pid)], capture_output=True, text=True).stdout.strip()
+            return int(kb) / 1024 if kb else None
         try:
             line = next(l for l in Path(f'/proc/{pid}/status').read_text().splitlines() if l.startswith('VmRSS:'))
             return int(line.split()[1]) / 1024

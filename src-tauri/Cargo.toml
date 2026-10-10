@@ -51,6 +51,14 @@ ts-rs.workspace = true
 nuzky-engine = { workspace = true, features = ["ts"] }
 nuzky-mcp = { workspace = true, features = ["ts"] }
 
+# How the UI flows drive the app on macOS (src/test_bridge.rs, debug builds only). wry already uses these crates.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+block2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSProcessInfo", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSBitmapImageRep", "NSButton", "NSControl", "NSEvent", "NSGraphicsContext", "NSImage", "NSImageRep", "NSResponder", "NSView", "NSWindow"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }
+
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
 nuzky-analysis = { workspace = true, features = ["gpu"] }

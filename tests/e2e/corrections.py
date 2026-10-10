@@ -3,8 +3,8 @@ changes with it; generating the captions again, reopening the app and undo all k
 together. Then an agent does the same over MCP."""
 import difflib, json, time
 
-from e2e.harness import (FIXTURES, MODELS, Bridge, Session, flow, link_models, preview_crop, preview_rect,
-                         preview_redraw, wait)
+from e2e.harness import (FIXTURES, MACOS, MODELS, Bridge, Session, close_window, flow, link_models, pointer, press,
+                         preview_crop, preview_rect, preview_redraw, wait)
 from e2e.reel import phrases, words as plain
 
 TAKE = FIXTURES / 'reel-2.mp4'
@@ -69,14 +69,20 @@ def shown(r):
 
 
 class Hands:
-    """A user's mouse and keyboard: real input through the X server (XTEST), so the webview itself turns two
-    clicks into a double-click and keys into text. WebKitWebDriver here has no Actions or element click."""
+    """A user's mouse and keyboard: real input into the app window, through the X server (XTEST) under gamescope
+    and through the window itself on macOS, so the webview turns two clicks into a double-click and keys into
+    text. WebKitWebDriver here has no Actions or element click."""
 
     KEYS = {'.': 'period', ',': 'comma', ' ': 'space', '\n': 'Return', '!': 'exclam', '?': 'question'}
 
     def __init__(self, r):
+        self.r, self.at = r, (0, 0)
+        if MACOS:
+            # Clicks land at page coordinates, and WebKit ignores pointer moves made off screen: nothing to calibrate.
+            self.origin, self.scale = (0, 0), 1
+            return
         from Xlib import display
-        self.r, self.d = r, display.Display()
+        self.d = display.Display()
         r.s.run("window.__pointerAt = null;"
                 "addEventListener('pointermove', (e) => { window.__pointerAt = [e.clientX, e.clientY]; }, true);")
         self.calibrate()
@@ -107,25 +113,41 @@ class Hands:
         """Moves the pointer to the middle of the element; true once the page sees it there."""
         left, top = self.r.s.run('const b = document.querySelector(arguments[0]).getBoundingClientRect();'
                                  'return [b.left + b.width / 2, b.top + b.height / 2];', css)
-        self.read(round(self.origin[0] + left * self.scale), round(self.origin[1] + top * self.scale))
+        self.at = (round(self.origin[0] + left * self.scale), round(self.origin[1] + top * self.scale))
+        if MACOS:
+            return self.r.s.run('return !!document.elementFromPoint(arguments[0], arguments[1])?.closest(arguments[2]);',
+                                *self.at, css)
+        self.read(*self.at)
         return self.r.s.run('const [x, y] = window.__pointerAt;'
                             'return !!document.elementFromPoint(x, y)?.closest(arguments[0]);', css)
 
     def double_click(self, css):
         """Two clicks on the element within the double-click time; false when the pointer missed it."""
-        from Xlib import X
         if not self.over(css):
+            if MACOS:
+                return False
             self.calibrate()
             if not self.over(css):
                 return False
-        for _ in range(2):
-            self.fake(X.ButtonPress, 1)
-            time.sleep(0.03)
-            self.fake(X.ButtonRelease, 1)
+        for clicks in (1, 2):
+            if MACOS:
+                pointer('down', *self.at, clicks)
+                time.sleep(0.03)
+                pointer('up', *self.at, clicks)
+            else:
+                from Xlib import X
+                self.fake(X.ButtonPress, 1)
+                time.sleep(0.03)
+                self.fake(X.ButtonRelease, 1)
             time.sleep(0.06)
         return True
 
     def type(self, text):
+        if MACOS:
+            for c in text:
+                press({'\n': 'Return'}.get(c, c))
+                time.sleep(0.02)
+            return
         from Xlib import X, XK
         for c in text:
             keysym = XK.string_to_keysym(self.KEYS.get(c, c))
@@ -154,25 +176,6 @@ def generate_captions(r):
     count = len(jobs())
     r.s.run("[...document.querySelectorAll('button')].find((b) => /enerate captions/.test(b.textContent)).click()")
     return wait(lambda: next((j for j in jobs()[count:] if j['status'] != 'running'), None), 600, 1)
-
-
-def close_window():
-    """Closes the app window as its title-bar button does."""
-    from Xlib import X, display
-    from Xlib.protocol import event
-    d = display.Display()
-    protocols, delete = d.intern_atom('WM_PROTOCOLS'), d.intern_atom('WM_DELETE_WINDOW')
-    stack = [d.screen().root]
-    while stack:
-        w = stack.pop()
-        try:
-            name = w.get_wm_name()
-            stack.extend(w.query_tree().children)
-        except Exception:
-            continue
-        if name in ('Nuzky', b'Nuzky'):
-            w.send_event(event.ClientMessage(window=w, client_type=protocols, data=(32, [delete, X.CurrentTime, 0, 0, 0])))
-    d.sync()
 
 
 def alive(r):

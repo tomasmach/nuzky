@@ -3,35 +3,12 @@ the background, and heard in the export as less room noise between the words and
 voice keeps its level."""
 import array, json, math, statistics, subprocess, time
 
-from e2e.harness import FIXTURES, export, flow, wait
+from e2e.harness import FIXTURES, export, flow, press, wait
 
 SOURCE = FIXTURES / 'voice.mp4'
 RATE = 48_000
 WINDOW = RATE // 20  # 50 ms
 JOB = "return window.__nuzky.store.getState().jobs[arguments[0]] ?? null"
-
-
-def press(key):
-    """A real key press through X11 (XTEST) into the app window: it moves focus and toggles native controls
-    as a person's does, which a key event sent from the page does not. WebKitWebDriver here has no key input."""
-    from Xlib import X, XK, display
-    from Xlib.ext import xtest
-    d = display.Display()
-    stack = [d.screen().root]
-    while stack:
-        window = stack.pop()
-        try:
-            name = window.get_wm_name()
-            stack.extend(window.query_tree().children)
-        except Exception:
-            continue
-        if name in ('Nuzky', b'Nuzky'):
-            window.set_input_focus(X.RevertToParent, X.CurrentTime)
-    code = d.keysym_to_keycode(XK.string_to_keysym(key))
-    for kind in (X.KeyPress, X.KeyRelease):
-        xtest.fake_input(d, kind, code)
-    d.sync()
-    d.close()
 
 
 def decode(path, high_pass=False):
