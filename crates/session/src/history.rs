@@ -359,6 +359,17 @@ impl History {
         }
     }
 
+    /// The project after the newest kept AI run, and the version before that run.
+    fn run_versions(&self) -> Result<Option<(Project, Option<Project>)>> {
+        let Some(at) = self.versions.iter().rposition(|v| v.run_id.is_some()) else { return Ok(None) };
+        let read = |v: &Version| {
+            serde_json::from_str::<Project>(&v.json)
+                .with_context(|| format!("HISTORY_CORRUPT: version {} cannot be read", v.index))
+        };
+        let before = at.checked_sub(1).map(|i| read(&self.versions[i])).transpose()?;
+        Ok(Some((read(&self.versions[at])?, before)))
+    }
+
     /// The label of the newest version a run made.
     fn run_label(&self, run_id: &str) -> Option<&str> {
         self.versions.iter().rev().find(|v| v.run_id.as_deref() == Some(run_id)).map(|v| v.label.as_str())
@@ -385,6 +396,16 @@ impl ProjectSession {
         }
         let tip = inner.history.tip.as_ref().filter(|_| inner.run.is_none());
         Ok(inner.history.list(&inner.editor.project, limit, tip))
+    }
+
+    /// The project as the newest kept AI run left it and as it was just before that run; none
+    /// when no AI run was kept. Telling them from the project now shows what the user changed.
+    pub fn run_versions(&self) -> Result<Option<(Project, Option<Project>)>> {
+        let inner = self.inner.lock().unwrap();
+        if inner.mode == Mode::ReadOnly {
+            return History::load(&storage::sidecar(&inner.path, HISTORY_SUFFIX)).run_versions();
+        }
+        inner.history.run_versions()
     }
 
     /// Restores a kept version as a new undo step. The project as it was stays a version too.

@@ -136,6 +136,8 @@ struct OpenSession {
     bridge_error: Option<String>,
     path: PathBuf,
     stopped: Arc<AtomicBool>,
+    /// When to learn the creator's style from their edits of an AI's cut.
+    learn_at: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 fn lock_session<'a>(
@@ -177,6 +179,7 @@ impl OpenSession {
             bridge_error: None,
             path,
             stopped: Arc::new(AtomicBool::new(false)),
+            learn_at: Arc::default(),
         };
         session.start_bridge();
         Ok((session, rx))
@@ -229,9 +232,17 @@ impl OpenSession {
 
     fn start_pump(&self, app: AppHandle, rx: Receiver<SessionEvent>) {
         let stopped = self.stopped.clone();
+        let learn_at = self.learn_at.clone();
         let session = Arc::downgrade(&self.host);
         std::thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
+                let due = {
+                    let mut at = learn_at.lock().unwrap();
+                    at.take_if(|at| *at <= std::time::Instant::now()).is_some()
+                };
+                if due && let Some(host) = session.upgrade() {
+                    style::learn_edits(&host);
+                }
                 let event = match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                     Ok(event) => event,
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -247,6 +258,9 @@ impl OpenSession {
                         app.emit("transcripts-changed", ()).ok();
                     }
                     SessionEvent::Changed { origin, .. } => {
+                        if matches!(origin, Origin::User | Origin::Undo | Origin::Redo | Origin::Restore) {
+                            *learn_at.lock().unwrap() = Some(std::time::Instant::now() + style::LEARN_AFTER);
+                        }
                         if let Ok(snap) = current.snapshot(Vec::new()) {
                             state.publish_project(&snap.project);
                             // Media an agent added, or rebound to another file under the same id,
@@ -279,6 +293,10 @@ impl OpenSession {
 impl Drop for OpenSession {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
+        // Edits waiting to be learned are learned as the project closes, without making it wait.
+        if self.learn_at.lock().unwrap().take().is_some() {
+            style::learn_edits(&self.host);
+        }
         self.close_ipc();
         if let Err(error) = self.host.retire() {
             log::error!("{error:#}");

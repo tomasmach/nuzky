@@ -895,6 +895,11 @@ impl Backend {
         media::check_media(&project)?;
         let cache = self.host.cache_dir.clone();
         let queue = self.export_queue.clone();
+        // What the creator's cut teaches, checked against the project as exported. This state may
+        // hide another client's open run, so the session is asked too.
+        let run_open = state.open_run.is_some() || self.host.session.state()?.open_run.is_some();
+        let moment = crate::style::moment(&self.host.session, state.project.clone(), run_open, false);
+        let transcripts = self.host.transcripts.clone();
         self.host.start_job(
             &self.client.id,
             state.open_run.as_ref().map(|run| run.run_id.as_str()),
@@ -911,6 +916,18 @@ impl Backend {
                     };
                     progress.set(phase, Some(p.fraction))
                 })?;
+                // Learned on its own thread once the export is done, so no export waits for it.
+                std::thread::spawn(move || {
+                    let learned = moment.and_then(|m| match m {
+                        Some(m) => {
+                            m.lesson(&transcripts)?.map(|e| crate::style::Store::default().keep_evidence(e)).transpose()
+                        }
+                        None => Ok(None),
+                    });
+                    if let Err(error) = learned {
+                        log::error!("Learning the style from this export failed: {error:#}");
+                    }
+                });
                 Ok(json!({"path": out, "duration_us": project.duration_us(), "preset": options.delivery}))
             },
         )

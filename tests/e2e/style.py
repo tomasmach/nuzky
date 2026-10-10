@@ -5,7 +5,7 @@ import json, subprocess, time
 
 from pathlib import Path
 
-from e2e.harness import CLI, FIXTURES, MODELS, Bridge, flow, link_models, wait
+from e2e.harness import CLI, FIXTURES, MODELS, Bridge, export, flow, link_models, wait
 from e2e.home import CLICK_TEXT, TYPE, resize
 
 FAKE = Path(__file__).resolve().parent / 'fake_agent'
@@ -271,3 +271,95 @@ def style(r):
     versions = json.loads(json.dumps(view(r)['versions']))
     r.check('every change is a version', [v['label'] for v in versions][:3] == ['Restored: Edited by hand', 'Back to default', 'Edited by hand'], versions[:4])
     r.check('the AI\'s change is a version of its own', any(v['label'] == 'AI: Added your rule' for v in versions), versions)
+
+
+def project_setup(r):
+    missing = [str(p) for p in (MODELS / 'ggml-small.bin',) if not p.exists()]
+    if missing:
+        raise RuntimeError(f'run scripts/fixtures.sh first, missing: {missing}')
+    link_models(r)
+    recording, _ = pair(r.work / 'pair')
+    run(str(CLI), 'new', str(r.work / 'data/nuzky/projects/talk.nuzky'), str(recording), env=r.env)
+
+
+def poll(bridge, job, timeout):
+    return wait(lambda: (s := bridge.call('job', {'job_id': job['job_id'], 'action': 'get'}))['status'] != 'running' and s, timeout, 0.5)
+
+
+def answer(r, expression, *args):
+    """What an app call answers, an object too, which Session.call does not hand back."""
+    done = r.s.call(f"({expression}).then((v) => {{ window.__flowAnswer = v; return 1; }})", *args)
+    if not done['ok']:
+        raise RuntimeError(done['error'])
+    return r.s.run('return window.__flowAnswer')
+
+
+def sources(r):
+    return (view(r) or {}).get('sources', [])
+
+
+@flow('style_auto', 'Nuzky learns by itself: never from the AI\'s own cut or its export, but from the user\'s edits of it, their corrected '
+                    'words and their export, all as suggestions that leave the style unchanged', before=project_setup, home=True)
+def style_auto(r):
+    bridge = Bridge(r, r.saved_project())
+    try:
+        job = poll(bridge, bridge.call('transcribe', {'language': 'en', 'model': 'small'}), 300)
+        r.check('the speech is recognised', job and job['status'] == 'done', job)
+        words = bridge.call('get_transcript', {})['words']
+        start = next(i for i, w in enumerate(words) if w['text'].strip().lower().startswith('show'))
+        run = bridge.call('begin_run', {'label': 'Rough cut'})['run_id']
+        # The first attempt at the opening sentence, up to where the retake starts.
+        retake = next(i for i in range(1, start) if words[i]['text'].strip().lower() == 'so')
+        bridge.call('apply_edits', {'run_id': run, 'request_id': 'cut', 'edits': [
+            {'type': 'rippleDeleteRanges', 'ranges': [{'startUs': words[0]['start_us'], 'endUs': words[retake]['start_us']}]}]})
+        bridge.call('end_run', {'run_id': run, 'action': 'keep'})
+        exported = bridge.call('export_video', {'path': str(r.work / 'agent.mp4'), 'resolution': 720, 'fps': 30, 'quality': 'small'})
+        r.check('the agent exports its cut', poll(bridge, exported, 180)['status'] == 'done')
+    finally:
+        bridge.close()
+    time.sleep(12)
+    r.check('neither the AI\'s cut nor its export teaches anything', sources(r) == [] and edit_md(r) is None, sources(r))
+
+    # The user corrects the AI's cut: a side remark goes, and three misheard words are put right.
+    epoch = "window.__nuzky.store.getState().snap.sessionEpoch"
+    shown = answer(r, "window.__nuzky.api.transcriptView(700000)")
+    texts = [w['text'].strip().lower().strip('.,') for w in shown['words']]
+    remark = texts.index('by'), texts.index('now')
+    r.s.call(f"window.__nuzky.api.cutWords(arguments[0], [arguments[1]], {epoch})", shown['key'], list(remark))
+    shown = answer(r, "window.__nuzky.api.transcriptView(700000)")
+    texts = [w['text'].strip().lower().strip('.,') for w in shown['words']]
+    # As typed in the transcript: the recognised punctuation stays.
+    said = [w['text'].strip() for w in shown['words']]
+    trail = lambda word: word[len(word.rstrip('.,')):]
+    fixes = [{'i': (i := texts.index(word)), 'text': right + trail(said[i])}
+             for word, right in (('phone', 'iPhone'), ('videos', 'reels'), ('captions', 'subtitles'))]
+    corrected = r.s.call(f"window.__nuzky.api.correctWords(arguments[0], arguments[1], {epoch})", shown['key'], fixes)
+    r.check('the user cuts a side remark and corrects three words', corrected['ok'], corrected)
+    r.check('10 s after the last edit Nuzky learns from it', wait(lambda: [s['kind'] for s in sources(r)] == ['project'], 25), sources(r))
+    titles = [s['title'] for s in view(r)['suggestions']]
+    r.check('it suggests rules, the corrected words among them', 'Spelling' in titles, titles)
+    spelling = next(s for s in view(r)['suggestions'] if s['title'] == 'Spelling')
+    r.check('Spelling quotes the corrections', any(m['line'].startswith('"phone') and '"iPhone' in m['line'] for m in spelling['moments']), spelling['moments'])
+    r.check('and the style is unchanged until accepted', edit_md(r) is None)
+    note = "return window.__nuzky.store.getState().toasts.find((t) => t.text.startsWith('Learned from')) ?? null"
+    toast = wait(lambda: r.s.run(note), 5)
+    r.check('a toast says what was learned, with Review', toast and toast['action']['label'] == 'Review', toast)
+    r.s.run("window.__nuzky.store.getState().toasts.find((t) => t.text.startsWith('Learned from')).action.run()")
+    r.check('Review shows the suggestions', wait(lambda: r.s.run(f"return !!document.querySelector('{PAGE}')"), 5))
+    r.shot('learned-by-itself')
+
+    learned_at = sources(r)[0]['atMs']
+    bridge = Bridge(r, r.saved_project())
+    try:
+        run = bridge.call('begin_run', {'label': 'Discarded'})['run_id']
+        bridge.call('apply_edits', {'run_id': run, 'request_id': 'cut', 'edits': [{'type': 'rippleDeleteRanges', 'ranges': [{'startUs': 0, 'endUs': 2_000_000}]}]})
+        bridge.call('end_run', {'run_id': run, 'action': 'discard'})
+    finally:
+        bridge.close()
+    time.sleep(12)
+    r.check('a discarded AI run teaches nothing', sources(r)[0]['atMs'] == learned_at, sources(r))
+
+    export(r, 'mine.mp4')
+    r.check('the user\'s export is learned again', wait(lambda: sources(r)[0]['atMs'] > learned_at, 10), sources(r))
+    r.check('as the same video, not a second one', len(sources(r)) == 1, sources(r))
+    r.check('no error toast', not r.errors(), r.errors())

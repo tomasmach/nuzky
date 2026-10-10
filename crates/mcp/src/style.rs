@@ -13,10 +13,17 @@ use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail, ensure};
+use nuzky_analysis::Range;
 use nuzky_analysis::Word;
 use nuzky_analysis::style::doc::{self, Doc, OVERVIEW, RARE};
-use nuzky_analysis::style::{self as learning, Alignment, Choice, Learned, Picture, Rule, Source};
-use nuzky_engine::model::{Asset, AssetKind};
+use nuzky_analysis::style::{
+    self as learning, Alignment, Caption, Choice, Correction, Framing, Learned, Picture, Piece, Place, Rule, Source,
+    ZoomChange,
+};
+use nuzky_engine::effects::transform_at;
+use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project};
+use nuzky_engine::speech::is_heard;
+use nuzky_session::ProjectSession;
 use nuzky_session::transcripts::{Record, TranscriptStore};
 use serde::{Deserialize, Serialize};
 
@@ -98,6 +105,11 @@ pub struct Evidence {
     pub cut_words: Vec<Word>,
     pub alignment: Alignment,
     pub picture: Picture,
+    /// Where each recording word plays in a project's timeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub places: Option<Vec<Place>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<Correction>,
 }
 
 impl Evidence {
@@ -111,7 +123,18 @@ impl Evidence {
             cut_words: &self.cut_words,
             alignment: &self.alignment,
             picture: &self.picture,
+            places: self.places.as_deref(),
+            corrections: &self.corrections,
         }
+    }
+
+    /// The same lesson as `other`: it would teach the same, whatever its name and time.
+    fn same_lesson(&self, other: &Evidence) -> bool {
+        let lesson = |e: &Evidence| {
+            serde_json::to_string(&(&e.words, &e.cut_words, &e.alignment, &e.picture, &e.places, &e.corrections))
+                .unwrap_or_default()
+        };
+        lesson(self) == lesson(other)
     }
 }
 
@@ -341,10 +364,17 @@ impl Store {
         self.show(&versions)
     }
 
-    /// Keeps what was learned from one video, replacing what was learned from it before.
-    pub fn add_evidence(&self, mut evidence: Evidence) -> Result<StyleView> {
+    /// Keeps what was learned from one video, replacing what was learned from it before, and
+    /// shows the style with it.
+    pub fn add_evidence(&self, evidence: Evidence) -> Result<StyleView> {
+        self.keep_evidence(evidence)?;
+        self.view()
+    }
+
+    /// Keeps what was learned from one video. Suggestions are worked out only when the style is
+    /// shown, so learning in the background stays cheap.
+    pub fn keep_evidence(&self, mut evidence: Evidence) -> Result<()> {
         let _lock = self.lock()?;
-        let versions = self.synced()?;
         let all = self.evidence()?;
         evidence.seq = all
             .iter()
@@ -359,7 +389,7 @@ impl Store {
         for old in seqs.iter().rev().skip(MAX_EVIDENCE) {
             fs::remove_file(dir.join(format!("{old:06}.json"))).context("Forgetting an old video")?;
         }
-        self.show(&versions)
+        Ok(())
     }
 
     /// Writes the style `nuzky style learn` learned, keeping the creator's own rules, as a version.
@@ -955,13 +985,233 @@ pub fn compare(
         cut_words: cut.record.words.clone(),
         alignment,
         picture,
+        places: None,
+        corrections: Vec::new(),
     })
+}
+
+/// Pauses shorter than this are gaps inside speech, as when sound is compared.
+const MIN_PAUSE_US: i64 = 80_000;
+/// Framing is read this often within a clip, and this far from its ends, as in a finished video.
+const SAMPLE_US: i64 = 500_000;
+const EDGE_US: i64 = 200_000;
+/// A smaller change of scale is not a zoom.
+const MIN_ZOOM: f32 = 0.03;
+
+/// What a project teaches, read from its timeline: the words its heard clips play, where each
+/// clip comes from, the pauses between words, its captions and how its clips are framed and
+/// zoomed. The recording is every transcribed video it hears, one after another. None when it
+/// hears no transcribed speech or plays everything that was recorded.
+pub fn project_evidence(project: &Project, path: &Path, transcripts: &TranscriptStore) -> Result<Option<Evidence>> {
+    let heard = crate::transcript::heard_assets(project);
+    let mut records = Vec::new();
+    for asset in project.assets.iter().filter(|a| heard.contains(&a.id)) {
+        if let Some(record) = transcripts.get(asset)? {
+            records.push((asset, record));
+        }
+    }
+    let Some((_, first)) = records.first() else { return Ok(None) };
+    let language = first.language.clone();
+    let sources = records.iter().map(|(a, r)| (a.id.clone(), r.words.clone())).collect();
+    let derived = crate::transcript::Derived::new(project, sources, Vec::new());
+    // Each file's words after the files before it.
+    let mut offsets = std::collections::HashMap::new();
+    let (mut words, mut owners) = (Vec::new(), Vec::new());
+    let mut recorded = 0;
+    for (asset, _) in &records {
+        offsets.insert(asset.id.as_str(), recorded);
+        for word in &derived.sources[&asset.id] {
+            words.push(Word { start_us: word.start_us + recorded, end_us: word.end_us + recorded, ..word.clone() });
+            owners.push((asset.id.as_str(), word.start_us));
+        }
+        recorded += asset.duration_us;
+    }
+    // Every clip that is heard playing a transcribed file is a piece of the recording.
+    let mut clips: Vec<_> = project
+        .tracks
+        .iter()
+        .flat_map(|t| t.clips.iter().filter(move |c| is_heard(project, t, c)))
+        .filter_map(|c| match &c.content {
+            ClipContent::Media { asset_id, source_in_us, .. } => {
+                offsets.get(asset_id.as_str()).map(|offset| (c, offset + source_in_us))
+            }
+            ClipContent::Text { .. } => None,
+        })
+        .collect();
+    clips.sort_by_key(|(c, _)| (c.start_us, c.id.clone()));
+    let pieces: Vec<Piece> = clips
+        .iter()
+        .map(|(c, from)| Piece { start_us: c.start_us, end_us: c.end_us(), offset_us: from - c.start_us })
+        .collect();
+    let mut places: Vec<Place> = vec![None; words.len()];
+    for word in &derived.words {
+        let Some(i) = owners.iter().position(|&(a, s)| a == word.asset_id && s == word.source_start_us) else {
+            continue;
+        };
+        let piece = clips.iter().position(|(c, _)| c.id == word.clip_id);
+        if places[i].is_none()
+            && let Some(piece) = piece
+        {
+            places[i] = Some((piece, word.start_us, word.end_us));
+        }
+    }
+    if places.iter().all(Option::is_some) {
+        return Ok(None);
+    }
+    let cut_words: Vec<Word> = derived
+        .words
+        .iter()
+        .map(|w| Word { start_us: w.start_us, end_us: w.end_us, text: w.text.clone(), probability: w.probability })
+        .collect();
+    let gaps = |words: &[Word]| -> Vec<Range> {
+        words
+            .windows(2)
+            .filter(|p| p[1].start_us - p[0].end_us >= MIN_PAUSE_US)
+            .map(|p| Range { start_us: p[0].end_us, end_us: p[1].start_us })
+            .collect()
+    };
+    let alignment = Alignment {
+        recording_pauses: gaps(&words),
+        cut_pauses: gaps(&cut_words),
+        matched: 1.0,
+        cut_duration_us: project.duration_us(),
+        pieces,
+    };
+    let corrections = project
+        .word_corrections
+        .iter()
+        .filter_map(|c| {
+            let word =
+                derived.words.iter().find(|w| w.asset_id == c.asset_id && w.source_start_us == c.source_start_us)?;
+            Some(Correction { time_us: word.start_us, heard: c.original.clone(), text: c.text.clone() })
+        })
+        .collect();
+    let key = format!("project:{}", fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()).display());
+    Ok(Some(Evidence {
+        seq: 0,
+        key,
+        kind: EvidenceKind::Project,
+        title: project.name.clone(),
+        at_ms: now_ms(),
+        matched: None,
+        recording: project.name.clone(),
+        cut: format!("{}, as edited", project.name),
+        language,
+        recording_us: recorded,
+        words,
+        cut_words,
+        picture: project_picture(project, &clips.iter().map(|(c, _)| *c).collect::<Vec<_>>()),
+        alignment,
+        places: Some(places),
+        corrections,
+    }))
+}
+
+/// Captions from the Captions track; framing and zoom from the clips of the recording.
+fn project_picture(project: &Project, clips: &[&nuzky_engine::model::Clip]) -> Picture {
+    let mut captions: Vec<Caption> = Vec::new();
+    let mut heights: Vec<f32> = Vec::new();
+    for clip in project.tracks.iter().filter(|t| t.is_captions()).flat_map(|t| &t.clips) {
+        let ClipContent::Text { text, transform, .. } = &clip.content else { continue };
+        captions.push(Caption {
+            start_us: clip.start_us,
+            end_us: clip.end_us(),
+            words: text.split_whitespace().count(),
+        });
+        heights.push(0.5 + transform.y);
+    }
+    captions.sort_by_key(|c| c.start_us);
+    heights.sort_by(f32::total_cmp);
+    let caption_band = heights.get(heights.len() / 2).map(|&middle| (middle, middle));
+    // The picture of the recording: video clips, which a detached sound clip is not.
+    let pictured: Vec<&nuzky_engine::model::Clip> = project
+        .tracks
+        .first()
+        .into_iter()
+        .flat_map(|t| &t.clips)
+        .filter(|c| match &c.content {
+            ClipContent::Media { asset_id, .. } => {
+                project.asset(asset_id).is_some_and(|a| a.kind == AssetKind::Video)
+                    && clips
+                        .iter()
+                        .any(|h| matches!(&h.content, ClipContent::Media { asset_id: a, .. } if a == asset_id))
+            }
+            ClipContent::Text { .. } => false,
+        })
+        .collect();
+    let mut framing = Vec::new();
+    let mut zooms = Vec::new();
+    for (i, clip) in pictured.iter().enumerate() {
+        let mut t = clip.start_us + EDGE_US;
+        while t < clip.end_us() - EDGE_US {
+            let (transform, _) = transform_at(clip, t);
+            framing.push(Framing { time_us: t, scale: transform.scale, x: transform.x, y: transform.y });
+            t += SAMPLE_US;
+        }
+        if let Some(next) = pictured.get(i + 1).filter(|n| n.start_us == clip.end_us()) {
+            let (from, to) = (transform_at(clip, clip.end_us() - 1).0.scale, transform_at(next, next.start_us).0.scale);
+            if (to - from).abs() >= MIN_ZOOM {
+                zooms.push(ZoomChange { start_us: next.start_us, end_us: next.start_us, from, to, at_cut: true });
+            }
+        }
+        for pair in clip.keyframes.windows(2) {
+            let (from, to) = (pair[0].transform.scale, pair[1].transform.scale);
+            if (to - from).abs() >= MIN_ZOOM {
+                let at = |t_us: i64| clip.start_us + t_us;
+                let (start_us, end_us) = (at(pair[0].t_us), at(pair[1].t_us));
+                zooms.push(ZoomChange { start_us, end_us, from, to, at_cut: false });
+            }
+        }
+    }
+    zooms.sort_by_key(|z| z.start_us);
+    Picture { skipped: None, captions, caption_band, framing, zooms }
+}
+
+/// A project to learn from as it was at one moment, with the AI runs before it, so what it
+/// teaches is checked against that same state however long learning takes.
+pub struct Moment {
+    project: Project,
+    path: PathBuf,
+    edited: bool,
+    runs: Option<(Project, Option<Project>)>,
+}
+
+/// What learning from a project the creator exported, or `edited` after an AI cut it, needs, taken
+/// now. None while an AI run is open, or for edits when no AI run was kept. It costs a look at the
+/// project's newest versions, so the slow part is left to `Moment::lesson`.
+pub fn moment(session: &ProjectSession, project: Project, run_open: bool, edited: bool) -> Result<Option<Moment>> {
+    if run_open {
+        return Ok(None);
+    }
+    let runs = session.run_versions()?;
+    if edited && runs.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(Moment { project, path: session.path(), edited, runs }))
+}
+
+impl Moment {
+    /// What it teaches. Nothing from a project exactly as the AI's last run left it: the AI would
+    /// only learn its own cut. Edits that undo the run teach nothing either, while an export of
+    /// the creator's own cut from before the run does.
+    pub fn lesson(&self, transcripts: &TranscriptStore) -> Result<Option<Evidence>> {
+        let Some(evidence) = project_evidence(&self.project, &self.path, transcripts)? else { return Ok(None) };
+        if let Some((after, before)) = &self.runs {
+            for other in std::iter::once(after).chain(before.as_ref().filter(|_| self.edited)) {
+                if project_evidence(other, &self.path, transcripts)?.is_some_and(|o| o.same_lesson(&evidence)) {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(evidence))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use nuzky_analysis::Range;
     use nuzky_analysis::style::{Caption, Piece};
+    use nuzky_session::host::Host;
 
     use super::*;
 
@@ -1034,6 +1284,8 @@ mod tests {
                 framing: Vec::new(),
                 zooms: Vec::new(),
             },
+            places: None,
+            corrections: Vec::new(),
         }
     }
 
@@ -1208,6 +1460,163 @@ mod tests {
         let view = store.act(StyleAction::Restore { index: view.versions[1].index }).unwrap();
         assert_eq!(file(&dir).unwrap(), after, "back to default can be undone");
         assert!(view.versions.len() >= 6);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A 30 s talk of six four-word sentences on one clip, its words stored.
+    fn talk() -> (PathBuf, Host) {
+        use nuzky_engine::edit::EditCmd;
+        use nuzky_engine::model::Asset;
+        use nuzky_session::transcripts::VERSION;
+        let dir = std::env::temp_dir().join(format!("nuzky-style-talk-{}", nuzky_engine::edit::new_id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("talk.mp4");
+        fs::write(&path, "talk").unwrap();
+        let asset = Asset {
+            id: "talk".into(),
+            name: "talk.mp4".into(),
+            path: path.to_string_lossy().into(),
+            kind: AssetKind::Video,
+            duration_us: 30_000_000,
+            width: 1080,
+            height: 1920,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+        };
+        let words = (0..6)
+            .flat_map(|s: i64| {
+                (0..4).map(move |w: i64| Word {
+                    start_us: 1_000_000 + s * 5_000_000 + w * 500_000,
+                    end_us: 1_400_000 + s * 5_000_000 + w * 500_000,
+                    text: format!("w{s}{w}{}", if w == 3 { "." } else { "" }),
+                    probability: 0.9,
+                })
+            })
+            .collect();
+        let mut project = Project::new("Talk");
+        project.apply(EditCmd::AddAssets { assets: vec![asset.clone()] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "talk".into(), start_us: None, track_id: None }).unwrap();
+        let file = dir.join("talk.nuzky");
+        fs::write(&file, serde_json::to_vec(&project).unwrap()).unwrap();
+        let transcripts = TranscriptStore::at(dir.join("transcripts")).unwrap();
+        let record = Record {
+            version: VERSION,
+            fingerprint: transcripts.fingerprint(&asset).unwrap(),
+            duration_us: asset.duration_us,
+            model: "fixture".into(),
+            language: "en".into(),
+            words,
+            segments: vec![],
+            alignment: None,
+        };
+        transcripts.put(&asset, &record).unwrap();
+        let session = nuzky_session::ProjectSession::open(&file, nuzky_session::Mode::Write, None).unwrap();
+        (dir.clone(), Host { session, jobs: Default::default(), transcripts, cache_dir: dir.join("cache") })
+    }
+
+    /// Cuts a sentence, with `before` sentences before it already cut; each cut takes 2 s.
+    fn cut(sentence: i64, before: i64) -> Vec<nuzky_engine::edit::EditCmd> {
+        let start = 900_000 + sentence * 5_000_000 - before * 2_000_000;
+        vec![serde_json::from_value(serde_json::json!({"type": "rippleDeleteRanges", "ranges": [{"startUs": start, "endUs": start + 2_000_000}]})).unwrap()]
+    }
+
+    /// Which of the six sentences the evidence says were kept.
+    fn kept(evidence: &Evidence) -> Vec<bool> {
+        let places = evidence.places.as_ref().unwrap();
+        (0..6).map(|s| places[s * 4..s * 4 + 4].iter().all(Option::is_some)).collect()
+    }
+
+    #[test]
+    fn the_ai_never_learns_its_own_cut_and_the_creators_edits_teach() {
+        let (dir, host) = talk();
+        let learn = |edited| {
+            let state = host.session.state().unwrap();
+            let moment = moment(&host.session, state.project, state.open_run.is_some(), edited).unwrap();
+            moment.and_then(|m| m.lesson(&host.transcripts).unwrap())
+        };
+        assert!(learn(false).is_none(), "a project that plays everything recorded teaches nothing");
+        host.session.edit(cut(5, 0), None, Default::default()).unwrap();
+        assert!(learn(true).is_none(), "edits teach only after an AI cut");
+        assert_eq!(kept(&learn(false).unwrap()), [true, true, true, true, true, false], "an export does");
+
+        let run = host.session.begin_run("Rough cut".into()).unwrap().run_id;
+        host.session.apply_edits(&run, "cut", cut(1, 0), Default::default()).unwrap();
+        assert!(learn(true).is_none() && learn(false).is_none(), "nothing while the AI edits");
+        host.session.end_run(&run, nuzky_session::EndAction::Keep).unwrap();
+        assert!(learn(true).is_none() && learn(false).is_none(), "nor from the AI's cut as it left it");
+
+        host.session.edit(cut(3, 1), None, Default::default()).unwrap();
+        let taught = learn(true).unwrap();
+        assert_eq!(kept(&taught), [true, false, true, false, true, false]);
+        assert_eq!(taught.alignment.pieces.len(), 4, "three cuts and the silence after the last");
+        assert_eq!(taught.kind, EvidenceKind::Project);
+        assert!(taught.alignment.cut_pauses.iter().all(|p| p.end_us - p.start_us >= MIN_PAUSE_US));
+        host.session.undo().unwrap();
+        assert!(learn(true).is_none(), "undoing the edit is the AI's cut again");
+        host.session.undo_run(&run).unwrap();
+        assert!(learn(true).is_none(), "undoing the AI's run teaches nothing");
+        assert_eq!(
+            kept(&learn(false).unwrap()),
+            [true, true, true, true, true, false],
+            "exporting the creator's own cut does"
+        );
+        drop(host);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_project_shows_its_captions_zoom_and_corrected_words() {
+        let (dir, host) = talk();
+        host.session.edit(cut(2, 0), None, Default::default()).unwrap();
+        let mut project = host.session.state().unwrap().project;
+        let main = &mut project.tracks[0].clips;
+        if let ClipContent::Media { transform, .. } = &mut main[1].content {
+            transform.scale = 1.25;
+        }
+        project.word_corrections = (0..3)
+            .map(|w| nuzky_engine::model::WordCorrection {
+                asset_id: "talk".into(),
+                source_start_us: 1_000_000 + w * 500_000,
+                original: format!("w0{w}"),
+                text: "Nuzky".into(),
+            })
+            .collect();
+        let mut captions = nuzky_engine::model::Track {
+            id: "captions".into(),
+            kind: nuzky_engine::model::TrackKind::Text,
+            name: nuzky_engine::model::CAPTIONS_TRACK.into(),
+            muted: false,
+            hidden: false,
+            keep_in_place: false,
+            clips: Vec::new(),
+        };
+        for i in 0..4 {
+            let mut clip = project.tracks[0].clips[0].clone();
+            clip.id = format!("caption{i}");
+            (clip.start_us, clip.duration_us) = (i * 1_000_000, 1_000_000);
+            let transform = nuzky_engine::model::Transform { y: 0.15, ..Default::default() };
+            clip.content = serde_json::from_value(serde_json::json!({"type": "text", "text": "two words", "style": crate::params::reel_style(), "transform": transform})).unwrap();
+            captions.clips.push(clip);
+        }
+        project.tracks.push(captions);
+        let evidence = project_evidence(&project, &dir.join("talk.nuzky"), &host.transcripts).unwrap().unwrap();
+        let picture = &evidence.picture;
+        assert_eq!(
+            (picture.captions.len(), picture.captions[0].words, picture.caption_band),
+            (4, 2, Some((0.65, 0.65)))
+        );
+        let zoom = picture.zooms[0];
+        assert!(zoom.at_cut && zoom.from == 1.0 && zoom.to == 1.25, "{zoom:?}");
+        assert!(picture.framing.iter().any(|f| f.scale == 1.25) && picture.framing.iter().any(|f| f.scale == 1.0));
+        let times: Vec<i64> = evidence.corrections.iter().map(|c| c.time_us).collect();
+        assert_eq!(times, [1_000_000, 1_500_000, 2_000_000]);
+        let style = learning::learn(&[evidence.source()]);
+        assert!(style.contains("## Spelling") && style.contains("| w00 | Nuzky | 1 |"), "{style}");
+        let rule = learning::learned(&[evidence.source()]).rules.into_iter().find(|r| r.title == "Spelling").unwrap();
+        assert_eq!(rule.summary, r#"Write "w00" as "Nuzky", "w01" as "Nuzky", "w02" as "Nuzky""#);
+        drop(host);
         fs::remove_dir_all(dir).unwrap();
     }
 

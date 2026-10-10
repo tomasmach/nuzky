@@ -27,11 +27,19 @@ export const useStyle = create<StyleState>(() => ({ view: null, error: null, lea
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 export async function loadStyle() {
   try {
     const before = useStyle.getState().view;
     const view = await api.styleView();
     useStyle.setState({ view, error: null });
+    // A project Nuzky learned from by itself is news when it brought new suggestions.
+    const learned = view.sources[0];
+    if (before && learned?.kind === "project" && learned.atMs !== before.sources[0]?.atMs && view.suggestions.length > before.suggestions.length) {
+      const more = view.suggestions.length - before.suggestions.length;
+      useEditor.getState().toast({ kind: "info", text: `Learned from ${learned.title}: ${plural(more, "new suggestion")}`, action: { label: "Review", run: openStyle } });
+    }
     // A change the AI made, in the panel or anywhere else, is news with Undo; the creator's own are not.
     const newest = view.versions[0];
     if (before && newest && newest.index > before.version && newest.label.startsWith("AI: ")) {
@@ -72,7 +80,6 @@ export function openStyle() {
   showHome();
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** Keeps the style current as learning finds things, and reports a learning job that ends with its dialog closed. */
 export function listenStyle() {

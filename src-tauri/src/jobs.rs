@@ -331,8 +331,13 @@ pub fn start_export(
 ) -> Result<String, String> {
     check_destination(&out, replace_existing)?;
     let state = app.state::<AppState>();
-    let project =
-        crate::lock_session(&state.session, expected_epoch)?.host.session.state().map_err(crate::err)?.project;
+    let host = crate::lock_session(&state.session, expected_epoch)?.host.clone();
+    let session = host.session.state().map_err(crate::err)?;
+    let project = session.project;
+    // What this cut teaches is checked against the project as exported, with the AI runs before it.
+    let moment = nuzky_mcp::style::moment(&host.session, project.clone(), session.open_run.is_some(), false);
+    let transcripts = host.transcripts.clone();
+    drop(host);
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
@@ -352,8 +357,13 @@ pub fn start_export(
             }))
             .unwrap_or_else(|p| Err(anyhow::anyhow!("Export crashed: {}", panic_text(&p))));
             let cancelled = cancel.load(Ordering::Relaxed);
+            let done = result.is_ok() && !cancelled;
             rep.finish(result.map(|_| Some(out.to_string_lossy().into_owned())), cancelled);
             unregister(&app, &job_id);
+            // Learned after the export is over, so it never holds the export up.
+            if done {
+                crate::style::learn(moment, transcripts);
+            }
         })
         .map_err(|e| e.to_string())?;
     Ok(id)
@@ -768,7 +778,7 @@ fn learn_pairs(
         match result {
             Ok(evidence) => {
                 event.matched = evidence.matched;
-                store.add_evidence(evidence)?;
+                store.keep_evidence(evidence)?;
                 learned += 1;
             }
             Err(_) if cancel.load(Ordering::Relaxed) => anyhow::bail!("CANCELLED: job cancelled"),

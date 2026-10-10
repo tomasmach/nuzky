@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Word;
 
-use super::{Alignment, Caption, Picture, token};
+use super::{Alignment, Caption, Picture, Place, token};
 
 /// Rules need at least this many moments from the recordings to be written down.
 const MIN_EXAMPLES: usize = 3;
@@ -39,6 +39,19 @@ pub struct Source<'a> {
     pub cut_words: &'a [Word],
     pub alignment: &'a Alignment,
     pub picture: &'a Picture,
+    /// Where each recording word plays in the cut, when that is known exactly, as in a project;
+    /// otherwise the alignment finds it.
+    pub places: Option<&'a [Place]>,
+    /// Words the creator corrected after recognition.
+    pub corrections: &'a [Correction],
+}
+
+/// A recognised word the creator corrected, where it is heard in the cut.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Correction {
+    pub time_us: i64,
+    pub heard: String,
+    pub text: String,
 }
 
 /// A recording word with where it plays in the cut.
@@ -57,7 +70,10 @@ struct Edit<'a> {
 
 impl<'a> Edit<'a> {
     fn new(index: usize, source: &'a Source<'a>) -> Self {
-        let places = source.alignment.places(source.words, source.cut_words);
+        let places = match source.places {
+            Some(places) => places.to_vec(),
+            None => source.alignment.places(source.words, source.cut_words),
+        };
         let words =
             source.words.iter().zip(places).map(|(word, cut)| Spoken { word, token: token(&word.text), cut }).collect();
         Self { index, source, words }
@@ -156,6 +172,7 @@ pub const RULES: &[&str] = &[
     "## Cuts",
     "## Captions",
     "## Zoom",
+    "## Spelling",
 ];
 
 /// Which rule writes each setting.
@@ -300,6 +317,7 @@ pub fn learned(sources: &[Source]) -> Learned {
         None if seen => rare.push("Zoom: no framing could be measured".into()),
         None => {}
     }
+    rules.extend(spelling(sources, &say));
 
     let mut header = String::new();
     let _ = writeln!(header, "# Editing style\n");
@@ -1148,6 +1166,48 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     Some(Rule { title: "Zoom", summary, text: out, settings, choices, moments })
 }
 
+/// Words recognition gets wrong, as the creator corrected them.
+fn spelling(sources: &[Source], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
+    // The word itself: the punctuation around it goes with the sentence, and a word heard at the
+    // start of a sentence is the same word.
+    let bare = |w: &str| w.trim().trim_end_matches(['.', ',', '!', '?', ';', ':', '…']).to_owned();
+    let mut rows: Vec<(String, String, usize)> = Vec::new();
+    let mut examples = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        for c in source.corrections {
+            let (heard, text) = (bare(&c.heard).to_lowercase(), bare(&c.text));
+            match rows.iter_mut().find(|r| r.0 == heard && r.1 == text) {
+                Some(row) => row.2 += 1,
+                None => rows.push((heard, text, 1)),
+            }
+            let line = format!("\"{}\" corrected to \"{}\"", c.heard.trim(), c.text.trim());
+            examples.push(Example { source: index, time_us: c.time_us, line });
+        }
+    }
+    if examples.len() < MIN_EXAMPLES {
+        return None;
+    }
+    rows.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+    let mut out = String::from(
+        "## Spelling\n\nWords speech recognition gets wrong, as the creator corrected them. After transcribing, correct them with correct_words wherever they are heard. Times in the examples are in the finished cut.\n\n| Recognised | Should read | Times |\n|---|---|---|\n",
+    );
+    for (heard, text, times) in &rows {
+        let _ = writeln!(out, "| {heard} | {text} | {times} |");
+    }
+    let _ = writeln!(out, "\n{}", say(&examples));
+    let pairs: Vec<String> = rows.iter().map(|(heard, text, _)| format!("\"{heard}\" as \"{text}\"")).collect();
+    let mut sorted = pairs.clone();
+    sorted.sort_unstable();
+    Some(Rule {
+        title: "Spelling",
+        summary: format!("Write {}", pairs.iter().take(3).cloned().collect::<Vec<_>>().join(", ")),
+        text: out,
+        settings: Vec::new(),
+        choices: vec![Choice::text("Corrections", sorted.join(", "))],
+        moments: examples,
+    })
+}
+
 fn ends_sentence(text: &str) -> bool {
     text.trim_end().ends_with(['.', '!', '?', '…'])
 }
@@ -1301,6 +1361,8 @@ mod tests {
             cut_words: &cut_words,
             alignment: &alignment,
             picture: &picture,
+            places: None,
+            corrections: &[],
         };
         learn(&[source])
     }
@@ -1346,6 +1408,8 @@ mod tests {
             cut_words: &[],
             alignment: &alignment,
             picture: &picture,
+            places: None,
+            corrections: &[],
         };
         assert!(learn(&[source]).starts_with("# Editing style"));
     }
@@ -1363,6 +1427,8 @@ mod tests {
             cut_words: &cut_words,
             alignment: &alignment,
             picture,
+            places: None,
+            corrections: &[],
         };
         let doc = learn(&[source(&picture)]);
         assert!(doc.contains("| build_captions max_words | 5 |"), "{doc}");
