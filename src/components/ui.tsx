@@ -714,7 +714,7 @@ export function TextSwatch({ style, label, size = 15, lines = 1 }: { style: Text
   const key = style.keywords ? label.indexOf(" ") + 1 || Math.floor(label.length / 2) : 0;
   return (
     <span
-      className={`inline-block max-w-full rounded px-1 ${lines === 2 ? "line-clamp-2 text-center leading-[15px] break-words" : "truncate leading-6"}`}
+      className={`inline-block max-w-full rounded px-1 ${lines === 2 ? "line-clamp-2 text-center leading-[15px]" : "truncate leading-6"}`}
       style={{
         fontSize: size,
         fontFamily: fontCss(style.fontFamily),

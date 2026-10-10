@@ -114,7 +114,7 @@ export function CaptionsTab() {
             current ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : disabled ? "border-white/[.08]" : "border-white/[.08] hover:border-white/30"
           }`}
         >
-          <TextSwatch style={{ ...preset.style, fontFamily: preset.style.fontFamily ?? font }} label={preset.name} size={12} lines={2} />
+          <TextSwatch style={{ ...preset.style, fontFamily: preset.style.fontFamily ?? font }} label={preset.name} size={11} lines={2} />
           {current && (
             <span aria-hidden className="absolute top-1 right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent-strong text-white shadow-[0_1px_2px_rgb(0_0_0/.5)]">
               <Check size={10} strokeWidth={3} />
@@ -250,9 +250,9 @@ function MyStyles({ look, mine, tile }: { look: CaptionLook; mine: ReturnType<ty
               type="button"
               {...lockedProps(lock)}
               onClick={lock ? undefined : () => setNaming({ from: null })}
-              className="flex h-11 min-w-0 items-center justify-center gap-1 rounded-[10px] border border-dashed border-white/[.15] text-[12px] text-muted transition-colors duration-[120ms] hover:border-white/30 hover:text-fg aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+              className="flex h-11 min-w-0 items-center justify-center gap-1 whitespace-nowrap rounded-[10px] border border-dashed border-white/[.15] text-[11px] text-muted transition-colors duration-[120ms] hover:border-white/30 hover:text-fg aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
             >
-              <Plus size={13} /> Save look
+              <Plus size={12} /> Save look
             </button>
           </div>
         )

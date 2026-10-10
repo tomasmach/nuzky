@@ -256,11 +256,6 @@ def caption_styles(r):
     r.s.run("[...document.querySelectorAll('[role=group][aria-label=\"Key words\"] button')].find((b) => b.textContent.trim() === 'Longest').click()")
     r.check('Longest marks key words in every caption',
             wait(lambda: all(c['keywords'] == {'color': KEY_GREEN, 'pick': 'longest'} for c in r.s.run(STYLED)), 5))
-    r.s.run("document.querySelector('[role=group][aria-label=\"Key words\"]').scrollIntoView({block: 'center'})")
-    r.shot('captions-tab')
-    if resize(r, 1024, 640):
-        r.shot('captions-tab-1024')
-        resize(r, 1440, 900)
 
     # A caption after the first one, of two words or more, in the middle of a word after its pop-in.
     caption = next((c for c in captions[1:] if len(c['words']) >= 2 and c['durationUs'] >= 500_000), None)
@@ -273,11 +268,13 @@ def caption_styles(r):
     print(f"  caption \"{caption['text']}\" at {caption['startUs'] / 1e6:.3f} s", flush=True)
     time.sleep(1.5)  # `nuzky frame` reads the saved file, saved about a second after the edit.
     r.seek(settled_us)
-    time.sleep(1.5)
-    # Measured now, once the panes have settled after the window went back to its size.
     rect = preview_rect(r)
-    r.shot('preview-key-word')
-    preview = green(preview_crop(r.work / 'preview-key-word.png', rect))
+
+    def preview_green():
+        r.shot('preview-key-word')
+        found = green(preview_crop(r.work / 'preview-key-word.png', rect))
+        return found if found[1] > 0.0003 else None
+    preview = wait(preview_green, 8, 1) or green(preview_crop(r.work / 'preview-key-word.png', rect))
     engine = green(engine_frame(r, settled_us, 'engine-key-word'))
     r.check('the preview shows the longest word in the key word green', preview[1] > 0.0003, preview)
     r.check('the preview shows it where the engine does', same_place(preview[0], engine[0]), {'preview': preview[0], 'engine': engine[0]})
@@ -297,6 +294,12 @@ def caption_styles(r):
         first = bright(export_frame(r, target, first_n, 'export-first-frame'))
         r.check(f'export frame {first_n}, the caption\'s first, shows the pop-in beginning', first < 0.3 * bright(r.work / 'export-key-word.png'),
                 {'first': first, 'settled': bright(r.work / 'export-key-word.png')})
+
+    r.s.run("document.querySelector('[role=group][aria-label=\"Key words\"]').scrollIntoView({block: 'center'})")
+    r.shot('captions-tab')
+    if resize(r, 1024, 640):
+        r.shot('captions-tab-1024')
+        resize(r, 1440, 900)
 
     # Save the look as one of My styles.
     r.s.run("document.querySelector('button[aria-label=\"Save the current look as a style\"]').click()")
