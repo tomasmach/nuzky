@@ -605,7 +605,8 @@ impl Renderer {
         size: (f32, f32),
     ) -> Result<Option<Box<Matte>>> {
         let original = matches!(self.mattes, Some((_, Pending::Original)));
-        let alpha = self.mattes.as_mut().and_then(|(mattes, _)| mattes.alpha(&asset.path, frame.t_us));
+        // What must not draw without the matte looks in the directory again before it fails.
+        let alpha = self.mattes.as_mut().and_then(|(mattes, _)| mattes.alpha(&asset.path, frame.t_us, !original));
         let Some(alpha) = alpha else {
             if original {
                 return Ok(None);

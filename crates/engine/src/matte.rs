@@ -13,6 +13,7 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -439,31 +440,56 @@ impl Chunk {
 /// Mattes as the renderer reads them, keeping the chunks it read last.
 pub(crate) struct Mattes {
     dir: PathBuf,
-    /// Chunks read, by path; one not made yet is looked for again on every frame, which costs a `stat`.
+    /// Chunks read, by path.
     chunks: HashMap<PathBuf, Arc<Chunk>>,
+    /// The chunks made of each file, by its key, and when the directory was read for them.
+    made: HashMap<String, (Instant, BTreeSet<i64>)>,
     /// The last matte given per file, so a paused frame drawn again uploads nothing new.
     last: HashMap<String, (PathBuf, i64, Arc<Vec<u8>>)>,
 }
 
+/// How often the directory is read again for a chunk not found made, as a job adds chunks while it runs.
+const LOOK_AGAIN: Duration = Duration::from_millis(100);
+
 impl Mattes {
     pub(crate) fn new(dir: PathBuf) -> Self {
-        Self { dir, chunks: HashMap::new(), last: HashMap::new() }
+        Self { dir, chunks: HashMap::new(), made: HashMap::new(), last: HashMap::new() }
+    }
+
+    /// The chunks of the file with `key` that are made, read from the directory the first time or when `again`.
+    fn made(&mut self, key: &str, again: bool) -> &BTreeSet<i64> {
+        if again || !self.made.contains_key(key) {
+            let (prefix, suffix) = (format!("{key}."), format!(".{MATTE_VERSION}.bin"));
+            let made = std::fs::read_dir(self.dir.join("matte"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    name.strip_prefix(&prefix)?.strip_suffix(&suffix)?.parse().ok()
+                })
+                .collect();
+            self.made.insert(key.to_owned(), (Instant::now(), made));
+        }
+        &self.made[key].1
     }
 
     /// The matte of the frame of `source` the decoder gave at `t_us`, `SIDE` × `SIDE` white RGBA with the person
     /// in alpha. A frame held across chunks that were never made, as over a long pause in variable frame rate
     /// video, is in the first chunk made after its own.
-    pub(crate) fn alpha(&mut self, source: &str, t_us: i64) -> Option<Arc<Vec<u8>>> {
+    /// A chunk not found made is looked for in the directory again, at most every `LOOK_AGAIN`, or always with `again`.
+    pub(crate) fn alpha(&mut self, source: &str, t_us: i64, again: bool) -> Option<Arc<Vec<u8>>> {
         let key = file_key(source);
         let own = chunk_of(t_us);
-        let path = chunk_path(&self.dir, &key, own);
-        if path.exists() {
-            return self.read(source, path, t_us, false);
+        let find = |made: &BTreeSet<i64>| {
+            if made.contains(&own) { Some(own) } else { made.range(own + 1..=own + MAX_HELD_CHUNKS).next().copied() }
+        };
+        let mut chunk = find(self.made(&key, false));
+        if chunk.is_none() && (again || self.made.get(&key).is_some_and(|(at, _)| at.elapsed() >= LOOK_AGAIN)) {
+            chunk = find(self.made(&key, true));
         }
-        (own + 1..=own + MAX_HELD_CHUNKS)
-            .map(|c| chunk_path(&self.dir, &key, c))
-            .find(|path| path.exists())
-            .and_then(|path| self.read(source, path, t_us, true))
+        let chunk = chunk?;
+        self.read(source, chunk_path(&self.dir, &key, chunk), t_us, chunk != own)
     }
 
     /// The matte at `t_us` in one chunk, of exactly that frame when `exact`, else of the last one before it.
