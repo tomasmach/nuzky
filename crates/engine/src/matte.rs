@@ -35,6 +35,8 @@ const CONTEXT_US: i64 = 300_000;
 /// Most frames a chunk can hold: 2 s at 240 fps, with room for odd timestamps.
 const MAX_FRAMES: usize = 1024;
 const MAGIC: &[u8; 4] = b"NZM1";
+/// How far after its own chunk a held frame is looked for: an hour of video without a new frame.
+const MAX_HELD_CHUNKS: i64 = 1800;
 
 fn chunk_of(t_us: i64) -> i64 {
     t_us.max(0) / CHUNK_US
@@ -417,9 +419,13 @@ impl Chunk {
         (offset == bytes.len()).then_some(Chunk { bytes, frames })
     }
 
-    /// The matte of the frame at `t_us`, or of the last one before it, as white RGBA with the person in alpha.
-    fn alpha(&self, t_us: i64) -> Option<Vec<u8>> {
+    /// The matte of the frame at `t_us`, or with `exact` false of the last one before it, as white RGBA with the
+    /// person in alpha.
+    fn alpha(&self, t_us: i64, exact: bool) -> Option<Vec<u8>> {
         let i = self.frames.partition_point(|(t, _)| *t <= t_us).checked_sub(1)?;
+        if exact && self.frames[i].0 != t_us {
+            return None;
+        }
         let mut reader =
             png::Decoder::new(std::io::Cursor::new(&self.bytes[self.frames[i].1.clone()])).read_info().ok()?;
         let mut alpha = vec![0; reader.output_buffer_size()?];
@@ -445,11 +451,23 @@ impl Mattes {
     }
 
     /// The matte of the frame of `source` the decoder gave at `t_us`, `SIDE` × `SIDE` white RGBA with the person
-    /// in alpha. A frame held into a chunk whose own chunk was never made is in the next one.
+    /// in alpha. A frame held across chunks that were never made, as over a long pause in variable frame rate
+    /// video, is in the first chunk made after its own.
     pub(crate) fn alpha(&mut self, source: &str, t_us: i64) -> Option<Arc<Vec<u8>>> {
         let key = file_key(source);
-        let own = chunk_path(&self.dir, &key, chunk_of(t_us));
-        let path = if own.exists() { own } else { chunk_path(&self.dir, &key, chunk_of(t_us) + 1) };
+        let own = chunk_of(t_us);
+        let path = chunk_path(&self.dir, &key, own);
+        if path.exists() {
+            return self.read(source, path, t_us, false);
+        }
+        (own + 1..=own + MAX_HELD_CHUNKS)
+            .map(|c| chunk_path(&self.dir, &key, c))
+            .find(|path| path.exists())
+            .and_then(|path| self.read(source, path, t_us, true))
+    }
+
+    /// The matte at `t_us` in one chunk, of exactly that frame when `exact`, else of the last one before it.
+    fn read(&mut self, source: &str, path: PathBuf, t_us: i64, exact: bool) -> Option<Arc<Vec<u8>>> {
         if let Some((p, t, alpha)) = self.last.get(source)
             && (p, *t) == (&path, t_us)
         {
@@ -466,7 +484,7 @@ impl Mattes {
                 chunk
             }
         };
-        let alpha = Arc::new(chunk.alpha(t_us)?);
+        let alpha = Arc::new(chunk.alpha(t_us, exact)?);
         self.last.insert(source.to_owned(), (path, t_us, alpha.clone()));
         Some(alpha)
     }

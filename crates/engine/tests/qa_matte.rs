@@ -281,20 +281,21 @@ fn a_frame_held_across_a_chunk_boundary_finds_its_matte() {
     let dir = dir("matte-gap");
     let cache = dir.join("cache");
     let _ = std::fs::remove_dir_all(&cache);
-    // No frames from 3.7 s to 4.6 s: the one at 3.667 s shows until then.
+    // No frames from 3.7 s to 7.6 s, as in a screen recording of a still screen: the one at 3.667 s shows until then,
+    // across chunk 2, which no clip shows, into chunk 3.
     let path = dir.join("gap.mp4");
     ff(
         &[
             "-f",
             "lavfi",
             "-i",
-            &format!("color=black:s={W}x{H}:r=30:d=6"),
+            &format!("color=black:s={W}x{H}:r=30:d=9"),
             "-f",
             "lavfi",
             "-i",
-            &format!("color=white:s={SQUARE}x{SQUARE}:r=30:d=6"),
+            &format!("color=white:s={SQUARE}x{SQUARE}:r=30:d=9"),
             "-filter_complex",
-            &format!("[0:v][1:v]overlay=x='20+{STEP}*mod(n\\,8)':y={SQUARE_Y},select='not(between(t\\,3.7\\,4.6))'"),
+            &format!("[0:v][1:v]overlay=x='20+{STEP}*mod(n\\,8)':y={SQUARE_Y},select='not(between(t\\,3.7\\,7.6))'"),
             "-fps_mode",
             "vfr",
             "-c:v",
@@ -313,12 +314,12 @@ fn a_frame_held_across_a_chunk_boundary_finds_its_matte() {
     let clip = &mut project.tracks[0].clips[0];
     clip.duration_us = 300_000;
     if let ClipContent::Media { source_in_us, .. } = &mut clip.content {
-        *source_in_us = 4_200_000;
+        *source_in_us = 6_200_000;
     }
-    assert_eq!(matte::needed(&project)[0].1, BTreeSet::from([2]), "the clip shows source from chunk 2 only");
+    assert_eq!(matte::needed(&project)[0].1, BTreeSet::from([3]), "the clip shows source from chunk 3 only");
     prepare(&cache, &project);
     let (times, xs) = (pts(&path), square_xs(&path));
-    let held = times.partition_point(|&t| t <= 4_200_000) - 1;
+    let held = times.partition_point(|&t| t <= 6_200_000) - 1;
     assert!(times[held] < 4_000_000, "the frame shown is from chunk 1: {}", times[held]);
     let mut strict = Renderer::new().unwrap();
     strict.use_mattes(cache.clone(), Pending::Fail);
