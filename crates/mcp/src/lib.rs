@@ -1,6 +1,7 @@
 //! Stdio MCP catalog with local and app-connected backends.
 mod activity;
 pub mod bridge;
+pub mod caption_styles;
 #[cfg(unix)]
 pub mod ipc;
 mod limits;
@@ -155,7 +156,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Captions>(
             "build_captions",
-            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. style_preset picks a preset by name instead (reel, outline, yellow, box, clean, karaoke, green_box); karaoke is Reel with the word being spoken in yellow, green_box bold white on a dark box with the spoken word green. Karaoke captions store each word's time and highlight only while a word is spoken; updateClip text with as many words keeps that timing, adding or removing words turns the caption's highlight off. Give style or style_preset, not both. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
+            "Build captions from stored words mapped through every heard clip, including detached audio and speed changes. No caption spans a clip cut. Requires run_id. Defaults max_words=2, max_chars=15; a single longer word stays intact. Adds or replaces ONE Captions track, preserving other text. Multiple Captions tracks require explicit replaceCaptions. Default Reel style: size 95, white, regular, black stroke 7.5, no background, Inter. style_preset picks a built-in style package or a saved style from My styles by name: its look, font when it has one, entry/exit animations for every caption and key word colour. karaoke and green_box highlight the spoken word. Key words are numbers and words said louder than the median word, scored from sound as analyze emphasis does. They are marked on caption words when captions are made, so they survive regeneration and word corrections. It may return AUDIO_NOT_READY with a preparation job: poll job until done, then retry build_captions, as with analyze emphasis. Karaoke captions store each word's time and highlight only while a word is spoken; updateClip text with as many words keeps that timing, adding or removing words turns the caption's highlight off. Give style or style_preset, not both. Vertical canvases automatically wrap to the IG/TikTok safe width. Inspect frames with safe_area=true.",
         )?,
         tool::<params::ApplyZooms>(
             "apply_zooms",

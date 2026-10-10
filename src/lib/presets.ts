@@ -1,5 +1,5 @@
 import captionStyles from "../../assets/presets/captions.json";
-import type { Adjust, AnimationKind, Crop, Shape, TextStyle, Transform, TransitionKind } from "./types";
+import type { Adjust, Animation, AnimationKind, CaptionPreset, Crop, KeywordPick, Shape, TextStyle, Transform, TransitionKind } from "./types";
 
 export const FORMATS = [
   { label: "9:16", hint: "Reels, TikTok, Shorts", width: 1080, height: 1920 },
@@ -40,23 +40,49 @@ export const TEXT_PRESETS: { name: string; text: string; style: TextStyle }[] = 
 ];
 
 /**
- * Caption looks, shared with the engine and MCP (assets/presets/captions.json); Reel comes first. Presets
- * carry no font: the font is picked separately and survives a preset change.
+ * Caption styles, shared with the engine and MCP (assets/presets/captions.json); Reel comes first. A style
+ * without a font keeps the font the captions have, so a font picked separately survives it.
  */
-export const CAPTION_STYLES: { name: string; style: TextStyle }[] = captionStyles;
+export const CAPTION_STYLES = captionStyles as CaptionPreset[];
 
-/** Same look apart from the font; a karaoke highlight counts, so Karaoke is not Reel. */
+const lower = (c: string | null | undefined) => (c ?? "").toLowerCase();
+
+/** Same look apart from the font; a karaoke highlight and key words count, so Karaoke is not Reel. */
 export function sameStyle(a: TextStyle, b: TextStyle) {
   return (
     a.fontSize === b.fontSize &&
-    a.color.toLowerCase() === b.color.toLowerCase() &&
+    lower(a.color) === lower(b.color) &&
     a.bold === b.bold &&
     a.strokeWidth === b.strokeWidth &&
-    a.strokeColor.toLowerCase() === b.strokeColor.toLowerCase() &&
-    (a.background ?? "").toLowerCase() === (b.background ?? "").toLowerCase() &&
-    (a.highlight ?? "").toLowerCase() === (b.highlight ?? "").toLowerCase()
+    lower(a.strokeColor) === lower(b.strokeColor) &&
+    lower(a.background) === lower(b.background) &&
+    lower(a.highlight) === lower(b.highlight) &&
+    lower(a.keywords?.color) === lower(b.keywords?.color) &&
+    (a.keywords?.pick ?? null) === (b.keywords?.pick ?? null)
   );
 }
+
+const sameAnimation = (a: Animation | null | undefined, b: Animation | null | undefined) => a?.kind === b?.kind && (a?.durationUs ?? 0) === (b?.durationUs ?? 0);
+
+/** Whether captions in `style` with these animations look like `preset`: its font counts only when it brings one. */
+export function isLook(preset: CaptionPreset, style: TextStyle, animIn: Animation | null | undefined, animOut: Animation | null | undefined) {
+  return (
+    sameStyle(preset.style, style) &&
+    (!preset.style.fontFamily || preset.style.fontFamily === style.fontFamily) &&
+    sameAnimation(preset.animIn, animIn) &&
+    sameAnimation(preset.animOut, animOut)
+  );
+}
+
+/** Which words of a caption the key word colour marks. */
+export const KEYWORD_PICKS: { id: KeywordPick | "off"; label: string; title: string }[] = [
+  { id: "off", label: "Off", title: "No key words" },
+  { id: "emphasis", label: "Emphasis", title: "Numbers and words said louder than the rest" },
+  { id: "first", label: "First", title: "The first word of every caption" },
+  { id: "last", label: "Last", title: "The last word of every caption" },
+  { id: "longest", label: "Longest", title: "The longest word of every caption" },
+];
+export const KEYWORD_COLOR = "#ffd400";
 
 /** Typewriter only makes sense for text; the engine treats it as Fade on media. */
 export const ANIMATIONS: { kind: AnimationKind; label: string; textOnly?: boolean }[] = [

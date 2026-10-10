@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { CAPTION_STYLES, TEXT_PRESETS, sameStyle } from "../../lib/presets";
+import { CAPTION_STYLES, KEYWORD_COLOR, KEYWORD_PICKS, TEXT_PRESETS, sameStyle } from "../../lib/presets";
 import { editClip, useEditor } from "../../lib/store";
 import type { Clip, TextStyle } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
-import { Checkbox, ColorInput, PresetTile, Section, Slider, TextSwatch, useLockReason } from "../ui";
+import { Checkbox, ColorInput, PresetTile, Section, Segmented, Slider, TextSwatch, useLockReason } from "../ui";
 
 /** A label above a full-width control, like the sliders' in the inspector. */
 export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -65,9 +65,9 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
         <TextField clipId={clip.id} text={text} />
         <div className="grid grid-cols-3 gap-2">
           {presets.map((p) => (
-            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: style.fontFamily, maxWidth: style.maxWidth } })}>
+            <PresetTile key={p.name} label={p.name} selected={sameStyle(p.style, style)} title={`Apply ${p.name} style`} onClick={() => edit({ type: "updateClip", clipId: clip.id, style: { ...p.style, fontFamily: p.style.fontFamily ?? style.fontFamily, maxWidth: style.maxWidth } })}>
               <span className="absolute inset-0 flex items-center justify-center bg-line">
-                <TextSwatch style={{ ...p.style, fontFamily: style.fontFamily }} label="Aa" />
+                <TextSwatch style={{ ...p.style, fontFamily: p.style.fontFamily ?? style.fontFamily }} label="Aa" />
               </span>
             </PresetTile>
           ))}
@@ -83,6 +83,18 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
               {unlitReason(clip, text) && <p className="text-[12px] text-muted">{unlitReason(clip, text)}</p>}
             </>
           )}
+        </Section>
+      )}
+      {caption && (
+        <Section title="Key words">
+          <Segmented
+            label="Key words"
+            value={style.keywords?.pick ?? "off"}
+            onChange={(id) => setStyle({ keywords: id === "off" ? null : { color: style.keywords?.color ?? KEYWORD_COLOR, pick: id } }, "keywords")}
+            options={KEYWORD_PICKS}
+          />
+          {style.keywords && <ColorInput label="Key word color" value={style.keywords.color} onChange={(color) => setStyle({ keywords: { ...style.keywords!, color } }, "keywordColor")} />}
+          {style.keywords && unlitReason(clip, text) && <p className="text-[12px] text-muted">{unlitReason(clip, text)}</p>}
         </Section>
       )}
     </>

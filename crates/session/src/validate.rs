@@ -164,7 +164,7 @@ fn transform(value: &Transform) -> Result<()> {
 }
 
 /// Sizes are bounded by the picture the text is drawn on: the canvas, or a thumbnail.
-fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
+pub fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
     ensure!(
         style.font_size.is_finite()
             && style.font_size > 0.0

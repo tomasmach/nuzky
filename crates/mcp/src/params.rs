@@ -291,10 +291,13 @@ pub struct Job {
 #[serde(deny_unknown_fields)]
 pub struct Captions {
     pub run_id: String,
-    /// A full caption style; leave it out to use style_preset or Reel.
+    /// A full caption style, including optional keywords {color, pick}; leave it out to use style_preset or Reel.
     pub style: Option<TextStyle>,
-    /// A caption preset by name: reel, outline, yellow, box, clean, karaoke or green_box.
-    /// Karaoke and green_box highlight the word being spoken.
+    /// A built-in style package: reel, outline, yellow, box, clean, karaoke, green_box, hormozi,
+    /// hormozi_green, spotlight, impact, headline, punchline, neon, neon_blue, yellow_box,
+    /// white_box, minimal or typewriter; or a saved style from My styles by name.
+    /// A package brings its font when it has one, entry/exit animations for every caption
+    /// and its key word colour. Karaoke and green_box highlight the word being spoken.
     pub style_preset: Option<String>,
     pub max_words: Option<usize>,
     pub max_chars: Option<usize>,
@@ -342,13 +345,7 @@ impl Captions {
             (Some(style), None) => {
                 Ok(CaptionPreset { name: String::new(), style: style.clone(), anim_in: None, anim_out: None })
             }
-            (None, Some(name)) => nuzky_engine::edit::caption_preset(name).cloned().ok_or_else(|| {
-                let names: Vec<_> = nuzky_engine::edit::caption_presets()
-                    .iter()
-                    .map(|p| p.name.to_lowercase().replace(' ', "_"))
-                    .collect();
-                anyhow::anyhow!("INVALID_ARGUMENTS: unknown style_preset {name:?}; use one of {}", names.join(", "))
-            }),
+            (None, Some(name)) => crate::caption_styles::find(name),
             (None, None) => Ok(reel()),
         }
     }
@@ -407,7 +404,7 @@ mod tests {
         assert_eq!(karaoke.font_size, reel_style().font_size);
         let boxed = captions(serde_json::json!({"style_preset": "Green_Box"})).unwrap();
         assert_eq!((boxed.highlight.as_deref(), boxed.background.is_some()), (Some("#4ade80"), true));
-        let unknown = captions(serde_json::json!({"style_preset": "neon"})).unwrap_err().to_string();
+        let unknown = captions(serde_json::json!({"style_preset": "unknown_caption_package"})).unwrap_err().to_string();
         assert!(unknown.starts_with("INVALID_ARGUMENTS") && unknown.contains("karaoke, green_box"), "{unknown}");
         let both = captions(
             serde_json::json!({"style_preset": "karaoke", "style": serde_json::to_value(reel_style()).unwrap()}),

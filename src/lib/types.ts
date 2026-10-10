@@ -155,6 +155,21 @@ export type Canvas = {
   backgroundBlur: number,
 };
 
+/**
+ * A caption style: its look, a font when it brings its own, the entry and exit animation of every caption
+ * and how it marks key words. The built-in ones are in `assets/presets/captions.json`; the user's own live
+ * beside the projects.
+ */
+export type CaptionPreset = {
+  name: string,
+  /**
+   * Without `fontFamily` the captions keep the font they have.
+   */
+  style: TextStyle,
+  animIn?: Animation | null,
+  animOut?: Animation | null,
+};
+
 export type CaptionSegment = {
   startUs: number,
   endUs: number,
@@ -174,6 +189,11 @@ export type CaptionWord = {
   text: string,
   startUs: number,
   endUs: number,
+  /**
+   * A key word of the speech, a number or a word said with emphasis, found when the caption was made.
+   * `style.keywords` with `KeywordPick::Emphasis` colours it.
+   */
+  key?: boolean,
 };
 
 export type Clip = {
@@ -485,11 +505,15 @@ export type EditCmd = {
   "type": "addCaptions",
   segments: Array<CaptionSegment>,
   style: TextStyle,
+  animIn?: Animation | null,
+  animOut?: Animation | null,
 } | {
   "type": "replaceCaptions",
   trackId: string,
   segments: Array<CaptionSegment>,
   style: TextStyle,
+  animIn?: Animation | null,
+  animOut?: Animation | null,
 } | {
   "type": "rippleDeleteRanges",
   ranges: Array<TimeRange>,
@@ -579,6 +603,22 @@ export type Keyframe = {
    * How the values move on to the next keyframe.
    */
   ease: Ease,
+};
+
+/**
+ * Which words of a caption are key.
+ */
+export type KeywordPick = "emphasis" | "first" | "last" | "longest";
+
+/**
+ * How a caption marks its key words. Needs the clip's `words`, like `highlight`.
+ */
+export type Keywords = {
+  /**
+   * `#rrggbb` fill of the key words.
+   */
+  color: string,
+  pick: KeywordPick,
 };
 
 /**
@@ -1103,6 +1143,10 @@ export type TextStyle = {
    * Needs the clip's `words`; outline, box, size and wrapping stay the same.
    */
   highlight?: string | null,
+  /**
+   * Key words of a generated caption in their own colour; the word being spoken still takes `highlight`.
+   */
+  keywords?: Keywords | null,
 };
 
 /**

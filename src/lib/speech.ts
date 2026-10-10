@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { aiLocked, currentEpoch, enqueue, undoAction, useEditor, whenIdle } from "./store";
-import type { Project, TextStyle, TranscriptCut, TranscriptView, WordsCorrected } from "./types";
+import { CAPTION_STYLES } from "./presets";
+import type { Animation, Project, TextStyle, TranscriptCut, TranscriptView, WordsCorrected } from "./types";
 
 /** Characters per caption when captions show 1–3 words, like reels. */
 export const SHORT_CAPTION_CHARS = 15;
@@ -48,9 +49,8 @@ interface SpeechState {
   language: string;
   /** 1–3 words per caption, or 0 for whole phrases. */
   captionWords: number;
-  /** Appearance of new captions while none are on the timeline: preset index and font. */
-  captionStyle: number;
-  captionFont: string | null;
+  /** Look of new captions while none are on the timeline, font included. */
+  captionLook: CaptionLook;
   /** Pauses longer than this are shown in the transcript and can be removed. */
   pauseUs: number;
   /** Counts changes to the stored transcripts, so the transcript is fetched again. */
@@ -61,8 +61,7 @@ export const useSpeech = create<SpeechState>(() => ({
   model: "large-v3-turbo-q5_0",
   language: initialLanguage(),
   captionWords: 2,
-  captionStyle: 0,
-  captionFont: null,
+  captionLook: { style: { ...CAPTION_STYLES[0].style, fontFamily: null }, animIn: null, animOut: null },
   pauseUs: 500_000,
   stored: 0,
 }));
@@ -108,8 +107,11 @@ export function useTranscriptView(): { view: TranscriptView | null; error: strin
   return state.epoch === epoch ? state : { view: null, error: null };
 }
 
-/** Starts recognition for the transcript, of every heard file with `refresh`, or for captions with `style`. */
-export async function startSpeech(captions: { style: TextStyle } | null, refresh = false) {
+/** How captions look: their style with its font, and the entry and exit animation of every caption. */
+export type CaptionLook = { style: TextStyle; animIn: Animation | null; animOut: Animation | null };
+
+/** Starts recognition for the transcript, of every heard file with `refresh`, or for captions in `captions`. */
+export async function startSpeech(captions: CaptionLook | null, refresh = false) {
   // Captions change the project; a transcript only reads it.
   if (captions && aiLocked()) return;
   const { model, language, captionWords } = useSpeech.getState();
@@ -120,7 +122,7 @@ export async function startSpeech(captions: { style: TextStyle } | null, refresh
   try {
     if (captions) {
       const words = captionWords || null;
-      await api.startCaptions(model, language, captions.style, words, words ? SHORT_CAPTION_CHARS : null, epoch);
+      await api.startCaptions(model, language, captions, words, words ? SHORT_CAPTION_CHARS : null, epoch);
     } else await api.startTranscript(model, language, refresh, epoch);
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });

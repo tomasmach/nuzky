@@ -4,6 +4,7 @@ import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
 import type { Asset, Background, Clip, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
+import type { CaptionLook } from "./speech";
 
 export interface Toast {
   id: number;
@@ -838,19 +839,30 @@ export function useVoicePreparation(assetIds: string[]) {
   });
 }
 
-/** Restyles every caption clip at once, as one undo step, keeping each caption's wrap width (the safe area). */
-export function applyCaptionStyle(style: TextStyle) {
+/**
+ * Gives every caption the look, as one undo step: its style and animations, its font when it brings one,
+ * else the font each caption has. Each caption keeps its wrap width.
+ */
+export function applyCaptionLook(look: CaptionLook) {
   return useEditor.getState().edit(
     (project) =>
-      project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...style, maxWidth: c.content.style.maxWidth } }] : [])) ?? null,
+      project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => {
+        if (c.content.type !== "text") return [];
+        const { fontFamily, maxWidth } = c.content.style;
+        return [
+          { type: "updateClip", clipId: c.id, style: { ...look.style, fontFamily: look.style.fontFamily ?? fontFamily, maxWidth } },
+          { type: "setAnimation", clipId: c.id, slot: "in", animation: look.animIn },
+          { type: "setAnimation", clipId: c.id, slot: "out", animation: look.animOut },
+        ];
+      }) ?? null,
   );
 }
 
-/** Sets the font of every caption, keeping the rest of each caption's style, as one undo step. */
-export function applyCaptionFont(fontFamily: string) {
+/** Changes part of every caption's style (the font, the key words), keeping the rest of each, as one undo step. */
+export function restyleCaptions(patch: Partial<TextStyle>) {
   return useEditor.getState().edit(
     (project) =>
-      project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...c.content.style, fontFamily } }] : [])) ?? null,
+      project.tracks.find(isCaptionTrack)?.clips.flatMap((c): EditCmd[] => (c.content.type === "text" ? [{ type: "updateClip", clipId: c.id, style: { ...c.content.style, ...patch } }] : [])) ?? null,
   );
 }
 

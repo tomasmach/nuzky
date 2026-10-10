@@ -709,7 +709,9 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
 /** A style preview in the font the engine draws it with. */
 export function TextSwatch({ style, label, size = 15 }: { style: TextStyle; label: string; /** Font size in px. */ size?: number }) {
   // Karaoke styles show the moment a word is spoken: the last word, or the end of a one-word label, lit.
+  // Key words take the first word, or the start of a one-word label.
   const split = label.lastIndexOf(" ") + 1 || Math.ceil(label.length / 2);
+  const key = style.keywords ? label.indexOf(" ") + 1 || Math.floor(label.length / 2) : 0;
   return (
     <span
       className="inline-block max-w-full truncate rounded px-1 leading-6"
@@ -723,13 +725,14 @@ export function TextSwatch({ style, label, size = 15 }: { style: TextStyle; labe
         paintOrder: "stroke fill",
       }}
     >
+      {key > 0 && <span style={{ color: style.keywords?.color }}>{label.slice(0, Math.min(key, style.highlight ? split : label.length))}</span>}
       {style.highlight ? (
         <>
-          {label.slice(0, split)}
-          <span style={{ color: style.highlight }}>{label.slice(split)}</span>
+          {label.slice(key, split)}
+          <span style={{ color: style.highlight }}>{label.slice(Math.max(key, split))}</span>
         </>
       ) : (
-        label
+        label.slice(key)
       )}
     </span>
   );
