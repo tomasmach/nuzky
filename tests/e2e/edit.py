@@ -3,19 +3,22 @@ import json, statistics, subprocess, time
 from e2e.ducking import RATE, TONE, WINDOW, decode, tone_levels
 from e2e.harness import FIXTURES, Bridge, export, flow, preview_brightness, wait, webdriver
 
-# Presses a fade dot of a clip and drags it `arguments[2]` px along the timeline, without letting go.
+# Presses what is under the middle of a fade dot of a clip and drags it `arguments[2]` px along the timeline, without
+# letting go.
 FADE_DRAG = """const knob = document.querySelector(`[data-clip-id='${arguments[0]}'] [data-fade='${arguments[1]}']`);
 if (!knob) return false;
 const b = knob.getBoundingClientRect();
 const at = (type, dx) => new PointerEvent(type, {bubbles: true, button: 0, pointerId: 1,
   clientX: b.left + b.width / 2 + dx, clientY: b.top + b.height / 2});
-knob.dispatchEvent(at('pointerdown', 0));
+document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2).dispatchEvent(at('pointerdown', 0));
 window.dispatchEvent(at('pointermove', arguments[2]));
 return true;"""
 RELEASE = "window.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, button: 0, pointerId: 1}))"
 TIP = "return [...document.querySelectorAll('section[aria-label=Timeline] div')].some((d) => d.textContent === arguments[0])"
 FADES = """const c = window.__nuzky.store.getState().snap.project.tracks.flatMap((t) => t.clips).find((c) => c.id === arguments[0]);
 return [c.content.fadeInUs, c.content.fadeOutUs];"""
+UNDER = """const b = document.querySelector(`[data-clip-id='${arguments[0]}'] [data-fade='${arguments[1]}']`).getBoundingClientRect();
+return document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)?.closest('[data-fade]')?.dataset.fade ?? null;"""
 KNOBS = "return document.querySelectorAll(`[data-clip-id='${arguments[0]}'] [data-fade]`).length"
 SELECTION = 'return window.__nuzky.store.getState().selection'
 
@@ -119,5 +122,11 @@ def edit(r):
     finally:
         bridge.close()
     r.check('they come back when the run ends', wait(lambda: r.s.run(KNOBS, clip) == 2, 10), r.s.run(KNOBS, clip))
+
+    # Fades meeting in the middle of the clip: each dot is still the one under the pointer at its place.
+    r.s.call("window.__nuzky.store.getState().edit({type: 'updateClip', clipId: arguments[0], fadeInUs: 2000000, fadeOutUs: 2000000})", clip)
+    wait(lambda: r.s.run(FADES, clip) == [2_000_000, 2_000_000], 5)
+    under = [r.s.run(UNDER, clip, end) for end in ('in', 'out')]
+    r.check('with both fades at half the clip, either dot can still be grabbed', under == ['in', 'out'], under)
 
     r.check('no error toast', not r.errors(), r.errors())

@@ -150,11 +150,19 @@ export const ClipView = memo(function ClipView({
       )}
       {(fadeIn > 0 || fadeOut > 0) && (
         // The fades as ramps over the waveform: the shaded corner above the line is how much quieter the sound plays there.
+        // The line has a dark edge, like the snap guide, so it stays visible over loud sound.
         <svg className="pointer-events-none absolute left-0 top-0" width={width} height={innerH}>
           {fadeIn > 0 && <path d={`M0 0H${fadeIn}L0 ${innerH}Z`} className="fill-black/45" />}
-          {fadeIn > 0 && <path d={`M0 ${innerH}L${fadeIn} 0`} className="stroke-white/70" />}
           {fadeOut > 0 && <path d={`M${width} 0H${width - fadeOut}L${width} ${innerH}Z`} className="fill-black/45" />}
-          {fadeOut > 0 && <path d={`M${width - fadeOut} 0L${width} ${innerH}`} className="stroke-white/70" />}
+          {[fadeIn > 0 && `M0 ${innerH}L${fadeIn} 0`, fadeOut > 0 && `M${width - fadeOut} 0L${width} ${innerH}`].map(
+            (d) =>
+              d && (
+                <g key={d}>
+                  <path d={d} strokeWidth={3} className="stroke-black/50" />
+                  <path d={d} strokeWidth={1.5} className="stroke-white/90" />
+                </g>
+              ),
+          )}
         </svg>
       )}
       {soundStrip && (
@@ -172,7 +180,8 @@ export const ClipView = memo(function ClipView({
         </div>
       ) : (
         // Over pictures and waveforms the name sits in a dark chip, readable over bright footage. A plain fill, not a blur: there is one per clip.
-        <div className="pointer-events-none absolute inset-x-0 top-1 flex items-center gap-1 px-2.5 text-[11px] font-medium text-fg">
+        // On sound it sits at the bottom, clear of the fade dots in the top corners.
+        <div className={`pointer-events-none absolute inset-x-0 ${sound ? "bottom-1" : "top-1"} flex items-center gap-1 px-2.5 text-[11px] font-medium text-fg`}>
           <span className="flex h-[17px] min-w-0 items-center gap-1 rounded-[5px] bg-black/60 pl-[5px] pr-1.5">
             <Icon size={11} className="shrink-0" />
             <span className="truncate">{label}</span>
@@ -228,28 +237,28 @@ export const ClipView = memo(function ClipView({
         (["left-0", "right-0"] as const).map((side) => (
           <div
             key={side}
-            className={`absolute bottom-0 ${side} flex cursor-ew-resize items-center justify-center ${selected ? "bg-accent" : "group-hover:bg-white/25"}`}
-            // On a sound clip the top corners belong to the fade handles.
-            style={{ width: EDGE, top: fadeHandles ? FADE_HANDLE : 0 }}
+            className={`absolute inset-y-0 ${side} flex cursor-ew-resize items-center justify-center ${selected ? "bg-accent" : "group-hover:bg-white/25"}`}
+            style={{ width: EDGE }}
           >
             {selected && <span className="h-3.5 w-0.5 rounded-full bg-black/55" />}
           </div>
         ))}
 
-      {/* Fade handles: a dot at the end of each fade, in the top corners while there is none; drag along the clip. */}
+      {/* Fade handles: a dot at the end of each fade, over the top of the trim handles while there is none; drag along the
+          clip. Each keeps to its half, so two fades meeting in the middle can both still be grabbed. */}
       {fadeHandles &&
         (
           [
-            ["in", fadeIn, "Drag to fade the sound in"],
-            ["out", width - fadeOut, "Drag to fade the sound out"],
+            ["in", fadeIn, 0, width / 2 - FADE_HANDLE, "Drag to fade the sound in"],
+            ["out", width - fadeOut, width / 2, width - FADE_HANDLE, "Drag to fade the sound out"],
           ] as const
-        ).map(([end, x, title]) => (
+        ).map(([end, x, min, max, title]) => (
           <div
             key={end}
             data-fade={end}
             title={title}
             className={`absolute top-0 flex cursor-ew-resize items-center justify-center ${selected || fades ? "" : "opacity-0 group-hover:opacity-100"}`}
-            style={{ left: Math.max(0, Math.min(width - FADE_HANDLE, x - FADE_HANDLE / 2)), width: FADE_HANDLE, height: FADE_HANDLE }}
+            style={{ left: Math.max(min, Math.min(max, x - FADE_HANDLE / 2)), width: FADE_HANDLE, height: FADE_HANDLE }}
           >
             <span className="h-2.5 w-2.5 rounded-full border border-black/70 bg-fg" />
           </div>
