@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Ease, Keyframe,
-    Project, Shape, TextStyle, Track, TrackKind, Transform, Transition, WordCorrection,
+    Project, Shape, TextStyle, Thumbnail, ThumbnailFormat, Track, TrackKind, Transform, Transition, WordCorrection,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -234,6 +234,13 @@ pub enum EditCmd {
         kind: MotionKind,
         /// How far it zooms, as a fraction: 0.06 is subtle, 0.15 strong.
         strength: f64,
+    },
+    /// Sets the thumbnail of its format, replacing the one there.
+    SetThumbnail {
+        thumbnail: Thumbnail,
+    },
+    RemoveThumbnail {
+        format: ThumbnailFormat,
     },
 }
 
@@ -606,6 +613,12 @@ impl Project {
             EditCmd::ApplyMotion { clip_id, range, kind, strength } => {
                 self.apply_motion(clip_id, range, kind, strength, &mut out)?
             }
+            EditCmd::SetThumbnail { thumbnail } => {
+                self.thumbnails.retain(|t| t.format != thumbnail.format);
+                self.thumbnails.push(thumbnail);
+                self.thumbnails.sort_by_key(|t| t.format as u8);
+            }
+            EditCmd::RemoveThumbnail { format } => self.thumbnails.retain(|t| t.format != format),
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();
@@ -1085,6 +1098,11 @@ impl Project {
                     // Packing also removes these fragments; every moving track must lose that time.
                     ranges.extend(slivers);
                     ranges = merge_ranges(ranges);
+                    // A thumbnail's frame moves with the picture, so it keeps showing the same moment.
+                    for thumbnail in &mut self.thumbnails {
+                        let t = thumbnail.time_us;
+                        thumbnail.time_us -= ranges.iter().map(|r| (t.min(r.end_us) - r.start_us).max(0)).sum::<i64>();
+                    }
                 }
                 // Later ranges first, so earlier coordinates stay valid while cutting.
                 for range in ranges.into_iter().rev() {
@@ -1604,6 +1622,36 @@ mod tests {
         })
         .unwrap();
         p
+    }
+
+    #[test]
+    fn thumbnails_stay_one_per_format_and_keep_their_frame_through_cuts() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        let thumbnail = |format, time_us| EditCmd::SetThumbnail {
+            thumbnail: Thumbnail {
+                format,
+                time_us,
+                frame: Transform::default(),
+                background: Default::default(),
+                texts: Vec::new(),
+                outline: None,
+            },
+        };
+        p.apply(thumbnail(ThumbnailFormat::Youtube16x9, 1_000_000)).unwrap();
+        p.apply(thumbnail(ThumbnailFormat::Cover9x16, 4_500_000)).unwrap();
+        p.apply(thumbnail(ThumbnailFormat::Cover9x16, 4_000_000)).unwrap();
+        let times = |p: &Project| p.thumbnails.iter().map(|t| (t.format, t.time_us)).collect::<Vec<_>>();
+        assert_eq!(times(&p), [(ThumbnailFormat::Cover9x16, 4_000_000), (ThumbnailFormat::Youtube16x9, 1_000_000)]);
+        // A second before the cover's frame goes and half a second ends at it; the earlier frame stays.
+        let ranges = vec![
+            TimeRange { start_us: 2_000_000, end_us: 3_000_000 },
+            TimeRange { start_us: 3_500_000, end_us: 4_200_000 },
+        ];
+        p.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+        assert_eq!(times(&p), [(ThumbnailFormat::Cover9x16, 2_500_000), (ThumbnailFormat::Youtube16x9, 1_000_000)]);
+        p.apply(EditCmd::RemoveThumbnail { format: ThumbnailFormat::Youtube16x9 }).unwrap();
+        assert_eq!(times(&p), [(ThumbnailFormat::Cover9x16, 2_500_000)]);
     }
 
     fn main_layout(p: &Project) -> Vec<(i64, i64)> {

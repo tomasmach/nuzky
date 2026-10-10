@@ -280,7 +280,7 @@ fn readonly_resources_prompts_and_clear_errors() {
         .iter()
         .map(|p| p["name"].clone())
         .collect();
-    assert_eq!(names, [json!("edit_selected"), json!("rough_cut")]);
+    assert_eq!(names, [json!("edit_selected"), json!("thumbnail"), json!("rough_cut")]);
     let rough = c.rpc("prompts/get", json!({"name":"rough_cut","arguments":{"wishes":"keep the call to action"}}));
     let text = rough["result"]["messages"][0]["content"]["text"].as_str().unwrap();
     assert!(
@@ -293,6 +293,23 @@ fn readonly_resources_prompts_and_clear_errors() {
             .as_str()
             .unwrap()
             .contains("wishes, which win over the steps: none")
+    );
+    // One prompt makes both covers, with the text presets and the user's wishes.
+    let covers = c.rpc("prompts/get", json!({"name":"thumbnail","arguments":{"wishes":"a red hook"}}));
+    let text = covers["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(
+        [
+            "thumbnail_frames",
+            "segment_subject",
+            "setThumbnail",
+            "inspect_thumbnail",
+            "export_thumbnail",
+            "\"Behind head\""
+        ]
+        .iter()
+        .all(|step| text.contains(step))
+            && text.contains("wishes, which win over the steps: a red hook"),
+        "{text}"
     );
     let error = c.rpc("tools/call", json!({"name":"inspect_frames","arguments":{"times_us":[0]}}));
     assert_eq!(error["result"]["isError"], true);
@@ -948,6 +965,18 @@ fn cover_tools_name_missing_models_and_never_download_them() {
     assert!(format.contains("INVALID_ARGUMENTS"), "{format}");
     let outside = c.error("segment_subject", json!({"time_us": 60_000_000}));
     assert!(outside.contains("INVALID_RANGE"), "{outside}");
+    // An outline needs the person's mask, so the thumbnail cannot be drawn without the model.
+    let run = c.call("begin_run", json!({"label":"cover"}))["run_id"].clone();
+    let cover = json!({"format":"cover_9x16","timeUs":0,"outline":{"color":"#ffffff","width":8}});
+    c.call("apply_edits", json!({"run_id":run,"request_id":"c","edits":[{"type":"setThumbnail","thumbnail":cover}]}));
+    for (tool, args) in [
+        ("inspect_thumbnail", json!({"format":"cover_9x16"})),
+        ("export_thumbnail", json!({"format":"cover_9x16","path":"cover.png"})),
+    ] {
+        let error = c.error(tool, args);
+        assert!(error.contains("MODEL_MISSING") && error.contains("birefnet-lite.onnx"), "{tool}: {error}");
+    }
+    assert!(!c.dir.join("cover.png").exists() && !c.dir.join("data/nuzky/models").exists());
     c.finish();
 }
 
@@ -1026,4 +1055,211 @@ fn cover_frames_and_subject_mask_of_a_face_over_stdio() {
         (json!(true), mask["mask_path"].clone())
     );
     c.finish();
+}
+
+/// The PNG of an inspect_thumbnail answer, with the answer's text.
+fn inspect_thumbnail(c: &mut Client, args: Value) -> (Value, png::OutputInfo, Vec<u8>) {
+    use base64::Engine as _;
+    let result = c.rpc("tools/call", json!({"name":"inspect_thumbnail","arguments":args}));
+    assert_ne!(result["result"]["isError"], true, "{result}");
+    let content = &result["result"]["content"];
+    let info: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+    let bytes = base64::prelude::BASE64_STANDARD.decode(content[1]["data"].as_str().unwrap()).unwrap();
+    let (frame, rgba) = decode_png(&bytes);
+    (info, frame, rgba)
+}
+
+fn decode_png(bytes: &[u8]) -> (png::OutputInfo, Vec<u8>) {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut rgba).unwrap();
+    assert_eq!(frame.color_type, png::ColorType::Rgba);
+    (frame, rgba)
+}
+
+/// Width and height from a JPEG's start-of-frame segment.
+fn jpeg_size(bytes: &[u8]) -> (u16, u16) {
+    assert_eq!(&bytes[..2], [0xff, 0xd8], "not a JPEG");
+    let mut at = 2;
+    loop {
+        let (marker, length) = (bytes[at + 1], u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]) as usize);
+        if (0xc0..=0xc2).contains(&marker) {
+            let word = |i: usize| u16::from_be_bytes([bytes[at + i], bytes[at + i + 1]]);
+            return (word(7), word(5));
+        }
+        at += 2 + length;
+    }
+}
+
+fn pixel(rgba: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
+    let i = ((y * width + x) * 4) as usize;
+    [rgba[i], rgba[i + 1], rgba[i + 2]]
+}
+
+/// A cover and a YouTube thumbnail are set in a run, drawn, written to new files and undone with the run.
+/// Their background is the frame as it is and no text is behind anyone, so no mask is needed.
+#[test]
+fn thumbnails_are_set_drawn_exported_and_undone_over_stdio() {
+    let mut c = Client::new(true);
+    let image = c.dir.join("grey.ppm");
+    let mut ppm = b"P6\n64 64\n255\n".to_vec();
+    ppm.extend([128u8; 64 * 64 * 3]);
+    std::fs::write(&image, ppm).unwrap();
+    let run = c.call("begin_run", json!({"label":"covers"}))["run_id"].clone();
+    let asset = c.call("import_media", json!({"run_id":run,"paths":[image]}))["asset_ids"][0].clone();
+    c.call("apply_edits", json!({"run_id":run,"request_id":"place","edits":[{"type":"addClip","assetId":asset}]}));
+    let missing = c.error("inspect_thumbnail", json!({"format":"cover_9x16"}));
+    assert!(missing.contains("THUMBNAIL_MISSING"), "{missing}");
+
+    let hook = |y: f64| {
+        json!({"text":"HOOK","style":{"fontSize":200,"color":"#00ff00","strokeWidth":0},
+            "transform":{"x":0,"y":y,"scale":1,"rotation":0,"opacity":1}})
+    };
+    let set = |format: &str, texts: Value| json!({"type":"setThumbnail","thumbnail":{"format":format,"timeUs":1_000_000,"texts":texts}});
+    let blurry =
+        json!([{"type":"setThumbnail","thumbnail":{"format":"cover_9x16","timeUs":0,"background":{"blur":2}}}]);
+    let bad = c.error("apply_edits", json!({"run_id":run,"request_id":"bad","edits":blurry}));
+    assert!(bad.contains("INVALID_PROJECT") && bad.contains("blur"), "{bad}");
+    let edits = json!([set("cover_9x16", json!([hook(-0.25)])), set("youtube_16x9", json!([hook(0.0)]))]);
+    c.call("apply_edits", json!({"run_id":run,"request_id":"covers","edits":edits}));
+    let state = c.call("get_state", json!({}));
+    assert_eq!(state["thumbnails"].as_array().unwrap().len(), 2, "{state}");
+
+    let (info, frame, rgba) = inspect_thumbnail(&mut c, json!({"format":"cover_9x16","width":270}));
+    assert_eq!((frame.width, frame.height, &info["width"], &info["height"]), (270, 480, &json!(270), &json!(480)));
+    assert_eq!(info["texts"], json!([{"text":"HOOK","behind":false,"hidden":0.0}]));
+    // The hook a quarter of the height above the middle, the grey frame elsewhere.
+    let green = |rgba: &[u8], width: u32, rows: std::ops::Range<u32>| {
+        rows.flat_map(|y| (0..width).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(rgba, width, x, y) == [0, 255, 0])
+            .count()
+    };
+    assert!(green(&rgba, 270, 100..140) > 300, "{}", green(&rgba, 270, 100..140));
+    assert_eq!(green(&rgba, 270, 0..90) + green(&rgba, 270, 150..480), 0);
+    assert_eq!(pixel(&rgba, 270, 135, 300), [128, 128, 128]);
+    // The like and comment rail on the right is tinted red, the middle not.
+    let (_, _, zones) = inspect_thumbnail(&mut c, json!({"format":"cover_9x16","width":270,"safe_zones":true}));
+    let tinted = pixel(&zones, 270, 260, 240);
+    assert!(tinted[0] > 150 && tinted[2] < 140, "{tinted:?}");
+    assert_eq!(pixel(&zones, 270, 135, 300), [128, 128, 128]);
+
+    let job = c.call("export_thumbnail", json!({"format":"youtube_16x9","path":"thumb.jpg"}));
+    let done = wait_job(&mut c, &job, Duration::from_secs(30), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let jpeg = std::fs::read(c.dir.join("thumb.jpg")).unwrap();
+    assert_eq!(jpeg_size(&jpeg), (1280, 720));
+    assert!(jpeg.len() < 2 * 1024 * 1024 && done["result"]["bytes"] == jpeg.len(), "{done}");
+    let taken = c.error("export_thumbnail", json!({"format":"youtube_16x9","path":"thumb.jpg"}));
+    assert!(taken.contains("OUTPUT_EXISTS"), "{taken}");
+    assert_eq!(std::fs::read(c.dir.join("thumb.jpg")).unwrap(), jpeg, "the first file is untouched");
+    let wrong = c.error("export_thumbnail", json!({"format":"cover_9x16","path":"cover.gif"}));
+    assert!(wrong.contains("INVALID_ARGUMENTS"), "{wrong}");
+    let job = c.call("export_thumbnail", json!({"format":"cover_9x16","path":"cover.png"}));
+    assert_eq!(wait_job(&mut c, &job, Duration::from_secs(30), |_| false)["status"], "done");
+    let (cover, rgba) = decode_png(&std::fs::read(c.dir.join("cover.png")).unwrap());
+    assert_eq!((cover.width, cover.height), (1080, 1920));
+    assert!(green(&rgba, 1080, 400..560) > 16 * 300, "the cover at full size has the same hook");
+
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+    let saved: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
+    assert_eq!(saved["thumbnails"].as_array().unwrap().len(), 2);
+    c.call("undo_run", json!({"run_id":run}));
+    let state = c.call("get_state", json!({}));
+    assert_eq!((state["thumbnails"].clone(), state["tracks"][0]["clips"].clone()), (json!([]), json!([])));
+    c.finish();
+}
+
+/// A project saved before thumbnails opens, takes an edit and its undo, and is saved exactly as it was.
+#[test]
+fn a_project_from_before_thumbnails_saves_unchanged_over_stdio() {
+    let mut c = Client::new(true);
+    let path = c.dir.join("project.nuzky");
+    let old = r##"{"version":1,"name":"Old","canvas":{"width":1080,"height":1920,"fps":30,"background":"#000000","backgroundBlur":0.0},"assets":[],"tracks":[{"id":"main","kind":"video","name":"Main","muted":false,"hidden":false,"keepInPlace":false,"clips":[]},{"id":"titles","kind":"text","name":"Text","muted":false,"hidden":false,"keepInPlace":false,"clips":[{"id":"title","startUs":0,"durationUs":3000000,"content":{"type":"text","text":"Ahoj","style":{"fontFamily":null,"fontSize":95.0,"color":"#ffffff","bold":false,"strokeWidth":7.5,"strokeColor":"#000000","background":null},"transform":{"x":0.0,"y":0.15,"scale":1.0,"rotation":0.0,"opacity":1.0}},"animIn":null,"animOut":null,"keyframes":[],"transitionIn":null}]}]}"##;
+    c.finish();
+    std::fs::write(&path, old).unwrap();
+    let mut c = c.restart(true);
+    let run = c.call("begin_run", json!({"label":"rename"}))["run_id"].clone();
+    c.call("apply_edits", json!({"run_id":run,"request_id":"r","edits":[{"type":"renameProject","name":"New"}]}));
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+    c.call("undo_run", json!({"run_id":run}));
+    c.finish();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved, serde_json::from_str::<Value>(old).unwrap());
+    assert!(saved.get("thumbnails").is_none());
+}
+
+/// Text behind a real face: where the mask has the person the picture shows, beside them the text. The cover
+/// is saved with the project and draws the same after reopening, through MCP and the CLI.
+#[test]
+#[ignore = "Requires tmp-test/face-thumb.mp4 and the vision models from scripts/fixtures.sh; run with XDG_DATA_HOME=tmp-test/xdg/data"]
+fn text_behind_a_face_over_stdio_and_the_cli() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let media = root.join("tmp-test/face-thumb.mp4").canonicalize().unwrap();
+    let mut c = Client::new(true);
+    let run = c.call("begin_run", json!({"label":"cover"}))["run_id"].clone();
+    let ids = c.call("import_media", json!({"run_id":run,"paths":[media]}))["asset_ids"].clone();
+    c.call("apply_edits", json!({"run_id":run,"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}));
+    // Pure green over the top of the head, wider than the head.
+    let cover = |behind: bool| {
+        json!([{"type":"setThumbnail","thumbnail":{"format":"cover_9x16","timeUs":7_500_000,"texts":[{"text":"VESMÍR",
+            "style":{"fontFamily":"Anton","fontSize":300,"color":"#00ff00","strokeWidth":0},
+            "transform":{"x":0,"y":-0.3,"scale":1,"rotation":0,"opacity":1},"behind":behind}]}}])
+    };
+    c.call("apply_edits", json!({"run_id":run,"request_id":"front","edits":cover(false)}));
+    let (info, _, front) = inspect_thumbnail(&mut c, json!({"format":"cover_9x16","width":1080}));
+    assert_eq!(info["texts"][0]["hidden"], 0.0, "{info}");
+    c.call("apply_edits", json!({"run_id":run,"request_id":"behind","edits":cover(true)}));
+    // The mask of this frame is not made yet: inspecting starts it as a job.
+    let waiting = c.error("inspect_thumbnail", json!({"format":"cover_9x16","width":1080}));
+    assert!(waiting.contains("MASK_NOT_READY"), "{waiting}");
+    let job = serde_json::from_str::<Value>(&waiting).unwrap()["error"]
+        .as_str()
+        .unwrap()
+        .split_whitespace()
+        .skip_while(|w| *w != "job")
+        .nth(1)
+        .unwrap()
+        .trim_end_matches(';')
+        .to_owned();
+    let done = wait_job(&mut c, &json!({"job_id": job}), Duration::from_secs(120), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let (info, _, behind) = inspect_thumbnail(&mut c, json!({"format":"cover_9x16","width":1080}));
+    let hidden = info["texts"][0]["hidden"].as_f64().unwrap();
+    assert!((0.1..0.9).contains(&hidden), "{info}");
+
+    let mask = decode_gray(&std::fs::read(done["result"]["mask_path"].as_str().unwrap()).unwrap());
+    let ink: Vec<usize> = (0..1080 * 1920).filter(|&i| front[i * 4..i * 4 + 3] == [0, 255, 0]).collect();
+    let (person, beside): (Vec<usize>, Vec<usize>) =
+        ink.iter().filter(|&&i| mask[i] == 255 || mask[i] == 0).partition(|&&i| mask[i] == 255);
+    assert!(person.len() > 5_000 && beside.len() > 5_000, "{} {}", person.len(), beside.len());
+    let green = |pixels: &[usize]| pixels.iter().filter(|&&i| behind[i * 4..i * 4 + 3] == [0, 255, 0]).count();
+    assert_eq!(green(&person), 0, "the person covers the text");
+    assert_eq!(green(&beside), beside.len(), "beside the person the text shows");
+    let share = person.len() as f64 / ink.len() as f64;
+    assert!((hidden - share).abs() < 0.05, "hidden {hidden}, measured {share}");
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+
+    // Reopened, the saved cover draws the same, and the CLI draws it the same as well.
+    let mut c = c.restart(false);
+    let (_, _, again) = inspect_thumbnail(&mut c, json!({"format":"cover_9x16","width":1080}));
+    assert_eq!(again, behind);
+    let out = c.dir.join("cover.png");
+    let cli = Command::new(env!("CARGO_BIN_EXE_nuzky"))
+        .args(["thumbnail".as_ref(), c.dir.join("project.nuzky").as_os_str(), "cover_9x16".as_ref(), out.as_os_str()])
+        .output()
+        .unwrap();
+    assert!(cli.status.success(), "{}", String::from_utf8_lossy(&cli.stderr));
+    let (frame, drawn) = decode_png(&std::fs::read(&out).unwrap());
+    assert_eq!((frame.width, frame.height), (1080, 1920));
+    let off = drawn.iter().zip(&behind).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+    assert!(off < 1080 * 1920 / 1000, "{off} values differ between the CLI and MCP");
+    c.finish();
+}
+
+fn decode_gray(bytes: &[u8]) -> Vec<u8> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+    let mut gray = vec![0; reader.output_buffer_size().unwrap()];
+    let frame = reader.next_frame(&mut gray).unwrap();
+    assert_eq!(frame.color_type, png::ColorType::Grayscale);
+    gray
 }

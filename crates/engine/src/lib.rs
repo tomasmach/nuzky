@@ -14,6 +14,7 @@ pub mod render;
 pub mod speech;
 mod stretch;
 pub mod text;
+pub mod thumbnail;
 pub mod voice;
 pub mod worker;
 

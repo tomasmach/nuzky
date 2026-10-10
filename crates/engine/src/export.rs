@@ -241,7 +241,7 @@ pub fn check_source_path(project: &Project, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn publish(tmp: &Path, out: &Path, replace_existing: bool, cancel: &AtomicBool) -> Result<()> {
+pub(crate) fn publish(tmp: &Path, out: &Path, replace_existing: bool, cancel: &AtomicBool) -> Result<()> {
     publish_with(tmp, out, replace_existing, cancel, |from, to| std::fs::hard_link(from, to))
 }
 

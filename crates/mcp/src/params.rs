@@ -1,7 +1,7 @@
 use nuzky_engine::{
     edit::{EditCmd, MotionKind, TimeRange},
     export::{Delivery, Quality},
-    model::TextStyle,
+    model::{TextStyle, ThumbnailFormat},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -281,6 +281,25 @@ pub struct Export {
     pub fps: Option<u32>,
     /// Defaults to recommended.
     pub quality: Option<Quality>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InspectThumbnail {
+    pub format: ThumbnailFormat,
+    /// Pixels, 96 to the thumbnail's own width; half of it by default.
+    pub width: Option<u32>,
+    /// Shades what the apps cover: outside the Reels safe area and the 3:4 profile grid on a cover, the
+    /// duration badge on a YouTube thumbnail.
+    #[serde(default)]
+    pub safe_zones: bool,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportThumbnail {
+    pub format: ThumbnailFormat,
+    /// A new .png, .jpg or .jpeg file; relative paths resolve beside the project.
+    pub path: String,
 }
 
 impl Captions {

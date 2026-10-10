@@ -14,11 +14,7 @@ use crate::frame::Frame;
 pub const EDGE_US: i64 = 400_000;
 
 /// The project without its text tracks: captions and titles are added on the thumbnail later.
-pub fn picture(project: &Project) -> Project {
-    let mut picture = project.clone();
-    picture.tracks.retain(|track| track.kind != TrackKind::Text);
-    picture
-}
+pub use nuzky_engine::thumbnail::picture;
 
 /// Time ranges, sorted, where a visible clip starts or ends, a transition runs or a clip animates.
 pub fn unsettled(project: &Project) -> Vec<(i64, i64)> {

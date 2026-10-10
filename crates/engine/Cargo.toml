@@ -18,6 +18,7 @@ memmap2 = "0.9"
 # RNNoise in Rust (BSD-3-Clause) for Clean voice; the default features only add its command-line tool.
 nnnoiseless = { version = "0.5.2", default-features = false }
 uuid = { version = "1", features = ["v4", "serde"] }
+png = "0.18.1"
 
 [features]
 schema = ["dep:schemars"]

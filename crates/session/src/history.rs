@@ -206,6 +206,8 @@ pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
         EditCmd::CorrectWords { .. } => "Correct words",
         EditCmd::ZoomRanges { .. } => "Zoom",
         EditCmd::ApplyMotion { .. } => "Motion",
+        EditCmd::SetThumbnail { .. } => "Thumbnail",
+        EditCmd::RemoveThumbnail { .. } => "Remove thumbnail",
     }
 }
 

@@ -9,7 +9,8 @@ use anyhow::{Context, Result, bail, ensure};
 use nuzky_engine::edit::{EditCmd, new_id};
 use nuzky_engine::export::{Delivery, ExportOptions, check_source_path, export};
 use nuzky_engine::media::probe;
-use nuzky_engine::model::AssetKind;
+use nuzky_engine::model::{AssetKind, ThumbnailFormat};
+use nuzky_engine::thumbnail::ImageKind;
 use nuzky_engine::{Project, Renderer, Wait, proxy};
 
 mod style;
@@ -28,6 +29,8 @@ const USAGE: &str = "Usage:
       frames worth a cover, best first, as JSON; downloads missing face models first
   nuzky mask <project.json> <seconds> <out.png>
       the subject of that frame as a grayscale alpha PNG; downloads the mask model first
+  nuzky thumbnail <project.json> cover_9x16|youtube_16x9 <out.png|out.jpg>
+      the project's cover or YouTube thumbnail at full size; downloads the mask model first when it needs one
 ";
 
 /// `[resolution] [fps]` and an optional `--preset <name>` anywhere among them.
@@ -385,6 +388,44 @@ fn main() -> Result<()> {
             }
             written.with_context(|| format!("Cannot write {}", out.display()))?;
             println!("{}", serde_json::to_string_pretty(&mask)?);
+        }
+        ["thumbnail", project, format, out] => {
+            let format: ThumbnailFormat = serde_json::from_value(serde_json::json!(format))
+                .context("The format is cover_9x16 or youtube_16x9")?;
+            let kind = ImageKind::of(Path::new(out)).context("The output must end in .png, .jpg or .jpeg")?;
+            check_render_output(Path::new(project), Path::new(out))?;
+            let project = load(project)?;
+            check_source_path(&project, Path::new(out))?;
+            let thumbnail = project.thumbnail(format).context("The project has no thumbnail in this format")?;
+            let mut renderer = Renderer::new()?;
+            let frame = renderer.thumbnail_frame(&project, thumbnail)?;
+            let cancel = AtomicBool::new(false);
+            let mask = if thumbnail.needs_mask() {
+                install_models(nuzky_vision::models::MASK)?;
+                let mut clock = PhaseClock { phase: None };
+                let size = (frame.width, frame.height);
+                let models = nuzky_analysis::models_dir();
+                let (alpha, _) =
+                    nuzky_vision::subject_alpha(&frame.data, size, &models, &cache_dir(), &cancel, &mut |phase| {
+                        clock.enter(phase)
+                    })?;
+                clock.finish();
+                Some(alpha)
+            } else {
+                None
+            };
+            let rendered = renderer.render_thumbnail(thumbnail, &frame, mask.as_deref(), format.size().0)?;
+            let bytes = nuzky_engine::thumbnail::encode(&rendered, kind)?;
+            // The output path was typed on purpose, as with any command-line tool.
+            nuzky_engine::thumbnail::save(Path::new(out), &bytes, true, &cancel)?;
+            let texts: Vec<_> = thumbnail
+                .texts
+                .iter()
+                .zip(&rendered.hidden)
+                .map(|(t, hidden)| serde_json::json!({"text": t.text, "behind": t.behind, "hidden": hidden}))
+                .collect();
+            let result = serde_json::json!({"width": rendered.width, "height": rendered.height, "bytes": bytes.len(), "texts": texts});
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
         ["style", ..] => style::run(&args[1..], &cache_dir())?,
         _ => bail!("{USAGE}{}", style::USAGE),
