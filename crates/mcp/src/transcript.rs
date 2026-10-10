@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use nuzky_analysis::VAD_MODEL;
 pub const BEFORE_WORD_US: i64 = 80_000;
 pub const AFTER_WORD_US: i64 = 120_000;
-const SENTENCE_GAP_US: i64 = 600_000;
+pub(crate) const SENTENCE_GAP_US: i64 = 600_000;
 const PAUSE_GAP_US: i64 = 300_000;
 pub const DEFAULT_PAUSE_US: i64 = 300_000;
 

@@ -7,6 +7,7 @@ mod limits;
 mod media;
 pub mod model_download;
 mod params;
+pub mod reels;
 mod rules;
 pub mod sounds;
 pub mod style;
@@ -75,7 +76,7 @@ fn catalog() -> Result<Vec<Tool>> {
     Ok(vec![
         tool::<params::State>(
             "get_state",
-            "Read compact project assets, tracks and clips, thumbnails, selection (empty headless), playhead (0 headless), timeline-layout speech_layout_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read nuzky://guide before editing.",
+            "Read compact project assets, tracks and clips, thumbnails, reel_candidates (see propose_reels), selection (empty headless), playhead (0 headless), timeline-layout speech_layout_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read nuzky://guide before editing.",
         )?,
         tool::<params::Begin>(
             "begin_run",
@@ -164,6 +165,14 @@ fn catalog() -> Result<Vec<Tool>> {
         tool::<params::ApplyMotion>(
             "apply_motion",
             "A slow camera move as one edit of the run, without working out keyframes: kind pushIn zooms in, pullOut starts zoomed in and ends on the clip's own framing, kenBurns zooms in while drifting right; strength is how far, 0.06 subtle, 0.1 or 0.15 strong (0.02-0.5). clip_id moves one video or image clip on any track, over the part of it inside range_us or its whole length; without clip_id, range_us moves every main-track video and image clip under it as one continuous motion, e.g. one sentence from get_transcript start_us of its first word to end_us of its last. Each clip gets two keyframes on a smooth curve (ease \"smooth\": it starts and ends gently) from its own transform, editable afterwards with setKeyframes. The zoom centres on the middle of the IG/TikTok safe area on vertical canvases, else on the canvas centre, so a face framed there stays put. Clips that already have keyframes are left alone and listed in skipped; remove their keyframes first to replace them. Requires run_id. Optional request_id: reuse it with identical arguments after a save failure. Returns revision, changed clip ids and skipped.",
+        )?,
+        tool::<params::ProposeReels>(
+            "propose_reels",
+            "Reels from a long video: propose moments of the transcript that each work as a reel on their own, as one edit of your run. Read the video first with get_transcript(detail: \"sentences\") page by page. candidates [{from, to, title, why, score}] are INCLUSIVE word ranges of the current transcript_key (SPEECH_CHANGED when stale): from starts a sentence and to ends one (REEL_BOUNDARY; a comma ends no sentence), inside the transcript (REEL_OUTSIDE_TRANSCRIPT), sharing no words with each other or with reels already made (REEL_OVERLAP), and at most max_duration_us long once made (default 60000000; REEL_TOO_LONG), measured as make_reels cuts: the words with at most 80 ms before and 120 ms after, pauses over 300 ms shortened. title up to 100 characters in the video's language; why up to 300: what makes it work alone, such as a strong opening line, a payoff, one clear idea; score 0-1. Replaces the reels proposed before; made ones stay. Returns candidates with id, from, to, start_us, end_us, hook (the sentence the reel opens with), duration_us and status proposed; get_state lists them as reel_candidates and the user picks them in the app. Requires run_id. Optional request_id: reuse it with identical arguments after a save failure.",
+        )?,
+        tool::<params::MakeReels>(
+            "make_reels",
+            "Make each reel candidate in ids (get_state.reel_candidates) a project of its own beside this one, as one edit of your run: the same media files, never copied, only the candidate's words, cut as edit_transcript keep cuts them, on a 1080x1920 canvas. canvas crop (default) fills the frame with the middle of the picture; blur fits the whole picture with a blurred copy of it behind. This project changes only in those candidates: status made and project_path. Returns reels [{id, path, duration_us}]. Make what the user picked (status picked) unless they asked for others. Each reel is its own project: captions, covers and export happen in it, through an MCP server started on its path, since this server edits only this project. UNKNOWN_REEL; REEL_MADE when it is made already; SPEECH_CHANGED when the video changed since it was proposed: propose again. Requires run_id. Optional request_id: reuse it with identical arguments after a save failure; the projects written then are kept.",
         )?,
         tool::<params::Export>(
             "export_video",

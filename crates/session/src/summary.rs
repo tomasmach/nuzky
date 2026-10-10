@@ -4,7 +4,7 @@
 
 use nuzky_engine::Project;
 use nuzky_engine::edit::MAIN_TRACK;
-use nuzky_engine::model::{Background, Clip, ClipContent, Crop, Thumbnail, ThumbnailFormat, TrackKind};
+use nuzky_engine::model::{Background, Clip, ClipContent, Crop, ReelStatus, Thumbnail, ThumbnailFormat, TrackKind};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -464,6 +464,23 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         };
         out.push(RunChange { text: format!("{verb} {name}"), clip_ids: Vec::new(), at_us: None });
     }
+    let (was, now) = (&before.reel_candidates, &after.reel_candidates);
+    let old = |id: &str| was.iter().find(|c| c.id == id);
+    let made =
+        now.iter().filter(|c| c.status == ReelStatus::Made && old(&c.id).is_none_or(|o| o.status != ReelStatus::Made));
+    let made = made.count();
+    let proposed = now.iter().filter(|c| c.status != ReelStatus::Made && old(&c.id).is_none()).count();
+    let changed = now.iter().filter(|c| c.status != ReelStatus::Made && old(&c.id).is_some_and(|o| o != *c)).count();
+    let removed = was.iter().filter(|o| !now.iter().any(|c| c.id == o.id)).count();
+    for (n, what) in [(proposed, "Proposed"), (made, "Made"), (changed, "Changed"), (removed, "Removed")] {
+        if n > 0 {
+            out.push(RunChange {
+                text: format!("{what} {}", count(n, "reel", "reels")),
+                clip_ids: Vec::new(),
+                at_us: None,
+            });
+        }
+    }
     if before.name != after.name {
         out.push(RunChange {
             text: format!("Renamed the project to {}", quote(&after.name)),
@@ -598,6 +615,36 @@ mod tests {
         apply(&mut e, cover(7_000_000, 0.3));
         apply(&mut e, json!({"type": "removeThumbnail", "format": "youtube_16x9"}));
         assert_eq!(texts(&summarize(&before, &e.project)), ["Changed the 9:16 cover", "Removed the YouTube thumbnail"]);
+    }
+
+    #[test]
+    fn reels_say_how_many_were_proposed_made_and_dropped() {
+        let mut e = editor();
+        let candidate = |id: &str, from: i64, status: &str| {
+            let mut c = json!({"id": id, "from": from, "to": from + 9, "startUs": from * 1_000_000,
+                "endUs": from * 1_000_000 + 900_000, "title": "T", "hook": "H.", "why": "W", "durationUs": 900_000,
+                "score": 0.5, "status": status});
+            if status == "made" {
+                c["projectPath"] = json!(format!("/v/{id}.nuzky"));
+            }
+            c
+        };
+        let before = e.project.clone();
+        apply(
+            &mut e,
+            json!({"type": "setReelCandidates", "candidates": [candidate("a", 0, "proposed"), candidate("b", 10, "proposed")]}),
+        );
+        assert_eq!(texts(&summarize(&before, &e.project)), ["Proposed 2 reels"]);
+        let before = e.project.clone();
+        apply(&mut e, json!({"type": "updateReelCandidate", "candidate": candidate("a", 0, "made")}));
+        apply(&mut e, json!({"type": "updateReelCandidate", "candidate": candidate("b", 10, "rejected")}));
+        assert_eq!(texts(&summarize(&before, &e.project)), ["Made 1 reel", "Changed 1 reel"]);
+        let before = e.project.clone();
+        apply(
+            &mut e,
+            json!({"type": "setReelCandidates", "candidates": [candidate("a", 0, "made"), candidate("c", 10, "proposed")]}),
+        );
+        assert_eq!(texts(&summarize(&before, &e.project)), ["Proposed 1 reel", "Removed 1 reel"]);
     }
 
     #[test]

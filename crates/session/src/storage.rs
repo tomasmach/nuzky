@@ -39,6 +39,42 @@ pub(crate) fn save_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+/// Writes a new project file without ever replacing one, also one created since the caller looked.
+pub fn publish_new(path: &Path, value: &impl Serialize) -> Result<()> {
+    let tmp = json_temp_path(path);
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = (|| {
+        file.write_all(&serde_json::to_vec_pretty(value)?)?;
+        file.sync_all()?;
+        // Unlike rename, hard_link refuses a destination created since the existence check.
+        match fs::hard_link(&tmp, path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(anyhow::Error::new(error).context("Publishing new project"));
+            }
+            // FAT32 and exFAT have no hard links: claim the name first, so nothing is replaced.
+            Err(_) => {
+                OpenOptions::new().write(true).create_new(true).open(path).context("Publishing new project")?;
+                if let Err(error) = fs::rename(&tmp, path) {
+                    let _ = fs::remove_file(path);
+                    return Err(anyhow::Error::new(error).context("Publishing new project"));
+                }
+            }
+        }
+        Ok(())
+    })();
+    drop(file);
+    let _ = fs::remove_file(tmp);
+    result
+}
+
+/// No project at `path`, and no history or checkpoint left from one, which a new project there would inherit.
+pub fn vacant(path: &Path) -> bool {
+    [PathBuf::from(path), sidecar(path, crate::HISTORY_SUFFIX), sidecar(path, ".checkpoint.json")]
+        .iter()
+        .all(|p| p.symlink_metadata().is_err())
+}
+
 /// The returned file owns the OS lock; keep it alive through any pending writes.
 pub fn lock_project(path: &Path, exclusive: bool) -> Result<File> {
     let path = if path.exists() {

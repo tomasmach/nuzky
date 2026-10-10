@@ -208,6 +208,8 @@ pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
         EditCmd::ApplyMotion { .. } => "Motion",
         EditCmd::SetThumbnail { .. } => "Thumbnail",
         EditCmd::RemoveThumbnail { .. } => "Remove thumbnail",
+        EditCmd::SetReelCandidates { .. } => "Reel ideas",
+        EditCmd::UpdateReelCandidate { .. } => "Change reel idea",
     }
 }
 

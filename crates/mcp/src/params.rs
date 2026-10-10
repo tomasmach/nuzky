@@ -260,6 +260,30 @@ pub struct ApplyZooms {
     /// Punch-ins on INCLUSIVE word ranges, such as analyze(kind: "emphasis").zooms.
     pub zooms: Vec<crate::zooms::WordZoom>,
 }
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposeReels {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without proposing twice.
+    pub request_id: Option<String>,
+    pub transcript_key: String,
+    /// Replace every reel proposed before; reels already made stay.
+    pub candidates: Vec<crate::reels::ReelProposal>,
+    /// Longest reel once made, 60 s by default.
+    pub max_duration_us: Option<i64>,
+}
+#[derive(Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MakeReels {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without making the reels twice.
+    pub request_id: Option<String>,
+    /// Ids from get_state's reel_candidates.
+    pub ids: Vec<String>,
+    /// crop (default) fills the 9:16 frame with the middle of the picture; blur fits the whole picture with a
+    /// blurred copy behind.
+    pub canvas: Option<crate::reels::Framing>,
+}
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyMotion {

@@ -13,7 +13,7 @@ use nuzky_engine::{
     edit::{EditCmd, TimeRange, new_id},
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
-    model::{Thumbnail, ThumbnailFormat},
+    model::{ReelStatus, Thumbnail, ThumbnailFormat},
     thumbnail::ImageKind,
 };
 use nuzky_session::{Expect, Mode, ProjectSession, SessionState, Target, host::Host, jobs::check_cancel};
@@ -21,7 +21,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::{activity, media, params::*, transcript};
+use crate::{activity, media, params::*, reels, transcript};
 
 const PREVIEW_CHARS: usize = 400;
 /// How long activity waits for its job before handing it over to poll.
@@ -267,6 +267,8 @@ impl Backend {
             "build_captions" => self.captions(parse(arguments)?, state),
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "apply_motion" => self.apply_motion(parse(arguments)?, state),
+            "propose_reels" => self.propose_reels(parse(arguments)?, state),
+            "make_reels" => self.make_reels(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             "export_thumbnail" => self.export_thumbnail(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
@@ -414,6 +416,7 @@ impl Backend {
         object.insert("assets".into(), json!(project.assets));
         object.insert("tracks".into(), json!(project.tracks));
         object.insert("thumbnails".into(), json!(project.thumbnails));
+        object.insert("reel_candidates".into(), json!(project.reel_candidates));
         object.insert("duration_us".into(), json!(state.project.duration_us()));
         object.insert("caption_stats".into(), caption_stats(&state.project));
         object.insert("filtered".into(), json!(args.range.is_some() || args.clip_ids.is_some()));
@@ -931,6 +934,63 @@ impl Backend {
         let result = self.host.session.apply_edits(&args.run_id, &request_id, vec![edit], Expect::default())?;
         Ok(json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch,
             "changed": result.changed, "skipped": result.outcome.skipped}))
+    }
+
+    /// The candidates replace those not made yet, as one edit of the run. A retry with the same request_id after a
+    /// failed save applies what was planned the first time.
+    fn propose_reels(&self, args: ProposeReels, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({ "propose_reels": &args });
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == arguments, "REQUEST_CONFLICT: request_id was used with different arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        transcript::check_key(&state.project, &derived, &args.transcript_key)?;
+        let made: Vec<_> =
+            state.project.reel_candidates.iter().filter(|c| c.status == ReelStatus::Made).cloned().collect();
+        let max = args.max_duration_us.unwrap_or(reels::DEFAULT_MAX_DURATION_US);
+        let proposed = reels::plan(&state.project, &derived, &args.candidates, &made, max)?;
+        let prepared = requests.entry(key).or_insert(PreparedTranscriptEdit {
+            arguments,
+            edits: vec![EditCmd::SetReelCandidates { candidates: made.into_iter().chain(proposed.clone()).collect() }],
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            response: json!({ "candidates": proposed }),
+        });
+        self.apply_transcript_edit(&args.run_id, &request_id, prepared)
+    }
+
+    /// Writes the reels' projects, then marks them made as one edit of the run. A retry with the same request_id
+    /// after a failed save marks the projects written the first time instead of writing new ones.
+    fn make_reels(&self, args: MakeReels, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let request_id = args.request_id.clone().unwrap_or_else(new_id);
+        let key = (args.run_id.clone(), request_id.clone());
+        let arguments = json!({ "make_reels": &args });
+        let mut requests = self.transcript_requests.lock().unwrap();
+        requests.retain(|(run, _), _| run == &args.run_id);
+        if let Some(prepared) = requests.get(&key) {
+            ensure!(prepared.arguments == arguments, "REQUEST_CONFLICT: request_id was used with different arguments");
+            return self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        }
+        let derived = transcript::derive(&self.media_project(&state.project), &self.host.transcripts)?;
+        let framing = args.canvas.unwrap_or_default();
+        let (made, edits) = reels::make(&self.project_path, &state.project, &derived, &args.ids, framing)?;
+        let prepared = requests.entry(key.clone()).or_insert(PreparedTranscriptEdit {
+            arguments,
+            edits,
+            expect: Expect { revision: Some(state.stamp.revision), speech_layout_key: None },
+            response: json!({ "reels": made }),
+        });
+        let applied = self.apply_transcript_edit(&args.run_id, &request_id, prepared);
+        if applied.is_err() && reels::forget(&made, &self.host.session.state()?.project) {
+            requests.remove(&key);
+        }
+        applied
     }
 
     fn export(&self, args: Export, state: &SessionState) -> Result<Value> {
