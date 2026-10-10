@@ -58,6 +58,9 @@ def covers(r):
         # The fixture: [0,3) s blurred, [3,6) a blink, [6,12) sharp open eyes.
         r.check('the cover frame has sharp open eyes', frames['status'] == 'done' and best.get('time_us', 0) >= 6_000_000
                 and best['parts']['eyes_open'] > 0.9, {'seconds': round(seconds, 1), 'best': best})
+        # The person model ran in the app under the system's locale: with a decimal comma it once saw nobody.
+        box = best.get('subject_box')
+        r.check('the cover frame knows where the person is', box and box[2] * box[3] > 0.2 * 1080 * 1920, box)
         r.seek(best.get('time_us', 0))
         time.sleep(1)
         r.shot('cover-frame')

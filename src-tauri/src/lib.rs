@@ -931,6 +931,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // GTK has set the process's locale from the system, so on a Czech or German system C code reads numbers
+            // with a decimal comma. ONNX Runtime read its operators' default values that way when the first model
+            // loaded, and the person model then saw nobody, so covers lost where the person is. Numbers stay C; the
+            // interface formats its own in the webview.
+            #[cfg(target_os = "linux")]
+            // SAFETY: on the main thread before any other code of the app runs.
+            unsafe {
+                libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
+            }
             let server = Arc::new(PreviewServer::start()?);
             let (session, events, startup_notice) = initial_project()?;
             let project = session.host.session.state()?.project;
