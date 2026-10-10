@@ -4,7 +4,7 @@ are linked from tmp-test, so nothing is downloaded. Without ONNX Runtime the app
 say they cannot run instead of offering a download."""
 import json, os, shutil, subprocess, time
 
-from e2e.harness import CLI, FIXTURES, MODELS, Bridge, flow, wait
+from e2e.harness import CLI, FIXTURES, MODELS, Bridge, comma_locale, flow, wait
 
 VISION = ('yunet-2026may.onnx', 'face-landmarks-v2.onnx', 'face-blendshapes-v2.onnx', 'selfie-segmenter.onnx',
           'birefnet-lite.onnx')
@@ -12,6 +12,7 @@ INVOKE = 'window.__TAURI_INTERNALS__.invoke(arguments[0]).then((v) => JSON.strin
 
 
 def face_project(r):
+    comma_locale(r)
     project = r.work / 'data/nuzky/projects/face.nuzky'
     subprocess.run([str(CLI), 'new', str(project), str(FIXTURES / 'face-thumb.mp4')], env=r.env, check=True,
                    capture_output=True)
@@ -58,6 +59,9 @@ def covers(r):
         # The fixture: [0,3) s blurred, [3,6) a blink, [6,12) sharp open eyes.
         r.check('the cover frame has sharp open eyes', frames['status'] == 'done' and best.get('time_us', 0) >= 6_000_000
                 and best['parts']['eyes_open'] > 0.9, {'seconds': round(seconds, 1), 'best': best})
+        # The person model runs in the app, started with a decimal comma where the system has one: it once saw nobody.
+        box = best.get('subject_box')
+        r.check('the cover frame knows where the person is', box and box[2] * box[3] > 0.2 * 1080 * 1920, box)
         r.seek(best.get('time_us', 0))
         time.sleep(1)
         r.shot('cover-frame')

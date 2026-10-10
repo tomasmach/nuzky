@@ -62,3 +62,4 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
 nuzky-analysis = { workspace = true, features = ["gpu"] }
+libc = "0.2.190"

@@ -493,6 +493,18 @@ class Bridge:
             stop(self.process)
 
 
+def comma_locale(r):
+    """Starts the app with numbers written with a decimal comma, as on a Czech system, when such a locale is installed;
+    the person model once saw nobody under one. Returns the locale, or None."""
+    installed = subprocess.run(['locale', '-a'], capture_output=True, text=True).stdout.split()
+    found = next((name for name in ('cs_CZ.utf8', 'de_DE.utf8', 'fr_FR.utf8') if name in installed), None)
+    if found:
+        # LC_ALL would win over it.
+        r.env.pop('LC_ALL', None)
+        r.env['LC_NUMERIC'] = found
+    return found
+
+
 # The word timing models recognition downloads on first use; linked so no flow reaches the network.
 ALIGN_MODELS = ('wav2vec2-xls-r-300m-cs-250-q8_0.gguf', 'wav2vec2-base-960h.gguf')
 
