@@ -215,14 +215,13 @@ def start(command, log, env=None):
 
 
 def stop(process, timeout=5):
-    # Ended already, such as the app after its window closed. macOS refuses to signal such a group.
-    if process.poll() is not None:
-        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout)
-    except (ProcessLookupError, PermissionError):
-        # Gone meanwhile; macOS answers a group that has just ended with a permission error.
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS refuses to signal a group whose leader has ended unwaited, such as the app after its window closed.
         process.wait(timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)

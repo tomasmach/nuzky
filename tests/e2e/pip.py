@@ -129,8 +129,11 @@ def pip(r):
     kept = wait(lambda: (b := bounds(r, clip['id'])) and abs(b['corners'][1][0] - area['right']) < 0.5 and b, 5)
     r.check('the circle stays in the corner of the safe area', kept, kept or bounds(r, clip['id']))
     r.s.run(f"document.querySelector('{SECTION} input[aria-label=\"Border\"]').focus()")
-    for _ in range(6):
+    # One press at a time, as a person watching the value: a press that lands before the last one is saved
+    # starts from the old value.
+    for width in range(1, 7):
         press('Right')
+        wait(lambda: pip_clip(r, wide)[1]['content']['shape']['borderWidth'] == width, 5)
     border = wait(lambda: (pip_clip(r, wide)[1]['content']['shape']['borderWidth'] == 6) or None, 5)
     r.check('the arrow keys on Border widen it to 6 px', border, pip_clip(r, wide)[1]['content']['shape'])
     r.shot('inspector-circle')
