@@ -37,9 +37,9 @@ done
 if [ ${#missing[@]} -gt 0 ]; then
   fetched="$(mktemp -d "$DEPS/rpms.XXXXXX")"
   dnf download --arch x86_64 --destdir "$fetched" "${missing[@]}"
-  mv "$fetched"/*.rpm "$DEPS/rpms/"
-  # The tree must take in the new packages too.
+  # The tree must take in the new packages too, even if this run stops before it does.
   rm -f "$ROOT/.complete"
+  mv "$fetched"/*.rpm "$DEPS/rpms/"
 fi
 if [ ! -f "$ROOT/.complete" ]; then
   fresh="$(mktemp -d "$DEPS/root.XXXXXX")"
