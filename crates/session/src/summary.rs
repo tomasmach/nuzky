@@ -130,6 +130,14 @@ fn crop(clip: &Clip) -> Option<Crop> {
     }
 }
 
+/// The file and the time in it the main track shows at `t_us`, to the millisecond.
+fn shown_source(project: &Project, t_us: i64) -> Option<(&str, i64)> {
+    let clip = project.tracks.iter().find(|t| t.id == MAIN_TRACK)?.clips.iter().find(|c| c.contains(t_us))?;
+    let (asset, from, to) = source(clip)?;
+    let at = from as f64 + (t_us - clip.start_us) as f64 * (to - from) as f64 / clip.duration_us as f64;
+    Some((asset, (at / 1000.0).round() as i64))
+}
+
 pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
     let mut out = Vec::new();
     let asset_name =
@@ -433,9 +441,12 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             ThumbnailFormat::Cover9x16 => "the 9:16 cover",
             ThumbnailFormat::Youtube16x9 => "the YouTube thumbnail",
         };
-        // Cuts before its frame move the frame's time with the picture; that is the same cover.
-        let moved_with_cut =
-            |old: &Thumbnail, new: &Thumbnail| now < was && Thumbnail { time_us: new.time_us, ..old.clone() } == *new;
+        // Cuts before its frame move the frame's time with the picture; showing the same moment, it is the same cover.
+        let moved_with_cut = |old: &Thumbnail, new: &Thumbnail| {
+            Thumbnail { time_us: new.time_us, ..old.clone() } == *new
+                && shown_source(before, old.time_us)
+                    .is_some_and(|shown| Some(shown) == shown_source(after, new.time_us))
+        };
         let verb = match (before.thumbnail(format), after.thumbnail(format)) {
             (None, Some(_)) => "Made",
             (Some(_), None) => "Removed",
@@ -563,11 +574,17 @@ mod tests {
         apply(&mut e, json!({"type": "setThumbnail", "thumbnail": {"format": "youtube_16x9", "timeUs": 0}}));
         assert_eq!(texts(&summarize(&before, &e.project)), ["Made the 9:16 cover", "Made the YouTube thumbnail"]);
         let before = e.project.clone();
-        apply(&mut e, json!({"type": "rippleDeleteRanges", "ranges": [{"startUs": 1_000_000, "endUs": 2_000_000}]}));
+        let cut = json!({"type": "rippleDeleteRanges", "ranges": [{"startUs": 1_000_000, "endUs": 2_000_000}]});
+        apply(&mut e, cut.clone());
         assert_eq!(
             texts(&summarize(&before, &e.project)),
             ["Shortened the video from 20.0 s to 19.0 s", "Cut out 1 passage, 1.0 s in total"]
         );
+        // A cut together with a frame chosen elsewhere is a change.
+        let mut other = Editor::new(before.clone());
+        apply(&mut other, cut);
+        apply(&mut other, cover(3_000_000, 0.0));
+        assert!(texts(&summarize(&before, &other.project)).contains(&"Changed the 9:16 cover"));
         let before = e.project.clone();
         apply(&mut e, cover(7_000_000, 0.3));
         apply(&mut e, json!({"type": "removeThumbnail", "format": "youtube_16x9"}));

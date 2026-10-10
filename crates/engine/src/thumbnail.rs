@@ -127,9 +127,8 @@ impl Renderer {
             // The frame as placed, enlarged about the middle of its visible part until it covers the thumbnail.
             let shown = crate::render::sub_quad(&corners, rect);
             let centre = [(shown[0][0] + shown[2][0]) / 2.0, (shown[0][1] + shown[2][1]) / 2.0];
-            let (sw, sh) = (frame_size.0 * (rect[2] - rect[0]), frame_size.1 * (rect[3] - rect[1]));
-            let cover = (2.0 * centre[0].max(w - centre[0]) / sw).max(2.0 * centre[1].max(h - centre[1]) / sh);
-            let enlarge = if cover.is_finite() { cover.clamp(1.0, 1e4) } else { 1.0 };
+            let shown_size = (frame_size.0 * (rect[2] - rect[0]), frame_size.1 * (rect[3] - rect[1]));
+            let enlarge = cover_scale(centre, shown_size, t.rotation, (w, h));
             let enlarged =
                 corners.map(|[x, y]| [centre[0] + (x - centre[0]) * enlarge, centre[1] + (y - centre[1]) * enlarge]);
             let image = if background.blur > 0.0 {
@@ -161,7 +160,7 @@ impl Renderer {
                 if let Some(coverage) = &coverage {
                     for (i, (text, layer)) in thumbnail.texts.iter().zip(&texts).enumerate() {
                         if let (true, Some(layer)) = (text.behind, layer) {
-                            hidden[i] = hidden_share(layer, coverage, (width, height));
+                            hidden[i] = hidden_share(layer, coverage, (width, height)) * t.opacity;
                         }
                     }
                 }
@@ -172,6 +171,21 @@ impl Renderer {
         let rgba = self.gpu.render(width, height, parse_color(&background.color), &draws)?;
         Ok(RenderedThumbnail { width, height, rgba, hidden })
     }
+}
+
+/// How much the visible part of the frame, `size` output pixels around `centre` and turned by `rotation` degrees
+/// clockwise, must grow about its centre to cover a `w` × `h` picture: at least 1.
+fn cover_scale(centre: [f32; 2], size: (f32, f32), rotation: f32, (w, h): (f32, f32)) -> f32 {
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let need = [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]]
+        .into_iter()
+        .map(|[x, y]| {
+            // Each corner of the picture in the frame's own, unturned directions.
+            let (dx, dy) = (x - centre[0], y - centre[1]);
+            (2.0 * (dx * cos + dy * sin).abs() / size.0).max(2.0 * (dy * cos - dx * sin).abs() / size.1)
+        })
+        .fold(1.0, f32::max);
+    if need.is_finite() { need.min(1e4) } else { 1.0 }
 }
 
 /// An image drawn on `corners`, showing the part `rect` (left, top, right and bottom in 0..1) of it.
@@ -208,13 +222,14 @@ fn shrink(image: &Image, step: usize) -> Image {
     let mut data = Vec::with_capacity(w * h * 4);
     for y in 0..h {
         for x in 0..w {
-            let mut sum = [0u32; 4];
+            // A whole 7680 px frame shrunk to one pixel adds up to more than a u32 holds.
+            let mut sum = [0u64; 4];
             let mut count = 0;
             for sy in y * step..((y + 1) * step).min(sh) {
                 for sx in x * step..((x + 1) * step).min(sw) {
                     let i = (sy * sw + sx) * 4;
                     for (sum, &value) in sum.iter_mut().zip(&image.data[i..i + 4]) {
-                        *sum += value as u32;
+                        *sum += value as u64;
                     }
                     count += 1;
                 }
@@ -455,6 +470,25 @@ pub fn save(out: &Path, bytes: &[u8], replace_existing: bool, cancel: &AtomicBoo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_background_grows_until_it_covers_the_thumbnail_also_when_turned() {
+        let centre = [540.0, 960.0];
+        assert_eq!(cover_scale(centre, (1080.0, 1920.0), 0.0, (1080.0, 1920.0)), 1.0);
+        // Turned a quarter, the 9:16 frame lies across the 9:16 cover and must grow by 16:9 to fill it.
+        assert!((cover_scale(centre, (1080.0, 1920.0), 90.0, (1080.0, 1920.0)) - 1920.0 / 1080.0).abs() < 1e-4);
+        // A vertical frame on the left third of a YouTube thumbnail reaches its right edge.
+        let third = cover_scale([427.0, 360.0], (405.0, 720.0), 0.0, (1280.0, 720.0));
+        assert!((third - 2.0 * (1280.0 - 427.0) / 405.0).abs() < 1e-4);
+        assert_eq!(cover_scale(centre, (0.0, 0.0), 0.0, (1080.0, 1920.0)), 1.0);
+    }
+
+    #[test]
+    fn shrinking_a_whole_large_frame_to_one_pixel_keeps_its_average() {
+        let (w, h) = (4200, 4200);
+        let image = Image { width: w, height: h, data: Arc::new([200u8, 100, 50, 255].repeat((w * h) as usize)) };
+        assert_eq!(*shrink(&image, usize::MAX).data, [200, 100, 50, 255]);
+    }
 
     #[test]
     fn distance_to_the_person_is_euclidean() {
