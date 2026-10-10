@@ -120,7 +120,7 @@ fn workers() -> usize {
 
 /// Runs `work` over `items` in contiguous runs, one per worker with the state `start` makes, and
 /// keeps their order. Reports the share done; the first failure stops every worker.
-fn in_parallel<I: Sync, O: Send, S>(
+pub(crate) fn in_parallel<I: Sync, O: Send, S>(
     items: &[I],
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
