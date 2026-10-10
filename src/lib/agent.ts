@@ -97,15 +97,13 @@ interface AgentState {
 
 const AGENT_KEY = "nuzky.aiAgent";
 
-/** Agents the panel can run so far; Codex there comes next, in a terminal it works today. */
-export const READY: AgentId[] = ["claude"];
-export const NOT_READY = "Codex in the AI panel comes next. Until then, connect it in a terminal.";
-const usable = (a: AgentInfo) => !!a.path && READY.includes(a.id);
+const AGENTS: AgentId[] = ["claude", "codex"];
+const usable = (a: AgentInfo) => !!a.path;
 
 export const useAgent = create<AgentState>(() => ({
   agents: null,
   agentsError: null,
-  agent: READY.includes(localStorage.getItem(AGENT_KEY) as AgentId) ? (localStorage.getItem(AGENT_KEY) as AgentId) : "claude",
+  agent: AGENTS.includes(localStorage.getItem(AGENT_KEY) as AgentId) ? (localStorage.getItem(AGENT_KEY) as AgentId) : "claude",
   chat: null,
   turn: null,
   items: [],
@@ -203,7 +201,7 @@ export async function loadAgents() {
 
 export function chooseAgent(agent: AgentId) {
   const s = useAgent.getState();
-  if (s.agent === agent || s.status !== "idle" || !READY.includes(agent)) return;
+  if (s.agent === agent || s.status !== "idle") return;
   localStorage.setItem(AGENT_KEY, agent);
   // Another agent does not know this conversation, so it starts a new one; the draft stays.
   useAgent.setState({ agent, chat: null, items: [] });
@@ -235,7 +233,6 @@ function describeContext(c: PromptContext): string | null {
 export function sendBlocked(): string | null {
   const s = useAgent.getState();
   const info = s.agents?.find((a) => a.id === s.agent);
-  if (!READY.includes(s.agent)) return NOT_READY;
   if (s.agents && !info?.path) return `${info?.name ?? "The agent"} is not installed`;
   if (s.status !== "idle") return "Wait for the answer, or stop it";
   if (useEditor.getState().aiRun) return "Another agent is editing. Wait for it, or stop it in the top bar";

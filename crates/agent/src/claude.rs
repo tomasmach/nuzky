@@ -1,17 +1,10 @@
 //! Claude Code as `claude -p` with stream-json output: the command and a parser of its lines.
 
 use crate::event::{AgentEvent, ErrorCode, ToolStatus};
-use crate::turn::TurnRequest;
+use crate::turn::{SYSTEM, Step, TurnRequest};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::process::Command;
-
-/// What Nuzky tells the agent about where it is, on top of the MCP server's own instructions.
-const SYSTEM: &str = "You are the AI panel inside Nuzky, a video editor. The user watches the open project change as you work. \
-Use only the nuzky tools and follow the Nuzky instructions you were given. One request is one run: begin_run once before \
-changing anything and end_run with keep when you are done. Answer briefly in the user's language and say what you changed. \
-When the user has to decide something, call suggest_options as the last thing in your turn. The [Nuzky] lines at the end \
-of a message say what the user had selected when they sent it.";
 
 /// Settings Nuzky needs; `outputStyle` doubles as a check that Claude applied them at all,
 /// since it silently ignores a settings value it does not accept.
@@ -32,14 +25,6 @@ pub(crate) fn command(req: &TurnRequest) -> Command {
         .args(["--disable-slash-commands", "--append-system-prompt", SYSTEM])
         .args([if req.resume { "--resume" } else { "--session-id" }, &req.session]);
     c
-}
-
-pub(crate) enum Step {
-    Event(AgentEvent),
-    /// Ends the turn with this error; Nuzky stops the agent.
-    Fail(ErrorCode, String),
-    /// The agent's own closing error, which a stopped turn also produces.
-    ResultError(String),
 }
 
 #[derive(Default)]

@@ -28,8 +28,6 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  NOT_READY,
-  READY,
   choose,
   chooseAgent,
   markUndone,
@@ -215,15 +213,15 @@ function AgentMenu() {
             <MenuItem
               key={a.id}
               checked={a.id === agent}
-              disabled={!a.path || busy || !READY.includes(a.id)}
-              reason={!READY.includes(a.id) ? NOT_READY : !a.path ? `${a.name} is not installed` : "Wait for the answer, or stop it"}
+              disabled={!a.path || busy}
+              reason={!a.path ? `${a.name} is not installed` : "Wait for the answer, or stop it"}
               onClick={() => {
                 chooseAgent(a.id);
                 close();
               }}
             >
               <span className="flex-1">{a.name}</span>
-              <span className="text-[12px] text-muted">{!READY.includes(a.id) ? "Coming next" : a.path ? (a.version ?? "Installed") : "Not installed"}</span>
+              <span className="text-[12px] text-muted">{a.path ? (a.version ?? "Installed") : "Not installed"}</span>
             </MenuItem>
           ))}
           <div className="mx-1.5 my-1 h-px bg-white/[.08]" />
@@ -384,7 +382,7 @@ function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; messa
   const agents = useAgent((s) => s.agents);
   const agent = useAgent((s) => s.agent);
   const name = agents?.find((a) => a.id === agent)?.name ?? "The agent";
-  const other = agents?.find((a) => a.id !== agent && a.path && READY.includes(a.id));
+  const other = agents?.find((a) => a.id !== agent && a.path);
   const retry = (
     <Button className="h-7 px-2.5 text-[12px]" onClick={() => void (retryText ? send(retryText) : send())}>
       Try again
@@ -395,10 +393,12 @@ function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; messa
       Ask {other.name} instead
     </Button>
   );
-  const cmd = <code className="rounded bg-white/[.08] px-1">{COMMAND[agent]}</code>;
+  const term = (text: string) => <code className="rounded bg-white/[.08] px-1">{text}</code>;
+  const cmd = term(COMMAND[agent]);
+  const signIn = agent === "codex" ? <>run {term("codex login")} and choose Sign in with ChatGPT</> : <>run {cmd} and sign in</>;
   const [icon, title, body, buttons]: [ReactNode, string, ReactNode, ReactNode] =
     code === "NOT_SIGNED_IN"
-      ? [<AlertCircle size={16} className="text-danger" />, `${name} isn't signed in.`, <>Open a terminal, run {cmd} and sign in. Your message is still here.</>, <>{retry}{switchTo}</>]
+      ? [<AlertCircle size={16} className="text-danger" />, `${name} isn't signed in.`, <>Open a terminal, {signIn}. Your message is still here.</>, <>{retry}{switchTo}</>]
       : code === "USAGE_LIMIT"
         ? [<AlertTriangle size={16} className="text-warn" />, `${name} usage limit reached.`, <>{message} The limit comes from your plan, not from Nuzky. Your message is still here.</>, switchTo]
         : code === "NOT_INSTALLED"
@@ -467,12 +467,12 @@ function Empty() {
   const blocked = useEditor((s) => !!s.aiRun);
   if (error) return <div className="mt-auto"><ErrorNotice code="AGENT_FAILED" message={error} /></div>;
   if (agents === null) return <p className="mt-auto px-1 text-[12px] text-muted">Looking for Claude Code and Codex…</p>;
-  if (!agents.some((a) => a.path && READY.includes(a.id)))
+  if (!agents.some((a) => a.path))
     return (
       <div className="my-auto flex flex-col px-1">
         <h3 className="text-[15px] font-semibold text-fg">No AI agent found</h3>
         <p className="mb-3 mt-1.5 text-[12px] leading-[18px] text-muted">Nuzky runs the AI you already use. Install one, sign in from your terminal, then check again.</p>
-        {agents.filter((a) => READY.includes(a.id)).map((a) => (
+        {agents.map((a) => (
           <div key={a.id} className="flex h-9 items-center justify-between border-t border-white/[.07] text-[13px]">
             {a.name}
             <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent" onClick={() => void openUrl(INSTALL[a.id])}>

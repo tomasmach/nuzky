@@ -12,3 +12,6 @@ serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.190"
+
+[dev-dependencies]
+toml = "1.1"
