@@ -14,6 +14,8 @@ if ! flock -n 9; then
   echo "Another scripts/check.sh runs on this machine; this one starts when it ends."
   flock 9
 fi
+# The time reported at the end leaves out the wait.
+SECONDS=0
 
 step() {
   local name=$1 started=$SECONDS

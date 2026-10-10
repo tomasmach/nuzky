@@ -12,9 +12,10 @@ joins their running Nuzky. It runs inside headless gamescope with D-Bus switched
 dialog or notification reaches the desktop. Media and models come from scripts/fixtures.sh.
 
 Needs gamescope, WebKitWebDriver, Pillow and python-xlib. Vite takes port 1420 (the app's dev URL) and
-WebKitWebDriver 4444. A busy port belongs to another session, so the run stops instead of touching it.
+WebKitWebDriver 4444. Runs on one machine take turns: a second one waits for the first. A port that something
+else holds, such as a dev server, stops the run instead of touching it.
 """
-import importlib, json, os, shutil, signal, subprocess, sys
+import fcntl, importlib, json, os, shutil, signal, subprocess, sys
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -75,6 +76,13 @@ def main(args):
         finally:
             stop(vite)
         return 0
+    # Another session's run holds the ports until it ends; failing on them would waste a whole gate.
+    turn = open(Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'nuzky-repro.lock', 'w')
+    try:
+        fcntl.flock(turn, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('Another UI run uses the app on this machine; this one starts when it ends.', flush=True)
+        fcntl.flock(turn, fcntl.LOCK_EX)
     problems = preflight(names)
     if problems:
         print('repro cannot run:\n  ' + '\n  '.join(problems), file=sys.stderr)
