@@ -195,6 +195,20 @@ def style_import(r):
     click(r, 'Replace my style')
     click(r, 'Cancel')
     r.check('Cancel leaves the style as it was', 'Replace my style' in r.s.run(DIALOG_TEXT) and edit_md(r) == mine)
+
+    # Meanwhile the style changes elsewhere, say in a text editor: replacing it now would lose that unseen.
+    elsewhere = mine + '- Keep the outro short.\n'
+    (r.work / 'data/nuzky/EDIT.md').write_text(elsewhere)
+    r.check('the page learns of the change', wait(lambda: 'Keep the outro short.' in (view(r)['text'] or ''), 5))
+    click(r, 'Replace my style')
+    click(r, 'Replace')
+    note = "return window.__nuzky.store.getState().toasts.find((t) => t.text.startsWith('Your style changed meanwhile'))?.text ?? null"
+    r.check('a style changed since the preview is not replaced', wait(lambda: r.s.run(note), 10) and edit_md(r) == elsewhere, r.state()['toasts'])
+    learn_button = f"return [...document.querySelectorAll('{DIALOG} button')].some((b) => b.textContent === 'Learn')"
+    r.check('and the projects can be learned again over it', wait(lambda: r.s.run(learn_button), 5))
+    mine = elsewhere
+    r.check('learning again ends', learn(r, watch=False) and job(r)['status'] == 'done', job(r))
+    preview = wait(lambda: r.s.run(PREVIEW), 5)
     click(r, 'Replace my style')
     click(r, 'Replace')
     r.check('Replace writes the learned style as shown', wait(lambda: edit_md(r) == preview, 10) and preview != mine, (edit_md(r) or '')[:400])

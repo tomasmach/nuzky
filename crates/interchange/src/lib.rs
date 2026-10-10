@@ -144,7 +144,7 @@ pub fn read(path: &Path) -> Result<Read> {
 }
 
 /// The local file a media reference names, a relative one from `folder`. Any other address, a
-/// web one above all, names nothing Nuzky opens.
+/// web one or a share on another computer above all, names nothing Nuzky opens.
 pub fn local_path(target: &str, folder: &Path) -> Option<PathBuf> {
     // One letter before the colon is a Windows drive, not a scheme.
     let scheme = target
@@ -165,6 +165,12 @@ pub fn local_path(target: &str, folder: &Path) -> Option<PathBuf> {
         None if target.is_empty() => return None,
         None => PathBuf::from(target),
     };
+    // Two slashes start a path on another computer on Windows (\\server\share, //server/share or
+    // \\?\UNC\…), which even looking at reaches over the network.
+    let text = path.to_string_lossy();
+    if ["//", r"\\", r"/\", r"\/"].iter().any(|start| text.starts_with(start)) {
+        return None;
+    }
     Some(if path.is_absolute() { path } else { folder.join(path) })
 }
 
@@ -180,9 +186,19 @@ mod tests {
         assert_eq!(local_path("FILE:/home/me/a.mov", folder), Some("/home/me/a.mov".into()));
         assert_eq!(local_path("media/a.mov", folder), Some("/home/me/edits/media/a.mov".into()));
         assert_eq!(local_path("/abs/a.mov", folder), Some("/abs/a.mov".into()));
-        for foreign in
-            ["http://example.com/a.mov", "https://x/a.mov", "smb://nas/a.mov", "file://nas/a.mov", "ftp:a", ""]
-        {
+        for foreign in [
+            "http://example.com/a.mov",
+            "https://x/a.mov",
+            "smb://nas/a.mov",
+            "file://nas/a.mov",
+            "file:////nas/share/a.mov",
+            "file:///%2Fnas/share/a.mov",
+            r"\\nas\share\a.mov",
+            r"\\?\UNC\nas\share\a.mov",
+            "//nas/share/a.mov",
+            "ftp:a",
+            "",
+        ] {
             assert_eq!(local_path(foreign, folder), None, "{foreign}");
         }
     }

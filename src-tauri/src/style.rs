@@ -40,13 +40,13 @@ pub fn start_timeline_learning(app: AppHandle, paths: Vec<String>) -> CmdResult<
     jobs::start_timeline_learning(&app, paths)
 }
 
-/// Makes what the timeline learning job `job_id` learned the style, over the version `seen`: the
-/// one the creator saw when they chose to use it, and agreed to replace. What it learned is kept
-/// from then on, as learning from videos keeps it.
+/// Makes what the timeline learning job `job_id` learned the style: EDIT.md as the job showed it,
+/// so only over the version it was shown over; a style changed since is never replaced unseen.
+/// What it learned is kept from then on, as learning from videos keeps it.
 #[tauri::command]
-pub async fn style_use_learned(app: AppHandle, job_id: String, seen: u64) -> CmdResult<StyleView> {
+pub async fn style_use_learned(app: AppHandle, job_id: String) -> CmdResult<StyleView> {
     let kept = app.state::<AppState>().timeline_lessons.lock().unwrap().clone();
-    let evidence = kept.filter(|(id, _)| *id == job_id).map(|(_, e)| e).ok_or("NOT_LEARNED: learn again first")?;
+    let (_, evidence, seen) = kept.filter(|(id, ..)| *id == job_id).ok_or("NOT_LEARNED: learn again first")?;
     tauri::async_runtime::spawn_blocking(move || {
         let sources: Vec<learning::Source> = evidence.iter().map(Evidence::source).collect();
         // One key per recording of a timeline file: "timeline:<file>:<recording>".

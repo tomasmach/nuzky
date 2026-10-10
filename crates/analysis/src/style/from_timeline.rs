@@ -1,19 +1,16 @@
 //! What a timeline cut in another editor teaches: every recording it hears speech from, in the
 //! pieces the editor cut it into. The timeline says exactly where each piece came from, so nothing
 //! is found by sound or picture and every piece matches fully. B-roll teaches no speech rules.
+//!
+//! A piece maps the cut to the recording one to one, so a sped up clip's piece places only its
+//! start exactly; its words are placed at their speed all the same.
 
 use std::path::Path;
 
-use nuzky_interchange::{ImportedTimeline, MediaClip, TrackKind, Transform};
+use nuzky_interchange::{ImportedTimeline, MediaClip, TrackKind};
 
-use super::{Alignment, Caption, Framing, Picture, Piece, Place, Source, ZoomChange, pauses_between};
+use super::{Alignment, Caption, Picture, Piece, Place, pauses_between};
 use crate::Word;
-
-/// Framing is read this often within a clip and this far from its ends, as in a finished video.
-const SAMPLE_US: i64 = 500_000;
-const EDGE_US: i64 = 200_000;
-/// A smaller change of scale is not a zoom.
-const MIN_ZOOM: f32 = 0.03;
 
 /// A recording the timeline plays, with the words recognised in it.
 pub struct Recording<'a> {
@@ -39,23 +36,6 @@ pub struct Lesson {
     pub places: Vec<Place>,
 }
 
-impl Lesson {
-    pub fn source(&self) -> Source<'_> {
-        Source {
-            recording: self.recording.clone(),
-            cut: self.cut.clone(),
-            language: self.language.clone(),
-            recording_us: self.recording_us,
-            words: &self.words,
-            cut_words: &self.cut_words,
-            alignment: &self.alignment,
-            picture: &self.picture,
-            places: Some(&self.places),
-            corrections: &[],
-        }
-    }
-}
-
 /// The media whose sound the timeline plays, in the order first heard: everything on its audio
 /// tracks and on its lowest video track. Video above that lies over it, as B-roll does.
 pub fn heard_media(timeline: &ImportedTimeline) -> Vec<&Path> {
@@ -76,19 +56,29 @@ pub fn heard_media(timeline: &ImportedTimeline) -> Vec<&Path> {
     out
 }
 
-/// The clips that play a recording's sound: on the lowest audio track that has it, as editors put a
-/// camera's sound beside its picture, or else on the lowest video track. Other tracks with the same
-/// recording only repeat it, such as its second channel.
+/// The clips that play a recording's sound, in timeline order: on the audio tracks that have it, as
+/// editors put a camera's sound beside its picture, or else on the lowest video track. A clip that
+/// only repeats another, such as the recording's second channel on a track of its own, is left out.
 pub fn speech_clips<'t>(timeline: &'t ImportedTimeline, path: &Path) -> Vec<&'t MediaClip> {
     let of = |kind| {
-        timeline.tracks.iter().filter(move |t| t.kind == kind).find_map(|t| {
-            let clips: Vec<&MediaClip> =
-                t.clips.iter().filter(|c| c.path.as_deref() == Some(path) && c.speed > 0.0).collect();
-            (!clips.is_empty()).then_some(clips)
-        })
+        let tracks = timeline.tracks.iter().filter(move |t| t.kind == kind);
+        tracks.flat_map(|t| t.clips.iter().filter(|c| c.path.as_deref() == Some(path) && c.speed > 0.0))
     };
-    let mut clips = of(TrackKind::Audio).or_else(|| of(TrackKind::Video)).unwrap_or_default();
+    let mut clips: Vec<&MediaClip> = of(TrackKind::Audio).collect();
+    if clips.is_empty() {
+        let lowest = timeline
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackKind::Video)
+            .find(|t| t.clips.iter().any(|c| c.path.as_deref() == Some(path)));
+        clips = lowest
+            .into_iter()
+            .flat_map(|t| t.clips.iter().filter(|c| c.path.as_deref() == Some(path) && c.speed > 0.0))
+            .collect();
+    }
     clips.retain(|c| c.volume != Some(0.0));
+    clips.sort_by_key(|c| (c.start_us, c.end_us()));
+    clips.dedup_by_key(|c| (c.start_us, c.duration_us, c.source_in_us, c.speed.to_bits()));
     clips
 }
 
@@ -97,6 +87,15 @@ pub fn lessons(timeline: &ImportedTimeline, cut: &str, recordings: &[Recording])
     let clips: Vec<Vec<&MediaClip>> = recordings.iter().map(|r| speech_clips(timeline, r.path)).collect();
     // Every recording word the timeline plays: its piece, the word in timeline time and its index.
     let heard: Vec<Vec<(usize, Word, usize)>> = recordings.iter().zip(&clips).map(|(r, c)| heard(r.words, c)).collect();
+    // The finished video is the whole timeline, gaps and B-roll included; recordings heard in it
+    // share what none of them plays by how much each plays, so its minutes count once.
+    let played: Vec<i64> = recordings
+        .iter()
+        .zip(&clips)
+        .map(|(r, c)| if r.words.is_empty() { 0 } else { c.iter().map(|c| c.duration_us).sum() })
+        .collect();
+    let all: i64 = played.iter().sum();
+    let unheard = (timeline.duration_us() - all).max(0);
     let mut out = Vec::new();
     for (k, recording) in recordings.iter().enumerate() {
         let clips = &clips[k];
@@ -141,12 +140,12 @@ pub fn lessons(timeline: &ImportedTimeline, cut: &str, recordings: &[Recording])
             cut_words,
             alignment: Alignment {
                 matched: 1.0,
-                cut_duration_us: clips.iter().map(|c| c.duration_us).sum(),
+                cut_duration_us: played[k] + (unheard as f64 * played[k] as f64 / all as f64).round() as i64,
                 cut_pauses,
                 recording_pauses: pauses_between(recording.words),
                 pieces,
             },
-            picture: picture(timeline, recording.path, clips),
+            picture: picture(timeline, clips),
             places,
         }));
     }
@@ -173,8 +172,9 @@ fn heard(words: &[Word], clips: &[&MediaClip]) -> Vec<(usize, Word, usize)> {
     out
 }
 
-/// Captions said over the recording and how its picture is framed, as far as the timeline says.
-fn picture(timeline: &ImportedTimeline, path: &Path, heard: &[&MediaClip]) -> Picture {
+/// The captions said over the recording, and where they sit when the timeline says so. Framing
+/// and zoom are left to formats that carry them.
+fn picture(timeline: &ImportedTimeline, heard: &[&MediaClip]) -> Picture {
     let spoken = |t: i64| heard.iter().any(|c| c.start_us <= t && t < c.end_us());
     let texts: Vec<_> =
         timeline.tracks.iter().flat_map(|t| &t.texts).filter(|c| spoken(c.start_us + c.duration_us / 2)).collect();
@@ -190,73 +190,17 @@ fn picture(timeline: &ImportedTimeline, path: &Path, heard: &[&MediaClip]) -> Pi
     let mut heights: Vec<f32> = texts.iter().filter_map(|c| c.transform).map(|t| 0.5 + t.y).collect();
     heights.sort_by(f32::total_cmp);
     let caption_band = heights.get(heights.len() / 2).map(|&middle| (middle, middle));
-    // The recording's picture: its clips on the lowest video track that shows it.
-    let pictured: Vec<&MediaClip> = timeline
-        .tracks
-        .iter()
-        .filter(|t| t.kind == TrackKind::Video)
-        .map(|t| t.clips.iter().filter(|c| c.path.as_deref() == Some(path)).collect::<Vec<_>>())
-        .find(|c| !c.is_empty())
-        .unwrap_or_default();
-    let framed = pictured.iter().any(|c| c.transform.is_some() || !c.keyframes.is_empty());
-    if caption_band.is_none() && !framed {
-        let skipped = Some("the timeline does not say where its captions sit or how its picture is framed".into());
-        return Picture { skipped, captions, ..Picture::default() };
-    }
-    let mut framing = Vec::new();
-    let mut zooms = Vec::new();
-    for (i, clip) in pictured.iter().enumerate() {
-        let mut t = clip.start_us + EDGE_US;
-        while t < clip.end_us() - EDGE_US {
-            let at = transform_at(clip, t);
-            framing.push(Framing { time_us: t, scale: at.scale, x: at.x, y: at.y });
-            t += SAMPLE_US;
-        }
-        if let Some(next) = pictured.get(i + 1).filter(|n| n.start_us == clip.end_us()) {
-            let (from, to) = (transform_at(clip, clip.end_us() - 1).scale, transform_at(next, next.start_us).scale);
-            if (to - from).abs() >= MIN_ZOOM {
-                zooms.push(ZoomChange { start_us: next.start_us, end_us: next.start_us, from, to, at_cut: true });
-            }
-        }
-        for pair in clip.keyframes.windows(2) {
-            let (from, to) = (pair[0].transform.scale, pair[1].transform.scale);
-            if (to - from).abs() >= MIN_ZOOM {
-                let (start_us, end_us) = (clip.start_us + pair[0].at_us, clip.start_us + pair[1].at_us);
-                zooms.push(ZoomChange { start_us, end_us, from, to, at_cut: false });
-            }
-        }
-    }
-    zooms.sort_by_key(|z| z.start_us);
-    Picture { skipped: None, captions, caption_band, framing, zooms }
-}
-
-/// The clip's framing at timeline time `t`, moving straight from one keyframe to the next.
-fn transform_at(clip: &MediaClip, t: i64) -> Transform {
-    let base = clip.transform.unwrap_or(Transform { scale: 1.0, x: 0.0, y: 0.0 });
-    let t = t - clip.start_us;
-    let next = clip.keyframes.iter().position(|k| k.at_us > t);
-    match (next, clip.keyframes.last()) {
-        (_, None) => base,
-        (None, Some(last)) => last.transform,
-        (Some(0), _) => clip.keyframes[0].transform,
-        (Some(n), _) => {
-            let (a, b) = (clip.keyframes[n - 1], clip.keyframes[n]);
-            let f = (t - a.at_us) as f32 / (b.at_us - a.at_us) as f32;
-            let mix = |x: f32, y: f32| x + (y - x) * f;
-            Transform {
-                scale: mix(a.transform.scale, b.transform.scale),
-                x: mix(a.transform.x, b.transform.x),
-                y: mix(a.transform.y, b.transform.y),
-            }
-        }
-    }
+    let skipped = caption_band
+        .is_none()
+        .then(|| "the timeline does not say where its captions sit or how its picture is framed".into());
+    Picture { skipped, captions, caption_band, ..Picture::default() }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use nuzky_interchange::{Keyframe, TextClip, Track};
+    use nuzky_interchange::{TextClip, Track, Transform};
 
     use super::*;
 
@@ -310,12 +254,20 @@ mod tests {
                     vec![clip("talk.mov", 0, 2 * S, 2 * S, 1.0), clip("talk.mov", 4 * S, 10 * S, 2 * S, 2.0)],
                 ),
                 track(TrackKind::Video, vec![clip("broll.mov", 2 * S, 0, 2 * S, 1.0)]),
-                // Its sound goes on under the B-roll: what is heard is cut here. The second channel repeats it.
+                // Its sound goes on under the B-roll: what is heard is cut here.
                 track(
                     TrackKind::Audio,
                     vec![clip("talk.mov", 0, 2 * S, 3 * S, 1.0), clip("talk.mov", 4 * S, 10 * S, 2 * S, 2.0)],
                 ),
-                track(TrackKind::Audio, vec![clip("talk.mov", 0, 0, 20 * S, 1.0)]),
+                // The second channel repeats it, and the last piece is on that track alone.
+                track(
+                    TrackKind::Audio,
+                    vec![
+                        clip("talk.mov", 0, 2 * S, 3 * S, 1.0),
+                        clip("talk.mov", 4 * S, 10 * S, 2 * S, 2.0),
+                        clip("talk.mov", 6 * S, 16 * S, S, 1.0),
+                    ],
+                ),
             ],
             ..ImportedTimeline::default()
         };
@@ -328,12 +280,18 @@ mod tests {
             lesson.alignment.pieces,
             [
                 Piece { start_us: 0, end_us: 3 * S, offset_us: 2 * S },
-                Piece { start_us: 4 * S, end_us: 6 * S, offset_us: 6 * S }
+                Piece { start_us: 4 * S, end_us: 6 * S, offset_us: 6 * S },
+                Piece { start_us: 6 * S, end_us: 7 * S, offset_us: 10 * S },
             ]
         );
-        assert_eq!((lesson.alignment.matched, lesson.alignment.cut_duration_us), (1.0, 5 * S));
+        // The finished video lasts 7 s, the second of silence between the pieces included.
+        assert_eq!((lesson.alignment.matched, lesson.alignment.cut_duration_us), (1.0, 7 * S));
         let kept: Vec<&str> = lesson.cut_words.iter().map(|w| w.text.as_str()).collect();
-        assert_eq!(kept, ["w2", "w3", "w4", "w10", "w11", "w12", "w13"], "the second piece plays 4 s of talk in 2 s");
+        assert_eq!(
+            kept,
+            ["w2", "w3", "w4", "w10", "w11", "w12", "w13", "w16"],
+            "the second piece plays 4 s of talk in 2 s"
+        );
         // "w11" is said 11.2 to 11.6 s into the recording: 0.6 s into a piece played twice as fast from 10 s at 4 s.
         assert_eq!(lesson.places[11], Some((1, 4_600_000, 4_800_000)));
         assert_eq!(lesson.places[5], None);
@@ -346,14 +304,17 @@ mod tests {
     fn each_recording_is_its_own_source_and_another_voice_is_no_pause() {
         let (a, b) = (words("a", 10), words("b", 10));
         let timeline = ImportedTimeline {
-            tracks: vec![track(
-                TrackKind::Video,
-                vec![
-                    clip("a.mov", 0, 0, 2 * S, 1.0),
-                    clip("b.mov", 2 * S, 0, 2 * S, 1.0),
-                    clip("a.mov", 4 * S, 5 * S, 2 * S, 1.0),
-                ],
-            )],
+            tracks: vec![
+                track(
+                    TrackKind::Video,
+                    vec![
+                        clip("a.mov", 0, 0, 2 * S, 1.0),
+                        clip("b.mov", 2 * S, 0, 2 * S, 1.0),
+                        clip("a.mov", 4 * S, 5 * S, 2 * S, 1.0),
+                    ],
+                ),
+                track(TrackKind::Video, vec![clip("broll.mov", 6 * S, 0, 2 * S, 1.0)]),
+            ],
             ..ImportedTimeline::default()
         };
         let taught = lessons(&timeline, "Talk", &[recording("a.mov", &a), recording("b.mov", &b)]);
@@ -367,6 +328,9 @@ mod tests {
             first.alignment.cut_pauses
         );
         assert_eq!(second.cut.as_str(), "Talk");
+        // B-roll from 6 to 8 s is shared by how much of the rest each plays: 4 to 2.
+        let durations = (first.alignment.cut_duration_us, second.alignment.cut_duration_us);
+        assert_eq!(durations, (5_333_333, 2_666_667));
     }
 
     #[test]
@@ -382,18 +346,8 @@ mod tests {
     }
 
     #[test]
-    fn captions_and_zoom_when_the_timeline_says_them() {
+    fn captions_said_over_the_recording_and_where_they_sit() {
         let talk = words("w", 20);
-        let framed = |scale: f32| Some(Transform { scale, x: 0.0, y: 0.0 });
-        let mut first = clip("t.mov", 0, 0, 2 * S, 1.0);
-        first.transform = framed(1.0);
-        let mut second = clip("t.mov", 2 * S, 5 * S, 2 * S, 1.0);
-        second.transform = framed(1.25);
-        let mut third = clip("t.mov", 4 * S, 10 * S, 2 * S, 1.0);
-        third.keyframes = vec![
-            Keyframe { at_us: 0, transform: Transform { scale: 1.0, x: 0.0, y: 0.0 } },
-            Keyframe { at_us: S, transform: Transform { scale: 1.2, x: 0.0, y: 0.1 } },
-        ];
         let text = |start_us, text: &str| TextClip {
             text: text.into(),
             start_us,
@@ -402,28 +356,14 @@ mod tests {
         };
         let mut titles = track(TrackKind::Video, Vec::new());
         titles.texts = vec![text(0, "two words"), text(S, "three short words"), text(9 * S, "after the cut")];
-        let timeline = ImportedTimeline {
-            tracks: vec![track(TrackKind::Video, vec![first, second, third]), titles],
-            ..Default::default()
-        };
+        let cut = vec![clip("t.mov", 0, 0, 2 * S, 1.0), clip("t.mov", 2 * S, 5 * S, 2 * S, 1.0)];
+        let timeline = ImportedTimeline { tracks: vec![track(TrackKind::Video, cut), titles], ..Default::default() };
         let lesson = lessons(&timeline, "Reel", &[recording("t.mov", &talk)]).remove(0).unwrap();
         let picture = &lesson.picture;
         assert_eq!(picture.skipped, None);
-        assert_eq!(
-            picture.captions.iter().map(|c| c.words).collect::<Vec<_>>(),
-            [2, 3],
-            "only captions said over the recording"
-        );
+        let words: Vec<usize> = picture.captions.iter().map(|c| c.words).collect();
+        assert_eq!(words, [2, 3], "only captions said over the recording");
         let (top, bottom) = picture.caption_band.unwrap();
         assert!((top - 0.65).abs() < 1e-6 && top == bottom, "{top}");
-        let scales: Vec<(i64, f32)> = picture.framing.iter().map(|f| (f.time_us, f.scale)).collect();
-        assert_eq!(
-            &scales[..5],
-            [(200_000, 1.0), (700_000, 1.0), (1_200_000, 1.0), (1_700_000, 1.0), (2_200_000, 1.25)]
-        );
-        let between = scales.iter().find(|(t, _)| *t == 4_700_000).unwrap().1;
-        assert!((between - 1.14).abs() < 1e-5, "70% of the way between keyframes: {scales:?}");
-        let zooms: Vec<_> = picture.zooms.iter().map(|z| (z.start_us, z.end_us, z.at_cut)).collect();
-        assert_eq!(zooms, [(2 * S, 2 * S, true), (4 * S, 4 * S, true), (4 * S, 5 * S, false)]);
     }
 }

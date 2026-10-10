@@ -112,20 +112,24 @@ export async function startProjectsLearning(plans: TimelinePlan[]) {
 }
 
 /**
- * Makes what the projects taught the style, over the version `seen` the creator saw; true when it did.
- * When the style changed meanwhile, the page shows it as it is now and nothing is written.
+ * Makes what the projects taught the style, as the dialog showed it; true when it did. When the style
+ * changed since, nothing is written and the projects can be learned again over the style as it is now.
  */
-export async function saveLearned(jobId: string, seen: number): Promise<boolean> {
+export async function saveLearned(jobId: string): Promise<boolean> {
   const toast = useEditor.getState().toast;
   try {
-    useStyle.setState({ view: await api.styleUseLearned(jobId, seen), error: null, projectsLearning: null, projects: [] });
-    toast({ kind: "success", text: "Saved as your style", action: { label: "Undo", run: () => void changeStyle({ type: "restore", index: seen }) } });
+    const view = await api.styleUseLearned(jobId);
+    useStyle.setState({ view, error: null, projectsLearning: null, projects: [] });
+    // The version before is the one replaced, or none: no style.
+    const before = view.versions[1]?.index ?? 0;
+    toast({ kind: "success", text: "Saved as your style", action: { label: "Undo", run: () => void changeStyle({ type: "restore", index: before }) } });
     return true;
   } catch (e) {
     const text = errorText(e);
     if (text.startsWith("STYLE_CHANGED")) {
+      useStyle.setState({ projectsLearning: null });
       await loadStyle();
-      toast({ kind: "info", text: "Your style changed meanwhile. Look at it again before you replace it." });
+      toast({ kind: "info", text: "Your style changed meanwhile, so it was not replaced. Learn again to see what replacing it does." });
     } else toast({ kind: "error", text: plainError(text) });
     return false;
   }

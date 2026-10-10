@@ -302,9 +302,9 @@ function Projects() {
   const rowProgress = job ? Math.min(1, Math.max(0, job.progress * plans.length - runningRow)) : 0;
 
   const save = async () => {
-    if (!learning || !view) return;
+    if (!learning) return;
     setSaving(true);
-    const saved = await saveLearned(learning.jobId, view.version);
+    const saved = await saveLearned(learning.jobId);
     setSaving(false);
     setConfirming(false);
     if (saved) {

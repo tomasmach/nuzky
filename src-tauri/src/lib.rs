@@ -60,8 +60,9 @@ pub struct AppState {
     startup_notice: Option<String>,
     library: Arc<library::Library>,
     sounds: sounds::Sounds,
-    /// What the last learning from imported timelines learned, by job, until the creator uses it.
-    timeline_lessons: Mutex<Option<(String, Vec<nuzky_mcp::style::Evidence>)>>,
+    /// What the last learning from imported timelines learned, by job, until the creator uses it,
+    /// with the version of the style its EDIT.md was shown over.
+    timeline_lessons: Mutex<Option<(String, Vec<nuzky_mcp::style::Evidence>, u64)>>,
 }
 
 /// Per asset id: the source file its cached previews show, and the lock of their decoding.

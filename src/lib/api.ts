@@ -133,8 +133,8 @@ export const api = {
   styleReadTimelines: (paths: string[]) => invoke<TimelinePlan[]>("style_read_timelines", { paths }),
   /** Learns from timelines cut in another editor as a `style` job, which ends with EDIT.md as it would be. */
   startTimelineLearning: (paths: string[]) => invoke<string>("start_timeline_learning", { paths }),
-  /** Makes what that job learned the style, over the version `seen` the creator saw. */
-  styleUseLearned: (jobId: string, seen: number) => invoke<StyleView>("style_use_learned", { jobId, seen }),
+  /** Makes what that job learned the style, as it showed it; STYLE_CHANGED when the style changed since. */
+  styleUseLearned: (jobId: string) => invoke<StyleView>("style_use_learned", { jobId }),
 };
 
 /** The error as the backend sent it, "CODE: detail" included; code checks use this. */

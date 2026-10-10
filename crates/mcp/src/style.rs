@@ -404,11 +404,11 @@ impl Store {
         self.show(&self.read_versions()?)
     }
 
-    /// EDIT.md as `replace` would write it now.
-    pub fn replacing(&self, learned: &Learned) -> Result<String> {
+    /// EDIT.md as `replace` would write it now, and the version it would replace.
+    pub fn replacing(&self, learned: &Learned) -> Result<(String, u64)> {
         let _lock = self.lock()?;
-        let versions = self.synced()?;
-        Ok(replacing(&versions.last().cloned().unwrap_or_default(), learned))
+        let current = self.synced()?.last().cloned().unwrap_or_default();
+        Ok((replacing(&current, learned), current.index))
     }
 
     pub fn act(&self, action: StyleAction) -> Result<StyleView> {
@@ -943,7 +943,15 @@ pub fn video(
     cancel: &AtomicBool,
     stage: impl FnMut(Stage),
 ) -> Result<Video> {
-    let asset = recording(path)?;
+    let asset = nuzky_engine::media::probe(path, stable_id(path)?)
+        .with_context(|| format!("Cannot read {}", path.display()))?;
+    ensure!(nuzky_engine::audio::has_audio(&asset), "{} has no sound", path.display());
+    // Nuzky hears speech in videos only; a sound file on the timeline is music.
+    ensure!(
+        asset.kind == AssetKind::Video,
+        "{} has no picture: style learns from and scores video recordings",
+        path.display()
+    );
     // A language asked for explicitly corrects a recognition stored in another one.
     if let Some(record) = store.get(&asset)?
         && (language == "auto" || record.language == language)
@@ -953,20 +961,6 @@ pub fn video(
     let model = best_model();
     let record = recognise(store, &asset, cache, model, &models(model)?, language, cancel, stage)?;
     Ok(Video { asset, record })
-}
-
-/// A video with sound, as style learns from and scores: Nuzky hears speech in videos only, and a
-/// sound file on a timeline is music.
-fn recording(path: &Path) -> Result<Asset> {
-    let asset = nuzky_engine::media::probe(path, stable_id(path)?)
-        .with_context(|| format!("Cannot read {}", path.display()))?;
-    ensure!(nuzky_engine::audio::has_audio(&asset), "{} has no sound", path.display());
-    ensure!(
-        asset.kind == AssetKind::Video,
-        "{} has no picture: style learns from and scores video recordings",
-        path.display()
-    );
-    Ok(asset)
 }
 
 /// The same file gets the same id, so its sound is extracted once into the shared cache.
@@ -1603,7 +1597,8 @@ mod tests {
         // Learning from given files replaces the learned rules and keeps the creator's own, over the
         // version the creator saw only.
         let learned = learning::learned(&[evidence("talk", 120_000).source()]);
-        let preview = store.replacing(&learned).unwrap();
+        let (preview, shown) = store.replacing(&learned).unwrap();
+        assert_eq!(shown, view.version);
         let stale = store.replace(&learned, "Learned from 1 project", Some(view.version - 1));
         assert!(stale.unwrap_err().to_string().starts_with("STYLE_CHANGED"));
         assert_eq!(file(&dir).unwrap(), edited);

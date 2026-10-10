@@ -897,8 +897,8 @@ fn learn_timelines(
     }
     anyhow::ensure!(!kept.is_empty(), "No recording with speech is cut in these projects, so nothing was learned.");
     let sources: Vec<_> = kept.iter().map(style::Evidence::source).collect();
-    let preview = store.replacing(&nuzky_analysis::style::learned(&sources))?;
-    *app.state::<AppState>().timeline_lessons.lock().unwrap() = Some((job_id.to_owned(), kept));
+    let (preview, version) = store.replacing(&nuzky_analysis::style::learned(&sources))?;
+    *app.state::<AppState>().timeline_lessons.lock().unwrap() = Some((job_id.to_owned(), kept, version));
     Ok(preview)
 }
 
