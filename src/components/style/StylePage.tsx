@@ -344,7 +344,8 @@ function NotLearned({ view }: { view: StyleView }) {
 }
 
 function source(s: StyleSource) {
-  return s.kind === "pair" ? `Your recording and finished video · matched ${Math.round((s.matched ?? 0) * 100)}%` : `Your edit of this project · ${when(s.atMs)}`;
+  if (s.kind === "pair") return `Your recording and finished video · matched ${Math.round((s.matched ?? 0) * 100)}%`;
+  return s.kind === "timeline" ? `Your cut in another editor · ${when(s.atMs)}` : `Your edit of this project · ${when(s.atMs)}`;
 }
 
 function LearnedFrom({ view }: { view: StyleView }) {
@@ -498,9 +499,9 @@ function Empty() {
   return (
     <div className="mx-auto flex max-w-[420px] flex-col items-center py-16 text-center">
       <h2 className="text-[17px] font-semibold text-fg">Nuzky learns how you edit</h2>
-      <p className="mt-2 text-[13px] text-muted">Export a video you cut, or show it videos you made before. Nothing leaves this computer.</p>
+      <p className="mt-2 text-[13px] text-muted">Export a video you cut, or show it videos and projects you made before. Nothing leaves this computer.</p>
       <Button pill variant="primary" className="mt-5" onClick={() => useStyle.setState({ learnOpen: true })}>
-        Learn from videos…
+        Learn my style…
       </Button>
     </div>
   );
@@ -534,7 +535,7 @@ export function StylePage() {
               <FileText size={14} /> Edit as text
             </Button>
             <Button variant={empty ? "primary" : "secondary"} onClick={() => useStyle.setState({ learnOpen: true })}>
-              Learn from videos…
+              Learn my style…
             </Button>
           </>
         )}

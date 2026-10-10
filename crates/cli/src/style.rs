@@ -1,5 +1,6 @@
-//! `nuzky style`: learn a creator's EDIT.md from recordings and their finished cuts, and score
-//! any cut of a recording against the creator's own. Everything runs on this computer.
+//! `nuzky style`: learn a creator's EDIT.md from recordings and their finished cuts or from
+//! timelines they cut in another editor, and score any cut of a recording against the creator's
+//! own. Everything runs on this computer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,8 +14,7 @@ use nuzky_mcp::transcript::best_model;
 use nuzky_session::transcripts::TranscriptStore;
 use serde_json::json;
 
-pub const USAGE: &str =
-    "  nuzky style learn [--out <EDIT.md>] [--replace] [--lang auto|cs|en] <recording> <cut> [<recording> <cut>...]
+pub const USAGE: &str = "  nuzky style learn [--out <EDIT.md>] [--replace] [--lang auto|cs|en] [--from <timeline.otio>]... [<recording> <cut>]...
   nuzky style compare [--lang auto|cs|en] <recording> <cut> <project.nuzky>";
 
 pub fn run(args: &[String], cache: &Path) -> Result<()> {
@@ -22,12 +22,14 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
     let mut out = None;
     let mut replace = false;
     let mut files = Vec::new();
+    let mut timelines = Vec::new();
     let mut rest = args.iter().skip(1);
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--lang" => language = rest.next().context("--lang needs a value")?.clone(),
             "--out" => out = Some(PathBuf::from(rest.next().context("--out needs a path")?)),
             "--replace" => replace = true,
+            "--from" => timelines.push(PathBuf::from(rest.next().context("--from needs a timeline file")?)),
             _ if arg.starts_with("--") => bail!("Unknown option {arg}\n{USAGE}"),
             _ => files.push(PathBuf::from(arg)),
         }
@@ -42,7 +44,7 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
         })
     };
     match args.first().map(String::as_str) {
-        Some("compare") if files.len() == 3 && out.is_none() && !replace => {
+        Some("compare") if files.len() == 3 && out.is_none() && !replace && timelines.is_empty() => {
             let recording = video(&files[0])?;
             let cut = video(&files[1])?;
             let alignment = style::aligned(&recording, &cut, cache, &|| false)?;
@@ -52,7 +54,7 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
             let score = learning::score(&recording.record.words, &human, &agent);
             println!("{}", serde_json::to_string_pretty(&json!({"score": score, "pieces": alignment.pieces}))?);
         }
-        Some("learn") if !files.is_empty() && files.len() % 2 == 0 => {
+        Some("learn") if !(files.is_empty() && timelines.is_empty()) && files.len() % 2 == 0 => {
             let default = learning::style_path();
             let out = out.unwrap_or_else(|| default.clone());
             ensure!(
@@ -67,11 +69,31 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
                 eprintln!("Comparing {} with {}", pair[1].display(), pair[0].display());
                 learned.push(style::compare(&recording, &cut, &store, cache, &|| false)?);
             }
+            for timeline in &timelines {
+                let plan = style::plan(timeline);
+                if let Some(error) = plan.error {
+                    bail!("Cannot learn from {}: {error}", timeline.display());
+                }
+                for line in &plan.unread {
+                    eprintln!("Not read in {}: {line}", timeline.display());
+                }
+                let taught = style::timeline_lessons(timeline, &store, &|| false, |path| video(path))?;
+                for (recording, evidence) in taught {
+                    match evidence {
+                        Ok(evidence) => {
+                            eprintln!("Learning from {recording} as {} cut it", plan.name);
+                            learned.push(evidence);
+                        }
+                        Err(why) => eprintln!("Not learning from {recording} in {}: {why}", timeline.display()),
+                    }
+                }
+            }
+            ensure!(!learned.is_empty(), "Nothing to learn from: no recording with speech is cut in these timelines");
             let sources: Vec<learning::Source> = learned.iter().map(style::Evidence::source).collect();
             let learned = learning::learned(&sources);
             // The style the app shows is a version, keeps the creator's own rules and can be undone.
             if same_file(&out, &default) {
-                style::Store::default().replace(&learned)?;
+                style::Store::default().replace(&learned, "Learned with nuzky style learn", None)?;
             } else {
                 write_new(&out, learned.document().as_bytes())?;
             }

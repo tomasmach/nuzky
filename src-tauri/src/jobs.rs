@@ -792,6 +792,116 @@ fn learn_pairs(
     Ok(())
 }
 
+/// How one timeline of a style learning job ended, sent as `style-timeline`.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleTimelineResult {
+    pub job_id: String,
+    pub index: usize,
+    /// The recordings learned from.
+    pub learned: Vec<String>,
+    /// Recordings not learned from, each with why.
+    pub skipped: Vec<(String, String)>,
+    /// Why nothing was read from the file.
+    pub error: Option<String>,
+}
+
+/// Learns the creator's style from timelines they cut in another editor, the way
+/// `nuzky style learn --from` does, and ends with EDIT.md as it would be. Nothing of the style
+/// changes, not even what was learned before, until the creator uses it (`style_use_learned`).
+pub fn start_timeline_learning(app: &AppHandle, paths: Vec<String>) -> Result<String, String> {
+    if paths.is_empty() {
+        return Err("Choose a project to learn from.".into());
+    }
+    let id = format!("style:{}", new_id());
+    let cancel = register(app, &id).ok_or("Speech is already being recognised. Try again when it is done.")?;
+    let (app, cache, job_id) = (app.clone(), app.state::<AppState>().cache_dir.clone(), id.clone());
+    std::thread::Builder::new()
+        .name("style".into())
+        .spawn(move || {
+            let mut rep = Reporter::new(&app, &job_id, "style", "Learning your style".into());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                learn_timelines(&app, &job_id, &paths, &cache, &cancel, &mut rep)
+            }))
+            .unwrap_or_else(|p| Err(anyhow::anyhow!("Learning crashed: {}", panic_text(&p))));
+            let cancelled = cancel.load(Ordering::Relaxed);
+            rep.finish(result.map(Some), cancelled);
+            unregister(&app, &job_id);
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Returns EDIT.md as what was learned would make it.
+fn learn_timelines(
+    app: &AppHandle,
+    job_id: &str,
+    paths: &[String],
+    cache: &Path,
+    cancel: &AtomicBool,
+    rep: &mut Reporter,
+) -> anyhow::Result<String> {
+    use nuzky_mcp::style;
+    let model = transcript::best_model();
+    download_model(model, cancel, rep)?;
+    download_vad(cancel, rep)?;
+    let transcripts = TranscriptStore::open()?;
+    let store = style::Store::default();
+    let mut kept = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        check_cancelled(cancel)?;
+        let plan = style::plan(Path::new(path));
+        let mut event = StyleTimelineResult {
+            job_id: job_id.into(),
+            index,
+            learned: Vec::new(),
+            skipped: Vec::new(),
+            error: plan.error,
+        };
+        if event.error.is_none() {
+            let count = plan.recordings.len().max(1) as f32;
+            let mut read = 0;
+            let taught =
+                style::timeline_lessons(Path::new(path), &transcripts, &|| cancel.load(Ordering::Relaxed), |media| {
+                    let at = (index as f32 + read as f32 / count) / paths.len() as f32;
+                    read += 1;
+                    rep.progress(at, Some("Recognising speech"));
+                    style::video(media, "auto", &transcripts, cache, cancel, |stage| match stage {
+                        transcript::Stage::Waiting => rep.progress(at, Some("Waiting for another transcription")),
+                        transcript::Stage::DownloadingAligner(_) => {
+                            rep.progress(at, Some("Downloading word timing model"))
+                        }
+                        transcript::Stage::Recognising | transcript::Stage::Aligning => {
+                            rep.progress(at, Some("Recognising speech"))
+                        }
+                    })
+                });
+            match taught {
+                Ok(taught) => {
+                    for (recording, evidence) in taught {
+                        match evidence {
+                            Ok(evidence) => {
+                                kept.push(evidence);
+                                event.learned.push(recording);
+                            }
+                            Err(why) => event.skipped.push((recording, why)),
+                        }
+                    }
+                }
+                Err(_) if cancel.load(Ordering::Relaxed) => anyhow::bail!("CANCELLED: job cancelled"),
+                Err(error) => event.error = Some(format!("{error:#}")),
+            }
+        }
+        app.emit("style-timeline", &event).ok();
+    }
+    anyhow::ensure!(!kept.is_empty(), "No recording with speech is cut in these projects, so nothing was learned.");
+    let sources: Vec<_> = kept.iter().map(style::Evidence::source).collect();
+    let preview = store.replacing(&nuzky_analysis::style::learned(&sources))?;
+    *app.state::<AppState>().timeline_lessons.lock().unwrap() = Some((job_id.to_owned(), kept));
+    Ok(preview)
+}
+
 fn count_label(count: usize, singular: &str, plural: &str) -> String {
     format!("{count} {}", if count == 1 { singular } else { plural })
 }

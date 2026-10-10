@@ -3,7 +3,11 @@
 //! pauses, zooms every other piece, makes one piece quieter and burns in two-word captions.
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::AtomicBool;
 
+use nuzky_analysis::style::Piece;
+use nuzky_mcp::style;
+use nuzky_session::transcripts::TranscriptStore;
 use serde_json::{Value, json};
 
 /// Sentences, whether the creator's cut keeps them, and the silence after them in seconds.
@@ -251,6 +255,199 @@ fn learns_the_creators_style_and_scores_cuts_against_it() {
     let expected = all["creator_kept"].as_f64().unwrap() / all["words"].as_f64().unwrap();
     assert_eq!(all["recall"], 1.0, "{all}");
     assert!((all["precision"].as_f64().unwrap() - expected).abs() < 1e-9 && expected < 0.85, "{all}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The creator's pieces as an editor exports them to OpenTimelineIO: the camera's picture on V1 and its
+/// sound on A1, cut on frames of 30 fps against the file's timecode of 01:00:00:00, the sound counted in
+/// samples, a gap after the third piece and a dissolve after the fourth, the finished video as B-roll
+/// above and a song that is not on this computer. Returns the file and the pieces it must give.
+fn timeline(fixture: &Fixture) -> (PathBuf, Vec<Piece>) {
+    const HOUR: i64 = 3600 * 30;
+    let frames = |seconds: f64| (seconds * 30.0).round() as i64;
+    let us = |frames: i64| (frames as f64 / 30.0 * 1e6).round() as i64;
+    let rt = |frames: i64, audio: bool| {
+        let (value, rate) = if audio { (frames * 1600, 48000) } else { (frames, 30) };
+        json!({"OTIO_SCHEMA": "RationalTime.1", "value": value, "rate": rate})
+    };
+    let range = |start: i64, duration: i64, audio: bool| json!({"OTIO_SCHEMA": "TimeRange.1", "start_time": rt(start, audio), "duration": rt(duration, audio)});
+    let file = |path: &Path, length: i64, audio: bool| {
+        json!({
+            "OTIO_SCHEMA": "ExternalReference.1",
+            "target_url": format!("file://{}", path.display()).replace(' ', "%20"),
+            "available_range": range(HOUR, length, audio),
+        })
+    };
+    let clip = |path: &Path, length: i64, from: i64, duration: i64, audio: bool| {
+        json!({
+            "OTIO_SCHEMA": "Clip.2",
+            "name": path.file_name().unwrap().to_string_lossy(),
+            "source_range": range(HOUR + from, duration, audio),
+            "media_references": {"DEFAULT_MEDIA": file(path, length, audio)},
+            "active_media_reference_key": "DEFAULT_MEDIA",
+        })
+    };
+    let gap = |duration: i64, audio: bool| json!({"OTIO_SCHEMA": "Gap.1", "source_range": range(0, duration, audio)});
+    let length = (duration(&fixture.recording) * 30.0).floor() as i64;
+    let (mut picture, mut sound, mut reference) = (Vec::new(), Vec::new(), Vec::new());
+    // Each time in the file is rounded to the microsecond on its own, so the reference adds them up so.
+    let mut at_us = 0;
+    for (k, (start, end)) in fixture.pieces.iter().enumerate() {
+        let (from, duration) = (frames(*start), frames(end - start));
+        picture.push(clip(&fixture.recording, length, from, duration, false));
+        sound.push(clip(&fixture.recording, length, from, duration, true));
+        reference.push(Piece { start_us: at_us, end_us: at_us + us(duration), offset_us: us(from) - at_us });
+        at_us += us(duration);
+        if k == 2 {
+            picture.push(gap(15, false));
+            sound.push(gap(15, true));
+            at_us += us(15);
+        }
+        if k == 3 {
+            picture.push(json!({
+                "OTIO_SCHEMA": "Transition.1", "transition_type": "SMPTE_Dissolve",
+                "in_offset": rt(6, false), "out_offset": rt(6, false),
+            }));
+        }
+    }
+    let track = |kind: &str, children: Vec<Value>| json!({"OTIO_SCHEMA": "Track.1", "name": kind, "kind": kind, "children": children});
+    let broll = clip(&fixture.cut, frames(duration(&fixture.cut)), 0, 60, false);
+    let song = clip(&fixture.dir.join("not here/song.wav"), 3000, 0, 300, true);
+    let otio = json!({
+        "OTIO_SCHEMA": "Timeline.1",
+        "name": "Reel",
+        "global_start_time": rt(HOUR, false),
+        "tracks": {"OTIO_SCHEMA": "Stack.1", "children": [
+            track("Video", picture),
+            track("Video", vec![gap(30, false), broll]),
+            track("Audio", sound),
+            track("Audio", vec![song]),
+        ]},
+    });
+    let path = fixture.dir.join("Reel.otio");
+    std::fs::write(&path, serde_json::to_vec_pretty(&otio).unwrap()).unwrap();
+    (path, reference)
+}
+
+#[test]
+#[ignore = "Recognises speech: needs ffmpeg, espeak-ng and the models in tmp-test/xdg/data/nuzky/models (scripts/fixtures.sh)"]
+fn learns_from_a_timeline_cut_in_another_editor() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test/style-tests").join(format!("otio-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = fixture(&dir);
+    let (otio, reference) = timeline(&fixture);
+    let learn = |out: &Path, more: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_nuzky"))
+            .args(["style", "learn", "--from"])
+            .arg(&otio)
+            .arg("--out")
+            .arg(out)
+            .args(more)
+            .env("XDG_DATA_HOME", data())
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap()
+    };
+    let (first, second) = (dir.join("EDIT.md"), dir.join("again.md"));
+    let out = learn(&first, &[]);
+    let said = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("Learning from talk.mp4 as Reel cut it") && said.contains("Not learning from song.wav"),
+        "{said}"
+    );
+    assert!(!said.contains("reel.mp4"), "B-roll above the main track is not heard: {said}");
+    assert!(learn(&second, &[]).status.success());
+    let style = std::fs::read_to_string(&first).unwrap();
+    assert_eq!(style, std::fs::read_to_string(&second).unwrap(), "the same timeline teaches the same");
+    assert!(!learn(&first, &[]).status.success(), "an existing EDIT.md may hold the creator's own changes");
+    assert!(learn(&first, &["--replace"]).status.success());
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), style);
+
+    assert!(style.contains("| talk.mp4 | en |") && style.contains("| Reel |"), "{style}");
+    assert!(
+        style.contains("### Restarted sentences\n\nAn attempt at a sentence that the creator then said again: 3 cut"),
+        "{style}"
+    );
+    assert!(style.contains(&format!("{} cuts,", fixture.pieces.len() - 1)), "{style}");
+    assert!(style.contains("Captions and zoom not measured in Reel"), "the timeline does not say them: {style}");
+
+    // The pieces are the ones cut, to the microsecond, read again from the words the CLI stored.
+    let store = TranscriptStore::at(data().join("nuzky/transcripts")).unwrap();
+    let cache = dir.join("cache");
+    let taught = style::timeline_lessons(&otio, &store, &|| false, |path| {
+        style::video(path, "auto", &store, &cache, &AtomicBool::new(false), |_| panic!("the words are stored"))
+    })
+    .unwrap();
+    let names: Vec<&str> = taught.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["talk.mp4", "song.wav"]);
+    let evidence = taught[0].1.as_ref().unwrap();
+    assert_eq!(evidence.alignment.pieces, reference);
+    assert_eq!(evidence.alignment.matched, 1.0);
+    assert_eq!(taught[1].1.as_ref().unwrap_err(), "not on this computer");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_timeline_of_nothing_on_this_computer_teaches_nothing() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test/style-tests").join(format!("otio-none-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let clip = |url: &str| {
+        json!({
+            "OTIO_SCHEMA": "Clip.2", "name": "talk",
+            "source_range": {"OTIO_SCHEMA": "TimeRange.1",
+                "start_time": {"OTIO_SCHEMA": "RationalTime.1", "value": 0, "rate": 30},
+                "duration": {"OTIO_SCHEMA": "RationalTime.1", "value": 90, "rate": 30}},
+            "media_references": {"DEFAULT_MEDIA": {"OTIO_SCHEMA": "ExternalReference.1", "target_url": url}},
+            "active_media_reference_key": "DEFAULT_MEDIA",
+        })
+    };
+    let otio = dir.join("shared.otio");
+    let tracks = json!([{"OTIO_SCHEMA": "Track.1", "kind": "Video", "children": [clip("https://example.com/talk.mov"), clip("gone/talk.mov")]}]);
+    let file = json!({"OTIO_SCHEMA": "Timeline.1", "name": "Shared", "tracks": {"OTIO_SCHEMA": "Stack.1", "children": tracks}});
+    std::fs::write(&otio, file.to_string()).unwrap();
+    let premiere = dir.join("edit.prproj");
+    std::fs::write(&premiere, "<xml/>").unwrap();
+    let learn = |timeline: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_nuzky"))
+            .args(["style", "learn", "--from"])
+            .arg(timeline)
+            .arg("--out")
+            .arg(dir.join("EDIT.md"))
+            .env("XDG_DATA_HOME", dir.join("data"))
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap()
+    };
+    let out = learn(&otio);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("Not read in")
+            && said.contains("Media that is not a file on this computer: https://example.com/talk.mov"),
+        "{said}"
+    );
+    assert!(said.contains("Not learning from talk.mov") && said.contains("Nothing to learn from"), "{said}");
+    // A pipe named as a recording is never opened: reading it would wait for ever.
+    let pipe = dir.join("pipe.mov");
+    assert!(Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+    let piped = file.to_string().replace("https://example.com/talk.mov", pipe.to_str().unwrap());
+    std::fs::write(&otio, piped).unwrap();
+    let out = learn(&otio);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Not learning from pipe.mov in"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = learn(&premiere);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("is not a timeline Nuzky reads"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!dir.join("EDIT.md").exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

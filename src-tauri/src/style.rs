@@ -1,13 +1,15 @@
 //! The creator's style, as the app shows and changes it, and learning from what the user does.
 
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use nuzky_mcp::style::{Moment, Store, StyleAction, StyleView, moment};
+use nuzky_analysis::style as learning;
+use nuzky_mcp::style::{Evidence, Moment, Store, StyleAction, StyleView, TimelinePlan, moment, plan};
 use nuzky_session::host::Host;
 use nuzky_session::transcripts::TranscriptStore;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{CmdResult, err, jobs};
+use crate::{AppState, CmdResult, err, jobs};
 
 /// After the user's last edit of an AI's cut, learning waits this long for the next one.
 pub const LEARN_AFTER: Duration = Duration::from_secs(10);
@@ -25,6 +27,45 @@ pub async fn style_act(action: StyleAction) -> CmdResult<StyleView> {
 #[tauri::command]
 pub fn start_style_learning(app: AppHandle, pairs: Vec<jobs::StylePair>) -> CmdResult<String> {
     jobs::start_style_learning(&app, pairs)
+}
+
+/// What each timeline file offers to learn from, read at once.
+#[tauri::command]
+pub async fn style_read_timelines(paths: Vec<String>) -> CmdResult<Vec<TimelinePlan>> {
+    tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| plan(Path::new(p))).collect()).await.map_err(err)
+}
+
+#[tauri::command]
+pub fn start_timeline_learning(app: AppHandle, paths: Vec<String>) -> CmdResult<String> {
+    jobs::start_timeline_learning(&app, paths)
+}
+
+/// Makes what the timeline learning job `job_id` learned the style, over the version `seen`: the
+/// one the creator saw when they chose to use it, and agreed to replace. What it learned is kept
+/// from then on, as learning from videos keeps it.
+#[tauri::command]
+pub async fn style_use_learned(app: AppHandle, job_id: String, seen: u64) -> CmdResult<StyleView> {
+    let kept = app.state::<AppState>().timeline_lessons.lock().unwrap().clone();
+    let evidence = kept.filter(|(id, _)| *id == job_id).map(|(_, e)| e).ok_or("NOT_LEARNED: learn again first")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let sources: Vec<learning::Source> = evidence.iter().map(Evidence::source).collect();
+        // One key per recording of a timeline file: "timeline:<file>:<recording>".
+        let projects: std::collections::BTreeSet<&str> =
+            evidence.iter().map(|e| e.key.rsplit_once(':').map_or(e.key.as_str(), |(file, _)| file)).collect();
+        let label = match projects.len() {
+            1 => "Learned from 1 project".to_owned(),
+            n => format!("Learned from {n} projects"),
+        };
+        let store = Store::default();
+        store.replace(&learning::learned(&sources), &label, Some(seen))?;
+        for evidence in &evidence {
+            store.keep_evidence(evidence.clone())?;
+        }
+        store.view()
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
 }
 
 /// Tells the UI whenever the style changes, whoever changes it: the AI panel's agent and other

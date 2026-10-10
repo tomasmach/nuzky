@@ -486,12 +486,15 @@ export function TabBar<T extends string>({
   value,
   onChange,
   label,
+  className = "mx-3 mb-1",
 }: {
   group: string;
   tabs: { id: T; label: string }[];
   value: T;
   onChange: (id: T) => void;
   label: string;
+  /** Its margins; the inspector's by default. */
+  className?: string;
 }) {
   const onKeyDown = tabListKeys(
     tabs.map((t) => t.id),
@@ -499,7 +502,7 @@ export function TabBar<T extends string>({
     onChange,
   );
   return (
-    <div role="tablist" aria-label={label} className="seg-track mx-3 mb-1 flex shrink-0 gap-0.5 overflow-hidden rounded-[9px] p-0.5" onKeyDown={onKeyDown}>
+    <div role="tablist" aria-label={label} className={`seg-track flex shrink-0 gap-0.5 overflow-hidden rounded-[9px] p-0.5 ${className}`} onKeyDown={onKeyDown}>
       {tabs.map((t) => (
         <button
           key={t.id}

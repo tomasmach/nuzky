@@ -130,7 +130,7 @@ export function JobIndicator() {
           : cover
             ? (useEditor.setState({ view: "editor" }), useCover.getState().open || openCover())
             : j.kind === "style"
-              ? useStyle.setState({ learnOpen: true })
+              ? useStyle.setState({ learnOpen: true, learnTab: useStyle.getState().projectsLearning?.jobId === j.id ? "projects" : "videos" })
               : useEditor.setState({ view: "editor", panelTab: j.kind === "transcript" ? "transcript" : "captions" })
       }
       className="bar flex h-8 items-center rounded-full px-3 text-[12px] font-medium text-fg transition-colors duration-[120ms] hover:bg-white/[.13]"

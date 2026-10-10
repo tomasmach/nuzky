@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -129,6 +129,12 @@ export const api = {
   styleAct: (action: StyleAction) => invoke<StyleView>("style_act", { action }),
   /** Learns from 1 to 3 recordings, each with the video cut from it, as a `style` job. */
   startStyleLearning: (pairs: StylePair[]) => invoke<string>("start_style_learning", { pairs }),
+  /** What each timeline file from another editor offers to learn from, read at once. */
+  styleReadTimelines: (paths: string[]) => invoke<TimelinePlan[]>("style_read_timelines", { paths }),
+  /** Learns from timelines cut in another editor as a `style` job, which ends with EDIT.md as it would be. */
+  startTimelineLearning: (paths: string[]) => invoke<string>("start_timeline_learning", { paths }),
+  /** Makes what that job learned the style, over the version `seen` the creator saw. */
+  styleUseLearned: (jobId: string, seen: number) => invoke<StyleView>("style_use_learned", { jobId, seen }),
 };
 
 /** The error as the backend sent it, "CODE: detail" included; code checks use this. */
@@ -189,6 +195,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   KEY_REJECTED: (detail) => `${detail} Check it under Where to search, the sliders button beside the search field.`,
   KEY_MISSING: "Add your Freesound API key under Where to search, the sliders button beside the search field.",
   INVALID_KEY: "A Freesound API key has only letters and digits. Copy it again from Freesound.",
+  NOT_LEARNED: "What was learned is gone. Learn from the projects again.",
 };
 
 /**

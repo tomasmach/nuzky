@@ -60,6 +60,8 @@ pub struct AppState {
     startup_notice: Option<String>,
     library: Arc<library::Library>,
     sounds: sounds::Sounds,
+    /// What the last learning from imported timelines learned, by job, until the creator uses it.
+    timeline_lessons: Mutex<Option<(String, Vec<nuzky_mcp::style::Evidence>)>>,
 }
 
 /// Per asset id: the source file its cached previews show, and the lock of their decoding.
@@ -954,6 +956,7 @@ pub fn run() {
                 startup_notice,
                 library: Arc::default(),
                 sounds: Default::default(),
+                timeline_lessons: Mutex::new(None),
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
@@ -1040,6 +1043,9 @@ pub fn run() {
             style::style_view,
             style::style_act,
             style::start_style_learning,
+            style::style_read_timelines,
+            style::start_timeline_learning,
+            style::style_use_learned,
             updates::check_for_update,
             updates::open_release_page,
         ])

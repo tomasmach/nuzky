@@ -9,6 +9,7 @@ nuzky-engine = { workspace = true, features = ["schema"] }
 nuzky-session.workspace = true
 nuzky-analysis.workspace = true
 nuzky-vision.workspace = true
+nuzky-interchange.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

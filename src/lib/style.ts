@@ -3,10 +3,13 @@ import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { showHome, useLibrary } from "./library";
 import { useEditor } from "./store";
-import type { JobEvent, StyleAction, StylePair, StylePairResult, StyleView } from "./types";
+import type { JobEvent, StyleAction, StylePair, StylePairResult, StyleTimelineResult, StyleView, TimelinePlan } from "./types";
 
-/** A "Learn from videos" job: its pairs and how each ended, in order. */
+/** A job learning from videos: its pairs and how each ended, in order. */
 export type Learning = { jobId: string; pairs: StylePair[]; results: (StylePairResult | null)[] };
+/** A job learning from projects cut in another editor: what each was read as and how it ended. */
+export type ProjectsLearning = { jobId: string; plans: TimelinePlan[]; results: (StyleTimelineResult | null)[] };
+export type LearnTab = "videos" | "projects";
 
 type StyleState = {
   /** null until read. */
@@ -14,16 +17,30 @@ type StyleState = {
   /** Why the style could not be read. */
   error: string | null;
   learning: Learning | null;
+  projectsLearning: ProjectsLearning | null;
   learnOpen: boolean;
+  learnTab: LearnTab;
   /** The pairs chosen in the Learn dialog, kept while it is closed. */
   draft: StylePair[];
+  /** The projects chosen in the Learn dialog, as read, kept while it is closed. */
+  projects: TimelinePlan[];
   /** The AI panel beside the page, to talk the style through. */
   chatOpen: boolean;
 };
 
 export const NO_PAIR: StylePair = { recording: "", cut: "" };
 
-export const useStyle = create<StyleState>(() => ({ view: null, error: null, learning: null, learnOpen: false, draft: [NO_PAIR], chatOpen: false }));
+export const useStyle = create<StyleState>(() => ({
+  view: null,
+  error: null,
+  learning: null,
+  projectsLearning: null,
+  learnOpen: false,
+  learnTab: "videos",
+  draft: [NO_PAIR],
+  projects: [],
+  chatOpen: false,
+}));
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
@@ -75,6 +92,45 @@ export async function startLearning(pairs: StylePair[]) {
   }
 }
 
+/** Reads timeline files into the Learn dialog's projects; a file chosen again is read again. */
+export async function addProjects(paths: string[]) {
+  try {
+    const plans = await api.styleReadTimelines(paths);
+    useStyle.setState((s) => ({ projects: [...s.projects.filter((p) => !paths.includes(p.path)), ...plans] }));
+  } catch (e) {
+    useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
+  }
+}
+
+export async function startProjectsLearning(plans: TimelinePlan[]) {
+  try {
+    const jobId = await api.startTimelineLearning(plans.map((p) => p.path));
+    useStyle.setState({ projectsLearning: { jobId, plans, results: plans.map(() => null) } });
+  } catch (e) {
+    useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
+  }
+}
+
+/**
+ * Makes what the projects taught the style, over the version `seen` the creator saw; true when it did.
+ * When the style changed meanwhile, the page shows it as it is now and nothing is written.
+ */
+export async function saveLearned(jobId: string, seen: number): Promise<boolean> {
+  const toast = useEditor.getState().toast;
+  try {
+    useStyle.setState({ view: await api.styleUseLearned(jobId, seen), error: null, projectsLearning: null, projects: [] });
+    toast({ kind: "success", text: "Saved as your style", action: { label: "Undo", run: () => void changeStyle({ type: "restore", index: seen }) } });
+    return true;
+  } catch (e) {
+    const text = errorText(e);
+    if (text.startsWith("STYLE_CHANGED")) {
+      await loadStyle();
+      toast({ kind: "info", text: "Your style changed meanwhile. Look at it again before you replace it." });
+    } else toast({ kind: "error", text: plainError(text) });
+    return false;
+  }
+}
+
 export function openStyle() {
   useLibrary.setState({ page: "style", selection: [] });
   showHome();
@@ -91,19 +147,30 @@ export function listenStyle() {
       const results = learning.results.map((r, i) => (i === e.payload.index ? e.payload : r));
       useStyle.setState({ learning: { ...learning, results } });
     }),
+    listen<StyleTimelineResult>("style-timeline", (e) => {
+      const learning = useStyle.getState().projectsLearning;
+      if (learning?.jobId !== e.payload.jobId) return;
+      const results = learning.results.map((r, i) => (i === e.payload.index ? e.payload : r));
+      useStyle.setState({ projectsLearning: { ...learning, results } });
+    }),
     listen<JobEvent>("job", async (e) => {
       const job = e.payload;
       if (job.kind !== "style" || job.status === "running") return;
       await loadStyle();
-      const { learning, learnOpen, view } = useStyle.getState();
-      if (learnOpen || learning?.jobId !== job.id) return;
+      const { learning, projectsLearning, learnOpen, view } = useStyle.getState();
+      const projects = projectsLearning?.jobId === job.id;
+      if (learnOpen || (learning?.jobId !== job.id && !projects)) return;
       const toast = useEditor.getState().toast;
-      if (job.status === "done") {
+      const details = { label: "Details", run: () => useStyle.setState({ learnOpen: true, learnTab: projects ? "projects" : "videos" }) };
+      if (job.status === "done" && projects) {
+        const learned = projectsLearning.results.filter((r) => r?.learned.length).length;
+        toast({ kind: "success", text: `Learned from ${plural(learned, "project")}`, action: { ...details, label: "Review" } });
+      } else if (job.status === "done" && learning) {
         const learned = learning.results.filter((r) => r && !r.error).length;
         const found = view?.suggestions.length ?? 0;
         toast({ kind: "success", text: `Learned from ${plural(learned, "video")}: ${plural(found, "suggestion")}`, action: { label: "Review", run: openStyle } });
       }
-      if (job.status === "failed") toast({ kind: "error", text: plainError(job.message ?? "Learning failed"), action: { label: "Details", run: () => useStyle.setState({ learnOpen: true }) } });
+      if (job.status === "failed") toast({ kind: "error", text: plainError(job.message ?? "Learning failed"), action: details });
     }),
   ];
   return () => offs.forEach((off) => void off.then((f) => f()));
