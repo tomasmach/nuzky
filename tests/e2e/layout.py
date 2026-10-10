@@ -1,6 +1,6 @@
 import subprocess, time
 
-from e2e.harness import CLI, FIXTURES, flow, wait, webdriver
+from e2e.harness import CLI, FIXTURES, flow, preview_crop, wait, webdriver
 
 SIZES = """const width = (e) => e ? Math.round(e.getBoundingClientRect().width) : null;
 return {library: width(document.querySelector('[role=tablist][aria-label=Library]').closest('aside')),
@@ -61,6 +61,12 @@ def layout(r):
     r.check("by default the library and the inspector take 28 % of the window's width and the timeline 35 % of its height",
             first['library'] == round(w * 0.28) and first['inspector'] == round(w * 0.28) and first['timeline'] == round(h * 0.35), first)
     r.shot('default')
+    zoom = r.s.run("""const b = document.querySelector('input[aria-label="Timeline zoom"]').getBoundingClientRect();
+        return {left: b.left, top: b.top, width: b.width, height: b.height, viewport: window.innerWidth};""")
+    track = preview_crop(r.work / 'default.png', zoom)
+    start = track.getpixel((1, track.height // 2))
+    r.check('the timeline zoom slider fills with accent from the very left end of its track',
+            start[2] > 200 and start[0] < 100, start)
 
     drag(r, 'library', 100)
     s = sizes(r)
