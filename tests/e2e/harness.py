@@ -499,6 +499,8 @@ def comma_locale(r):
     installed = subprocess.run(['locale', '-a'], capture_output=True, text=True).stdout.split()
     found = next((name for name in ('cs_CZ.utf8', 'de_DE.utf8', 'fr_FR.utf8') if name in installed), None)
     if found:
+        # LC_ALL would win over it.
+        r.env.pop('LC_ALL', None)
         r.env['LC_NUMERIC'] = found
     return found
 
