@@ -55,6 +55,15 @@ pub struct Zoom {
     pub scale: f64,
 }
 
+/// Key words of captions are scored like sentences, per word: how much louder than the median word, an
+/// exclamation, and a number, which a viewer should not miss. A word below `MIN_KEY_SCORE` is not key.
+const NUMBER_WEIGHT: f64 = 0.5;
+const MIN_KEY_SCORE: i64 = 40;
+/// Time between the starts of two key words, so a caption never has a row of them.
+const MIN_KEY_SPACING_US: i64 = 1_500_000;
+/// Words this short are mostly little words ("and", "the", "je") and never key, unless they are numbers.
+const MIN_KEY_LETTERS: usize = 4;
+
 /// The sound of one word: the sum of its squared samples and how many there are.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Energy {
@@ -81,6 +90,27 @@ pub fn word_energy(
     sources: &HashMap<String, Vec<Word>>,
     cache: &Path,
 ) -> Result<Vec<Energy>> {
+    measure(project, words, sources, cache, true)
+}
+
+/// Like `word_energy`, for caption key words: the words of a file whose sound is not prepared (missing
+/// or unreadable media) are left unmeasured, so captions never wait for sound or fail without it.
+pub fn prepared_word_energy(
+    project: &Project,
+    words: &[TimelineWord],
+    sources: &HashMap<String, Vec<Word>>,
+    cache: &Path,
+) -> Result<Vec<Energy>> {
+    measure(project, words, sources, cache, false)
+}
+
+fn measure(
+    project: &Project,
+    words: &[TimelineWord],
+    sources: &HashMap<String, Vec<Word>>,
+    cache: &Path,
+    wait_for_sound: bool,
+) -> Result<Vec<Energy>> {
     let mut out = vec![Energy::default(); words.len()];
     let mut assets: Vec<&str> = words.iter().map(|w| w.asset_id.as_str()).collect();
     assets.sort_unstable();
@@ -91,8 +121,12 @@ pub fn word_energy(
             sources.get(asset_id).into_iter().flatten().map(|w| ((w.start_us, w.text.as_str()), w.end_us)).collect();
         // Reading a word's level must never start decoding a whole file nobody can stop: the app
         // prepares sound in the background and recognition leaves it ready.
+        let prepared = nuzky_engine::audio::pcm_path(cache, asset).exists();
+        if !prepared && !wait_for_sound {
+            continue;
+        }
         anyhow::ensure!(
-            nuzky_engine::audio::pcm_path(cache, asset).exists(),
+            prepared,
             "AUDIO_NOT_READY: the sound of {} is still being prepared; try again in a moment",
             asset.name
         );
@@ -174,6 +208,55 @@ pub fn select(words: &[TimelineWord], energy: &[Energy], timeline_us: i64) -> Ve
     }
     picked.sort_by_key(|zoom| zoom.start_us);
     picked
+}
+
+/// Which of the words are key words for captions: numbers and words said louder than the median word,
+/// more so in an exclaimed sentence, at least `MIN_KEY_SPACING_US` apart, the highest scores first. Where
+/// a word sits in its sentence does not count. Words without measured sound are scored without loudness.
+pub fn key_words(words: &[TimelineWord], energy: &[Energy]) -> Vec<bool> {
+    let letters = |w: &TimelineWord| w.text.chars().filter(|c| c.is_alphanumeric()).count();
+    let number = |w: &TimelineWord| w.text.chars().any(|c| c.is_ascii_digit());
+    let candidate = |w: &TimelineWord| number(w) || letters(w) >= MIN_KEY_LETTERS;
+    let level = |e: &Energy| (e.samples > 0).then(|| 10.0 * (e.sum / e.samples as f64).max(1e-12).log10());
+    let mut levels: Vec<f64> =
+        words.iter().zip(energy).filter(|(w, _)| candidate(w)).filter_map(|(_, e)| level(e)).collect();
+    levels.sort_by(f64::total_cmp);
+    let median = levels.get(levels.len().saturating_sub(1) / 2).copied();
+    let mut exclaimed = vec![false; words.len()];
+    for (from, to) in sentences(words) {
+        let exclaims = words[to].text.trim_end().ends_with('!');
+        exclaimed[from..=to].fill(exclaims);
+    }
+    let mut scored: Vec<(i64, usize)> = words
+        .iter()
+        .zip(energy)
+        .enumerate()
+        .filter(|(_, (w, _))| candidate(w))
+        .map(|(i, (word, energy))| {
+            let louder = match (level(energy), median) {
+                (Some(level), Some(median)) => ((level - median) / FULL_LOUDNESS_DB).clamp(0.0, 1.0),
+                _ => 0.0,
+            };
+            let score = LOUDNESS_WEIGHT * louder
+                + if exclaimed[i] { EXCLAMATION_WEIGHT } else { 0.0 }
+                + if number(word) { NUMBER_WEIGHT } else { 0.0 };
+            // In whole hundredths, so the result does not hang on the last bits of a float.
+            ((score * 100.0).round() as i64, i)
+        })
+        .filter(|&(score, _)| score >= MIN_KEY_SCORE)
+        .collect();
+    // The highest first, the earlier of two equal ones.
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut key = vec![false; words.len()];
+    let mut picked: Vec<i64> = Vec::new();
+    for (_, i) in scored {
+        let start = words[i].start_us;
+        if picked.iter().all(|&other| (start - other).abs() >= MIN_KEY_SPACING_US) {
+            picked.push(start);
+            key[i] = true;
+        }
+    }
+    key
 }
 
 /// Inclusive word ranges of sentences. They end at . ! ? …, at a pause of `SENTENCE_GAP_US` and
@@ -342,6 +425,43 @@ mod tests {
         let error = word_energy(&project, &words, &HashMap::new(), &cache).unwrap_err().to_string();
         assert!(error.starts_with("AUDIO_NOT_READY") && error.contains("take.mov"), "{error}");
         assert!(!cache.exists(), "nothing was decoded");
+    }
+
+    fn keys<'a>(words: &'a [TimelineWord], key: &[bool]) -> Vec<&'a str> {
+        words.iter().zip(key).filter(|(_, k)| **k).map(|(w, _)| w.text.trim()).collect()
+    }
+
+    #[test]
+    fn key_words_are_numbers_and_loud_words_wherever_they_sit() {
+        let (mut words, mut energy) = timeline(&[
+            ("Tohle stojí 450 korun a vydrží roky.", CALM, 900_000),
+            ("Potom řešíte světlo z okna.", CALM, 900_000),
+            ("Kamera musí stát pevně.", CALM, 900_000),
+            ("Celé to zabere jen deset minut.", CALM, 900_000),
+        ]);
+        // One word in the middle of a sentence said 6 dB louder, one 3 dB louder in the middle of another.
+        let loud = |e: &mut Energy, db: f64| e.sum *= 10f64.powf(db / 10.0);
+        let at = |words: &[TimelineWord], text: &str| words.iter().position(|w| w.text.trim() == text).unwrap();
+        loud(&mut energy[at(&words, "světlo")], 6.0);
+        loud(&mut energy[at(&words, "pevně.")], 3.0);
+        assert_eq!(keys(&words, &key_words(&words, &energy)), ["450", "světlo"]);
+        // An exclamation lifts the 3 dB word over the line; the place in the sentence never counts.
+        let last = at(&words, "pevně.");
+        words[last].text = " pevně!".into();
+        assert_eq!(keys(&words, &key_words(&words, &energy)), ["450", "světlo", "pevně!"]);
+        // A loud little word is not key; without sound only numbers are.
+        loud(&mut energy[at(&words, "z")], 12.0);
+        assert!(!key_words(&words, &energy)[at(&words, "z")]);
+        assert_eq!(keys(&words, &key_words(&words, &vec![Energy::default(); words.len()])), ["450"]);
+    }
+
+    #[test]
+    fn key_words_keep_apart() {
+        // Five numbers 0.4 s apart: only one per 1.5 s, the earliest of equal scores.
+        let (words, energy) = timeline(&[("1 2 3 4 5 6 7 8", CALM, 900_000)]);
+        let key = key_words(&words, &energy);
+        assert_eq!(keys(&words, &key), ["1", "5"]);
+        assert!(key_words(&[], &[]).is_empty());
     }
 
     #[test]

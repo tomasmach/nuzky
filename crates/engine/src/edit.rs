@@ -20,10 +20,23 @@ pub const MAX_TRANSITION_US: i64 = 2_000_000;
 pub const MAX_DUCK_DB: f32 = 40.0;
 pub const CAPTION_Y: f32 = 0.15;
 
-#[derive(Deserialize)]
+/// A caption style: its look, a font when it brings its own, the entry and exit animation of every caption
+/// and how it marks key words. The built-in ones are in `assets/presets/captions.json`; the user's own live
+/// beside the projects.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptionPreset {
     pub name: String,
+    /// Without `fontFamily` the captions keep the font they have.
     pub style: TextStyle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub anim_in: Option<Animation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub anim_out: Option<Animation>,
 }
 
 pub fn caption_presets() -> &'static [CaptionPreset] {
@@ -190,16 +203,26 @@ pub enum EditCmd {
         background: Option<String>,
         background_blur: Option<f32>,
     },
-    /// Adds a new captions track; existing tracks are left alone.
+    /// Adds a new captions track; existing tracks are left alone. Every caption gets the animations.
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
     AddCaptions {
         segments: Vec<CaptionSegment>,
         style: TextStyle,
+        #[serde(default)]
+        anim_in: Option<Animation>,
+        #[serde(default)]
+        anim_out: Option<Animation>,
     },
     /// Replaces the clips of an existing captions track.
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
     ReplaceCaptions {
         track_id: String,
         segments: Vec<CaptionSegment>,
         style: TextStyle,
+        #[serde(default)]
+        anim_in: Option<Animation>,
+        #[serde(default)]
+        anim_out: Option<Animation>,
     },
     /// Cuts the timeline ranges out of every track except `keep_track_ids` (by default the
     /// tracks kept in place) and closes the gaps, so video, overlays, audio and captions stay in sync.
@@ -1083,8 +1106,8 @@ impl Project {
     fn apply_captions(&mut self, cmd: EditCmd, out: &mut EditOutcome) -> Result<()> {
         let min = min_duration(self);
         match cmd {
-            EditCmd::AddCaptions { segments, style } => {
-                let clips = caption_clips(segments, &style, &self.canvas, min)?;
+            EditCmd::AddCaptions { segments, style, anim_in, anim_out } => {
+                let clips = caption_clips(segments, &style, [anim_in, anim_out], &self.canvas, min)?;
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks.push(Track {
                     id: new_id(),
@@ -1096,9 +1119,9 @@ impl Project {
                     clips,
                 });
             }
-            EditCmd::ReplaceCaptions { track_id, segments, style } => {
+            EditCmd::ReplaceCaptions { track_id, segments, style, anim_in, anim_out } => {
                 let ti = self.caption_track(&track_id)?;
-                let clips = caption_clips(segments, &style, &self.canvas, min)?;
+                let clips = caption_clips(segments, &style, [anim_in, anim_out], &self.canvas, min)?;
                 out.select = clips.iter().map(|c| c.id.clone()).take(1).collect();
                 self.tracks[ti].clips = clips;
             }
@@ -1354,7 +1377,13 @@ pub fn merge_ranges(mut ranges: Vec<TimeRange>) -> Vec<TimeRange> {
 /// One text clip per segment, sorted and never overlapping: a segment starting inside the
 /// previous one ends it there, and one starting within a frame of it is merged into it.
 /// On vertical videos captions wrap inside the Reels and TikTok safe area unless the style says otherwise.
-fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &Canvas, min: i64) -> Result<Vec<Clip>> {
+fn caption_clips(
+    mut segments: Vec<CaptionSegment>,
+    style: &TextStyle,
+    [anim_in, anim_out]: [Option<Animation>; 2],
+    canvas: &Canvas,
+    min: i64,
+) -> Result<Vec<Clip>> {
     let mut style = style.clone();
     if style.max_width.is_none() {
         style.max_width = canvas.safe_area().map(|area| area.centered_width(canvas.width as f32));
@@ -1403,7 +1432,7 @@ fn caption_clips(mut segments: Vec<CaptionSegment>, style: &TextStyle, canvas: &
                 })
                 .collect();
             let content = ClipContent::Text { text: s.text, style: style.clone(), transform, words };
-            Clip::new(new_id(), s.start_us, (s.end_us - s.start_us).max(min), content)
+            Clip { anim_in, anim_out, ..Clip::new(new_id(), s.start_us, (s.end_us - s.start_us).max(min), content) }
         })
         .collect())
 }
@@ -2453,11 +2482,14 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into(), words: Vec::new() };
         p.apply(EditCmd::AddCaptions {
             segments: vec![seg(0, 1_200_000, "Ahoj"), seg(1_000_000, 2_000_000, "světe")],
             style: style.clone(),
+            anim_in: None,
+            anim_out: None,
         })
         .unwrap();
         let track = p.tracks.iter().find(|t| t.name == "Captions").unwrap().id.clone();
@@ -2465,13 +2497,21 @@ mod tests {
             track_id: track,
             segments: vec![seg(0, 1_000_000, "Znovu")],
             style: style.clone(),
+            anim_in: None,
+            anim_out: None,
         })
         .unwrap();
         let caption_tracks: Vec<_> = p.tracks.iter().filter(|t| t.name == "Captions").collect();
         assert_eq!(caption_tracks.len(), 1);
         assert_eq!(caption_tracks[0].clips.len(), 1);
         // Adding never removes an existing captions track.
-        p.apply(EditCmd::AddCaptions { segments: vec![seg(0, 1_000_000, "Druhá")], style: style.clone() }).unwrap();
+        p.apply(EditCmd::AddCaptions {
+            segments: vec![seg(0, 1_000_000, "Druhá")],
+            style: style.clone(),
+            anim_in: None,
+            anim_out: None,
+        })
+        .unwrap();
         assert_eq!(p.tracks.iter().filter(|t| t.name == "Captions").count(), 2);
         // A title added where a captions track is free still gets its own track, so replacing
         // the captions never removes it.
@@ -2481,13 +2521,44 @@ mod tests {
             track_id: titles.clone(),
             segments: vec![seg(0, 1_000_000, "X")],
             style: style.clone(),
+            anim_in: None,
+            anim_out: None,
         };
         assert!(p.apply(replace).is_err());
         let captions = p.tracks.iter().find(|t| t.is_captions()).unwrap().id.clone();
-        p.apply(EditCmd::ReplaceCaptions { track_id: captions, segments: vec![seg(0, 1_000_000, "Y")], style })
-            .unwrap();
+        p.apply(EditCmd::ReplaceCaptions {
+            track_id: captions,
+            segments: vec![seg(0, 1_000_000, "Y")],
+            style,
+            anim_in: None,
+            anim_out: None,
+        })
+        .unwrap();
         let title = &p.tracks.iter().find(|t| t.id == titles).unwrap().clips[0].content;
         assert!(matches!(title, ClipContent::Text { text, .. } if text == "Title"));
+    }
+
+    #[test]
+    fn every_caption_gets_the_animations_of_its_style() {
+        let style: TextStyle =
+            serde_json::from_value(serde_json::json!({"fontSize": 95.0, "color": "#ffffff"})).unwrap();
+        let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into(), words: Vec::new() };
+        let pop = Some(Animation { kind: crate::model::AnimationKind::Pop, duration_us: 200_000 });
+        let clips = caption_clips(
+            vec![seg(0, 1_000_000, "first"), seg(1_000_000, 2_000_000, "second")],
+            &style,
+            [pop, None],
+            &Project::new("c").canvas,
+            33_334,
+        )
+        .unwrap();
+        assert!(clips.iter().all(|c| c.anim_in == pop && c.anim_out.is_none()));
+        // An older command without animations reads as none.
+        let old: EditCmd = serde_json::from_value(serde_json::json!({
+            "type": "addCaptions", "segments": [], "style": style
+        }))
+        .unwrap();
+        assert!(matches!(old, EditCmd::AddCaptions { anim_in: None, anim_out: None, .. }));
     }
 
     #[test]
@@ -2502,11 +2573,13 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         let seg = |s, e, t: &str| CaptionSegment { start_us: s, end_us: e, text: t.into(), words: Vec::new() };
         let clips = caption_clips(
             vec![seg(0, 1_000_000, "first"), seg(0, 2_000_000, "second"), seg(1_500_000, 3_000_000, "third")],
             &style,
+            [None, None],
             &Project::new("c").canvas,
             33_334,
         )
@@ -2545,6 +2618,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         p.apply(EditCmd::AddText { start_us: 2_000_000, text: "hi".into(), style }).unwrap();
         let music = p.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().id.clone();
@@ -2589,9 +2663,10 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         let seg = CaptionSegment { start_us: 1_000_000, end_us: 3_000_000, text: "jsem se".into(), words: Vec::new() };
-        p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
+        p.apply(EditCmd::AddCaptions { segments: vec![seg], style, anim_in: None, anim_out: None }).unwrap();
         let clip_id = p.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].id.clone();
         // A keyframe at 2.5 s on the timeline, inside the part that stays.
         let keyframes = vec![Keyframe { t_us: 1_500_000, transform: Transform::default(), ease: Ease::Linear }];
@@ -2627,6 +2702,7 @@ mod tests {
                 background: None,
                 max_width: None,
                 highlight: None,
+                keywords: None,
             };
             p.apply(EditCmd::AddCaptions {
                 segments: vec![CaptionSegment {
@@ -2636,6 +2712,8 @@ mod tests {
                     words: Vec::new(),
                 }],
                 style,
+                anim_in: None,
+                anim_out: None,
             })
             .unwrap();
             let mut overlay = p.tracks[0].clone();
@@ -2683,6 +2761,7 @@ mod tests {
             text: text.into(),
             start_us: start_ms * 1000,
             end_us: end_ms * 1000,
+            key: false,
         };
         let style: TextStyle = serde_json::from_value(serde_json::json!({
             "fontSize": 95.0, "color": "#ffffff", "strokeWidth": 7.5, "highlight": "#ffe14d"
@@ -2699,7 +2778,8 @@ mod tests {
                 word("jak", 3200, 3800),
             ],
         };
-        let out = p.apply(EditCmd::AddCaptions { segments: vec![segment], style }).unwrap();
+        let out =
+            p.apply(EditCmd::AddCaptions { segments: vec![segment], style, anim_in: None, anim_out: None }).unwrap();
         (p, out.select[0].clone())
     }
 
@@ -2822,16 +2902,28 @@ mod tests {
         assert_eq!(spoken_at(&p, 2_600_000).as_deref(), Some("ukážu,"));
         // A word corrected into two before captions were made stays one timed word, and fixing
         // another word keeps the caption lit.
-        let timed = |text: &str, start_us: i64| CaptionWord { text: text.into(), start_us, end_us: start_us + 200_000 };
-        let mut words = vec![timed("na pivo", 0), timed("teď", 300_000)];
+        let timed = |text: &str, start_us: i64| CaptionWord {
+            text: text.into(),
+            start_us,
+            end_us: start_us + 200_000,
+            key: false,
+        };
+        let mut words = vec![timed("na pivo", 0), CaptionWord { key: true, ..timed("teď", 300_000) }];
         retext_words(&mut words, "na pivo teď", "na pivo hned");
         assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["na pivo", "hned"]);
+        // A corrected key word stays key.
+        assert_eq!(words.iter().map(|w| w.key).collect::<Vec<_>>(), [false, true]);
         assert_eq!(crate::model::spoken_word("na pivo hned", &words, 350_000), Some(8..12));
     }
 
     #[test]
     fn caption_words_must_spell_the_caption_and_survive_merging() {
-        let word = |text: &str, start_us: i64| CaptionWord { text: text.into(), start_us, end_us: start_us + 200_000 };
+        let word = |text: &str, start_us: i64| CaptionWord {
+            text: text.into(),
+            start_us,
+            end_us: start_us + 200_000,
+            key: false,
+        };
         let segment = |start_us: i64, text: &str, words: Vec<CaptionWord>| CaptionSegment {
             start_us,
             end_us: start_us + 500_000,
@@ -2843,7 +2935,9 @@ mod tests {
                 .unwrap();
         let mut p = project();
         let wrong = segment(0, "Ahoj světe", vec![word("Ahoj", 0), word("svete", 250_000)]);
-        let error = p.apply(EditCmd::AddCaptions { segments: vec![wrong], style: style.clone() }).unwrap_err();
+        let error = p
+            .apply(EditCmd::AddCaptions { segments: vec![wrong], style: style.clone(), anim_in: None, anim_out: None })
+            .unwrap_err();
         assert!(error.to_string().contains("Caption words must be the caption text"), "{error}");
         // Segments starting within a frame merge; the words of both stay, at their times.
         let merged = vec![
@@ -2852,7 +2946,7 @@ mod tests {
             segment(1_000_000, "bez", vec![word("bez", 1_000_000)]),
             segment(1_010_000, "slov", Vec::new()),
         ];
-        p.apply(EditCmd::AddCaptions { segments: merged, style }).unwrap();
+        p.apply(EditCmd::AddCaptions { segments: merged, style, anim_in: None, anim_out: None }).unwrap();
         let captions = &p.tracks.iter().find(|t| t.is_captions()).unwrap().clips;
         let ClipContent::Text { text, words, .. } = &captions[0].content else { panic!() };
         assert_eq!(
@@ -2962,6 +3056,7 @@ mod tests {
             background: None,
             max_width: None,
             highlight: None,
+            keywords: None,
         };
         p.apply(EditCmd::AddText { start_us: 500_000, text: "Title".into(), style }).unwrap();
         let first = p.tracks[0].clips[0].id.clone();

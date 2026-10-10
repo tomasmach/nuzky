@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Animation, Boot, CaptionPreset, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -106,8 +106,13 @@ export const api = {
   startCoverExport: (format: ThumbnailFormat, path: string, replaceExisting: boolean, epoch: Epoch) =>
     invoke<string>("start_cover_export", { format, path, replaceExisting, expectedEpoch: epoch }),
   /** `maxWords`/`maxChars` null group by phrase, capped at 12 words and 42 characters. */
-  startCaptions: (model: string, language: string, style: TextStyle, maxWords: number | null, maxChars: number | null, epoch: Epoch) =>
-    invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars }, expectedEpoch: epoch }),
+  startCaptions: (model: string, language: string, look: { style: TextStyle; animIn: Animation | null; animOut: Animation | null }, maxWords: number | null, maxChars: number | null, epoch: Epoch) =>
+    invoke<string>("start_captions", { request: { model, language, ...look, maxWords, maxChars }, expectedEpoch: epoch }),
+  /** The user's own caption styles, kept beside the projects; each change returns the list. */
+  captionStyles: () => invoke<CaptionPreset[]>("caption_styles"),
+  saveCaptionStyle: (style: CaptionPreset) => invoke<CaptionPreset[]>("save_caption_style", { style }),
+  renameCaptionStyle: (from: string, to: string) => invoke<CaptionPreset[]>("rename_caption_style", { from, to }),
+  deleteCaptionStyle: (name: string) => invoke<CaptionPreset[]>("delete_caption_style", { name }),
   /** Recognises the heard media without a transcript, or all of it with `refresh`. */
   startTranscript: (model: string, language: string, refresh: boolean, epoch: Epoch) => invoke<string>("start_transcript", { model, language, refresh, expectedEpoch: epoch }),
   transcriptView: (pauseUs: number) => invoke<TranscriptView>("transcript_view", { pauseUs: Math.round(pauseUs) }),

@@ -8,8 +8,8 @@ use anyhow::{Context, Result, ensure};
 use nuzky_analysis::{AudioSource, CaptionGrouping, group_words};
 use nuzky_engine::{
     Project,
-    edit::{EditCmd, TimeRange, merge_ranges},
-    model::{Asset, ClipContent, MAX_CORRECTION_CHARS, TextStyle, WordCorrection},
+    edit::{CaptionPreset, EditCmd, TimeRange, merge_ranges},
+    model::{Asset, ClipContent, MAX_CORRECTION_CHARS, WordCorrection},
     speech::{TimelineWord, Word, is_heard, map_words},
 };
 use nuzky_session::{
@@ -881,15 +881,20 @@ pub fn plan_cut(project: &Project, derived: &Derived, ranges: Vec<TimeRange>) ->
     Ok(Cut { edit, ranges, preview, words })
 }
 
+/// Captions of the timeline words in `look`, replacing the captions track when there is one. `keys` says
+/// which words are key (`nuzky_analysis::key_words`), in the order of `words`.
 pub fn caption_edit(
     words: &[TimelineWord],
+    keys: &[bool],
     project: &Project,
-    style: TextStyle,
+    look: CaptionPreset,
     grouping: CaptionGrouping,
 ) -> Result<(EditCmd, usize)> {
     ensure!(grouping.max_words > 0 && grouping.max_chars > 0, "INVALID_GROUPING: caption limits must be positive");
     let mut segments = Vec::new();
     let min_caption_us = project.frame_duration_us().ceil() as i64;
+    let keyed: HashSet<(&str, i64)> =
+        words.iter().zip(keys).filter(|(_, key)| **key).map(|(w, _)| (w.clip_id.as_str(), w.start_us)).collect();
     let mut by_clip: HashMap<&str, Vec<Word>> = HashMap::new();
     for word in words {
         by_clip.entry(&word.clip_id).or_default().push(Word {
@@ -903,6 +908,9 @@ pub fn caption_edit(
         let Some(clip_words) = by_clip.get(clip.id.as_str()) else { continue };
         let mut grouped = group_words(clip_words, grouping);
         for segment in &mut grouped {
+            for word in &mut segment.words {
+                word.key = keyed.contains(&(clip.id.as_str(), word.start_us));
+            }
             segment.end_us = segment.end_us.min(clip.end_us());
             // The engine enforces a one-frame minimum; borrow time before a short tail word.
             segment.start_us = segment.start_us.min(segment.end_us - min_caption_us).max(clip.start_us);
@@ -914,9 +922,10 @@ pub fn caption_edit(
     ensure!(count > 0, "NO_CAPTIONS: no transcript words in retained media");
     let tracks: Vec<_> = project.tracks.iter().filter(|t| t.is_captions()).collect();
     ensure!(tracks.len() <= 1, "AMBIGUOUS_CAPTIONS: multiple caption tracks; use explicit replaceCaptions");
+    let CaptionPreset { style, anim_in, anim_out, .. } = look;
     let edit = match tracks.first() {
-        Some(track) => EditCmd::ReplaceCaptions { track_id: track.id.clone(), segments, style },
-        None => EditCmd::AddCaptions { segments, style },
+        Some(track) => EditCmd::ReplaceCaptions { track_id: track.id.clone(), segments, style, anim_in, anim_out },
+        None => EditCmd::AddCaptions { segments, style, anim_in, anim_out },
     };
     Ok((edit, count))
 }
@@ -1127,6 +1136,7 @@ pub(crate) mod tests {
             text: text.into(),
             start_us,
             end_us: start_us + 400_000,
+            key: false,
         };
         let segment = nuzky_engine::edit::CaptionSegment {
             start_us: 400_000,
@@ -1135,7 +1145,14 @@ pub(crate) mod tests {
             // Timeline times, as built from the transcript.
             words: vec![timed("To", 500_000), timed("je", 1_500_000), timed("to.", 2_500_000)],
         };
-        project.apply(EditCmd::AddCaptions { segments: vec![segment], style: crate::params::reel_style() }).unwrap();
+        project
+            .apply(EditCmd::AddCaptions {
+                segments: vec![segment],
+                style: crate::params::reel_style(),
+                anim_in: None,
+                anim_out: None,
+            })
+            .unwrap();
         let caption = project.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].id.clone();
         project
             .apply(EditCmd::TrimClip {
@@ -1211,8 +1228,9 @@ pub(crate) mod tests {
         assert_eq!(data["words"][0]["text"], "word6");
         let (edit, _) = caption_edit(
             &words,
+            &[],
             &project,
-            crate::params::reel_style(),
+            crate::params::reel(),
             CaptionGrouping { max_words: 100, max_chars: 1000, ..CaptionGrouping::default() },
         )
         .unwrap();
@@ -1241,7 +1259,14 @@ pub(crate) mod tests {
         let words = map_words(&project, &sources);
         let style = nuzky_engine::edit::caption_preset("karaoke").unwrap().style.clone();
         let grouping = CaptionGrouping { max_words: 3, max_chars: 30, break_gap_us: 1_000_000 };
-        let (edit, _) = caption_edit(&words, &project, style, grouping).unwrap();
+        let (edit, _) = caption_edit(
+            &words,
+            &[],
+            &project,
+            CaptionPreset { name: String::new(), style, anim_in: None, anim_out: None },
+            grouping,
+        )
+        .unwrap();
         project.apply(edit).unwrap();
         let captions = &project.tracks.iter().find(|t| t.is_captions()).unwrap().clips;
         assert!(captions.iter().any(|c| matches!(&c.content, ClipContent::Text { words, .. } if words.len() > 1)));
@@ -1320,8 +1345,7 @@ pub(crate) mod tests {
         sources.get_mut("talk").unwrap()[0].end_us = 5_000_000;
         sources.get_mut("talk").unwrap().truncate(1);
         let words = map_words(&project, &sources);
-        let (edit, _) =
-            caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping::default()).unwrap();
+        let (edit, _) = caption_edit(&words, &[], &project, crate::params::reel(), CaptionGrouping::default()).unwrap();
         project.apply(edit).unwrap();
         let caption = &project.tracks.iter().find(|t| t.name == "Captions").unwrap().clips[0];
         assert_eq!(caption.end_us(), 5_000_000);
@@ -1349,7 +1373,7 @@ pub(crate) mod tests {
             })
             .collect();
         let (edit, count) =
-            caption_edit(&words, &project, crate::params::reel_style(), CaptionGrouping::default()).unwrap();
+            caption_edit(&words, &[], &project, crate::params::reel(), CaptionGrouping::default()).unwrap();
         assert_eq!(count, 1);
         let EditCmd::AddCaptions { segments, .. } = &edit else { panic!() };
         assert_eq!(segments[0].text, words[1].text);
@@ -1359,7 +1383,7 @@ pub(crate) mod tests {
         assert_eq!(captions.len(), 1);
         assert!(captions[0].start_us >= 10_000);
         assert!(
-            caption_edit(&words[..1], &project, crate::params::reel_style(), CaptionGrouping::default())
+            caption_edit(&words[..1], &[], &project, crate::params::reel(), CaptionGrouping::default())
                 .unwrap_err()
                 .to_string()
                 .contains("NO_CAPTIONS")
@@ -1463,7 +1487,9 @@ pub(crate) mod tests {
                 words: vec![],
             })
             .collect();
-        project.apply(EditCmd::AddCaptions { segments, style: crate::params::reel_style() }).unwrap();
+        project
+            .apply(EditCmd::AddCaptions { segments, style: crate::params::reel_style(), anim_in: None, anim_out: None })
+            .unwrap();
     }
 
     #[test]
@@ -1564,16 +1590,12 @@ pub(crate) mod tests {
         let (mut project, sources) = fixture();
         let grouping = CaptionGrouping { max_words: 3, max_chars: 100, break_gap_us: 2_000_000 };
         let derived = Derived::new(&project, sources.clone(), vec![]);
-        project
-            .apply(caption_edit(&derived.words, &project, crate::params::reel_style(), grouping).unwrap().0)
-            .unwrap();
+        project.apply(caption_edit(&derived.words, &[], &project, crate::params::reel(), grouping).unwrap().0).unwrap();
         correct(&mut project, &sources, &[(3, "fixed")]).unwrap();
         let shown = caption_texts(&project);
         assert!(shown.iter().any(|t| t.split(' ').any(|w| w == "fixed")), "{shown:?}");
         let derived = Derived::new(&project, sources.clone(), vec![]);
-        project
-            .apply(caption_edit(&derived.words, &project, crate::params::reel_style(), grouping).unwrap().0)
-            .unwrap();
+        project.apply(caption_edit(&derived.words, &[], &project, crate::params::reel(), grouping).unwrap().0).unwrap();
         assert_eq!(caption_texts(&project), shown);
     }
 

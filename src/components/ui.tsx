@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight, Minus } from "lucide-react";
 import { followPointer } from "../lib/drag";
@@ -21,7 +21,8 @@ const variants: Record<Variant, string> = {
 const idle = (classes: string) => classes.split(" ").filter((c) => !c.startsWith("hover:")).join(" ");
 
 /** Why the controls inside an `AiLock` are locked, or null. */
-const LockReason = createContext<string | null>(null);
+/** Why the controls inside cannot change anything now, or null. */
+export const LockReason = createContext<string | null>(null);
 export const useLockReason = () => useContext(LockReason);
 
 /** For a plain button inside an `AiLock`: focusable, inert to clicks, the reason as its tooltip. */
@@ -87,7 +88,7 @@ export function IconButton({
   disabled,
   onClick,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean; /** Round, for icons grouped in a toolbar capsule. */ round?: boolean }) {
+}: ComponentProps<"button"> & { label: string; active?: boolean; /** Round, for icons grouped in a toolbar capsule. */ round?: boolean }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
   return (
@@ -707,12 +708,14 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
 }
 
 /** A style preview in the font the engine draws it with. */
-export function TextSwatch({ style, label, size = 15 }: { style: TextStyle; label: string; /** Font size in px. */ size?: number }) {
+export function TextSwatch({ style, label, size = 15, lines = 1 }: { style: TextStyle; label: string; /** Font size in px. */ size?: number; /** A long label wraps onto two. */ lines?: 1 | 2 }) {
   // Karaoke styles show the moment a word is spoken: the last word, or the end of a one-word label, lit.
+  // Key words take the first word, or the start of a one-word label.
   const split = label.lastIndexOf(" ") + 1 || Math.ceil(label.length / 2);
+  const key = style.keywords ? label.indexOf(" ") + 1 || Math.floor(label.length / 2) : 0;
   return (
     <span
-      className="inline-block max-w-full truncate rounded px-1 leading-6"
+      className={`inline-block max-w-full rounded px-1 ${lines === 2 ? "line-clamp-2 text-center leading-[15px]" : "truncate leading-6"}`}
       style={{
         fontSize: size,
         fontFamily: fontCss(style.fontFamily),
@@ -723,13 +726,14 @@ export function TextSwatch({ style, label, size = 15 }: { style: TextStyle; labe
         paintOrder: "stroke fill",
       }}
     >
+      {key > 0 && <span style={{ color: style.keywords?.color }}>{label.slice(0, Math.min(key, style.highlight ? split : label.length))}</span>}
       {style.highlight ? (
         <>
-          {label.slice(0, split)}
-          <span style={{ color: style.highlight }}>{label.slice(split)}</span>
+          {label.slice(key, split)}
+          <span style={{ color: style.highlight }}>{label.slice(Math.max(key, split))}</span>
         </>
       ) : (
-        label
+        label.slice(key)
       )}
     </span>
   );

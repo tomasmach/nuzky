@@ -164,7 +164,7 @@ fn transform(value: &Transform) -> Result<()> {
 }
 
 /// Sizes are bounded by the picture the text is drawn on: the canvas, or a thumbnail.
-fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
+pub fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
     ensure!(
         style.font_size.is_finite()
             && style.font_size > 0.0
@@ -184,6 +184,9 @@ fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
     }
     if let Some(highlight) = &style.highlight {
         color(highlight, "highlight color")?;
+    }
+    if let Some(keywords) = &style.keywords {
+        color(&keywords.color, "key word color")?;
     }
     Ok(())
 }
@@ -426,7 +429,8 @@ mod tests {
         .unwrap();
         let mut project = Project::new("words");
         project.apply(EditCmd::AddText { start_us: 0, text: "Ahoj".into(), style }).unwrap();
-        let word = |start_us, end_us| nuzky_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us };
+        let word =
+            |start_us, end_us| nuzky_engine::model::CaptionWord { text: "Jinak".into(), start_us, end_us, key: false };
         for (words, valid) in [
             (vec![word(0, 0), word(-500, 100)], true),
             (vec![word(i64::MIN, i64::MAX)], true),
@@ -526,7 +530,7 @@ mod tests {
         let mut project = Project::new("colors");
         project.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }).unwrap();
         validate(&project).unwrap();
-        for field in 0..5 {
+        for field in 0..6 {
             for (value, valid) in [
                 ("#fff", true),
                 ("#FFAA00", true),
@@ -547,7 +551,11 @@ mod tests {
                     1 => style.color = value.into(),
                     2 => style.stroke_color = value.into(),
                     3 => style.background = Some(value.into()),
-                    _ => style.highlight = Some(value.into()),
+                    4 => style.highlight = Some(value.into()),
+                    _ => {
+                        style.keywords =
+                            Some(nuzky_engine::model::Keywords { color: value.into(), pick: Default::default() })
+                    }
                 }
                 let result = validate(&candidate);
                 assert_eq!(result.is_ok(), valid, "field {field}: {value:?}");

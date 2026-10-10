@@ -1,5 +1,6 @@
 mod agent_panel;
 mod audio_out;
+mod caption_styles;
 mod connect;
 mod cover;
 mod engine;
@@ -991,6 +992,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            caption_styles::caption_styles,
+            caption_styles::save_caption_style,
+            caption_styles::rename_caption_style,
+            caption_styles::delete_caption_style,
             boot,
             set_ui_context,
             sounds::sound_library,

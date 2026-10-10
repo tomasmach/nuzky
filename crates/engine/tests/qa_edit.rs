@@ -178,6 +178,7 @@ fn equal_start_captions_do_not_overlap() {
         background: None,
         max_width: None,
         highlight: None,
+        keywords: None,
     };
     let _ = e.apply(
         EditCmd::AddCaptions {
@@ -186,6 +187,8 @@ fn equal_start_captions_do_not_overlap() {
                 CaptionSegment { start_us: 0, end_us: 2_000_000, text: "second".into(), words: Vec::new() },
             ],
             style,
+            anim_in: None,
+            anim_out: None,
         },
         None,
     );

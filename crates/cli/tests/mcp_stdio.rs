@@ -486,6 +486,96 @@ fn retakes_answer_at_once_even_for_read_only_clients() {
     writer.finish();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn caption_style_packages_over_stdio() {
+    use nuzky_engine::edit::caption_preset;
+    use nuzky_session::transcripts::{Record, TranscriptStore, VERSION};
+
+    let mut c = Client::start(true, None, Some(None));
+    let video = c.dir.join("talk.mp4");
+    assert!(
+        Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=s=16x16:r=30:d=4"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=4",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac"
+            ])
+            .arg(&video)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let asset = nuzky_engine::media::probe(&video, "take".into()).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/nuzky/transcripts")).unwrap();
+    store
+        .put(
+            &asset,
+            &Record {
+                version: VERSION,
+                fingerprint: store.fingerprint(&asset).unwrap(),
+                duration_us: asset.duration_us,
+                model: "fixture".into(),
+                language: "en".into(),
+                words: ["Save", "450", "every", "month."]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| nuzky_engine::speech::Word {
+                        start_us: 200_000 + i as i64 * 800_000,
+                        end_us: 700_000 + i as i64 * 800_000,
+                        text: (*text).into(),
+                        probability: 0.9,
+                    })
+                    .collect(),
+                segments: vec![],
+                alignment: None,
+            },
+        )
+        .unwrap();
+    let mut own = caption_preset("neon_blue").unwrap().clone();
+    own.name = "My neon".into();
+    own.anim_out = own.anim_in;
+    std::fs::write(c.dir.join("data/nuzky/caption-styles.json"), serde_json::to_vec(&vec![&own]).unwrap()).unwrap();
+    let run = c.call("begin_run", json!({"label": "caption packages"}));
+    c.call(
+        "apply_edits",
+        json!({"run_id": run["run_id"], "request_id": "place",
+        "edits": [{"type": "addAssets", "assets": [asset]}, {"type": "addClip", "assetId": "take"}]}),
+    );
+    for (name, preset) in [("hormozi", caption_preset("hormozi").unwrap()), ("MY-NEON", &own)] {
+        let made = c.call("build_captions", json!({"run_id": run["run_id"], "style_preset": name}));
+        assert!(made["caption_count"].as_u64().unwrap() > 1);
+        let state = c.call("get_state", json!({}));
+        let clips = state["tracks"].as_array().unwrap().iter().find(|t| t["name"] == "Captions").unwrap()["clips"]
+            .as_array()
+            .unwrap();
+        for clip in clips {
+            assert_eq!(clip["content"]["style"]["fontFamily"], json!(preset.style.font_family));
+            assert_eq!(clip["content"]["style"]["keywords"], json!(preset.style.keywords));
+            assert_eq!(clip["animIn"], json!(preset.anim_in));
+            assert_eq!(clip["animOut"], json!(preset.anim_out));
+        }
+        assert!(
+            clips
+                .iter()
+                .flat_map(|clip| clip["content"]["words"].as_array().unwrap())
+                .any(|word| word["text"] == "450" && word["key"] == true)
+        );
+    }
+    let unknown = c.error("build_captions", json!({"run_id": run["run_id"], "style_preset": "missing_package"}));
+    assert!(unknown.contains("My neon") && unknown.contains("hormozi") && unknown.contains("typewriter"), "{unknown}");
+    c.call("end_run", json!({"run_id": run["run_id"], "action": "keep"}));
+    c.finish();
+}
+
 // Only on Linux does XDG_DATA_HOME choose where Nuzky keeps transcripts.
 #[cfg(target_os = "linux")]
 #[test]
@@ -744,7 +834,10 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     let captions = c.call("build_captions", json!({"run_id":run["run_id"]}));
     assert!(captions["caption_count"].as_u64().unwrap() > 0);
     // Rebuilt as karaoke: each caption keeps its spoken words, which spell its text.
-    assert!(c.error("build_captions", json!({"run_id":run["run_id"],"style_preset":"neon"})).contains("karaoke"));
+    assert!(
+        c.error("build_captions", json!({"run_id":run["run_id"],"style_preset":"unknown_caption_package"}))
+            .contains("karaoke")
+    );
     let karaoke = c.call("build_captions", json!({"run_id":run["run_id"],"style_preset":"karaoke"}));
     assert_eq!(karaoke["caption_count"], captions["caption_count"]);
     let state = c.call("get_state", json!({}));

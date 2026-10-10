@@ -17,7 +17,7 @@ mod writer;
 pub use history::{HISTORY_SUFFIX, HistoryList, MAX_VERSIONS, Restored, Target, VersionInfo, other_versions};
 pub use storage::{json_temp_path, lock_project, save as write_json_atomic};
 pub use types::*;
-pub use validate::{local_media_path, validate};
+pub use validate::{local_media_path, text_style, validate};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};

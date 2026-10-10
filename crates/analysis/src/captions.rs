@@ -66,7 +66,7 @@ pub fn group_words(words: &[Word], grouping: CaptionGrouping) -> Vec<CaptionSegm
             let text = group.iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ");
             let words = group
                 .iter()
-                .map(|w| CaptionWord { text: w.text.trim().into(), start_us: w.start_us, end_us: w.end_us })
+                .map(|w| CaptionWord { text: w.text.trim().into(), start_us: w.start_us, end_us: w.end_us, key: false })
                 .collect();
             CaptionSegment { start_us: group[0].start_us, end_us: end.max(group[0].start_us + 1), text, words }
         })

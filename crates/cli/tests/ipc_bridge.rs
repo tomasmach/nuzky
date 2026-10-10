@@ -44,6 +44,7 @@ impl App {
                     background: None,
                     max_width: None,
                     highlight: None,
+                    keywords: None,
                 },
             })
             .unwrap();

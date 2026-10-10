@@ -1,5 +1,5 @@
 use nuzky_engine::{
-    edit::{EditCmd, MotionKind, TimeRange},
+    edit::{CaptionPreset, EditCmd, MotionKind, TimeRange},
     export::{Delivery, Quality},
     model::{TextStyle, ThumbnailFormat},
 };
@@ -291,10 +291,13 @@ pub struct Job {
 #[serde(deny_unknown_fields)]
 pub struct Captions {
     pub run_id: String,
-    /// A full caption style; leave it out to use style_preset or Reel.
+    /// A full caption style, including optional keywords {color, pick}; leave it out to use style_preset or Reel.
     pub style: Option<TextStyle>,
-    /// A caption preset by name: reel, outline, yellow, box, clean, karaoke or green_box.
-    /// Karaoke and green_box highlight the word being spoken.
+    /// A built-in style package: reel, outline, yellow, box, clean, karaoke, green_box, hormozi,
+    /// hormozi_green, spotlight, impact, headline, punchline, neon, neon_blue, yellow_box,
+    /// white_box, minimal or typewriter; or a saved style from My styles by name.
+    /// A package brings its font when it has one, entry/exit animations for every caption
+    /// and its key word colour. Karaoke and green_box highlight the word being spoken.
     pub style_preset: Option<String>,
     pub max_words: Option<usize>,
     pub max_chars: Option<usize>,
@@ -339,19 +342,15 @@ pub struct ExportThumbnail {
 }
 
 impl Captions {
-    /// The style asked for: a full style or a preset, Reel when neither is given.
-    pub fn style(&self) -> anyhow::Result<TextStyle> {
+    /// The style asked for: a full style or a preset with its animations, Reel when neither is given.
+    pub fn look(&self) -> anyhow::Result<CaptionPreset> {
         match (&self.style, &self.style_preset) {
             (Some(_), Some(_)) => anyhow::bail!("INVALID_ARGUMENTS: give style or style_preset, not both"),
-            (Some(style), None) => Ok(style.clone()),
-            (None, Some(name)) => nuzky_engine::edit::caption_preset(name).map(|p| p.style.clone()).ok_or_else(|| {
-                let names: Vec<_> = nuzky_engine::edit::caption_presets()
-                    .iter()
-                    .map(|p| p.name.to_lowercase().replace(' ', "_"))
-                    .collect();
-                anyhow::anyhow!("INVALID_ARGUMENTS: unknown style_preset {name:?}; use one of {}", names.join(", "))
-            }),
-            (None, None) => Ok(reel_style()),
+            (Some(style), None) => {
+                Ok(CaptionPreset { name: String::new(), style: style.clone(), anim_in: None, anim_out: None })
+            }
+            (None, Some(name)) => crate::caption_styles::find(name),
+            (None, None) => Ok(reel()),
         }
     }
 
@@ -365,8 +364,13 @@ impl Captions {
     }
 }
 
+pub fn reel() -> CaptionPreset {
+    nuzky_engine::edit::caption_presets()[0].clone()
+}
+
+#[cfg(test)]
 pub fn reel_style() -> nuzky_engine::model::TextStyle {
-    nuzky_engine::edit::caption_presets()[0].style.clone()
+    reel().style
 }
 
 #[cfg(test)]
@@ -382,7 +386,7 @@ mod tests {
         let defaults = nuzky_analysis::CaptionGrouping::default();
         assert_eq!(args.grouping().max_words, defaults.max_words);
         assert_eq!(args.grouping().max_chars, defaults.max_chars);
-        let style = args.style().unwrap();
+        let style = args.look().unwrap().style;
         assert_eq!(
             serde_json::to_value(style).unwrap(),
             serde_json::json!({
@@ -397,14 +401,14 @@ mod tests {
         let captions = |value: serde_json::Value| {
             let mut args = serde_json::json!({"run_id": "run"});
             args.as_object_mut().unwrap().extend(value.as_object().unwrap().clone());
-            serde_json::from_value::<Captions>(args).unwrap().style()
+            serde_json::from_value::<Captions>(args).unwrap().look().map(|look| look.style)
         };
         let karaoke = captions(serde_json::json!({"style_preset": "karaoke"})).unwrap();
         assert_eq!(karaoke.highlight.as_deref(), Some("#ffe14d"));
         assert_eq!(karaoke.font_size, reel_style().font_size);
         let boxed = captions(serde_json::json!({"style_preset": "Green_Box"})).unwrap();
         assert_eq!((boxed.highlight.as_deref(), boxed.background.is_some()), (Some("#4ade80"), true));
-        let unknown = captions(serde_json::json!({"style_preset": "neon"})).unwrap_err().to_string();
+        let unknown = captions(serde_json::json!({"style_preset": "unknown_caption_package"})).unwrap_err().to_string();
         assert!(unknown.starts_with("INVALID_ARGUMENTS") && unknown.contains("karaoke, green_box"), "{unknown}");
         let both = captions(
             serde_json::json!({"style_preset": "karaoke", "style": serde_json::to_value(reel_style()).unwrap()}),
