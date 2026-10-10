@@ -4,7 +4,7 @@
 
 use nuzky_engine::Project;
 use nuzky_engine::edit::MAIN_TRACK;
-use nuzky_engine::model::{Clip, ClipContent, Crop, TrackKind};
+use nuzky_engine::model::{Clip, ClipContent, Crop, Thumbnail, ThumbnailFormat, TrackKind};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -128,6 +128,14 @@ fn crop(clip: &Clip) -> Option<Crop> {
     match &clip.content {
         ClipContent::Media { transform, .. } | ClipContent::Text { transform, .. } => transform.crop,
     }
+}
+
+/// The file and the time in it the main track shows at `t_us`, to the millisecond.
+fn shown_source(project: &Project, t_us: i64) -> Option<(&str, i64)> {
+    let clip = project.tracks.iter().find(|t| t.id == MAIN_TRACK)?.clips.iter().find(|c| c.contains(t_us))?;
+    let (asset, from, to) = source(clip)?;
+    let at = from as f64 + (t_us - clip.start_us) as f64 * (to - from) as f64 / clip.duration_us as f64;
+    Some((asset, (at / 1000.0).round() as i64))
 }
 
 pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
@@ -428,6 +436,25 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
             at_us: None,
         });
     }
+    for format in [ThumbnailFormat::Cover9x16, ThumbnailFormat::Youtube16x9] {
+        let name = match format {
+            ThumbnailFormat::Cover9x16 => "the 9:16 cover",
+            ThumbnailFormat::Youtube16x9 => "the YouTube thumbnail",
+        };
+        // Cuts before its frame move the frame's time with the picture; showing the same moment, it is the same cover.
+        let moved_with_cut = |old: &Thumbnail, new: &Thumbnail| {
+            Thumbnail { time_us: new.time_us, ..old.clone() } == *new
+                && shown_source(before, old.time_us)
+                    .is_some_and(|shown| Some(shown) == shown_source(after, new.time_us))
+        };
+        let verb = match (before.thumbnail(format), after.thumbnail(format)) {
+            (None, Some(_)) => "Made",
+            (Some(_), None) => "Removed",
+            (Some(old), Some(new)) if old != new && !moved_with_cut(old, new) => "Changed",
+            _ => continue,
+        };
+        out.push(RunChange { text: format!("{verb} {name}"), clip_ids: Vec::new(), at_us: None });
+    }
     if before.name != after.name {
         out.push(RunChange {
             text: format!("Renamed the project to {}", quote(&after.name)),
@@ -536,6 +563,32 @@ mod tests {
         let changes = summarize(&before, &e.project);
         assert_eq!(texts(&changes), ["Split take-1.mp4"]);
         assert_eq!(changes[0].at_us, Some(5_000_000));
+    }
+
+    #[test]
+    fn covers_say_what_happened_to_them_but_not_that_a_cut_moved_their_frame() {
+        let mut e = editor();
+        let cover = |time_us: i64, dim: f32| json!({"type": "setThumbnail", "thumbnail": {"format": "cover_9x16", "timeUs": time_us, "background": {"dim": dim}}});
+        let before = e.project.clone();
+        apply(&mut e, cover(8_000_000, 0.0));
+        apply(&mut e, json!({"type": "setThumbnail", "thumbnail": {"format": "youtube_16x9", "timeUs": 0}}));
+        assert_eq!(texts(&summarize(&before, &e.project)), ["Made the 9:16 cover", "Made the YouTube thumbnail"]);
+        let before = e.project.clone();
+        let cut = json!({"type": "rippleDeleteRanges", "ranges": [{"startUs": 1_000_000, "endUs": 2_000_000}]});
+        apply(&mut e, cut.clone());
+        assert_eq!(
+            texts(&summarize(&before, &e.project)),
+            ["Shortened the video from 20.0 s to 19.0 s", "Cut out 1 passage, 1.0 s in total"]
+        );
+        // A cut together with a frame chosen elsewhere is a change.
+        let mut other = Editor::new(before.clone());
+        apply(&mut other, cut);
+        apply(&mut other, cover(3_000_000, 0.0));
+        assert!(texts(&summarize(&before, &other.project)).contains(&"Changed the 9:16 cover"));
+        let before = e.project.clone();
+        apply(&mut e, cover(7_000_000, 0.3));
+        apply(&mut e, json!({"type": "removeThumbnail", "format": "youtube_16x9"}));
+        assert_eq!(texts(&summarize(&before, &e.project)), ["Changed the 9:16 cover", "Removed the YouTube thumbnail"]);
     }
 
     #[test]

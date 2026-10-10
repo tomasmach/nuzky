@@ -6,7 +6,7 @@ use nuzky_engine::{
     Project,
     model::{
         AssetKind, Clip, ClipContent, MAX_BORDER_WIDTH, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO,
-        MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TrackKind, Transform, max_stroke_width,
+        MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TextStyle, TrackKind, Transform, max_stroke_width,
     },
 };
 
@@ -54,7 +54,8 @@ pub fn validate(project: &Project) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: clip time overflow"))?;
         }
     }
-    word_corrections(project)
+    word_corrections(project)?;
+    thumbnails(project)
 }
 
 /// More than a long recording has words, so a project file cannot grow without bound.
@@ -141,6 +142,71 @@ fn transform(value: &Transform) -> Result<()> {
     Ok(())
 }
 
+/// Sizes are bounded by the picture the text is drawn on: the canvas, or a thumbnail.
+fn text_style(style: &TextStyle, (width, height): (u32, u32)) -> Result<()> {
+    ensure!(
+        style.font_size.is_finite()
+            && style.font_size > 0.0
+            && style.font_size <= MAX_FONT_HEIGHT_RATIO * height as f32
+            && style.stroke_width.is_finite()
+            && style.stroke_width >= 0.0
+            && style.stroke_width <= max_stroke_width(style.font_size)
+            && style
+                .max_width
+                .is_none_or(|max| max.is_finite() && max > 0.0 && max <= MAX_TEXT_WIDTH_RATIO * width as f32),
+        "INVALID_PROJECT: text style"
+    );
+    color(&style.color, "text color")?;
+    color(&style.stroke_color, "outline color")?;
+    if let Some(background) = &style.background {
+        color(background, "text background")?;
+    }
+    if let Some(highlight) = &style.highlight {
+        color(highlight, "highlight color")?;
+    }
+    Ok(())
+}
+
+/// More text layers than any thumbnail needs, and more characters than one shows.
+const MAX_THUMBNAIL_TEXTS: usize = 20;
+const MAX_THUMBNAIL_CHARS: usize = 500;
+
+/// A thumbnail's frame may lie past the end of the video after later edits; the renderer says so then.
+fn thumbnails(project: &Project) -> Result<()> {
+    let mut formats = HashSet::new();
+    for thumbnail in &project.thumbnails {
+        ensure!(formats.insert(thumbnail.format), "INVALID_PROJECT: two thumbnails of one format");
+        ensure!(thumbnail.time_us >= 0, "INVALID_PROJECT: a thumbnail's frame time must not be negative");
+        transform(&thumbnail.frame)?;
+        let background = &thumbnail.background;
+        ensure!(
+            (0.0..=1.0).contains(&background.blur) && (0.0..=1.0).contains(&background.dim),
+            "INVALID_PROJECT: a thumbnail's background blur and dim go from 0 to 1"
+        );
+        color(&background.color, "thumbnail background")?;
+        ensure!(
+            thumbnail.texts.len() <= MAX_THUMBNAIL_TEXTS,
+            "INVALID_PROJECT: a thumbnail has at most {MAX_THUMBNAIL_TEXTS} texts"
+        );
+        for text in &thumbnail.texts {
+            ensure!(
+                text.text.chars().count() <= MAX_THUMBNAIL_CHARS,
+                "INVALID_PROJECT: a thumbnail text has at most {MAX_THUMBNAIL_CHARS} characters"
+            );
+            text_style(&text.style, thumbnail.format.size())?;
+            transform(&text.transform)?;
+        }
+        if let Some(outline) = &thumbnail.outline {
+            ensure!(
+                outline.width > 0.0 && outline.width <= MAX_BORDER_WIDTH,
+                "INVALID_PROJECT: a thumbnail's outline is wider than 0 and at most {MAX_BORDER_WIDTH} px"
+            );
+            color(&outline.color, "thumbnail outline")?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> {
     ensure!(clip.start_us >= 0 && clip.duration_us > 0, "INVALID_PROJECT: clip {} timing", clip.id);
     match &clip.content {
@@ -220,26 +286,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             }
         }
         ClipContent::Text { style, transform: t, words, .. } => {
-            ensure!(
-                style.font_size.is_finite()
-                    && style.font_size > 0.0
-                    && style.font_size <= MAX_FONT_HEIGHT_RATIO * project.canvas.height as f32
-                    && style.stroke_width.is_finite()
-                    && style.stroke_width >= 0.0
-                    && style.stroke_width <= max_stroke_width(style.font_size)
-                    && style.max_width.is_none_or(|width| width.is_finite()
-                        && width > 0.0
-                        && width <= MAX_TEXT_WIDTH_RATIO * project.canvas.width as f32),
-                "INVALID_PROJECT: text style"
-            );
-            color(&style.color, "text color")?;
-            color(&style.stroke_color, "outline color")?;
-            if let Some(background) = &style.background {
-                color(background, "text background")?;
-            }
-            if let Some(highlight) = &style.highlight {
-                color(highlight, "highlight color")?;
-            }
+            text_style(style, (project.canvas.width, project.canvas.height))?;
             // Words that no longer spell the text are kept but ignored, so only their times are checked.
             ensure!(
                 words.len() <= MAX_CAPTION_WORDS && words.iter().all(|w| w.start_us <= w.end_us),
@@ -508,6 +555,53 @@ mod tests {
                     assert!(error.to_string().contains("non-finite adjustment"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn thumbnails_are_one_per_format_with_bounded_text_background_and_outline() {
+        use nuzky_engine::model::{Thumbnail, ThumbnailFormat};
+        let mut project = Project::new("covers");
+        let presets: Vec<serde_json::Value> =
+            serde_json::from_str(include_str!("../../../assets/presets/thumbnails.json")).unwrap();
+        let texts: Vec<_> = presets
+            .iter()
+            .map(|p| serde_json::json!({"text": "HOOK", "style": p["style"], "behind": p["behind"]}))
+            .collect();
+        let cover = serde_json::json!({"format": "cover_9x16", "timeUs": 0, "texts": texts,
+            "outline": {"color": "#ffffff", "width": 10}});
+        project.thumbnails = vec![serde_json::from_value(cover).unwrap()];
+        // Every preset is a valid style on a cover.
+        validate(&project).unwrap();
+        let youtube = |change: fn(&mut Thumbnail)| {
+            let mut candidate = project.clone();
+            let mut thumbnail = candidate.thumbnails[0].clone();
+            thumbnail.format = ThumbnailFormat::Youtube16x9;
+            change(&mut thumbnail);
+            candidate.thumbnails.push(thumbnail);
+            validate(&candidate)
+        };
+        youtube(|_| {}).unwrap();
+        // Font sizes are bounded by the thumbnail, here twice the 720 px of a YouTube thumbnail.
+        youtube(|t| t.texts[0].style.font_size = 1440.0).unwrap();
+        type Break = fn(&mut Thumbnail);
+        let broken: [(&str, Break); 12] = [
+            ("format", |t| t.format = ThumbnailFormat::Cover9x16),
+            ("time", |t| t.time_us = -1),
+            ("blur", |t| t.background.blur = 1.5),
+            ("dim", |t| t.background.dim = f32::NAN),
+            ("colour", |t| t.background.color = "black".into()),
+            ("font", |t| t.texts[0].style.font_size = 1441.0),
+            ("text colour", |t| t.texts[1].style.background = Some("#€".into())),
+            ("frame", |t| t.frame.scale = 0.0),
+            ("outline", |t| t.outline.as_mut().unwrap().width = 101.0),
+            ("outline colour", |t| t.outline.as_mut().unwrap().color = String::new()),
+            ("texts", |t| t.texts = vec![t.texts[0].clone(); 21]),
+            ("characters", |t| t.texts[0].text = "x".repeat(501)),
+        ];
+        for (what, change) in broken {
+            let error = youtube(change).unwrap_err().to_string();
+            assert!(error.starts_with("INVALID_PROJECT") || error.starts_with("INVALID_COLOR"), "{what}: {error}");
         }
     }
 

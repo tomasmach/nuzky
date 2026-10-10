@@ -1,0 +1,41 @@
+[
+  {
+    "name": "Behind head",
+    "behind": true,
+    "style": {
+      "fontFamily": "Anton",
+      "fontSize": 300,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 0,
+      "strokeColor": "#000000",
+      "background": null
+    }
+  },
+  {
+    "name": "Yellow box",
+    "behind": false,
+    "style": {
+      "fontFamily": "Montserrat",
+      "fontSize": 88,
+      "color": "#111111",
+      "bold": true,
+      "strokeWidth": 0,
+      "strokeColor": "#000000",
+      "background": "#ffe14d"
+    }
+  },
+  {
+    "name": "Outline",
+    "behind": false,
+    "style": {
+      "fontFamily": "Anton",
+      "fontSize": 170,
+      "color": "#ffffff",
+      "bold": false,
+      "strokeWidth": 14,
+      "strokeColor": "#000000",
+      "background": null
+    }
+  }
+]

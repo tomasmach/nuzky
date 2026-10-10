@@ -10,6 +10,7 @@ use nuzky_engine::{Project, Renderer};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::frame::Frame;
 use crate::models;
 use crate::nets::{BIREFNET_SIDE, BiRefNet, Yunet, check_cancel};
 use crate::timeline;
@@ -48,8 +49,7 @@ pub struct Mask {
     pub cached: bool,
 }
 
-/// Masks the subject at `t_us` of the timeline as exported without text. The cache key is the
-/// rendered frame itself with the model, so a change of file, time or edit gives a new mask.
+/// Masks the subject at `t_us` of the timeline as exported without text.
 pub fn segment_subject(
     project: &Project,
     t_us: i64,
@@ -66,37 +66,71 @@ pub fn segment_subject(
     let frame = timeline::render(&mut renderer, &picture, t_us, size)?;
     drop(renderer);
     check_cancel(cancel)?;
-    let mut key = Sha256::new();
-    key.update(format!("{MASK_VERSION}:{}:{}x{}:", models::BIREFNET.sha256, size.0, size.1));
-    key.update(&frame.rgba);
-    let key: String = key.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect();
-    let path = cache_dir.join("masks").join(format!("mask-v{MASK_VERSION}-{key}.png"));
     let person = !Yunet::load(models_dir)?.detect(&frame.fit(640), cancel)?.is_empty();
-    let (alpha, cached) = match read_png(&path, size) {
-        Some(alpha) => (alpha, true),
-        None => {
-            let _turn = loop {
-                match SEGMENTING.try_lock() {
-                    Ok(turn) => break turn,
-                    Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
-                    Err(TryLockError::WouldBlock) => {
-                        progress(Phase::Waiting);
-                        check_cancel(cancel)?;
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                }
-            };
-            progress(Phase::Loading);
-            let mut model = BiRefNet::load(models_dir)?;
-            progress(Phase::Segmenting);
-            let grid = model.segment(&frame, cancel)?;
-            let alpha = upsample(&grid, size);
-            write_png(&path, size, &alpha)?;
-            (alpha, false)
-        }
-    };
+    let path = mask_path(&frame.rgba, size, cache_dir);
+    let (alpha, cached) = alpha_of(frame, &path, models_dir, cancel, progress)?;
     let (subject_box, subject_share) = measure(&alpha, size);
     Ok(Mask { path, width: size.0, height: size.1, subject_box, subject_share, person, cached })
+}
+
+/// The subject's alpha over a frame of the timeline rendered as `segment_subject` renders it (straight
+/// RGBA), when it was masked before.
+pub fn cached_alpha(rgba: &[u8], size: (u32, u32), cache_dir: &Path) -> Option<Vec<u8>> {
+    read_png(&mask_path(rgba, size, cache_dir), size)
+}
+
+/// The subject's alpha over such a frame, from the cache or made now; true when it came from the cache.
+pub fn subject_alpha(
+    rgba: &[u8],
+    (width, height): (u32, u32),
+    models_dir: &Path,
+    cache_dir: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Phase),
+) -> Result<(Vec<u8>, bool)> {
+    models::require(models::MASK, models_dir)?;
+    let path = mask_path(rgba, (width, height), cache_dir);
+    alpha_of(Frame { width, height, rgba: rgba.to_vec() }, &path, models_dir, cancel, progress)
+}
+
+/// The cache key is the rendered frame itself with the model, so a change of file, time or edit gives a new mask.
+fn mask_path(rgba: &[u8], size: (u32, u32), cache_dir: &Path) -> PathBuf {
+    let mut key = Sha256::new();
+    key.update(format!("{MASK_VERSION}:{}:{}x{}:", models::BIREFNET.sha256, size.0, size.1));
+    key.update(rgba);
+    let key: String = key.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect();
+    cache_dir.join("masks").join(format!("mask-v{MASK_VERSION}-{key}.png"))
+}
+
+fn alpha_of(
+    frame: Frame,
+    path: &Path,
+    models_dir: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Phase),
+) -> Result<(Vec<u8>, bool)> {
+    let size = (frame.width, frame.height);
+    if let Some(alpha) = read_png(path, size) {
+        return Ok((alpha, true));
+    }
+    let _turn = loop {
+        match SEGMENTING.try_lock() {
+            Ok(turn) => break turn,
+            Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                progress(Phase::Waiting);
+                check_cancel(cancel)?;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    };
+    progress(Phase::Loading);
+    let mut model = BiRefNet::load(models_dir)?;
+    progress(Phase::Segmenting);
+    let grid = model.segment(&frame, cancel)?;
+    let alpha = upsample(&grid, size);
+    write_png(path, size, &alpha)?;
+    Ok((alpha, false))
 }
 
 /// Bilinear from the model's square grid to the canvas, as 8-bit alpha.

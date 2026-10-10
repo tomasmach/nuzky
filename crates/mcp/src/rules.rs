@@ -63,6 +63,9 @@ pub(crate) const TOOLS: &[Rules] = &[
     // Leaves clips that already move alone, so the same call again changes nothing.
     rules("apply_motion", Never, false, true, false),
     rules("export_video", Never, false, false, true),
+    // Only draws the thumbnail; a missing mask of its frame is made as a job into the cache.
+    rules("inspect_thumbnail", Always, false, true, true),
+    rules("export_thumbnail", Never, false, false, true),
     // Only shows choices to the user; the project is not touched.
     rules("suggest_options", Always, false, true, false),
 ];
@@ -104,6 +107,7 @@ mod tests {
                 "inspect_frames",
                 "activity",
                 "segment_subject",
+                "inspect_thumbnail",
                 "suggest_options",
                 "list_history"
             ])
@@ -129,6 +133,7 @@ mod tests {
                 "inspect_frames",
                 "activity",
                 "segment_subject",
+                "inspect_thumbnail",
                 "apply_edits",
                 "apply_motion",
                 "suggest_options",
@@ -138,7 +143,15 @@ mod tests {
         );
         assert_eq!(
             names(|r| r.run_job),
-            set(&["analyze", "activity", "segment_subject", "transcribe", "export_video"])
+            set(&[
+                "analyze",
+                "activity",
+                "segment_subject",
+                "inspect_thumbnail",
+                "transcribe",
+                "export_video",
+                "export_thumbnail"
+            ])
         );
         let job = find("job").unwrap();
         assert!(job.reads(&json!({"action":"get"})) && job.reads(&json!({"action":"cancel"})));

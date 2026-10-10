@@ -26,6 +26,10 @@ const STYLE_FIRST: &str = "This creator has their own editing style, nuzky://sty
 /// The whole way from raw takes to a reel, as the guide describes it, so one prompt starts it.
 const ROUGH_CUT: &str = "Make a rough cut of this whole project for Instagram Reels and TikTok, then export it, following the guide below.\n\n1. get_state. Transcribe whatever is untranscribed and poll job until done.\n2. get_transcript, read every sentence, then analyze(kind: \"retakes\"). Keep the last complete attempt of each restarted sentence and drop the fillers that start sentences; check every group against the text and decide each review pair yourself. Add other slips and false starts you find.\n3. Plan with edit_transcript dry_run, then in one run: edit_transcript with the deletions (long pauses shorten by default), build_captions with the Reel style, inspect_frames with safe_area around cuts and captions, end_run keep.\n4. export_video with preset \"reels\" to a new .mp4 in the user's Videos folder (an absolute path), named after the project, poll until done and report the path, the duration and anything you were unsure about.";
 
+/// Both covers from the best frame, with a hook from the transcript, in one run, so one prompt makes them.
+const THUMBNAIL: &str = "Make a 9:16 cover for Reels and TikTok (cover_9x16, 1080x1920) and a YouTube thumbnail (youtube_16x9, 1280x720) for this video, then export both, following the guide below.\n\n1. get_state. analyze(kind: \"thumbnail_frames\") and poll the job; its parts score the framing for both formats. inspect_frames(times_us) the top 4-6 candidates on one contact sheet and choose a frame for each format, the same or two: eyes open, facing the camera, an expression that fits the hook, and for 16:9 room beside the person.\n2. The hook: get_transcript (transcribe first if needed) and write 2 to 5 words in the video's language that make someone want to watch: its main promise or surprise, from what is actually said, never invented. Uppercase reads best on a thumbnail.\n3. segment_subject(time_us) of each chosen frame and poll it: subject_box [x,y,w,h] in canvas pixels says where the person and their head are.\n4. In one run (begin_run), apply_edits with both setThumbnail edits in one batch. Text styles come from the presets below; when the creator's style at the end of the guide names fonts or colours, use those instead. Sizes are thumbnail pixels for the cover; on youtube_16x9 use about two thirds. Text transform x and y are fractions of the thumbnail from its centre, like clips.\n   - cover_9x16: frame {x:0,y:0,scale:1,rotation:0,opacity:1} on a 9:16 video. The hook in Behind head, behind: true, with its middle a little above the top of the head (subject_box y), so the head covers the lower part of the letters; or Yellow box or Outline in front, inside the Reels safe area.\n   - youtube_16x9 from a vertical video: background {picture: true, blur: 1, dim: 0.2, color: \"#000000\"} or a solid colour (picture: false), the frame at scale 1.2-1.6 with the person on the left or right third: frame x = (1/3 or 2/3) - 0.5 - (person centre x / canvas width - 0.5) * frame width / 1280, where the frame is canvas width * min(1280 / canvas width, 720 / canvas height) * scale thumbnail pixels wide; y moves the face up when the person is small. outline {color: \"#ffffff\", width: 10}. The hook big over the other two thirds, Outline or Yellow box, wrapped onto two lines with style.maxWidth. On a 16:9 video use the frame as it is.\n5. inspect_thumbnail(format, safe_zones: true) for both. Keep faces and the hook out of the tints (Reels interface, the 3:4 profile grid, YouTube's duration badge), the hook readable at a glance, nothing important cut by an edge, text behind the person with hidden about 0.05-0.3. MASK_NOT_READY names a job: poll it, then inspect again. Fix it with another setThumbnail in the same run until both look right.\n6. end_run keep. export_thumbnail cover_9x16 to a new .png and youtube_16x9 to a new .jpg in the user's Pictures folder (absolute paths), named after the project; poll both until done and report the paths, the hook and anything you were unsure about.\n\nThumbnail text presets (assets/presets/thumbnails.json):\n";
+const THUMBNAIL_PRESETS: &str = include_str!("../../../assets/presets/thumbnails.json");
+
 const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at nuzky://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
 
 /// The creator's EDIT.md, read anew each time so edits to it apply to the next request.
@@ -64,7 +68,7 @@ fn catalog() -> Result<Vec<Tool>> {
     Ok(vec![
         tool::<params::State>(
             "get_state",
-            "Read compact project assets, tracks and clips, selection (empty headless), playhead (0 headless), timeline-layout speech_layout_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read nuzky://guide before editing.",
+            "Read compact project assets, tracks and clips, thumbnails, selection (empty headless), playhead (0 headless), timeline-layout speech_layout_key (for apply_edits), revision, session_epoch, open_run and recovery_checkpoint. Times are integer microseconds; ranges are [start,end). Optional range and clip_ids filter clips only; duration_us and caption_stats (count, max_chars, max_words) always describe the full timeline. Use caption_stats after manual text corrections. Media source out = sourceInUs + durationUs * speed. The main track is magnetic: edits pack clips back-to-back from zero. Read nuzky://guide before editing.",
         )?,
         tool::<params::Begin>(
             "begin_run",
@@ -76,7 +80,7 @@ fn catalog() -> Result<Vec<Tool>> {
         )?,
         tool::<params::Apply>(
             "apply_edits",
-            "Atomically apply EditCmd JSON (camelCase fields and type tags). All times are integer microseconds. Supply a unique request_id within this run; retry identical content with the same id while the run is open for the stored result. Ended runs reject retries with INVALID_RUN; runs stopped by the user return RUN_STOPPED. expected_revision rejects stale edits; expected_speech_layout_key rejects moved speech with SPEECH_CHANGED while allowing unrelated caption restyles. Main track is magnetic and repacks after edits. rippleDeleteRanges removes the union of half-open timeline ranges from every track except keepTrackIds, then closes gaps; omit keepTrackIds to leave the tracks marked keepInPlace (music) alone; ranges refer to the timeline BEFORE this command. A generated caption loses the words heard inside the ranges: with words left on both sides it becomes two captions, with none left it goes. Source analysis times must first be mapped through sourceInUs, startUs and speed. addCaptions creates a new track; replaceCaptions replaces only the named captions track (a text track named Captions). Other text never lands on a captions track automatically. Rejected commands or validation leave the project and history unchanged. Successful batches are saved before returning. A save failure reports an error but keeps the live edit; retry the identical request to retry saving without applying it twice. Result contains created/changed/removed ids and actual resulting clip times.",
+            "Atomically apply EditCmd JSON (camelCase fields and type tags). All times are integer microseconds. Supply a unique request_id within this run; retry identical content with the same id while the run is open for the stored result. Ended runs reject retries with INVALID_RUN; runs stopped by the user return RUN_STOPPED. expected_revision rejects stale edits; expected_speech_layout_key rejects moved speech with SPEECH_CHANGED while allowing unrelated caption restyles. Main track is magnetic and repacks after edits. rippleDeleteRanges removes the union of half-open timeline ranges from every track except keepTrackIds, then closes gaps; omit keepTrackIds to leave the tracks marked keepInPlace (music) alone; ranges refer to the timeline BEFORE this command. A generated caption loses the words heard inside the ranges: with words left on both sides it becomes two captions, with none left it goes. Source analysis times must first be mapped through sourceInUs, startUs and speed. addCaptions creates a new track; replaceCaptions replaces only the named captions track (a text track named Captions). Other text never lands on a captions track automatically. Rejected commands or validation leave the project and history unchanged. Successful batches are saved before returning. A save failure reports an error but keeps the live edit; retry the identical request to retry saving without applying it twice. Result contains created/changed/removed ids and actual resulting clip times. setThumbnail {thumbnail} sets the cover or thumbnail of its format, one per format; removeThumbnail {format} removes it; rippleDeleteRanges moves a thumbnail's frame time with the picture.",
         )?,
         tool::<params::End>(
             "end_run",
@@ -149,6 +153,14 @@ fn catalog() -> Result<Vec<Tool>> {
         tool::<params::Export>(
             "export_video",
             "Start a LOCAL H.264/AAC export of an immutable snapshot; job reports its revision. For Instagram Reels or TikTok pass preset=\"reels\": 1080x1920, 30 fps, H.264 High, AAC 48 kHz stereo, sound levelled to -14 LUFS with true peak <= -1 dBTP in the file (the project and preview keep their levels); needs a 9:16 canvas, resolution/fps may be omitted or must be 1080/30. Without preset resolution (the SHORT side in pixels, 1080 gives 1080x1920 on a portrait canvas) and fps=1..240 are required. quality high/recommended/small, default recommended. path must be new; relative paths resolve beside the project. Requires --allow-write. Job phases: measuring_loudness (preset only), exporting. Poll job(get) until done before reporting success.",
+        )?,
+        tool::<params::InspectThumbnail>(
+            "inspect_thumbnail",
+            "Draw the project's thumbnail of format (cover_9x16 is 1080x1920, youtube_16x9 1280x720) as ONE PNG, width pixels wide (96 up to its own width, half by default), exactly as export_thumbnail writes it, with texts [{text, behind, hidden}]: hidden is the share of a text behind the person that they cover, 0..1, always 0 in front; about 0.05-0.3 lets the head overlap the letters while they stay readable. safe_zones=true tints what the apps cover: on a cover red for the Reels interface and blue outside the 3:4 middle the profile grid shows; on a YouTube thumbnail red for the duration badge in the bottom right corner. Only reads. Text behind the person, an outline, or a background that is blurred, dimmed or a colour needs the mask of the person in the frame; when it is not in the cache yet MASK_NOT_READY names the job making it: poll it, then inspect again. THUMBNAIL_MISSING: apply_edits setThumbnail first. INVALID_RANGE: cuts left the frame past the end; set timeUs again. MODEL_MISSING and VISION_UNAVAILABLE as for segment_subject.",
+        )?,
+        tool::<params::ExportThumbnail>(
+            "export_thumbnail",
+            "Write the thumbnail of format at its full size to a NEW .png, .jpg or .jpeg file as a job (phases rendering, and while the mask of the person is made waiting_for_other_mask, loading_model, segmenting); poll job until done. JPEG keeps the best quality under 2 MB, YouTube's limit, so use .jpg for youtube_16x9. Relative paths resolve beside the project; OUTPUT_EXISTS when the file is there. Result: path, width, height, bytes and texts with hidden as inspect_thumbnail. Requires --allow-write.",
         )?,
         tool::<params::SuggestOptions>(
             "suggest_options",
@@ -233,6 +245,17 @@ impl ServerHandler for Server {
                 Some(vec![PromptArgument::new("goal").with_required(true)]),
             ),
             Prompt::new(
+                "thumbnail",
+                Some(
+                    "Make a Reels and TikTok cover and a YouTube thumbnail from the best frame, with a hook, and export them",
+                ),
+                Some(vec![
+                    PromptArgument::new("wishes")
+                        .with_description("Anything to do differently, e.g. the hook text or a colour")
+                        .with_required(false),
+                ]),
+            ),
+            Prompt::new(
                 "rough_cut",
                 Some("Rough-cut the whole project into a Reels and TikTok video with captions and export it"),
                 Some(vec![
@@ -250,11 +273,21 @@ impl ServerHandler for Server {
         _: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
         let argument = |name: &str| request.arguments.as_ref().and_then(|a| a.get(name)).and_then(Value::as_str);
+        let wishes = argument("wishes").filter(|w| !w.trim().is_empty()).unwrap_or("none");
         if request.name == "rough_cut" {
-            let wishes = argument("wishes").filter(|w| !w.trim().is_empty()).unwrap_or("none");
             return Ok(GetPromptResult::new(vec![PromptMessage::new_text(
                 Role::User,
                 format!("{ROUGH_CUT}\n\nThe user's wishes, which win over the steps: {wishes}\n\n{}", guide()),
+            )])
+            .into());
+        }
+        if request.name == "thumbnail" {
+            return Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                Role::User,
+                format!(
+                    "{THUMBNAIL}{THUMBNAIL_PRESETS}\nThe user's wishes, which win over the steps: {wishes}\n\n{}",
+                    guide()
+                ),
             )])
             .into());
         }

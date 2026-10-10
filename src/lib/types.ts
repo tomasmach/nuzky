@@ -396,6 +396,12 @@ export type EditCmd = {
    * How far it zooms, as a fraction: 0.06 is subtle, 0.15 strong.
    */
   strength: number,
+} | {
+  "type": "setThumbnail",
+  thumbnail: Thumbnail,
+} | {
+  "type": "removeThumbnail",
+  format: ThumbnailFormat,
 };
 
 export type ExportRequest = {
@@ -542,6 +548,10 @@ export type Project = {
    * shared by every project, so the corrections live here.
    */
   wordCorrections?: Array<WordCorrection>,
+  /**
+   * Covers and thumbnails of the video, at most one per format.
+   */
+  thumbnails?: Array<Thumbnail>,
 };
 
 export type ProjectSummary = {
@@ -709,6 +719,78 @@ export type TextStyle = {
    * Needs the clip's `words`; outline, box, size and wrapping stay the same.
    */
   highlight?: string | null,
+};
+
+/**
+ * A still made from one frame of the video: a background, the person cut out of the frame, an
+ * outline around them and text, some of it behind them. Sizes are in thumbnail pixels.
+ */
+export type Thumbnail = {
+  format: ThumbnailFormat,
+  /**
+   * The frame, as the video shows it at this timeline time without its text tracks.
+   */
+  timeUs: number,
+  /**
+   * Where the frame sits, as for clips: scale 1 fits the whole frame inside the thumbnail, x and y move its
+   * centre by fractions of the thumbnail, crop cuts its edges without moving the rest.
+   */
+  frame: Transform,
+  background: ThumbnailBackground,
+  /**
+   * Bottom to top.
+   */
+  texts: Array<ThumbnailText>,
+  outline?: ThumbnailOutline | null,
+};
+
+export type ThumbnailBackground = {
+  /**
+   * A copy of the frame behind the person: the frame as placed, enlarged about its centre until it covers
+   * the thumbnail. False shows only `color`.
+   */
+  picture: boolean,
+  /**
+   * Blur of that copy, 0 (sharp) to 1 (strongest).
+   */
+  blur: number,
+  /**
+   * How much darker the background gets, 0 (unchanged) to 1 (black).
+   */
+  dim: number,
+  /**
+   * `#rrggbb` under everything.
+   */
+  color: string,
+};
+
+export type ThumbnailFormat = "cover_9x16" | "youtube_16x9";
+
+/**
+ * A solid line around the person, like a sticker's edge.
+ */
+export type ThumbnailOutline = {
+  /**
+   * `#rrggbb` or `#rrggbbaa`
+   */
+  color: string,
+  /**
+   * Thumbnail pixels, up to 100.
+   */
+  width: number,
+};
+
+export type ThumbnailText = {
+  text: string,
+  /**
+   * Font size and outline in thumbnail pixels; lines wrap at 90% of the thumbnail width by default.
+   */
+  style: TextStyle,
+  transform: Transform,
+  /**
+   * Drawn behind the person, so their head can cover part of it.
+   */
+  behind: boolean,
 };
 
 /**

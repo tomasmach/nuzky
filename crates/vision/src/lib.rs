@@ -11,5 +11,5 @@ pub mod thumbnails;
 mod timeline;
 
 pub use framing::Format;
-pub use mask::{Mask, segment_subject};
+pub use mask::{Mask, cached_alpha, segment_subject, subject_alpha};
 pub use thumbnails::{Candidate, thumbnail_frames};

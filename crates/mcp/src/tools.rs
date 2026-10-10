@@ -9,10 +9,12 @@ use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use nuzky_analysis::{SceneParams, SilenceParams};
 use nuzky_engine::{
-    Project,
+    Project, Renderer,
     edit::{EditCmd, TimeRange, new_id},
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
+    model::{Thumbnail, ThumbnailFormat},
+    thumbnail::ImageKind,
 };
 use nuzky_session::{Expect, Mode, ProjectSession, SessionState, Target, host::Host, jobs::check_cancel};
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -144,6 +146,9 @@ impl Backend {
         if name == "inspect_frames" {
             return self.inspect(parse(arguments)?, &state);
         }
+        if name == "inspect_thumbnail" {
+            return self.inspect_thumbnail(parse(arguments)?, &state);
+        }
         let mut value = self.dispatch(name, arguments, &state)?;
         if name == "begin_run"
             && let Some(id) = value["run_id"].as_str()
@@ -247,6 +252,7 @@ impl Backend {
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
             "apply_motion" => self.apply_motion(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
+            "export_thumbnail" => self.export_thumbnail(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
         }
     }
@@ -390,6 +396,7 @@ impl Backend {
         object.insert("canvas".into(), json!(project.canvas));
         object.insert("assets".into(), json!(project.assets));
         object.insert("tracks".into(), json!(project.tracks));
+        object.insert("thumbnails".into(), json!(project.thumbnails));
         object.insert("duration_us".into(), json!(state.project.duration_us()));
         object.insert("caption_stats".into(), caption_stats(&state.project));
         object.insert("filtered".into(), json!(args.range.is_some() || args.clip_ids.is_some()));
@@ -900,6 +907,111 @@ impl Backend {
         )
     }
 
+    /// Draws the thumbnail at once from the cached mask. Without one it starts the mask as a job and
+    /// says so, since making a mask takes seconds and a read cannot be stopped halfway.
+    fn inspect_thumbnail(&self, args: InspectThumbnail, state: &SessionState) -> Result<CallToolResult> {
+        let project = self.media_project(&state.project);
+        let thumbnail = thumbnail(&project, args.format)?;
+        let full = args.format.size().0;
+        let width = args.width.unwrap_or(full / 2);
+        ensure!((96..=full).contains(&width), "INVALID_ARGUMENTS: width must be 96..={full}");
+        media::check_media(&project)?;
+        let mut renderer = Renderer::new().context("Starting frame renderer")?;
+        let frame = renderer.thumbnail_frame(&project, thumbnail)?;
+        let mask = match thumbnail.needs_mask() {
+            false => None,
+            true => {
+                nuzky_vision::models::require(nuzky_vision::models::MASK, &nuzky_analysis::models_dir())?;
+                let size = (frame.width, frame.height);
+                match nuzky_vision::cached_alpha(&frame.data, size, &self.host.cache_dir) {
+                    Some(alpha) => Some(alpha),
+                    None => {
+                        drop(renderer);
+                        let job = self.segment_subject(SegmentSubject { time_us: thumbnail.time_us }, state)?;
+                        anyhow::bail!(
+                            "MASK_NOT_READY: making the person's mask as job {}; poll job until done, then inspect_thumbnail again",
+                            job["job_id"].as_str().unwrap_or_default()
+                        )
+                    }
+                }
+            }
+        };
+        let mut rendered = renderer.render_thumbnail(thumbnail, &frame, mask.as_deref(), width)?;
+        if args.safe_zones {
+            media::shade_thumbnail_zones(&mut rendered.rgba, rendered.width, rendered.height, args.format);
+        }
+        let png = nuzky_engine::thumbnail::encode(&rendered, ImageKind::Png)?;
+        let info = json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
+            "format": args.format, "time_us": thumbnail.time_us, "width": rendered.width, "height": rendered.height,
+            "texts": texts(thumbnail, &rendered.hidden)});
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(info.to_string()),
+            ContentBlock::image(BASE64_STANDARD.encode(png), "image/png"),
+        ]))
+    }
+
+    /// Renders the thumbnail at its full size into a new file as a job, making the mask first when needed.
+    fn export_thumbnail(&self, args: ExportThumbnail, state: &SessionState) -> Result<Value> {
+        ensure!(!state.read_only, "READ_ONLY: --allow-write is required to write an export");
+        let out = self.resolve(&args.path);
+        let kind = ImageKind::of(&out).context("INVALID_ARGUMENTS: the path must end in .png, .jpg or .jpeg")?;
+        ensure!(!out.exists(), "OUTPUT_EXISTS: choose a new export path");
+        let parent = std::fs::canonicalize(out.parent().context("Output has no parent")?)
+            .context("Export directory must exist")?;
+        let out = parent.join(out.file_name().context("Output needs a filename")?);
+        let project = self.media_project(&state.project);
+        nuzky_engine::export::check_source_path(&project, &out)?;
+        let thumbnail = thumbnail(&project, args.format)?.clone();
+        media::check_media(&project)?;
+        let models = nuzky_analysis::models_dir();
+        if thumbnail.needs_mask() {
+            nuzky_vision::models::require(nuzky_vision::models::MASK, &models)?;
+        }
+        let cache = self.host.cache_dir.clone();
+        self.host.start_job(
+            &self.client.id,
+            state.open_run.as_ref().map(|run| run.run_id.as_str()),
+            "export",
+            state.stamp.clone(),
+            move |cancel, progress| {
+                progress.set("rendering", None);
+                let mut renderer = Renderer::new().context("Starting frame renderer")?;
+                let frame = renderer.thumbnail_frame(&project, &thumbnail)?;
+                let mask = match thumbnail.needs_mask() {
+                    false => None,
+                    true => Some(
+                        nuzky_vision::subject_alpha(
+                            &frame.data,
+                            (frame.width, frame.height),
+                            &models,
+                            &cache,
+                            &cancel,
+                            &mut |phase| {
+                                progress.set(
+                                    match phase {
+                                        nuzky_vision::mask::Phase::Rendering => "rendering",
+                                        nuzky_vision::mask::Phase::Waiting => "waiting_for_other_mask",
+                                        nuzky_vision::mask::Phase::Loading => "loading_model",
+                                        nuzky_vision::mask::Phase::Segmenting => "segmenting",
+                                    },
+                                    None,
+                                )
+                            },
+                        )?
+                        .0,
+                    ),
+                };
+                check_cancel(&cancel)?;
+                progress.set("rendering", None);
+                let rendered = renderer.render_thumbnail(&thumbnail, &frame, mask.as_deref(), args.format.size().0)?;
+                let bytes = nuzky_engine::thumbnail::encode(&rendered, kind)?;
+                nuzky_engine::thumbnail::save(&out, &bytes, false, &cancel)?;
+                Ok(json!({"path": out, "format": args.format, "width": rendered.width, "height": rendered.height,
+                    "bytes": bytes.len(), "texts": texts(&thumbnail, &rendered.hidden)}))
+            },
+        )
+    }
+
     fn resolve(&self, path: &str) -> PathBuf {
         let path = PathBuf::from(path);
         if path.is_absolute() { path } else { self.project_dir.join(path) }
@@ -939,6 +1051,25 @@ fn check_new_assets(edits: &[EditCmd]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn thumbnail(project: &Project, format: ThumbnailFormat) -> Result<&Thumbnail> {
+    project.thumbnail(format).with_context(|| {
+        format!("THUMBNAIL_MISSING: the project has no {} thumbnail; apply_edits setThumbnail first", json!(format))
+    })
+}
+
+/// Each text with the share of it the person covers.
+fn texts(thumbnail: &Thumbnail, hidden: &[f32]) -> Value {
+    let round = |share: f32| (share * 1000.0).round() / 1000.0;
+    json!(
+        thumbnail
+            .texts
+            .iter()
+            .zip(hidden)
+            .map(|(t, &h)| json!({"text": t.text, "behind": t.behind, "hidden": round(h)}))
+            .collect::<Vec<_>>()
+    )
 }
 
 fn owns_run(state: &SessionState, id: &str) -> Result<()> {

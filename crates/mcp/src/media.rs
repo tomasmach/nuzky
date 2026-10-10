@@ -1,7 +1,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use nuzky_engine::{Project, Renderer, Wait, model::ClipContent};
+use nuzky_engine::{
+    Project, Renderer, Wait,
+    model::{ClipContent, ThumbnailFormat},
+};
 
 const DEFAULT_WIDTH: u32 = 320;
 pub const MAX_FRAMES: usize = 16;
@@ -117,6 +120,37 @@ fn shade_unsafe(pixels: &mut [u8], width: u32, height: u32, canvas: &nuzky_engin
                 let offset = ((y * width + x) * 4) as usize;
                 for (channel, overlay) in [240u16, 80, 60].into_iter().enumerate() {
                     pixels[offset + channel] = ((u16::from(pixels[offset + channel]) * 3 + overlay) / 4) as u8;
+                }
+            }
+        }
+    }
+}
+
+/// What the apps draw over a thumbnail, tinted: on a cover red where Reels puts its interface and blue
+/// outside the 3:4 middle the profile grid shows; on a YouTube thumbnail red under the duration badge in
+/// the bottom right corner.
+pub fn shade_thumbnail_zones(pixels: &mut [u8], width: u32, height: u32, format: ThumbnailFormat) {
+    let (tw, th) = format.size();
+    let canvas =
+        nuzky_engine::model::Canvas { width: tw, height: th, fps: 30, background: String::new(), background_blur: 0.0 };
+    let area = canvas.safe_area();
+    let grid = (th as f32 - tw as f32 * 4.0 / 3.0) / 2.0;
+    for y in 0..height {
+        for x in 0..width {
+            let (cx, cy) = ((x as f32 + 0.5) * tw as f32 / width as f32, (y as f32 + 0.5) * th as f32 / height as f32);
+            let covered = match format {
+                ThumbnailFormat::Cover9x16 => {
+                    area.is_some_and(|a| cx < a.left || cx >= a.right || cy < a.top || cy >= a.bottom)
+                }
+                ThumbnailFormat::Youtube16x9 => cx >= 0.8 * tw as f32 && cy >= 0.8 * th as f32,
+            };
+            let cut = format == ThumbnailFormat::Cover9x16 && (cy < grid || cy >= th as f32 - grid);
+            let offset = ((y * width + x) * 4) as usize;
+            for (tint, on) in [([240u16, 80, 60], covered), ([60, 120, 240], cut)] {
+                if on {
+                    for (channel, overlay) in tint.into_iter().enumerate() {
+                        pixels[offset + channel] = ((u16::from(pixels[offset + channel]) * 3 + overlay) / 4) as u8;
+                    }
                 }
             }
         }

@@ -24,6 +24,111 @@ pub struct Project {
     /// shared by every project, so the corrections live here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub word_corrections: Vec<WordCorrection>,
+    /// Covers and thumbnails of the video, at most one per format.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thumbnails: Vec<Thumbnail>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ThumbnailFormat {
+    /// Reels, TikTok and Shorts cover, 1080 × 1920.
+    #[serde(rename = "cover_9x16")]
+    Cover9x16,
+    /// YouTube thumbnail, 1280 × 720.
+    #[serde(rename = "youtube_16x9")]
+    Youtube16x9,
+}
+
+impl ThumbnailFormat {
+    pub fn size(self) -> (u32, u32) {
+        match self {
+            ThumbnailFormat::Cover9x16 => (1080, 1920),
+            ThumbnailFormat::Youtube16x9 => (1280, 720),
+        }
+    }
+}
+
+/// A still made from one frame of the video: a background, the person cut out of the frame, an
+/// outline around them and text, some of it behind them. Sizes are in thumbnail pixels.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Thumbnail {
+    pub format: ThumbnailFormat,
+    /// The frame, as the video shows it at this timeline time without its text tracks.
+    pub time_us: i64,
+    /// Where the frame sits, as for clips: scale 1 fits the whole frame inside the thumbnail, x and y move its
+    /// centre by fractions of the thumbnail, crop cuts its edges without moving the rest.
+    #[serde(default)]
+    pub frame: Transform,
+    #[serde(default)]
+    pub background: ThumbnailBackground,
+    /// Bottom to top.
+    #[serde(default)]
+    pub texts: Vec<ThumbnailText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<ThumbnailOutline>,
+}
+
+impl Thumbnail {
+    /// The person is cut out of the frame whenever something goes between them and the rest of the
+    /// picture: text behind them, an outline, or a background that is not the frame as it is.
+    pub fn needs_mask(&self) -> bool {
+        let b = &self.background;
+        self.texts.iter().any(|t| t.behind) || self.outline.is_some() || !b.picture || b.blur > 0.0 || b.dim > 0.0
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ThumbnailBackground {
+    /// A copy of the frame behind the person: the frame as placed, enlarged about its centre until it covers
+    /// the thumbnail. False shows only `color`.
+    pub picture: bool,
+    /// Blur of that copy, 0 (sharp) to 1 (strongest).
+    pub blur: f32,
+    /// How much darker the background gets, 0 (unchanged) to 1 (black).
+    pub dim: f32,
+    /// `#rrggbb` under everything.
+    pub color: String,
+}
+
+impl Default for ThumbnailBackground {
+    fn default() -> Self {
+        Self { picture: true, blur: 0.0, dim: 0.0, color: "#000000".into() }
+    }
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailText {
+    pub text: String,
+    /// Font size and outline in thumbnail pixels; lines wrap at 90% of the thumbnail width by default.
+    pub style: TextStyle,
+    #[serde(default)]
+    pub transform: Transform,
+    /// Drawn behind the person, so their head can cover part of it.
+    #[serde(default)]
+    pub behind: bool,
+}
+
+/// A solid line around the person, like a sticker's edge.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailOutline {
+    /// `#rrggbb` or `#rrggbbaa`
+    pub color: String,
+    /// Thumbnail pixels, up to 100.
+    pub width: f32,
 }
 
 /// Longest corrected word, in characters.
@@ -570,7 +675,12 @@ impl Project {
                 clips: Vec::new(),
             }],
             word_corrections: Vec::new(),
+            thumbnails: Vec::new(),
         }
+    }
+
+    pub fn thumbnail(&self, format: ThumbnailFormat) -> Option<&Thumbnail> {
+        self.thumbnails.iter().find(|t| t.format == format)
     }
 
     pub fn asset(&self, id: &str) -> Option<&Asset> {

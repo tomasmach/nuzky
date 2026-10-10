@@ -3484,6 +3484,7 @@ name = "nuzky-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "dirs 6.0.0",
  "nuzky-analysis",
  "nuzky-engine",
@@ -3505,6 +3506,7 @@ dependencies = [
  "log",
  "memmap2",
  "nnnoiseless",
+ "png 0.18.1",
  "pollster",
  "schemars 1.2.2",
  "serde",

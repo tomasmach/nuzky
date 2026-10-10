@@ -21,16 +21,16 @@ const BACKGROUND_SIZE: f32 = 96.0;
 /// Samples per block side when shrinking a frame for the background blur.
 const BLOCK_SAMPLES: usize = 4;
 const BACKGROUND_BLUR_PASSES: usize = 3;
-const BACKGROUND_MAX_RADIUS: f32 = 9.0;
+pub(crate) const BACKGROUND_MAX_RADIUS: f32 = 9.0;
 const BACKGROUND_BRIGHTNESS: f32 = 0.85;
-const MAX_TEXT_SCALE: f32 = 8.0;
+pub(crate) const MAX_TEXT_SCALE: f32 = 8.0;
 const PREFETCH_US: i64 = 1_000_000;
 const IDLE_WORKER: Duration = Duration::from_secs(5);
 /// Blur of a layer's shadow, as a share of the canvas's shorter side.
 const SHADOW_BLUR: f32 = 0.025;
-const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+pub(crate) const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
-type Quad = [[f32; 2]; 4];
+pub(crate) type Quad = [[f32; 2]; 4];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Wait {
@@ -41,14 +41,14 @@ pub enum Wait {
 }
 
 pub struct Renderer {
-    gpu: Gpu,
-    text: TextRenderer,
+    pub(crate) gpu: Gpu,
+    pub(crate) text: TextRenderer,
     /// Keyed by clip and source path, so a clip relinked to other media gets a fresh decoder.
     workers: HashMap<(String, String), VideoWorker>,
     /// Clips shown now or prefetched for the next second, whose decoders other clips must not take.
     needed: HashSet<String>,
     blurred: HashMap<(usize, usize), (Image, Image)>,
-    solids: [Image; 3],
+    pub(crate) solids: [Image; 3],
     /// The cache to find preview proxies in; `None` decodes the originals, as export must.
     proxies: Option<PathBuf>,
     pub late_layers: u64,
@@ -170,7 +170,7 @@ pub fn layer_bounds(project: &Project, t_us: i64, text: &mut TextRenderer) -> Ve
 }
 
 /// The part of a quad between the edges `rect` (left, top, right and bottom in 0..1).
-fn sub_quad(q: &Quad, rect: [f32; 4]) -> Quad {
+pub(crate) fn sub_quad(q: &Quad, rect: [f32; 4]) -> Quad {
     if rect == WHOLE {
         return *q;
     }
@@ -588,7 +588,7 @@ fn apply_transition(layer: &mut Layer, kind: TransitionKind, p: f32, incoming: b
     }
 }
 
-fn solid(image: &Image, w: u32, h: u32) -> Layer {
+pub(crate) fn solid(image: &Image, w: u32, h: u32) -> Layer {
     Layer {
         image: image.clone(),
         corners: [[0.0, 0.0], [w as f32, 0.0], [w as f32, h as f32], [0.0, h as f32]],
@@ -603,7 +603,7 @@ fn solid(image: &Image, w: u32, h: u32) -> Layer {
     }
 }
 
-fn small_image(image: &Image, radius: usize) -> Image {
+pub(crate) fn small_image(image: &Image, radius: usize) -> Image {
     let scale = (BACKGROUND_SIZE / image.width.max(image.height) as f32).min(1.0);
     let w = (image.width as f32 * scale).round().max(1.0) as usize;
     let h = (image.height as f32 * scale).round().max(1.0) as usize;
@@ -674,7 +674,7 @@ fn box_blur(src: &[[f32; 4]], dst: &mut [[f32; 4]], w: usize, h: usize, radius: 
 }
 
 /// Corner positions (tl, tr, br, bl) in output pixels for a layer of `size` output pixels.
-fn quad(t: &Transform, size: (f32, f32), cw: f32, ch: f32, k: f32) -> Quad {
+pub(crate) fn quad(t: &Transform, size: (f32, f32), cw: f32, ch: f32, k: f32) -> Quad {
     let cx = (cw / 2.0 + t.x * cw) * k;
     let cy = (ch / 2.0 + t.y * ch) * k;
     let (hw, hh) = (size.0 / 2.0, size.1 / 2.0);
