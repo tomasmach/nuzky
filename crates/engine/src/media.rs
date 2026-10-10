@@ -52,7 +52,7 @@ fn format_whitelist() -> &'static str {
 
 /// Opens local media only: no network protocols, also for files a container refers to,
 /// and no playlists or scripts that pull in other sources.
-fn open_input(path: &Path) -> Result<ff::format::context::Input> {
+pub(crate) fn open_input(path: &Path) -> Result<ff::format::context::Input> {
     init();
     let mut options = ff::Dictionary::new();
     options.set("protocol_whitelist", "file");
@@ -65,13 +65,37 @@ fn origin_us(input: &ff::format::context::Input) -> i64 {
     if start == ff::ffi::AV_NOPTS_VALUE { 0 } else { start }
 }
 
-fn is_image_format(input: &ff::format::context::Input) -> bool {
+pub(crate) fn is_image_format(input: &ff::format::context::Input) -> bool {
     let format = input.format();
     let name = format.name();
     name == "image2" || name.ends_with("_pipe")
 }
 
-fn video_stream(input: &ff::format::context::Input) -> Option<ff::format::stream::Stream<'_>> {
+/// The file at `path` as it is now: its size, modification time and a hash of the path, so a changed or
+/// replaced file, or another file under the same name in a copied project, gets other caches.
+pub(crate) fn file_key(path: &str) -> String {
+    let revision = match std::fs::metadata(path) {
+        Ok(metadata) => {
+            let modified = metadata
+                .modified()
+                .ok()
+                .map(|time| {
+                    time.duration_since(std::time::UNIX_EPOCH).map_or_else(
+                        |before| format!("pre{}", before.duration().as_nanos()),
+                        |since| since.as_nanos().to_string(),
+                    )
+                })
+                .unwrap_or_else(|| "unknown".into());
+            format!("{}-{modified}", metadata.len())
+        }
+        Err(_) => "missing".into(),
+    };
+    // FNV-1a: stable across builds, so caches survive an update.
+    let source = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    format!("{revision}-{source:016x}")
+}
+
+pub(crate) fn video_stream(input: &ff::format::context::Input) -> Option<ff::format::stream::Stream<'_>> {
     input
         .streams()
         .filter(|s| s.parameters().medium() == ff::media::Type::Video)
@@ -212,15 +236,23 @@ struct Scaler {
 // SwsContext is only touched by the thread that owns the decoder.
 unsafe impl Send for Scaler {}
 
-fn sws_colorspace(space: color::Space, height: u32) -> i32 {
+/// The YUV matrix a frame is shown with: its own, or by its height when the file does not name one.
+pub(crate) fn matrix(f: &frame::Video) -> color::Space {
+    use color::Space::*;
+    match f.color_space() {
+        space @ (BT709 | BT2020NCL | BT2020CL | SMPTE240M | FCC | BT470BG | SMPTE170M) => space,
+        _ if f.height() >= 720 => BT709,
+        _ => SMPTE170M,
+    }
+}
+
+pub(crate) fn sws_colorspace(space: color::Space) -> i32 {
     use ff::ffi::*;
     match space {
         color::Space::BT709 => SWS_CS_ITU709,
         color::Space::BT2020NCL | color::Space::BT2020CL => SWS_CS_BT2020,
         color::Space::SMPTE240M => SWS_CS_SMPTE240M,
         color::Space::FCC => SWS_CS_FCC,
-        color::Space::BT470BG | color::Space::SMPTE170M => SWS_CS_ITU601,
-        _ if height >= 720 => SWS_CS_ITU709,
         _ => SWS_CS_ITU601,
     }
 }
@@ -248,7 +280,7 @@ pub(crate) fn set_sws_colorspace(ctx: &mut scaling::Context, src_cs: i32, src_fu
     }
 }
 
-fn is_full_range(f: &frame::Video) -> bool {
+pub(crate) fn is_full_range(f: &frame::Video) -> bool {
     f.color_range() == color::Range::JPEG
         || matches!(f.format(), Pixel::YUVJ420P | Pixel::YUVJ422P | Pixel::YUVJ444P | Pixel::YUVJ440P)
 }
@@ -258,8 +290,7 @@ fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: 
     if scaler.as_ref().map(|s| s.key) != Some(key) {
         let mut ctx =
             scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
-        let src_cs = sws_colorspace(f.color_space(), f.height());
-        set_sws_colorspace(&mut ctx, src_cs, is_full_range(f), ff::ffi::SWS_CS_DEFAULT, true);
+        set_sws_colorspace(&mut ctx, sws_colorspace(matrix(f)), is_full_range(f), ff::ffi::SWS_CS_DEFAULT, true);
         *scaler = Some(Scaler { key, ctx });
     }
     let mut out = frame::Video::new(Pixel::RGBA, w, h);
@@ -331,8 +362,19 @@ impl VideoDecoder {
         })
     }
 
+    /// Opens a preview proxy (`crate::proxy`), whose frames are stored at the original's times.
+    pub fn open_proxy(path: &Path) -> Result<Self> {
+        let mut decoder = Self::open(path)?;
+        decoder.origin_us = 0;
+        Ok(decoder)
+    }
+
     pub fn is_image(&self) -> bool {
         self.is_image
+    }
+
+    pub fn duration_us(&self) -> i64 {
+        self.input.duration().max(0)
     }
 
     pub fn source_size(&self) -> (u32, u32) {

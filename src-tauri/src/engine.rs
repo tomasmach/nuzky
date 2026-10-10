@@ -72,7 +72,13 @@ pub struct Engine {
 
 impl Engine {
     pub fn start(app: AppHandle, server: Arc<PreviewServer>, project: Arc<Project>, cache_dir: PathBuf) -> Self {
-        let renderer = || Renderer::new().inspect(|r| log::info!("Preview renderer on {}", r.adapter_name()));
+        let proxies = cache_dir.clone();
+        let renderer = move || {
+            let mut renderer = Renderer::new()?;
+            log::info!("Preview renderer on {}", renderer.adapter_name());
+            renderer.use_proxies(proxies.clone());
+            Ok(renderer)
+        };
         Self::start_with(app, server, project, cache_dir, renderer)
     }
 

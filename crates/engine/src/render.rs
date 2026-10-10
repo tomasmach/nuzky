@@ -1,7 +1,7 @@
 //! Turns a project and a time into a composited frame. Preview and export both use this.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,6 +49,8 @@ pub struct Renderer {
     needed: HashSet<String>,
     blurred: HashMap<(usize, usize), (Image, Image)>,
     solids: [Image; 3],
+    /// The cache to find preview proxies in; `None` decodes the originals, as export must.
+    proxies: Option<PathBuf>,
     pub late_layers: u64,
 }
 
@@ -264,8 +266,15 @@ impl Renderer {
                 height: 1,
                 data: Arc::new(c.to_vec()),
             }),
+            proxies: None,
             late_layers: 0,
         })
+    }
+
+    /// Decodes each file's preview proxy (`crate::proxy`) from `cache_dir` once it is made. For the preview
+    /// only: export keeps a renderer without, so it reads the originals.
+    pub fn use_proxies(&mut self, cache_dir: PathBuf) {
+        self.proxies = Some(cache_dir);
     }
 
     pub fn adapter_name(&self) -> &str {
@@ -429,15 +438,22 @@ impl Renderer {
                 continue;
             };
             let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
-            self.worker(&clip.id, &asset.path).get(source_time(clip, clip.start_us), size, false, false);
+            self.worker(&clip.id, &asset.path, false).get(source_time(clip, clip.start_us), size, false, false);
         }
     }
 
     /// The clip's decoder. A clip without one takes over the most recently used decoder of the same
     /// file that no needed clip uses, so a file cut into many pieces does not open one per piece,
     /// and the next piece usually continues where the previous one stopped.
-    fn worker(&mut self, clip_id: &str, path: &str) -> &mut VideoWorker {
+    /// A decoder reads the file's proxy once there is one. One made before switches only when `switch`
+    /// (a paused frame): a new decoder has no frame ready at once, so playback would miss the clip.
+    fn worker(&mut self, clip_id: &str, path: &str, switch: bool) -> &mut VideoWorker {
         let key = (clip_id.to_owned(), path.to_owned());
+        let proxy = self.proxies.as_deref().and_then(|dir| crate::proxy::ready(dir, Path::new(path)));
+        let spawn = |proxy: Option<PathBuf>| match proxy {
+            Some(proxy) => VideoWorker::spawn_proxy(proxy),
+            None => VideoWorker::spawn(PathBuf::from(path)),
+        };
         if !self.workers.contains_key(&key) {
             let idle = self
                 .workers
@@ -447,11 +463,17 @@ impl Renderer {
                 .map(|(k, _)| k.clone());
             let worker = match idle {
                 Some(idle) => self.workers.remove(&idle).unwrap(),
-                None => VideoWorker::spawn(PathBuf::from(path)),
+                None => spawn(proxy.clone()),
             };
             self.workers.insert(key.clone(), worker);
         }
-        self.workers.get_mut(&key).unwrap()
+        let worker = self.workers.get_mut(&key).unwrap();
+        if switch && worker.proxy != proxy {
+            let old = std::mem::replace(worker, spawn(proxy));
+            // Its thread may be in the middle of a long seek in the original; the frame does not wait for it.
+            std::thread::Builder::new().name("video-decode-end".into()).spawn(move || drop(old)).ok();
+        }
+        worker
     }
 
     fn layer_for(
@@ -476,7 +498,7 @@ impl Renderer {
                 } else {
                     source_time(clip, t_us).min((asset.duration_us - 1).max(0))
                 };
-                let worker = self.worker(&clip.id, &asset.path);
+                let worker = self.worker(&clip.id, &asset.path, wait == Wait::Exact);
                 let frame = worker.get(source_t, size, playing, wait == Wait::Exact);
                 if wait == Wait::Exact {
                     if let Some(error) = worker.error() {

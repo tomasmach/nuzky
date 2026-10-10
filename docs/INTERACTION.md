@@ -15,6 +15,7 @@ The library, the inspector and the timeline start close to CapCut's proportions 
 | Click, toggle, select | Visual state change in the same frame |
 | Seek or scrub | Last frame stays on screen until the new one arrives, so the preview never flashes |
 | Import | Item appears at once with a skeleton thumbnail; audio preparation shows a thin progress bar on the item |
+| Import of video that decodes slowly (HEVC from phones, AV1, VP9, larger than 1080p) | A lighter copy for the preview is made in the background, one file at a time: "Preparing preview of IMG_0042.MOV 42%" with Stop in the top bar. Until it is ready the preview plays the original; from the next pause on it plays the copy, which has the same frames at the same times. Thumbnails made after that come from it too. Export always reads the original. A failed copy says so in a toast and the preview keeps the original |
 | Export, captions, transcript | Background job with percentage and phase in the top bar; the user keeps editing; a toast reports the result |
 
 ## Flows

@@ -9,6 +9,7 @@ pub mod gpu;
 pub mod loudness;
 pub mod media;
 pub mod model;
+pub mod proxy;
 pub mod render;
 pub mod speech;
 mod stretch;

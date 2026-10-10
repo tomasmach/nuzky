@@ -13,7 +13,8 @@ use nuzky_analysis::models_dir;
 use nuzky_engine::audio::{ensure_pcm, has_audio};
 use nuzky_engine::edit::new_id;
 use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
-use nuzky_engine::model::{Asset, ClipContent, Project, TextStyle};
+use nuzky_engine::model::{Asset, AssetKind, ClipContent, Project, TextStyle};
+use nuzky_engine::proxy;
 use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use nuzky_mcp::model_download::{self, Integrity};
 use nuzky_mcp::transcript;
@@ -28,7 +29,7 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct JobEvent {
     pub id: String,
-    #[cfg_attr(test, ts(type = r#""audio" | "export" | "captions" | "transcript""#))]
+    #[cfg_attr(test, ts(type = r#""audio" | "proxy" | "export" | "captions" | "transcript""#))]
     pub kind: &'static str,
     pub label: String,
     #[cfg_attr(test, ts(type = r#""running" | "done" | "failed" | "cancelled""#))]
@@ -99,6 +100,8 @@ fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
             "export" => running == "export",
             "captions" | "transcript" => matches!(running, "captions" | "transcript"),
             "vision-models" => running == "vision-models",
+            // Each one decodes a whole video; the next file waits, so the preview keeps some of the machine.
+            "proxy" => running == "proxy",
             _ => false,
         }
     };
@@ -114,9 +117,9 @@ fn unregister(app: &AppHandle, id: &str) {
     app.state::<AppState>().jobs.lock().unwrap().remove(id);
 }
 
-/// Decodes the audio of every asset once into the PCM cache used for playback,
-/// waveforms, export and captions, and cleans the voice of files whose clips ask for it.
-pub fn ensure_audio(state: &AppState, project: &Project) {
+/// Decodes the audio of every asset once into the PCM cache used for playback, waveforms, export and
+/// captions, cleans the voice of files whose clips ask for it and makes the preview proxies of heavy video.
+pub fn prepare_media(state: &AppState, project: &Project) {
     let app = state.app.clone();
     // Missing media waits for relinking, and a source that failed is not retried on every edit.
     for asset in project.assets.iter().filter(|a| has_audio(a) && Path::new(&a.path).is_file()) {
@@ -151,11 +154,12 @@ pub fn ensure_audio(state: &AppState, project: &Project) {
             if let Ok(open) = state.project()
                 && open.assets.iter().any(|a| a.id == asset.id && nuzky_engine::audio::pcm_path(&cache, a) != path)
             {
-                ensure_audio(&state, &open);
+                prepare_media(&state, &open);
             }
         });
     }
     ensure_voice(state, project);
+    ensure_proxies(state, project);
 }
 
 /// Files a clip with Clean voice plays.
@@ -215,6 +219,63 @@ fn ensure_voice(state: &AppState, project: &Project) {
             let state = app.state::<AppState>();
             if let Ok(open) = state.project() {
                 ensure_voice(&state, &open);
+            }
+        });
+        if spawned.is_err() {
+            unregister(&app, &id);
+        }
+    }
+}
+
+/// Makes the preview proxy of each video that decodes slowly (`nuzky_engine::proxy`), one file at a time; the
+/// preview switches to it once it is there. Jobs are per file. A file that leaves the project stops its proxy,
+/// and starts it again when it comes back. One that failed, or that the user stopped (`cancel_job`), is not
+/// tried again until the app restarts.
+fn ensure_proxies(state: &AppState, project: &Project) {
+    let app = state.app.clone();
+    let wanted: HashSet<&str> = project.assets.iter().map(|a| a.path.as_str()).collect();
+    for (id, cancel) in state.jobs.lock().unwrap().iter() {
+        if id.strip_prefix("proxy:").is_some_and(|source| !wanted.contains(source)) {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    for asset in project.assets.iter().filter(|a| a.kind == AssetKind::Video && Path::new(&a.path).is_file()) {
+        let path = proxy::proxy_path(&state.cache_dir, Path::new(&asset.path));
+        if path.exists() || state.proxy_skipped.lock().unwrap().contains(&path) {
+            continue;
+        }
+        let id = format!("proxy:{}", asset.path);
+        let Some(flag) = register(&app, &id) else { continue };
+        let (worker, job, asset, cache) = (app.clone(), id.clone(), asset.clone(), state.cache_dir.clone());
+        let spawned = std::thread::Builder::new().name("preview-proxy".into()).spawn(move || {
+            let (app, id) = (worker, job);
+            let source = PathBuf::from(&asset.path);
+            let skip = |path| app.state::<AppState>().proxy_skipped.lock().unwrap().insert(path);
+            // Video that decodes fast enough needs none; a file that cannot be read shows its error in the preview.
+            if !proxy::wanted(&source).unwrap_or(false) {
+                skip(path);
+            } else {
+                let mut rep = Reporter::new(&app, &id, "proxy", format!("Preparing preview of {}", asset.name));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    proxy::ensure_proxy(&cache, &source, |p| {
+                        check_cancelled(&flag)?;
+                        rep.progress(p, None);
+                        Ok(())
+                    })
+                }))
+                .unwrap_or_else(|p| Err(anyhow::anyhow!("Preparing the preview crashed: {}", panic_text(&p))));
+                let cancelled = flag.load(Ordering::Relaxed);
+                if result.is_err() && !cancelled {
+                    skip(path);
+                }
+                rep.finish(result.map(|_| None), cancelled);
+            }
+            unregister(&app, &id);
+            // The next file was waiting for this one, unless the app is quitting.
+            let state = app.state::<AppState>();
+            let quitting = state.session.lock().unwrap().stopped.load(Ordering::Acquire);
+            if !quitting && let Ok(open) = state.project() {
+                ensure_proxies(&state, &open);
             }
         });
         if spawned.is_err() {

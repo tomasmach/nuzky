@@ -75,26 +75,7 @@ pub fn has_audio(asset: &Asset) -> bool {
 /// holds the asset id, the source's size and time and a hash of its path, since a copied project
 /// can reuse an asset id for another file of the same size and time.
 pub fn pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
-    let revision = match std::fs::metadata(&asset.path) {
-        Ok(metadata) => {
-            let modified = metadata
-                .modified()
-                .ok()
-                .map(|time| {
-                    time.duration_since(std::time::UNIX_EPOCH).map_or_else(
-                        |before| format!("pre{}", before.duration().as_nanos()),
-                        |since| since.as_nanos().to_string(),
-                    )
-                })
-                .unwrap_or_else(|| "unknown".into());
-            format!("{}-{modified}", metadata.len())
-        }
-        Err(_) => "missing".into(),
-    };
-    // FNV-1a: stable across builds, so the cache survives an update.
-    let source =
-        asset.path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
-    cache_dir.join("pcm").join(format!("{}.{revision}-{source:016x}.{PCM_VERSION}.f32", asset.id))
+    cache_dir.join("pcm").join(format!("{}.{}.{PCM_VERSION}.f32", asset.id, crate::media::file_key(&asset.path)))
 }
 
 /// Raised whenever extraction changes its output, so caches made before are extracted again.
@@ -128,20 +109,16 @@ fn remove_older_versions(path: &Path, asset: &Asset) {
     }
 }
 
-/// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
-/// same file (import, export and captions) wait for one extraction instead of racing.
-/// An error from `progress` stops the extraction, or the wait for another caller's; the next call
-/// starts it again.
-pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
-    let path = pcm_path(cache_dir, asset);
+/// Locks `<path>.lock`, so only one process makes the cache at `path`; released when the file is dropped.
+/// Waiting for another caller still asks `progress`, so a cancelled job stops at once.
+pub(crate) fn lock_cache(path: &Path, progress: &mut impl FnMut(f32) -> Result<()>) -> Result<File> {
     std::fs::create_dir_all(path.parent().unwrap())?;
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
-    // Waiting for another caller still asks `progress`, so a cancelled job stops at once.
     loop {
         match lock.try_lock() {
-            Ok(()) => break,
+            Ok(()) => return Ok(lock),
             Err(std::fs::TryLockError::WouldBlock) => {
                 progress(0.0)?;
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -149,6 +126,15 @@ pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32)
             Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
     }
+}
+
+/// Extracts the PCM cache for `asset` unless it already exists. Concurrent callers for the
+/// same file (import, export and captions) wait for one extraction instead of racing.
+/// An error from `progress` stops the extraction, or the wait for another caller's; the next call
+/// starts it again.
+pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32) -> Result<()>) -> Result<PathBuf> {
+    let path = pcm_path(cache_dir, asset);
+    let _lock = lock_cache(&path, &mut progress)?;
     if !path.exists() {
         extract_pcm_with_peaks(Path::new(&asset.path), &path, &peaks_for(&path), progress)?;
         remove_older_versions(&path, asset);
