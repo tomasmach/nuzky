@@ -334,6 +334,7 @@ mod tests {
                     has_audio: true,
                     rotation: 0,
                     mirror: false,
+                    credit: None,
                 }],
             })
             .unwrap();

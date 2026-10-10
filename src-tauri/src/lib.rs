@@ -6,6 +6,7 @@ mod engine;
 mod jobs;
 mod library;
 mod preview_server;
+mod sounds;
 mod store;
 mod style;
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -58,6 +59,7 @@ pub struct AppState {
     /// Why the most recent project was not opened at startup.
     startup_notice: Option<String>,
     library: Arc<library::Library>,
+    sounds: sounds::Sounds,
 }
 
 /// Per asset id: the source file its cached previews show, and the lock of their decoding.
@@ -949,6 +951,7 @@ pub fn run() {
                 fonts: OnceLock::new(),
                 startup_notice,
                 library: Arc::default(),
+                sounds: Default::default(),
             };
             // Jobs look the state up from their threads, so it must be managed first.
             app.manage(state);
@@ -964,6 +967,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             boot,
             set_ui_context,
+            sounds::sound_library,
+            sounds::sound_search,
+            sounds::sound_preview,
+            sounds::sound_stop,
+            sounds::sound_cancel,
+            sounds::sound_add,
+            sounds::sound_credits,
+            sounds::sound_settings,
+            sounds::set_sound_settings,
+            sounds::open_sound_page,
             resolve_recovery,
             stop_run,
             apply_edit,

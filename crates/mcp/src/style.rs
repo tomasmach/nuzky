@@ -1513,6 +1513,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         };
         let words = (0..6)
             .flat_map(|s: i64| {

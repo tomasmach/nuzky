@@ -28,6 +28,7 @@ import { Launcher } from "./components/home/Launcher";
 import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
+import { useSounds } from "./lib/sounds";
 import { listenStyle, loadStyle, useStyle } from "./lib/style";
 import { closeCover, deleteText, onCoverJob, useCover } from "./lib/cover";
 import { LearnDialog } from "./components/style/LearnDialog";
@@ -356,7 +357,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, cover: useCover, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
+    __nuzky: { importPaths, store: useEditor, cover: useCover, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds },
   });
 
 async function startEditor() {

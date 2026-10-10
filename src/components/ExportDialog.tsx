@@ -162,7 +162,8 @@ export function ExportDialog() {
       useEditor.setState({ exportJobId: await api.startExport(path, options, epoch, replace) });
     } catch (e) {
       const text = errorText(e);
-      if (text.startsWith("DESTINATION_EXISTS")) setExists(path);
+      // The video, or the credits file its CC BY sounds bring beside it.
+      if (text.startsWith("DESTINATION_EXISTS")) setExists(/^DESTINATION_EXISTS: (.+) already exists/.exec(text)?.[1] ?? path);
       else setError(text);
     }
   };

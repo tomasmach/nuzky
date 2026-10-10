@@ -17,6 +17,7 @@ fn asset(id: &str, duration: i64) -> Asset {
         has_audio: true,
         rotation: 0,
         mirror: false,
+        credit: None,
     }
 }
 fn editor() -> Editor {

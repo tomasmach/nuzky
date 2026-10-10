@@ -101,6 +101,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         };
         let store = host.transcripts.clone();
         let mut record = Record {

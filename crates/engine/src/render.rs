@@ -826,6 +826,7 @@ mod tests {
             has_audio: false,
             rotation: 0,
             mirror: false,
+            credit: None,
         });
         for (id, start, x) in [("a", 0, 0.3), ("b", 1_000_000, -0.3)] {
             project.tracks[0].clips.push(Clip::new(

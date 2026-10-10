@@ -344,6 +344,10 @@ pub fn start_export(
     if project.duration_us() <= 0 {
         return Err("Add something to the timeline before exporting.".into());
     }
+    // CC BY sounds bring a credits file beside the video; replacing the video replaces that too.
+    if nuzky_engine::credits::credits(&project).is_some() {
+        check_destination(&nuzky_engine::credits::credits_path(&out), replace_existing)?;
+    }
     check_options(&project, &request.options(replace_existing)).map_err(|e| e.to_string())?;
     let id = format!("export:{}", new_id());
     let cancel = register(app, &id).ok_or("An export is already running")?;

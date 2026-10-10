@@ -178,6 +178,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         };
         let fingerprint = store.fingerprint(&asset).unwrap();
         let record = Record {
@@ -231,6 +232,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         };
         let fingerprint = store.fingerprint(&asset).unwrap();
         let record = Record {

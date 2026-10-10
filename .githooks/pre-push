@@ -13,7 +13,15 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   gitleaks git --redact=100 --no-banner --log-opts="$local_sha --not --remotes" . || exit 1
   # Unquoted names, so "něčí-video.mp4" ends in .mp4; names with quotes or control characters stay quoted.
   media=$(git -c core.quotePath=false log --format= --name-only --diff-filter=AR "$local_sha" --not --remotes |
-    grep -iE '\.(mp4|mov|m4v|mkv|webm|avi|mts|wav|mp3|m4a|aac|flac|ogg|opus|heic)"?$' | sort -u)
+    grep -iE '\.(mp4|mov|m4v|mkv|webm|avi|mts|wav|mp3|m4a|aac|flac|ogg|opus|heic)"?$' | sort -u |
+    # The sounds built into Nuzky are CC0, each listed with its author and source in their manifest.
+    while read -r file; do
+      case "$file" in
+        assets/sounds/*/*) ;;
+        assets/sounds/*.ogg) grep -qF "\"file\": \"${file#assets/sounds/}\"" assets/sounds/manifest.json 2>/dev/null && continue ;;
+      esac
+      printf '%s\n' "$file"
+    done)
   if [ -n "$media" ]; then
     echo "pre-push: these commits add video or audio files. Generate test media with scripts/fixtures.sh instead:" >&2
     echo "$media" >&2

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, ProjectVersion, Said, Snapshot, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -55,6 +55,23 @@ export const api = {
   restoreCollection: (deleted: DeletedCollection) => invoke<void>("restore_collection", { deleted }),
   /** null takes the projects out of their collection. */
   setCollection: (paths: string[], collection: string | null) => invoke<void>("set_collection", { paths, collection }),
+  /** The sound effects built into Nuzky. */
+  soundLibrary: () => invoke<Sound[]>("sound_library"),
+  /** One page of online results; only the query leaves the computer. */
+  soundSearch: (query: string, kind: SoundKind, page: number) => invoke<SoundPage>("sound_search", { query, kind, page }),
+  /** Plays a sound, downloading it first when needed; `sound-preview-ended` names it when it is over. */
+  soundPreview: (id: string) => invoke<PreviewStarted>("sound_preview", { id }),
+  soundStop: () => invoke<void>("sound_stop"),
+  /** Stops downloading a sound being added. */
+  soundCancel: (id: string) => invoke<void>("sound_cancel", { id }),
+  /** Adds the sound at `startUs` on an audio track, as one undo step. */
+  soundAdd: (id: string, startUs: number, epoch: Epoch) => invoke<Snapshot>("sound_add", { id, startUs: Math.round(startUs), expectedEpoch: epoch }),
+  /** The credits the video's description needs; null when no CC BY sound is heard in it. */
+  soundCredits: (epoch: Epoch) => invoke<string | null>("sound_credits", { expectedEpoch: epoch }),
+  soundSettings: () => invoke<SoundSettings>("sound_settings"),
+  /** `key`: a new Freesound key, "" to remove it, undefined to keep it. */
+  setSoundSettings: (freesound: boolean, key?: string) => invoke<SoundSettings>("set_sound_settings", { freesound, key: key ?? null }),
+  openSoundPage: (url: string) => invoke<void>("open_sound_page", { url }),
   /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */
   startExport: (path: string, options: ExportRequest, epoch: Epoch, replaceExisting: boolean) =>
     invoke<string>("start_export", { path, options, expectedEpoch: epoch, replaceExisting }),
@@ -161,6 +178,16 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   NOTHING_TO_REVERT: "That rule has not changed, so there is nothing to put back.",
   UNKNOWN_RULE: "That rule is no longer in your style.",
   TOO_LONG: (detail) => sentence(detail) + ".",
+  // The sound library's errors already say what happened; a technical reason in brackets is dropped.
+  OFFLINE: (detail) => detail.replace(/ \(.*\)$/, ""),
+  RATE_LIMITED: (detail) => detail,
+  SOURCE_REFUSED: (detail) => detail,
+  SOURCE_FAILED: (detail) => detail.replace(/ \(.*\)$/, ""),
+  SOUND_UNAVAILABLE: (detail) => detail.replace(/ \(.*\)$/, ""),
+  UNLICENSED: (detail) => sentence(detail) + ".",
+  KEY_REJECTED: (detail) => `${detail} Check it under Sources.`,
+  KEY_MISSING: "Turn on Freesound and add your API key under Sources.",
+  INVALID_KEY: "A Freesound API key has only letters and digits. Copy it again from Freesound.",
 };
 
 /**

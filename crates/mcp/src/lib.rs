@@ -8,6 +8,7 @@ mod media;
 pub mod model_download;
 mod params;
 mod rules;
+pub mod sounds;
 pub mod style;
 mod tools;
 pub mod transcript;
@@ -66,7 +67,7 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<
         .read_only(matches!(rules.reads, rules::Reads::Always))
         .destructive(rules.destructive)
         .idempotent(rules.idempotent)
-        .open_world(false);
+        .open_world(rules::ONLINE.contains(&name));
     Ok(Tool::new(name, description, object).with_annotations(annotations))
 }
 
@@ -107,6 +108,14 @@ fn catalog() -> Result<Vec<Tool>> {
         tool::<params::Import>(
             "import_media",
             "Probe existing local file paths and add assets through the owning run. Relative paths resolve beside the project. Optional request_id: reuse it with the same paths after a save failure to finish the original import without adding the assets twice. Returns asset_ids; follow with addClip edits to place them. No uploads, downloads or automatic insertion.",
+        )?,
+        tool::<params::SearchSounds>(
+            "search_sounds",
+            "Find music (kind music) or sound effects (kind effect) the user may put in a video they monetize: only CC0 (no credit needed) and CC BY (the video's description must credit it) ever come back. Effects start with the ones built into Nuzky, which work offline; with a query, online results follow from Openverse, or from Freesound when the user turned it on with their key. Only the query leaves the computer. Each sound has id, title, author, duration_us, license (cc0|by), license_version, license_url, url (its page at the source, where its licence can be checked) and provider. more is true while another page (page 2-12) has results. Offline or rate-limited, online_error says so and the built-in effects still come back; with nothing to show the call fails with OFFLINE, RATE_LIMITED or SOURCE_FAILED. An empty query lists the built-in effects only. Search in English with short words (\"whoosh\", \"upbeat\", \"cinematic\").",
+        )?,
+        tool::<params::AddSound>(
+            "add_sound",
+            "Add a sound from search_sounds at at_us on an audio track, as ONE edit of your run (the user can undo it with the run). Requires run_id. Downloads the file first when it is not on this computer yet (seconds for music), into Nuzky's sound library; a sound the project already has gets another clip of the same asset. The asset remembers the source, author and licence, so export writes the credits beside the video. Returns asset_id, clip_id, track_id, start_us, duration_us, needs_credit and credit; when needs_credit is true, tell the user the video's description must credit it (the app's Copy credits and the .credits.txt beside the export have the text). Optional request_id: reuse it with the same id after a save failure to finish without adding the sound twice. Fails with SOUND_UNKNOWN for an id that did not come from search_sounds, OFFLINE when the file cannot be downloaded.",
         )?,
         tool::<params::Inspect>(
             "inspect_frames",

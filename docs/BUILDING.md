@@ -158,6 +158,10 @@ For Ubuntu images, obtain the matching distribution sources with `apt-get source
 
 ONNX Runtime is MIT, © Microsoft; the installers carry its `LICENSE` and `ThirdPartyNotices.txt` in `licenses/onnxruntime/`. Add the ONNX Runtime 1.28.3 source (commit `0d68ff6b3b72b04aac578decd6c4c45d322bb962`, with the dependencies its `cmake/deps.txt` lists) to the release source archive next to FFmpeg's.
 
+### Bundled sounds
+
+The sound effects in `assets/sounds/` are built into every binary. Each is CC0 1.0 (the legal code is `assets/sounds/CC0-1.0.txt`); `assets/sounds/manifest.json` names its author, source page, the pinned download it came from and what was changed (silence trimmed at the edges, levelled to a −2 dBFS peak, encoded as Ogg Opus, a few shortened). The sources are Kenney's audio packs, OpenGameArt, BigSoundBank and Freesound, each page stating CC0. `scripts/build-sounds.py` makes the pack again from those pinned sources. CC0 needs no notice; the manifest keeps the provenance. Sounds that people find online in the app are downloaded on their computer, never shipped.
+
 ### Downloaded models
 
 Models are not bundled. The app and `nuzky vision-models` download them on request from pinned commits or releases, and a file is used only when its size and SHA-256 match (`crates/vision/src/models.rs`). They can be redistributed under these licences:

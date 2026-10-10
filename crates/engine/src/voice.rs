@@ -515,6 +515,7 @@ mod tests {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         };
         let raw = pcm_path(&cache, &asset);
         std::fs::write(&raw, bytemuck::cast_slice(&vec![0.1f32; SAMPLE_RATE as usize * CHANNELS])).unwrap();

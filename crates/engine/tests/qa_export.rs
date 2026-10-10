@@ -243,6 +243,7 @@ fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
             has_audio: true,
             rotation: 0,
             mirror: false,
+            credit: None,
         });
     }
     let mut muted = p.tracks[0].clone();
@@ -266,6 +267,58 @@ fn export_ignores_missing_unused_muted_and_zero_volume_audio() {
     p.tracks[1].hidden = true;
     let error = export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap_err();
     assert!(format!("{error:#}").contains("muted.wav"));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+/// A CC BY song's credits go beside the video under the video's consent: an existing credits file stops an
+/// export that may not replace files before anything is written, and one that may replaces both.
+#[test]
+fn export_writes_the_credits_of_cc_by_sounds_beside_the_video() {
+    if !available() {
+        return;
+    }
+    let d = dir(&format!("credits-{}", nuzky_engine::edit::new_id()));
+    let song = d.join("song.mp3");
+    ff(&["-f", "lavfi", "-i", "sine=f=440:r=48000:d=1", "-c:a", "libmp3lame"], &song);
+    let mut p = Project::new("credits");
+    p.canvas.width = 64;
+    p.canvas.height = 64;
+    let mut asset = probe(&song, "song".into()).unwrap();
+    asset.credit = Some(Credit {
+        source: "openverse".into(),
+        id: "b386828e-b628-45f6-b900-6441a49cc977".into(),
+        title: "Lofy".into(),
+        author: "macouno".into(),
+        license: License::CcBy,
+        license_version: "3.0".into(),
+        license_url: "https://creativecommons.org/licenses/by/3.0/".into(),
+        url: "https://www.jamendo.com/track/317391".into(),
+    });
+    p.assets.push(asset);
+    let mut music = p.tracks[0].clone();
+    music.id = "music".into();
+    music.kind = TrackKind::Audio;
+    music.clips = vec![clip("song", "song", 0, 500_000)];
+    p.tracks.push(music);
+    let (out, credits) = (d.join("reel.mp4"), d.join("reel.credits.txt"));
+
+    std::fs::write(&credits, "notes the user keeps").unwrap();
+    let keep = ExportOptions { replace_existing: false, ..options() };
+    let error = export(&p, &d.join("cache"), &out, &keep, &AtomicBool::new(false), |_| {}).unwrap_err();
+    assert!(format!("{error:#}").starts_with("OUTPUT_EXISTS"), "{error:#}");
+    assert_eq!(std::fs::read_to_string(&credits).unwrap(), "notes the user keeps");
+    assert!(!out.exists(), "nothing is written before the credits file is cleared");
+
+    export(&p, &d.join("cache"), &out, &options(), &AtomicBool::new(false), |_| {}).unwrap();
+    assert!(std::fs::metadata(&out).unwrap().len() > 0);
+    assert_eq!(
+        std::fs::read_to_string(&credits).unwrap(),
+        "Music and sound effects:\n\"Lofy\" by macouno (https://www.jamendo.com/track/317391), licensed under CC BY 3.0 \
+         (https://creativecommons.org/licenses/by/3.0/). Synced to video; trimmed.\n"
+    );
+    assert!(
+        std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".nuzky-part"))
+    );
     std::fs::remove_dir_all(d).unwrap();
 }
 

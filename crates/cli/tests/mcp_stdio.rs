@@ -142,12 +142,55 @@ impl Drop for Client {
     }
 }
 
+/// The built-in sound effects need no network: listing finds them, and add_sound places one at the time
+/// asked as an edit of the run, with its credit saved in the project and its file in Nuzky's library.
+#[test]
+fn built_in_sounds_are_listed_and_added_with_their_credit() {
+    let mut c = Client::start(true, None, Some(None));
+    let listed = c.call("search_sounds", json!({"query": "", "kind": "effect"}));
+    let sounds = listed["sounds"].as_array().unwrap();
+    assert!(sounds.len() >= 40, "{listed}");
+    assert!(sounds.iter().all(|s| s["license"] == "cc0" && s["provider"] == "Built in"));
+    assert!(sounds.iter().any(|s| s["id"] == "nuzky:whoosh" && s["category"] == "Whoosh"));
+    // Music has nothing built in, and an empty query sends nothing anywhere.
+    assert_eq!(c.call("search_sounds", json!({"query": " ", "kind": "music"}))["sounds"], json!([]));
+
+    let run = c.call("begin_run", json!({"label": "Add a whoosh"}))["run_id"].clone();
+    let added = c.call("add_sound", json!({"run_id": run, "id": "nuzky:whoosh", "at_us": 1_500_000}));
+    assert_eq!(added["start_us"], 1_500_000, "{added}");
+    assert_eq!(added["needs_credit"], false);
+    assert_eq!(added["credit"]["source"], "nuzky");
+    // The same sound again is another clip of the same asset.
+    let again = c.call("add_sound", json!({"run_id": run, "id": "nuzky:whoosh", "at_us": 4_000_000}));
+    assert_eq!(again["asset_id"], added["asset_id"]);
+    assert_ne!(again["clip_id"], added["clip_id"]);
+    assert!(
+        c.error("add_sound", json!({"run_id": run, "id": "https://example.org/x.mp3", "at_us": 0}))
+            .contains("SOUND_UNKNOWN")
+    );
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+
+    let disk: Value = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
+    let assets = disk["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["credit"]["title"], "Whoosh");
+    assert_eq!(assets[0]["credit"]["license"], "cc0");
+    let file = PathBuf::from(assets[0]["path"].as_str().unwrap());
+    assert!(file.starts_with(c.dir.join("data/nuzky/sounds")) && file.is_file(), "{file:?}");
+    let clips: Vec<_> =
+        disk["tracks"].as_array().unwrap().iter().flat_map(|t| t["clips"].as_array().unwrap()).collect();
+    assert_eq!(clips.iter().map(|c| c["startUs"].as_i64().unwrap()).collect::<Vec<_>>(), [1_500_000, 4_000_000]);
+}
+
 #[test]
 fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 27);
+    assert_eq!(tools.len(), 29);
+    let search = tools.iter().find(|t| t["name"] == "search_sounds").unwrap();
+    assert_eq!(search["annotations"]["openWorldHint"], true);
+    assert_eq!(search["annotations"]["readOnlyHint"], true);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -465,6 +508,7 @@ fn correct_words_fixes_the_transcript_and_captions_over_stdio() {
         has_audio: true,
         rotation: 0,
         mirror: false,
+        credit: None,
     };
     let said = ["Mikrofon", "vejte", "co", "nejblíž."];
     let words = said
