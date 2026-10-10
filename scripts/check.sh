@@ -8,8 +8,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 # One gate at a time per machine, whichever checkout it runs in: two at once take longer than one after the
-# other, fail on timing checks and collide on the UI flows' ports. A second gate waits here.
-exec 9>"${XDG_RUNTIME_DIR:-/tmp}/nuzky-check.lock"
+# other, fail on timing checks and collide on the UI flows' ports. A second gate waits here. The lock sits with
+# the build dependencies, not in XDG_RUNTIME_DIR, which a terminal running the app may have changed.
+mkdir -p "$HOME/.cache/nuzky/deps"
+exec 9>"$HOME/.cache/nuzky/deps/check.lock"
 if ! flock -n 9; then
   echo "Another scripts/check.sh runs on this machine; this one starts when it ends."
   flock 9
@@ -75,8 +77,12 @@ media_tests_and_flows() {
   local flows=tmp-test/ui-flows.log tests_failed=0 flows_failed=0
   python3 scripts/repro.py --all >"$flows" 2>&1 &
   local pid=$!
+  # A job in the background ignores Ctrl+C, so a stopped gate stops its UI flows too and waits for their cleanup.
+  trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 130' INT
+  trap 'kill -TERM "$pid" 2>/dev/null; wait "$pid"; exit 143' TERM
   isolated cargo test --workspace --locked -- --ignored || tests_failed=1
   wait "$pid" || flows_failed=1
+  trap - INT TERM
   echo
   cat "$flows"
   [ "$tests_failed" = 0 ] || echo "Rust tests with media and models FAILED" >&2

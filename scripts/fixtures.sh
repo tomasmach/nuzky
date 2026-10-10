@@ -13,6 +13,8 @@ out=tmp-test
 models=$out/xdg/data/nuzky/models
 shared=${NUZKY_DEPS:-$HOME/.cache/nuzky/deps}/fixtures
 mkdir -p "$out/engine-evidence" "$models" "$shared"
+# An interrupted run leaves none of its temporary files behind.
+trap 'find "$out" "$shared" \( -name ".part-$$-*" -o -name "*.part.$$" \) -delete 2>/dev/null' EXIT
 for tool in ffmpeg espeak-ng curl sha256sum; do
   command -v "$tool" >/dev/null || { echo "fixtures: $tool is required" >&2; exit 1; }
 done
@@ -42,8 +44,9 @@ media() {
     return
   fi
   echo "> $file"
+  # Its own name, so two runs in one checkout never write into the same file.
   local part
-  part=$(dirname "$file")/.part-$(basename "$file")
+  part=$(dirname "$file")/.part-$$-$(basename "$file")
   "$@" "$part"
   mv "$part" "$file"
   place "$file" "$cached"

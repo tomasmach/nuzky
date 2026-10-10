@@ -77,7 +77,10 @@ def main(args):
             stop(vite)
         return 0
     # Another session's run holds the ports until it ends; failing on them would waste a whole gate.
-    turn = open(Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'nuzky-repro.lock', 'w')
+    # Kept with the build dependencies, since a terminal running the app may have its own XDG_RUNTIME_DIR.
+    locks = Path.home() / '.cache/nuzky/deps'
+    locks.mkdir(parents=True, exist_ok=True)
+    turn = open(locks / 'repro.lock', 'w')
     try:
         fcntl.flock(turn, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
