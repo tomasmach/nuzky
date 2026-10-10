@@ -797,6 +797,12 @@ export async function detachAudio(clipIds: string[]) {
   if (snap) toast({ kind: "info", text, action: undoAction(snap) });
 }
 
+/** Sound fades move in steps of 0.1 s, in the inspector and on the timeline alike. */
+export const FADE_STEP_US = US / 10;
+
+/** The longest sound fade at each end of a clip: half its length, at most 10 s, on a whole step. */
+export const maxFadeUs = (durationUs: number) => Math.min(10 * US, Math.floor(durationUs / 2 / FADE_STEP_US) * FADE_STEP_US);
+
 /** Turns Clean voice on or off for the media clips in `ids`, as one undo step. */
 export function setCleanVoice(ids: string[], on: boolean) {
   return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));

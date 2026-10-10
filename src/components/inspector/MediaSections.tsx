@@ -1,7 +1,7 @@
 import { RotateCcw, Unlink } from "lucide-react";
 import { LIMITS } from "../../lib/limits";
 import { ADJUST_ROWS, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
-import { detachAudio, detachBlocker, editClip, editClips, findClip, setCleanVoice, useEditor, useVoicePreparation } from "../../lib/store";
+import { detachAudio, detachBlocker, editClip, editClips, findClip, maxFadeUs, setCleanVoice, useEditor, useVoicePreparation } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
 import { Button, Checkbox, IconButton, ProgressBar, Section, Segmented, Slider } from "../ui";
@@ -141,7 +141,7 @@ export function DuckingRow({ clips, coalesce }: { clips: Clip[]; coalesce: strin
 export function AudioSection({ clip, content }: { clip: Clip; content: Media }) {
   const project = useEditor((s) => s.snap!.project);
   const edit = useEditor((s) => s.edit);
-  const maxFade = Math.min(10, Math.floor((clip.durationUs / 2 / US) * 10) / 10);
+  const maxFade = maxFadeUs(clip.durationUs) / US;
   const blocker = detachBlocker(project, clip);
   // Sound already detached to an audio track has nothing left to detach.
   const isVideo = project.assets.find((a) => a.id === content.assetId)?.kind === "video" && findClip(project, clip.id)?.track.kind !== "audio";

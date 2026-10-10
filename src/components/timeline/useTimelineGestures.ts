@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type RefObject } from "react";
 import { followPointer } from "../../lib/drag";
-import { allClips, useEditor } from "../../lib/store";
+import { FADE_STEP_US, allClips, maxFadeUs, useEditor } from "../../lib/store";
 import { US } from "../../lib/time";
 import type { Clip, Project, Track } from "../../lib/types";
 import { EDGE, clipAsset } from "./ClipView";
 
 const SNAP_PX = 8;
 
-type Mode = "move" | "trimL" | "trimR";
+type Mode = "move" | "trimL" | "trimR" | "fadeIn" | "fadeOut";
+
+export const isFade = (mode: Mode) => mode === "fadeIn" || mode === "fadeOut";
 
 export interface Drag {
   clip: Clip;
@@ -25,6 +27,9 @@ export interface Drag {
   maxDurUs: number | null;
   sourceInUs: number | null;
   speed: number;
+  /** A fade drag: the sound fade at that end when it started, and the longest it may get. */
+  fadeUs: number;
+  maxFadeUs: number;
 }
 
 /**
@@ -44,6 +49,12 @@ export function dragResult(d: Drag, minUs: number): { startUs: number; durationU
   return { startUs: clip.startUs, durationUs: dur };
 }
 
+/** The fade a fade drag sets: the fade-in handle lengthens it to the right, the fade-out handle to the left. */
+export function dragFade(d: Drag): number {
+  const us = d.fadeUs + (d.mode === "fadeIn" ? d.dxUs : -d.dxUs);
+  return Math.max(0, Math.min(d.maxFadeUs, Math.round(us / FADE_STEP_US) * FADE_STEP_US));
+}
+
 function snap(value: number, candidates: number[], thr: number): number | null {
   let best: number | null = null;
   for (const c of candidates) if (Math.abs(c - value) <= thr && (best === null || Math.abs(c - value) < Math.abs(best - value))) best = c;
@@ -51,9 +62,9 @@ function snap(value: number, candidates: number[], thr: number): number | null {
 }
 
 /**
- * Moving and trimming clips, and scrubbing the ruler and empty lanes; both follow the pointer on
- * the window. A drag binds its listeners once when it starts and reads the latest zoom and
- * snapping from a ref, so pointer moves only update the drag state.
+ * Moving and trimming clips, dragging their sound fades, and scrubbing the ruler and empty lanes;
+ * all follow the pointer on the window. A drag binds its listeners once when it starts and reads
+ * the latest zoom and snapping from a ref, so pointer moves only update the drag state.
  */
 export function useTimelineGestures({
   project,
@@ -83,6 +94,7 @@ export function useTimelineGestures({
       const moved = d.moved || Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 3;
       if (!moved || !project) return null;
       let dxUs = ((e.clientX - d.startX) / zoom) * US;
+      if (isFade(d.mode)) return { ...d, moved: true, dxUs: Math.round(dxUs) };
       let snapUs: number | null = null;
       const thr = (SNAP_PX / zoom) * US;
       if (snapping) {
@@ -134,6 +146,12 @@ export function useTimelineGestures({
       else select([d.clip.id]);
       return;
     }
+    if (isFade(d.mode)) {
+      const fadeUs = dragFade(d);
+      if (fadeUs !== d.fadeUs) edit({ type: "updateClip", clipId: d.clip.id, ...(d.mode === "fadeIn" ? { fadeInUs: fadeUs } : { fadeOutUs: fadeUs }) });
+      select([d.clip.id]);
+      return;
+    }
     const r = dragResult(d, live.current.minUs);
     if (d.mode === "move") {
       const trackId = d.target === undefined ? d.trackId : d.target;
@@ -156,7 +174,9 @@ export function useTimelineGestures({
       stopDrag.current?.();
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const x = e.clientX - rect.left;
-      const mode: Mode = x <= EDGE ? "trimL" : x >= rect.width - EDGE ? "trimR" : "move";
+      // The fade handles sit over the top of the trim zones.
+      const fade = (e.target as HTMLElement).closest<HTMLElement>("[data-fade]")?.dataset.fade;
+      const mode: Mode = fade === "in" ? "fadeIn" : fade === "out" ? "fadeOut" : x <= EDGE ? "trimL" : x >= rect.width - EDGE ? "trimR" : "move";
       const asset = clipAsset(project, clip);
       const media = clip.content.type === "media" ? clip.content : null;
       const sourceInUs = media && asset?.kind !== "image" ? media.sourceInUs : null;
@@ -166,7 +186,7 @@ export function useTimelineGestures({
       for (const c of allClips(project)) if (c.id !== clip.id) candidates.push(c.startUs, c.startUs + c.durationUs);
       // While the AI edits, pressing a clip only selects it.
       const locked = !!useEditor.getState().aiRun;
-      let d: Drag = { clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1 };
+      let d: Drag = { clip, trackId: track.id, mode, startX: e.clientX, startY: e.clientY, moved: false, shift: e.shiftKey, dxUs: 0, target: undefined, snapUs: null, candidates, maxDurUs, sourceInUs, speed: media?.speed ?? 1, fadeUs: (mode === "fadeIn" ? media?.fadeInUs : media?.fadeOutUs) ?? 0, maxFadeUs: maxFadeUs(clip.durationUs) };
       setDrag(d);
 
       // Pointer moves are handled once per display frame: a fast mouse sends several per frame, and each

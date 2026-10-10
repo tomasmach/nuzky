@@ -9,7 +9,7 @@ import { ClipMenu, type MenuAt } from "./ClipMenu";
 import { ClipView } from "./ClipView";
 import { CutMarkers } from "./CutMarkers";
 import { TrackHeader } from "./TrackHeader";
-import { dragResult, useTimelineGestures, type Drag } from "./useTimelineGestures";
+import { dragFade, dragResult, isFade, useTimelineGestures, type Drag } from "./useTimelineGestures";
 
 const HEADER_W = 140;
 const RULER_H = 28;
@@ -248,7 +248,10 @@ export function Timeline({ height }: { height: number }) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [setZoom]);
 
-  const { drag, startClipDrag, startScrub } = useTimelineGestures({ project, zoom, snapping, minUs, rows, timeAt });
+  const { drag: gesture, startClipDrag, startScrub } = useTimelineGestures({ project, zoom, snapping, minUs, rows, timeAt });
+  // A fade drag changes only the clip's fades; the ghost, the slot and the snap guide belong to moves and trims.
+  const drag = gesture && !isFade(gesture.mode) ? gesture : null;
+  const fading = gesture?.moved && isFade(gesture.mode) ? gesture : null;
 
   // When the focused clip is deleted, focus and select the clip that followed it on its track, else
   // the one before it, so the keyboard keeps its place. Neighbours come from the order shown before
@@ -287,6 +290,9 @@ export function Timeline({ height }: { height: number }) {
   for (let t = firstTick; t <= lastTick; t += step) ticks.push(Math.round(t * 1000) / 1000);
 
   const layout = mainLayout(project, drag, minUs);
+  const fadeUs = fading ? dragFade(fading) : 0;
+  const fadeContent = fading?.clip.content.type === "media" ? fading.clip.content : null;
+  const fades = fading && fadeContent ? { inUs: fading.mode === "fadeIn" ? fadeUs : fadeContent.fadeInUs, outUs: fading.mode === "fadeOut" ? fadeUs : fadeContent.fadeOutUs } : undefined;
   // A trimmed main-track clip shows where it ends up; elsewhere the ghost follows the pointer.
   const ghostTiming = drag?.moved ? ((drag.mode !== "move" && layout?.timing.get(drag.clip.id)) || dragResult(drag, minUs)) : null;
   const ghostTrackId = drag?.moved ? (drag.target === undefined ? drag.trackId : drag.target) : null;
@@ -547,6 +553,7 @@ export function Timeline({ height }: { height: number }) {
                           locked={locked}
                           tabbable={clip.id === tabStop}
                           timing={isMain ? layout?.timing.get(clip.id) : undefined}
+                          fades={fading?.clip.id === clip.id ? fades : undefined}
                           onPointerDown={startClipDrag}
                           onContextMenu={openMenu}
                         />
@@ -619,6 +626,15 @@ export function Timeline({ height }: { height: number }) {
               style={{ left: HEADER_W + ((drag.mode === "trimR" ? ghostTiming.startUs + ghostTiming.durationUs : ghostTiming.startUs) / US) * zoom, top: 2 }}
             >
               {drag.mode === "move" ? formatTime(layout?.slotUs ?? ghostTiming.startUs) : formatDuration(ghostTiming.durationUs)}
+            </div>
+          )}
+          {fading && (
+            // Pinned to the end of the fade, like a trim's tooltip to its edge.
+            <div
+              className={`tabular pointer-events-none absolute z-50 rounded-md bg-black/80 px-1.5 py-0.5 text-[11px] font-medium text-fg ${fading.mode === "fadeOut" ? "-translate-x-full" : ""}`}
+              style={{ left: HEADER_W + ((fading.mode === "fadeIn" ? fading.clip.startUs + fadeUs : fading.clip.startUs + fading.clip.durationUs - fadeUs) / US) * zoom, top: 2 }}
+            >
+              {fading.mode === "fadeIn" ? "Fade in" : "Fade out"} {formatDuration(fadeUs)}
             </div>
           )}
         </div>
