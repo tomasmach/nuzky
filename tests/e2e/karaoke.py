@@ -252,10 +252,11 @@ def caption_styles(r):
         first_n, first_us = first_n + 1, frame_at(caption['startUs'] + 1e6 / FPS)[1]
     settled_n, settled_us = frame_at(caption['startUs'] + max(300_000, caption['durationUs'] // 2))
     print(f"  caption \"{caption['text']}\" at {caption['startUs'] / 1e6:.3f} s", flush=True)
-    rect = preview_rect(r)
     time.sleep(1.5)  # `nuzky frame` reads the saved file, saved about a second after the edit.
     r.seek(settled_us)
     time.sleep(1.5)
+    # Measured now, once the panes have settled after the window went back to its size.
+    rect = preview_rect(r)
     r.shot('preview-key-word')
     preview = green(preview_crop(r.work / 'preview-key-word.png', rect))
     engine = green(engine_frame(r, settled_us, 'engine-key-word'))
