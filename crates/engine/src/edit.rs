@@ -479,21 +479,38 @@ impl Project {
     /// Removes `range` from one track: clips are cut at its edges, the inside goes, later
     /// clips move left. Pieces shorter than `min` are dropped rather than kept as slivers.
     fn ripple_delete_track(&mut self, ti: usize, range: TimeRange, min: i64) {
-        // Splitting a text clip would show its whole text twice; keep only the longer side.
-        for c in self.tracks[ti].clips.iter_mut().filter(|c| matches!(c.content, ClipContent::Text { .. })) {
-            if c.start_us < range.start_us && range.end_us < c.end_us() {
-                let (before, after) = (range.start_us - c.start_us, c.end_us() - range.end_us);
-                if before >= after {
-                    c.duration_us = before;
-                } else {
-                    // Keyframes and spoken words stay on the kept text, as when a split drops the first half.
-                    for k in &mut c.keyframes {
-                        k.t_us -= range.end_us - c.start_us;
-                    }
-                    shift_words(c, range.end_us - c.start_us);
-                    c.start_us = range.end_us;
-                    c.duration_us = after;
+        // Backwards, so a caption split in two leaves the clips still to visit where they were.
+        for ci in (0..self.tracks[ti].clips.len()).rev() {
+            let c = &self.tracks[ti].clips[ci];
+            if !matches!(c.content, ClipContent::Text { .. })
+                || c.end_us() <= range.start_us
+                || range.end_us <= c.start_us
+            {
+                continue;
+            }
+            let (from, to) = (range.start_us - c.start_us, range.end_us - c.start_us);
+            let inside = 0 < from && to < c.duration_us;
+            let longer_before = from >= c.duration_us - to;
+            match heard_sides(c, from, to) {
+                // A generated caption shows only the words still heard; with none left, it goes.
+                Some((before, after)) if before.is_empty() && after.is_empty() => {
+                    self.tracks[ti].clips[ci].duration_us = 0
                 }
+                Some((before, after)) if inside && !before.is_empty() && !after.is_empty() => {
+                    set_words(&mut self.tracks[ti].clips[ci], after);
+                    self.split_clip(ti, ci, range.end_us);
+                    set_words(&mut self.tracks[ti].clips[ci], before);
+                }
+                Some((before, after)) => {
+                    let keep_before = !before.is_empty();
+                    set_words(&mut self.tracks[ti].clips[ci], [before, after].concat());
+                    if inside {
+                        keep_side(&mut self.tracks[ti].clips[ci], keep_before, range);
+                    }
+                }
+                // Splitting other text would show its whole text twice; it keeps only the longer side.
+                None if inside => keep_side(&mut self.tracks[ti].clips[ci], longer_before, range),
+                None => {}
             }
         }
         for at in [range.start_us, range.end_us] {
@@ -1339,6 +1356,43 @@ fn retext_words(words: &mut [CaptionWord], old: &str, new: &str) {
         let size = word.text.split(' ').count();
         word.text = tokens.by_ref().take(size).collect::<Vec<_>>().join(" ");
     }
+}
+
+/// The words of a generated caption heard before `from` and from `to` on (clip time), each where its middle
+/// is; None for other text and for a caption whose text no longer is its words.
+fn heard_sides(clip: &Clip, from: i64, to: i64) -> Option<(Vec<CaptionWord>, Vec<CaptionWord>)> {
+    let ClipContent::Text { text, words, .. } = &clip.content else { return None };
+    if words.is_empty() || words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") != *text {
+        return None;
+    }
+    let middle = |w: &&CaptionWord| (w.start_us + w.end_us) / 2;
+    Some((
+        words.iter().filter(|w| middle(w) < from).cloned().collect(),
+        words.iter().filter(|w| middle(w) >= to).cloned().collect(),
+    ))
+}
+
+/// Makes a generated caption say exactly `kept`.
+fn set_words(clip: &mut Clip, kept: Vec<CaptionWord>) {
+    if let ClipContent::Text { text, words, .. } = &mut clip.content {
+        *text = kept.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        *words = kept;
+    }
+}
+
+/// Trims a text clip that `range` lies inside to the part before or after it.
+fn keep_side(clip: &mut Clip, before: bool, range: TimeRange) {
+    if before {
+        clip.duration_us = range.start_us - clip.start_us;
+        return;
+    }
+    // Keyframes and spoken words stay on the kept text, as when a split drops the first half.
+    for k in &mut clip.keyframes {
+        k.t_us -= range.end_us - clip.start_us;
+    }
+    shift_words(clip, range.end_us - clip.start_us);
+    clip.duration_us = clip.end_us() - range.end_us;
+    clip.start_us = range.end_us;
 }
 
 /// Keeps a text clip's spoken words on the same moments when its start moves `by` later.
@@ -2591,6 +2645,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_cut_takes_its_words_out_of_the_captions() {
+        let (p, id) = karaoke();
+        let cut = |p: &Project, start_ms: i64, end_ms: i64| -> Vec<(i64, i64, String)> {
+            let mut cut = p.clone();
+            let ranges = vec![TimeRange { start_us: start_ms * 1000, end_us: end_ms * 1000 }];
+            cut.apply(EditCmd::RippleDeleteRanges { ranges, keep_track_ids: None }).unwrap();
+            let captions = cut.tracks.iter().filter(|t| t.is_captions()).flat_map(|t| &t.clips);
+            captions
+                .map(|c| {
+                    let ClipContent::Text { text, .. } = &c.content else { panic!() };
+                    (c.start_us / 1000, c.end_us() / 1000, text.clone())
+                })
+                .collect()
+        };
+        // A cut inside the caption leaves a caption on each side, each saying its own words.
+        assert_eq!(cut(&p, 1300, 2000), [(1000, 1300, "Dneska".into()), (1300, 3300, "ukážu jak".into())]);
+        // Across its start, the words after the cut are left; a word cut in the middle goes.
+        assert_eq!(cut(&p, 500, 1950), [(500, 2550, "ukážu jak".into())]);
+        // With every word cut, the caption goes too, though a moment of it is left after the cut.
+        assert_eq!(cut(&p, 900, 3900), []);
+        // Typed text is no longer the words: it keeps its longer side whole, as before.
+        let mut typed = p.clone();
+        typed
+            .apply(
+                serde_json::from_value(serde_json::json!({"type": "updateClip", "clipId": id, "text": "Ahoj"}))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(cut(&typed, 1300, 2000), [(1300, 3300, "Ahoj".into())]);
     }
 
     #[test]

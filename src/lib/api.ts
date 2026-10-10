@@ -73,6 +73,8 @@ export const api = {
   /** The view's pauses at `pauseUs`, by index, or all of them. */
   removePauses: (key: string, pauseUs: number, only: number[] | null, epoch: Epoch) =>
     invoke<TranscriptCut>("remove_pauses", { key, pauseUs: Math.round(pauseUs), only, expectedEpoch: epoch }),
+  /** What the retake analysis suggests deleting and every pause longer than `pauseUs`, as one undo step. */
+  removeRetakes: (key: string, pauseUs: number, epoch: Epoch) => invoke<TranscriptCut>("remove_retakes", { key, pauseUs: Math.round(pauseUs), expectedEpoch: epoch }),
   /** Words by view index and the text they should read, with the captions that show them, as one undo step. */
   correctWords: (key: string, corrections: { i: number; text: string }[], epoch: Epoch) =>
     invoke<WordsCorrected>("correct_words", { key, corrections, expectedEpoch: epoch }),
