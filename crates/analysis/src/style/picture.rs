@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use nuzky_engine::media::{VideoDecoder, orient};
 use nuzky_engine::model::{Asset, AssetKind};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Alignment, Piece};
 
@@ -28,7 +28,7 @@ const STEP: f32 = 0.012;
 const MIN_ZOOM: f32 = 0.03;
 
 /// One caption on screen, in cut time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Caption {
     pub start_us: i64,
     pub end_us: i64,
@@ -38,7 +38,7 @@ pub struct Caption {
 
 /// How a moment of the recording is framed in the cut, in Nuzky transform terms: scale 1
 /// fits the recording inside the frame, x and y move its centre by fractions of the frame.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Framing {
     pub time_us: i64,
     pub scale: f32,
@@ -47,7 +47,7 @@ pub struct Framing {
 }
 
 /// A change of zoom: instant when `start_us == end_us`, otherwise a gradual move.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ZoomChange {
     pub start_us: i64,
     pub end_us: i64,
@@ -57,7 +57,7 @@ pub struct ZoomChange {
     pub at_cut: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Picture {
     /// Why the picture was not analysed, if it was not.
     pub skipped: Option<String>,

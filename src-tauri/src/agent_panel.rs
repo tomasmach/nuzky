@@ -55,6 +55,9 @@ pub struct PromptContext {
     playhead_us: Option<i64>,
     #[serde(default)]
     frame: bool,
+    /// Sent from the Your style page: the message is about the creator's style.
+    #[serde(default)]
+    style: bool,
 }
 
 fn timecode(us: i64) -> String {
@@ -65,6 +68,11 @@ fn timecode(us: i64) -> String {
 /// The message as the agent gets it: the user's words, then what they had selected.
 fn prompt(text: &str, context: &PromptContext, project: &nuzky_engine::Project) -> String {
     let mut lines = Vec::new();
+    if context.style {
+        lines.push(
+            "[Nuzky] The user writes from the Your style page: this is about how you edit all their videos, not the open project. Read their style with get_style. Agree on the exact change with them first, then make it with change_style (their words as setOwn) and say in a sentence what changed; the page shows it at once.".to_owned(),
+        );
+    }
     if let Some(ids) = context.selection.as_ref().filter(|ids| !ids.is_empty()) {
         let clips: Vec<_> = project.tracks.iter().flat_map(|t| &t.clips).filter(|c| ids.contains(&c.id)).collect();
         let range = clips.iter().map(|c| c.start_us).min().zip(clips.iter().map(|c| c.end_us()).max());
@@ -231,11 +239,18 @@ mod tests {
     #[test]
     fn the_prompt_carries_what_was_selected_when_sent() {
         let project = Project::new("t");
-        let context = PromptContext { selection: None, playhead_us: Some(7_200_000), frame: true };
+        let context = PromptContext { selection: None, playhead_us: Some(7_200_000), frame: true, style: false };
         let text = prompt("Zkrať to", &context, &project);
         assert!(text.starts_with("Zkrať to\n\n[Nuzky] Playhead: 00:07.20 (7200000 µs)."), "{text}");
         assert!(text.contains("inspect_frames at 7200000 µs"));
-        let none = PromptContext { selection: Some(Vec::new()), playhead_us: None, frame: true };
+        let none = PromptContext { selection: Some(Vec::new()), playhead_us: None, frame: true, style: false };
         assert_eq!(prompt("Ahoj", &none, &project), "Ahoj");
+        let style = PromptContext { selection: None, playhead_us: None, frame: false, style: true };
+        let text = prompt("Nestříhej mi rozloučení", &style, &project);
+        assert!(
+            text.starts_with("Nestříhej mi rozloučení\n\n[Nuzky] The user writes from the Your style page")
+                && text.contains("change_style"),
+            "{text}"
+        );
     }
 }

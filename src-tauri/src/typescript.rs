@@ -136,6 +136,10 @@ fn generate() -> String {
     types.visit::<crate::zooms::ZoomSuggestions>();
     types.visit::<crate::zooms::ZoomsApplied>();
     types.visit::<crate::connect::Connection>();
+    types.visit::<nuzky_mcp::style::StyleView>();
+    types.visit::<nuzky_mcp::style::StyleAction>();
+    types.visit::<crate::jobs::StylePair>();
+    types.visit::<crate::jobs::StylePairResult>();
     let mut out = HEADER.to_string();
     for declaration in types.by_name.values() {
         out.push('\n');

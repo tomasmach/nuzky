@@ -447,7 +447,7 @@ export type FontFamilies = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "proxy" | "export" | "captions" | "transcript",
+  kind: "audio" | "proxy" | "export" | "captions" | "transcript" | "style",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,
@@ -671,6 +671,165 @@ export type SpeechModel = {
 };
 
 /**
+ * What the creator, or an agent they agreed with, does to the style.
+ */
+export type StyleAction = {
+  "type": "accept",
+  titles: Array<string>,
+  seen: Array<string>,
+} | {
+  "type": "reject",
+  title: string,
+} | {
+  "type": "remove",
+  title: string,
+} | {
+  "type": "revert",
+  title: string,
+} | {
+  "type": "learnAgain",
+  title: string,
+} | {
+  "type": "setOwn",
+  index: number | null,
+  text: string,
+  was: string | null,
+} | {
+  "type": "setText",
+  text: string,
+  baseVersion: number,
+} | {
+  "type": "restore",
+  index: number,
+} | {
+  "type": "reset"
+};
+
+export type StyleChange = {
+  name: string,
+  from: string | null,
+  to: string | null,
+};
+
+export type StyleConfidence = {
+  /**
+   * High in 3 or more videos, medium in 2, low in 1.
+   */
+  level: StyleLevel,
+  videos: number,
+  /**
+   * Videos learned from in all.
+   */
+  of: number,
+  moments: number,
+};
+
+/**
+ * Why learning leaves a rule alone.
+ */
+export type StyleFrozen = "rejected" | "removed" | "reverted" | "edited";
+
+export type StyleLevel = "high" | "medium" | "low";
+
+export type StyleMoment = {
+  video: string,
+  /**
+   * In the recording, or in the finished cut where the rule says so.
+   */
+  timeUs: number,
+  line: string,
+};
+
+export type StyleNotLearned = {
+  title: string,
+  reason: StyleFrozen,
+};
+
+/**
+ * A raw recording and the finished video the creator cut from it.
+ */
+export type StylePair = {
+  recording: string,
+  cut: string,
+};
+
+/**
+ * How one pair of a style learning job ended, sent as `style-pair`.
+ */
+export type StylePairResult = {
+  jobId: string,
+  index: number,
+  /**
+   * The share of the finished video's speech found in the recording.
+   */
+  matched: number | null,
+  /**
+   * Why nothing was learned from the pair.
+   */
+  error: string | null,
+};
+
+export type StyleRule = {
+  title: string,
+  summary: string,
+  /**
+   * The creator changed it by hand, so learning leaves it alone.
+   */
+  byYou: boolean,
+  /**
+   * How well the videos learned from now back it; none when they no longer show it.
+   */
+  confidence: StyleConfidence | null,
+};
+
+export type StyleSource = {
+  title: string,
+  kind: StyleSourceKind,
+  atMs: number,
+  matched: number | null,
+};
+
+export type StyleSourceKind = "pair" | "project";
+
+export type StyleVersion = {
+  index: number,
+  label: string,
+  atMs: number,
+};
+
+/**
+ * The style as the app shows it.
+ */
+export type StyleView = {
+  /**
+   * The version shown; saving the text checks it is still the newest.
+   */
+  version: number,
+  /**
+   * EDIT.md, none without a style.
+   */
+  text: string | null,
+  /**
+   * The creator's own rules.
+   */
+  own: Array<string>,
+  /**
+   * Learned rules in the style, in file order.
+   */
+  rules: Array<StyleRule>,
+  suggestions: Array<Suggestion>,
+  notLearned: Array<StyleNotLearned>,
+  /**
+   * Newest first.
+   */
+  sources: Array<StyleSource>,
+  /**
+   * Newest first.
+   */
+  versions: Array<StyleVersion>,
+};
+
+/**
  * A sentence said with emphasis, proposed for a punch-in.
  */
 export type SuggestedZoom = {
@@ -684,6 +843,22 @@ export type SuggestedZoom = {
   text: string,
   score: number,
   scale: number,
+};
+
+export type Suggestion = {
+  title: string,
+  summary: string,
+  /**
+   * The style already has this rule and learning would change it.
+   */
+  update: boolean,
+  changes: Array<StyleChange>,
+  confidence: StyleConfidence,
+  moments: Array<StyleMoment>,
+  /**
+   * The rule as EDIT.md would hold it.
+   */
+  text: string,
 };
 
 export type TextStyle = {

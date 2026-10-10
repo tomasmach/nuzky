@@ -7,6 +7,7 @@ from --mcp-config, so its edits go through Nuzky like a real agent's. The messag
   "cut"      reads the project and its activity, cuts 1-3 s out, adds two captions and answers
   "options"  offers two takes with suggest_options
   "slow"     opens a run, splits the clip and keeps working until stopped
+  "keep: …"  sent from Your style: reads the style and keeps the rest of the message as the creator's rule
   "signin"   is not signed in;  "limit" has hit its usage limit
   anything else is echoed back.
 Each start is logged to $NUZKY_FAKE_AGENT_LOG/runs.jsonl (argv, pid, session); sessions live there too.
@@ -136,7 +137,16 @@ if 'limit' in message:
     emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': "You've hit your limit · resets 9pm"})
     sys.exit(1)
 
-if 'cut' in message:
+if '[Nuzky] The user writes from the Your style page' in prompt:
+    style = call('get_style', {})
+    said = prompt.split('\n\n[Nuzky]')[0].strip()
+    if said.lower().startswith('keep:'):
+        rule = said[5:].strip()
+        call('change_style', {'action': {'type': 'setOwn', 'text': rule}})
+        say(f'Hotovo, máš nové pravidlo: {rule}')
+    else:
+        say(f"Tvůj styl má {len(style['rules'])} naučených a {len(style['own'])} tvých pravidel.")
+elif 'cut' in message:
     state = call('get_state', {})
     call('activity', {})
     say('Vystřihnu pauzu na začátku a přidám titulky.')

@@ -3,9 +3,11 @@
 
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 use crate::Word;
 
-use super::{Alignment, Caption, Picture, token};
+use super::{Alignment, Caption, Picture, Place, token};
 
 /// Rules need at least this many moments from the recordings to be written down.
 const MIN_EXAMPLES: usize = 3;
@@ -37,6 +39,19 @@ pub struct Source<'a> {
     pub cut_words: &'a [Word],
     pub alignment: &'a Alignment,
     pub picture: &'a Picture,
+    /// Where each recording word plays in the cut, when that is known exactly, as in a project;
+    /// otherwise the alignment finds it.
+    pub places: Option<&'a [Place]>,
+    /// Words the creator corrected after recognition.
+    pub corrections: &'a [Correction],
+}
+
+/// A recognised word the creator corrected, where it is heard in the cut.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Correction {
+    pub time_us: i64,
+    pub heard: String,
+    pub text: String,
 }
 
 /// A recording word with where it plays in the cut.
@@ -55,7 +70,10 @@ struct Edit<'a> {
 
 impl<'a> Edit<'a> {
     fn new(index: usize, source: &'a Source<'a>) -> Self {
-        let places = source.alignment.places(source.words, source.cut_words);
+        let places = match source.places {
+            Some(places) => places.to_vec(),
+            None => source.alignment.places(source.words, source.cut_words),
+        };
         let words =
             source.words.iter().zip(places).map(|(word, cut)| Spoken { word, token: token(&word.text), cut }).collect();
         Self { index, source, words }
@@ -78,14 +96,143 @@ impl<'a> Edit<'a> {
 }
 
 /// A moment of one recording, quoted.
-#[derive(Clone)]
-struct Example {
-    source: usize,
-    time_us: i64,
-    line: String,
+#[derive(Clone, Debug, PartialEq)]
+pub struct Moment {
+    /// Index of the recording among the sources.
+    pub source: usize,
+    pub time_us: i64,
+    pub line: String,
+}
+
+type Example = Moment;
+
+/// What a rule tells the agent to do, in a form two learnings can be compared by. A number may
+/// move by 15% or by `floor`, whichever is more, and still be the same choice.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Choice {
+    pub name: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<(f64, f64)>,
+}
+
+impl Choice {
+    fn text(name: &str, value: impl Into<String>) -> Self {
+        Self { name: name.into(), value: value.into(), number: None }
+    }
+
+    fn number(name: &str, value: impl Into<String>, number: f64, floor: f64) -> Self {
+        Self { name: name.into(), value: value.into(), number: Some((number, floor)) }
+    }
+
+    pub fn same(&self, other: &Choice) -> bool {
+        match (self.number, other.number) {
+            (Some((a, floor)), Some((b, _))) => (a - b).abs() <= (0.15 * a.abs().max(b.abs())).max(floor),
+            _ => self.value == other.value,
+        }
+    }
+}
+
+/// One rule of EDIT.md: its section, the settings it adds, what it decides and every moment it
+/// was learned from.
+#[derive(Clone, Debug)]
+pub struct Rule {
+    /// The heading without its hashes; it names the rule.
+    pub title: &'static str,
+    /// What it tells the agent, in one line.
+    pub summary: String,
+    /// The section from its heading to the next.
+    pub text: String,
+    pub settings: Vec<(String, String)>,
+    pub choices: Vec<Choice>,
+    pub moments: Vec<Moment>,
+}
+
+impl Rule {
+    /// The same choices as `other`: a new learning that only moves counts and examples.
+    pub fn same(choices: &[Choice], other: &[Choice]) -> bool {
+        choices.len() == other.len() && choices.iter().zip(other).all(|(a, b)| a.name == b.name && a.same(b))
+    }
+}
+
+/// Every rule EDIT.md can hold, by heading, in the order they are written.
+pub const RULES: &[&str] = &[
+    "### Sentences said once",
+    "### Restarted sentences",
+    "### Repeats of something already kept",
+    "### Dropped passages",
+    "### Slips and stray words",
+    "### Filler sounds",
+    "### Talk before the start",
+    "### Talk after the end",
+    "### Closing calls to action",
+    "### Filler words",
+    "## Pauses",
+    "## Pace",
+    "## Cuts",
+    "## Captions",
+    "## Zoom",
+    "## Spelling",
+];
+
+/// Which rule writes each setting.
+pub const SETTINGS: &[(&str, &str)] = &[
+    ("Filler words to cut", "Filler words"),
+    ("edit_transcript shorten_pauses_us", "Pauses"),
+    ("Cuts per minute", "Cuts"),
+    ("build_captions max_words", "Captions"),
+    ("build_captions max_chars", "Captions"),
+    ("Base framing", "Zoom"),
+    ("Zoom in", "Zoom"),
+    ("Slow zoom moves", "Zoom"),
+];
+
+/// What the recordings and their cuts teach, before it is written down.
+#[derive(Clone, Debug)]
+pub struct Learned {
+    /// The title, what the file is and the table of recordings and cuts.
+    pub header: String,
+    /// "What gets cut" and how much the cuts kept.
+    pub overview: String,
+    pub rules: Vec<Rule>,
+    /// What was seen too rarely for a rule.
+    pub rare: Option<String>,
+}
+
+impl Learned {
+    /// EDIT.md with every rule.
+    pub fn document(&self) -> String {
+        let mut doc = format!("{}\n", self.header);
+        let settings: Vec<&(String, String)> = self.rules.iter().flat_map(|r| &r.settings).collect();
+        if !settings.is_empty() {
+            doc.push_str(&settings_block(settings));
+        }
+        doc.push_str(&self.overview);
+        for rule in &self.rules {
+            doc.push_str(&rule.text);
+        }
+        if let Some(rare) = &self.rare {
+            doc.push_str(rare);
+        }
+        doc
+    }
+}
+
+/// The Settings section with these rows, and the blank line after it.
+pub fn settings_block<'a>(rows: impl IntoIterator<Item = &'a (String, String)>) -> String {
+    let mut out = String::from("## Settings\n\n| Setting | Value |\n|---|---|\n");
+    for (name, value) in rows {
+        let _ = writeln!(out, "| {name} | {value} |");
+    }
+    out.push('\n');
+    out
 }
 
 pub fn learn(sources: &[Source]) -> String {
+    learned(sources).document()
+}
+
+pub fn learned(sources: &[Source]) -> Learned {
     let edits: Vec<Edit> = sources.iter().enumerate().map(|(i, s)| Edit::new(i, s)).collect();
     let many = edits.len() > 1;
     let names: Vec<&str> = sources.iter().map(|s| s.recording.as_str()).collect();
@@ -97,29 +244,24 @@ pub fn learn(sources: &[Source]) -> String {
         }
         out
     };
-    let mut settings: Vec<(String, String)> = Vec::new();
+    let mut rules: Vec<Rule> = Vec::new();
     // Kinds seen too rarely for a rule, with what was seen.
     let mut rare: Vec<String> = Vec::new();
-    let mut body = String::new();
 
     // What gets cut.
     let words: usize = edits.iter().map(|e| e.words.len()).sum();
     let kept: usize = edits.iter().map(|e| (0..e.words.len()).filter(|&i| e.kept(i)).count()).sum();
     let recorded: i64 = sources.iter().map(|s| s.recording_us).sum();
     let cut_us: i64 = sources.iter().map(|s| s.alignment.cut_duration_us).sum();
-    let _ = writeln!(body, "## What gets cut\n");
-    let _ = writeln!(
-        body,
-        "The finished cuts kept {kept} of {words} recognised words ({}) and {} of {} recorded ({}). That share is what the rules below produced, not a goal: never cut a sentence only to get closer to it.\n",
+    let overview = format!(
+        "## What gets cut\n\nThe finished cuts kept {kept} of {words} recognised words ({}) and {} of {} recorded ({}). That share is what the rules below produced, not a goal: never cut a sentence only to get closer to it.\n\n",
         percent(kept, words),
         clock(cut_us),
         clock(recorded),
         percent(cut_us as usize, recorded as usize)
     );
     let removals = removals(&edits);
-    if let Some(section) = said_once(&edits, &removals, &say) {
-        body.push_str(&section);
-    }
+    rules.extend(said_once(&edits, &removals, &say));
     for kind in Kind::ALL {
         let found: Vec<&Removal> = removals.iter().filter(|r| r.kind == kind).collect();
         if found.is_empty() {
@@ -132,28 +274,33 @@ pub fn learn(sources: &[Source]) -> String {
             continue;
         }
         let seconds: i64 = found.iter().map(|r| r.duration_us).sum();
-        let _ = writeln!(body, "### {}\n", kind.title());
-        let _ = writeln!(body, "{}", kind.rule(found.len(), seconds, &removals, &edits));
-        let _ = writeln!(body, "\n{}", say(&examples));
+        let shorter = found.iter().any(|r| r.longer_than_retake);
+        rules.push(Rule {
+            title: kind.title(),
+            summary: kind.summary().into(),
+            text: format!(
+                "### {}\n\n{}\n\n{}\n",
+                kind.title(),
+                kind.rule(found.len(), seconds, &removals, &edits),
+                say(&examples)
+            ),
+            settings: Vec::new(),
+            choices: match kind {
+                Kind::Restart => vec![Choice::text(
+                    "Keep the latest attempt even when an earlier one is longer",
+                    if shorter { "yes" } else { "no" },
+                )],
+                _ => Vec::new(),
+            },
+            moments: examples,
+        });
     }
-    if let Some((section, setting)) = fillers(&edits, &say) {
-        body.push_str(&section);
-        settings.extend(setting);
-    }
+    rules.extend(fillers(&edits, &say));
 
     // Pauses, pace, cuts, captions and zoom.
-    let pauses = pauses(&edits, &say);
-    if let Some((section, setting)) = pauses {
-        body.push_str(&section);
-        settings.push(setting);
-    }
-    if let Some(section) = pace(&edits, &say) {
-        body.push_str(&section);
-    }
-    if let Some((section, setting)) = cuts(&edits, &say) {
-        body.push_str(&section);
-        settings.push(setting);
-    }
+    rules.extend(pauses(&edits, &say));
+    rules.extend(pace(&edits, &say));
+    rules.extend(cuts(&edits, &say));
     let unseen: Vec<String> =
         sources.iter().filter_map(|s| s.picture.skipped.as_ref().map(|why| format!("{} ({why})", s.cut))).collect();
     if !unseen.is_empty() {
@@ -161,32 +308,27 @@ pub fn learn(sources: &[Source]) -> String {
     }
     let seen = unseen.len() < sources.len();
     match captions(&edits, &say) {
-        Some((section, rows)) => {
-            body.push_str(&section);
-            settings.extend(rows);
-        }
+        Some(rule) => rules.push(rule),
         None if seen => rare.push("Burned-in captions: none found".into()),
         None => {}
     }
     match zoom(&edits, &say) {
-        Some((section, rows)) => {
-            body.push_str(&section);
-            settings.extend(rows);
-        }
+        Some(rule) => rules.push(rule),
         None if seen => rare.push("Zoom: no framing could be measured".into()),
         None => {}
     }
+    rules.extend(spelling(sources, &say));
 
-    let mut doc = String::new();
-    let _ = writeln!(doc, "# Editing style\n");
+    let mut header = String::new();
+    let _ = writeln!(header, "# Editing style\n");
     let _ = writeln!(
-        doc,
+        header,
         "Nuzky measured how these recordings became their finished cuts. An agent editing through Nuzky follows the rules and numbers here instead of the general defaults in nuzky://guide, and keeps the defaults for anything this file does not cover. Edit this file by hand to change the style; delete it to go back to the defaults.\n"
     );
-    let _ = writeln!(doc, "| Recording | Language | Length | Finished cut | Length |\n|---|---|---|---|---|");
+    let _ = writeln!(header, "| Recording | Language | Length | Finished cut | Length |\n|---|---|---|---|---|");
     for s in sources {
         let _ = writeln!(
-            doc,
+            header,
             "| {} | {} | {} | {} | {} |",
             s.recording,
             s.language,
@@ -195,24 +337,23 @@ pub fn learn(sources: &[Source]) -> String {
             clock(s.alignment.cut_duration_us)
         );
     }
-    if !settings.is_empty() {
-        let _ = writeln!(doc, "\n## Settings\n\n| Setting | Value |\n|---|---|");
-        for (name, value) in &settings {
-            let _ = writeln!(doc, "| {name} | {value} |");
-        }
-    }
-    doc.push('\n');
-    doc.push_str(&body);
-    if !rare.is_empty() {
-        let _ = writeln!(
-            doc,
-            "## Seen too rarely for a rule\n\nFewer than {MIN_EXAMPLES} times, so these are not rules and the guide's defaults apply. They only show what else happened.\n"
+    let rare = (!rare.is_empty()).then(|| {
+        let mut out = format!(
+            "## Seen too rarely for a rule\n\nFewer than {MIN_EXAMPLES} times, so these are not rules and the guide's defaults apply. They only show what else happened.\n\n"
         );
         for line in &rare {
-            let _ = writeln!(doc, "- {line}");
+            let _ = writeln!(out, "- {line}");
+        }
+        plain(&out)
+    });
+    for rule in &mut rules {
+        rule.text = plain(&rule.text);
+        rule.summary = plain(&rule.summary);
+        for moment in &mut rule.moments {
+            moment.line = plain(&moment.line);
         }
     }
-    plain(&doc)
+    Learned { header: plain(&header), overview, rules, rare }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -241,6 +382,19 @@ impl Kind {
             Kind::LeadIn => "Talk before the start",
             Kind::Ending => "Talk after the end",
             Kind::Dropped => "Dropped passages",
+        }
+    }
+
+    fn summary(self) -> &'static str {
+        match self {
+            Kind::Restart => "Cut earlier attempts at a sentence, keep the latest",
+            Kind::Repeat => "Cut repeats of something already kept",
+            Kind::Filler => "Cut sounds without meaning",
+            Kind::Slip => "Cut slips and stray words",
+            Kind::Call => "Cut closing calls to action",
+            Kind::LeadIn => "Start at the first real sentence",
+            Kind::Ending => "End on the last point made",
+            Kind::Dropped => "Leave out side remarks the video does not need",
         }
     }
 
@@ -306,7 +460,7 @@ struct Removal {
 
 /// How often the creator kept a sentence said only once: neither an attempt said again, nor a
 /// slip or a filler. Next to the rules about what to cut, this says how much else stays.
-fn said_once(edits: &[Edit], removals: &[Removal], say: &dyn Fn(&[Example]) -> String) -> Option<String> {
+fn said_once(edits: &[Edit], removals: &[Removal], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let mut kept = Vec::new();
     let mut total = 0;
     for edit in edits {
@@ -333,12 +487,19 @@ fn said_once(edits: &[Edit], removals: &[Removal], say: &dyn Fn(&[Example]) -> S
     if kept.len() < MIN_EXAMPLES {
         return None;
     }
-    Some(format!(
-        "### Sentences said once\n\nOf {total} sentences said only once, the creator kept {} ({}). When unsure whether to cut a sentence said once, keep it.\n\n{}\n",
-        kept.len(),
-        percent(kept.len(), total),
-        say(&kept)
-    ))
+    Some(Rule {
+        title: "Sentences said once",
+        summary: format!("Keep a sentence said once when unsure; {} were kept", percent(kept.len(), total)),
+        text: format!(
+            "### Sentences said once\n\nOf {total} sentences said only once, the creator kept {} ({}). When unsure whether to cut a sentence said once, keep it.\n\n{}\n",
+            kept.len(),
+            percent(kept.len(), total),
+            say(&kept)
+        ),
+        settings: Vec::new(),
+        choices: Vec::new(),
+        moments: kept,
+    })
 }
 
 /// Every cut-out run of words, split into sentences and sorted into kinds.
@@ -483,7 +644,7 @@ fn calls(edit: &Edit) -> Vec<(usize, usize)> {
 }
 
 /// How often each filler word is cut where it is heard.
-fn fillers(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, Vec<(String, String)>)> {
+fn fillers(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let mut rows: Vec<(String, usize, usize, Vec<Example>)> = Vec::new();
     for edit in edits {
         for (i, w) in edit.words.iter().enumerate() {
@@ -530,11 +691,23 @@ fn fillers(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String
     out.push('\n');
     let usually: Vec<&str> = rows.iter().filter(|r| r.2 * 2 > r.1).map(|r| r.0.as_str()).collect();
     let setting = (!usually.is_empty()).then(|| ("Filler words to cut".to_owned(), usually.join(", ")));
-    Some((out, setting.into_iter().collect()))
+    let mut sorted = usually.clone();
+    sorted.sort_unstable();
+    Some(Rule {
+        title: "Filler words",
+        summary: if usually.is_empty() { "Keep filler words".into() } else { format!("Cut {}", usually.join(", ")) },
+        text: out,
+        settings: setting.into_iter().collect(),
+        choices: vec![Choice::text(
+            "Filler words to cut",
+            if sorted.is_empty() { "none".into() } else { sorted.join(", ") },
+        )],
+        moments: rows.into_iter().flat_map(|r| r.3).collect(),
+    })
 }
 
 /// Silences heard between speech in the recordings and in their cuts.
-fn pauses(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, (String, String))> {
+fn pauses(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let (mut recorded, mut kept, mut examples) = (Vec::new(), Vec::new(), Vec::new());
     let (mut recorded_minutes, mut cut_minutes) = (0.0, 0.0);
     for edit in edits {
@@ -602,11 +775,18 @@ fn pauses(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String,
         millis(longest),
         say(&examples)
     );
-    Some((out, ("edit_transcript shorten_pauses_us".into(), longest.to_string())))
+    Some(Rule {
+        title: "Pauses",
+        summary: format!("Shorten pauses longer than {}", millis(longest)),
+        text: out,
+        settings: vec![("edit_transcript shorten_pauses_us".into(), longest.to_string())],
+        choices: vec![Choice::number("Longest pause", millis(longest), longest as f64, 20_000.0)],
+        moments: examples,
+    })
 }
 
 /// Words per second before and after the cut.
-fn pace(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<String> {
+fn pace(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let (mut words, mut spoken, mut kept, mut cut) = (0usize, 0i64, 0usize, 0i64);
     let mut examples: Vec<(i64, Example)> = Vec::new();
     for edit in edits {
@@ -647,6 +827,7 @@ fn pace(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<String> {
         return None;
     }
     examples.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.source.cmp(&b.1.source)).then(a.1.time_us.cmp(&b.1.time_us)));
+    let moments: Vec<Example> = examples.iter().map(|(_, e)| e.clone()).collect();
     let mut best: Vec<Example> = examples.into_iter().take(SHOWN).map(|(_, e)| e).collect();
     best.sort_by_key(|e| (e.source, e.time_us));
     let mut out = String::from("## Pace\n\n");
@@ -657,11 +838,18 @@ fn pace(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<String> {
         kept as f64 / (cut as f64 / 1e6),
         say(&best)
     );
-    Some(out)
+    Some(Rule {
+        title: "Pace",
+        summary: format!("{:.1} words per second in the cut", kept as f64 / (cut as f64 / 1e6)),
+        text: out,
+        settings: Vec::new(),
+        choices: Vec::new(),
+        moments,
+    })
 }
 
 /// Places where two pieces of the recording meet.
-fn cuts(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, (String, String))> {
+fn cuts(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let mut joins = Vec::new();
     let mut lengths = Vec::new();
     let minutes: f64 = edits.iter().map(|e| e.source.alignment.cut_duration_us as f64 / 60e6).sum();
@@ -703,11 +891,18 @@ fn cuts(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, (
         seconds(percentile(&lengths, 0.5)),
         say(&joins)
     );
-    Some((out, ("Cuts per minute".into(), format!("{per_minute:.1}"))))
+    Some(Rule {
+        title: "Cuts",
+        summary: format!("{per_minute:.1} cuts per minute"),
+        text: out,
+        settings: vec![("Cuts per minute".into(), format!("{per_minute:.1}"))],
+        choices: vec![Choice::number("Cuts per minute", format!("{per_minute:.1}"), per_minute, 0.5)],
+        moments: joins,
+    })
 }
 
 /// Words on screen per caption, from when the burned-in captions change.
-fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, Vec<(String, String)>)> {
+fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let mut counts = Vec::new();
     let mut chars = Vec::new();
     let mut examples = Vec::new();
@@ -755,13 +950,22 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(Strin
         centre - 0.5,
         say(&examples)
     );
-    Some((
-        out,
-        vec![
+    let height = format!("{:.0}% of the height", centre * 100.0);
+    Some(Rule {
+        title: "Captions",
+        summary: format!("{most} words at most, {max_chars} characters at most, middle at {height}"),
+        text: out,
+        settings: vec![
             ("build_captions max_words".into(), most.to_string()),
             ("build_captions max_chars".into(), max_chars.to_string()),
         ],
-    ))
+        choices: vec![
+            Choice::number("Words per caption", most.to_string(), most as f64, 0.0),
+            Choice::number("Characters per caption", max_chars.to_string(), max_chars as f64, 2.0),
+            Choice::number("Position", height, centre as f64, 0.03),
+        ],
+        moments: examples,
+    })
 }
 
 /// The cut's recognised words of each caption, in order. Each caption takes about as many words
@@ -815,7 +1019,7 @@ fn caption_texts<'w>(captions: &[Caption], words: &'w [Word]) -> Vec<Vec<&'w Wor
 }
 
 /// Base framing and zoom changes, measured against the recording.
-fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, Vec<(String, String)>)> {
+fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
     let (mut scales, mut xs, mut ys) = (Vec::new(), Vec::new(), Vec::new());
     let mut minutes = 0.0;
     let (mut ins, mut outs, mut moves) = (Vec::new(), Vec::new(), Vec::new());
@@ -889,18 +1093,25 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
         "## Zoom\n\nNuzky transform: scale 1 fits the recording, x and y move it by fractions of the frame. Times in the examples are in the finished cut.",
     );
     let mut settings = Vec::new();
+    let mut choices = Vec::new();
+    let mut summary = Vec::new();
     if base.len() >= MIN_EXAMPLES {
         let _ = write!(
             out,
             " Every clip of the recording is framed at scale {scale:.2}, x {x:.3}, y {y:.3} unless zoomed."
         );
         settings.push(("Base framing".into(), format!("scale {scale:.2}, x {x:.3}, y {y:.3}")));
+        choices.push(Choice::number("Base scale", format!("{scale:.2}"), scale as f64, 0.02));
+        choices.push(Choice::number("Base x", format!("{x:.3}"), x as f64, 0.01));
+        choices.push(Choice::number("Base y", format!("{y:.3}"), y as f64, 0.01));
+        summary.push(format!("framed at {scale:.2}"));
     }
     let _ =
         write!(out, " The zoom changes {changes} times, {:.1} per minute of finished video.", changes as f64 / minutes);
     if changes >= MIN_EXAMPLES {
         out.push_str(" Zoom even when the user does not ask for it.");
     }
+    choices.push(Choice::text("Zoom unasked", if changes >= MIN_EXAMPLES { "yes" } else { "no" }));
     out.push_str("\n\n");
     if base.len() >= MIN_EXAMPLES {
         let _ = writeln!(out, "{}", say(&base));
@@ -915,8 +1126,11 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
             seconds(percentile(&holds, 0.5)),
             say(&ins)
         );
-        settings
-            .push(("Zoom in".into(), format!("to scale {target:.2}, {:.1} per minute", ins.len() as f64 / minutes)));
+        let rate = ins.len() as f64 / minutes;
+        settings.push(("Zoom in".into(), format!("to scale {target:.2}, {rate:.1} per minute")));
+        choices.push(Choice::number("Zoom in to", format!("{target:.2}"), target as f64, 0.02));
+        choices.push(Choice::number("Zoom ins per minute", format!("{rate:.1}"), rate, 0.5));
+        summary.push(format!("zooms in to {target:.2} {rate:.1} times a minute"));
     } else if !ins.is_empty() {
         out.push_str(&format!("Instant zoom ins: {} seen, too few for a rule.\n\n", ins.len()));
     }
@@ -936,11 +1150,62 @@ fn zoom(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<(String, V
             seconds(percentile(&move_lengths, 0.5)),
             say(&moves)
         );
-        settings.push(("Slow zoom moves".into(), format!("{:.1} per minute", moves.len() as f64 / minutes)));
+        let rate = moves.len() as f64 / minutes;
+        settings.push(("Slow zoom moves".into(), format!("{rate:.1} per minute")));
+        choices.push(Choice::number("Slow moves per minute", format!("{rate:.1}"), rate, 0.5));
+        summary.push(format!("{rate:.1} slow moves a minute"));
     } else if !moves.is_empty() {
         out.push_str(&format!("Slow zoom moves: {} seen, too few for a rule.\n\n", moves.len()));
     }
-    Some((out, settings))
+    if summary.is_empty() {
+        summary.push(format!("zoom changes {:.1} times a minute", changes as f64 / minutes));
+    }
+    let mut summary = summary.join(", ");
+    summary[..1].make_ascii_uppercase();
+    let moments = base.into_iter().chain(ins).chain(outs).chain(moves).collect();
+    Some(Rule { title: "Zoom", summary, text: out, settings, choices, moments })
+}
+
+/// Words recognition gets wrong, as the creator corrected them.
+fn spelling(sources: &[Source], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> {
+    // The word itself: the punctuation around it goes with the sentence, and a word heard at the
+    // start of a sentence is the same word.
+    let bare = |w: &str| w.trim().trim_end_matches(['.', ',', '!', '?', ';', ':', '…']).to_owned();
+    let mut rows: Vec<(String, String, usize)> = Vec::new();
+    let mut examples = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        for c in source.corrections {
+            let (heard, text) = (bare(&c.heard).to_lowercase(), bare(&c.text));
+            match rows.iter_mut().find(|r| r.0 == heard && r.1 == text) {
+                Some(row) => row.2 += 1,
+                None => rows.push((heard, text, 1)),
+            }
+            let line = format!("\"{}\" corrected to \"{}\"", c.heard.trim(), c.text.trim());
+            examples.push(Example { source: index, time_us: c.time_us, line });
+        }
+    }
+    if examples.len() < MIN_EXAMPLES {
+        return None;
+    }
+    rows.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+    let mut out = String::from(
+        "## Spelling\n\nWords speech recognition gets wrong, as the creator corrected them. After transcribing, correct them with correct_words wherever they are heard. Times in the examples are in the finished cut.\n\n| Recognised | Should read | Times |\n|---|---|---|\n",
+    );
+    for (heard, text, times) in &rows {
+        let _ = writeln!(out, "| {heard} | {text} | {times} |");
+    }
+    let _ = writeln!(out, "\n{}", say(&examples));
+    let pairs: Vec<String> = rows.iter().map(|(heard, text, _)| format!("\"{heard}\" as \"{text}\"")).collect();
+    let mut sorted = pairs.clone();
+    sorted.sort_unstable();
+    Some(Rule {
+        title: "Spelling",
+        summary: format!("Write {}", pairs.iter().take(3).cloned().collect::<Vec<_>>().join(", ")),
+        text: out,
+        settings: Vec::new(),
+        choices: vec![Choice::text("Corrections", sorted.join(", "))],
+        moments: examples,
+    })
 }
 
 fn ends_sentence(text: &str) -> bool {
@@ -1096,6 +1361,8 @@ mod tests {
             cut_words: &cut_words,
             alignment: &alignment,
             picture: &picture,
+            places: None,
+            corrections: &[],
         };
         learn(&[source])
     }
@@ -1141,6 +1408,8 @@ mod tests {
             cut_words: &[],
             alignment: &alignment,
             picture: &picture,
+            places: None,
+            corrections: &[],
         };
         assert!(learn(&[source]).starts_with("# Editing style"));
     }
@@ -1158,6 +1427,8 @@ mod tests {
             cut_words: &cut_words,
             alignment: &alignment,
             picture,
+            places: None,
+            corrections: &[],
         };
         let doc = learn(&[source(&picture)]);
         assert!(doc.contains("| build_captions max_words | 5 |"), "{doc}");

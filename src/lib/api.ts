@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, ProjectVersion, Said, Snapshot, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, ProjectVersion, Said, Snapshot, StyleAction, StylePair, StyleView, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -87,6 +87,10 @@ export const api = {
   /** A newer released version, or null when this one is the latest. */
   checkForUpdate: () => invoke<string | null>("check_for_update"),
   openReleasePage: () => invoke<void>("open_release_page"),
+  styleView: () => invoke<StyleView>("style_view"),
+  styleAct: (action: StyleAction) => invoke<StyleView>("style_act", { action }),
+  /** Learns from 1 to 3 recordings, each with the video cut from it, as a `style` job. */
+  startStyleLearning: (pairs: StylePair[]) => invoke<string>("start_style_learning", { pairs }),
 };
 
 /** The error as the backend sent it, "CODE: detail" included; code checks use this. */
@@ -126,6 +130,12 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   JOB_FAILED: "The task stopped unexpectedly. Try again.",
   MODEL_INVALID: "The speech model did not download completely. Try again to download it anew.",
   STORE_UNREADABLE: "The saved transcripts could not be read. Transcribe the timeline again.",
+  NO_MATCH: (detail) => `${sentence(detail.replace(/, so it was not cut from it$/, ""))}. Skipped.`,
+  STYLE_CHANGED: "Your style changed in another window meanwhile. Copy your text, open the style again and redo your change.",
+  NOT_SUGGESTED: "That suggestion is gone; the style was learned again meanwhile.",
+  NOTHING_TO_REVERT: "That rule has not changed, so there is nothing to put back.",
+  UNKNOWN_RULE: "That rule is no longer in your style.",
+  TOO_LONG: (detail) => sentence(detail) + ".",
 };
 
 /**

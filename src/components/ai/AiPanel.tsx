@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -18,6 +18,7 @@ import {
   Info,
   Loader2,
   Plug,
+  MessageSquareText,
   RefreshCw,
   Scissors,
   SquarePen,
@@ -38,6 +39,7 @@ import {
   stop,
   useAgent,
   type AgentErrorCode,
+  type AiAbout,
   type AgentId,
   type ChatItem,
   type RunChange,
@@ -443,8 +445,17 @@ const STARTERS: [ReactNode, string][] = [
   [<Captions size={14} />, "Add captions"],
   [<Download size={14} />, "Make a reel and export it"],
 ];
+const STYLE_STARTERS: [ReactNode, string][] = [
+  [<MessageSquareText size={14} />, "What do you cut in my videos, and why?"],
+  [<MessageSquareText size={14} />, "Never cut my sign-off at the end"],
+  [<MessageSquareText size={14} />, "Leave my pauses a bit longer"],
+];
+
+/** What the panel is about; on the Your style page, the creator's style. */
+const About = createContext<AiAbout>("project");
 
 function Empty() {
+  const about = useContext(About);
   const agents = useAgent((s) => s.agents);
   const error = useAgent((s) => s.agentsError);
   const blocked = useEditor((s) => !!s.aiRun);
@@ -470,8 +481,10 @@ function Empty() {
     );
   return (
     <div className="mt-auto flex flex-col gap-0.5">
-      <p className="mb-2 px-2 text-[12px] text-muted">Edits show up live. One Undo takes back a whole run.</p>
-      {STARTERS.map(([icon, text]) => (
+      <p className="mb-2 px-2 text-[12px] text-muted">
+        {about === "style" ? "Tell the AI how you edit. Once you agree, your style changes here at once, with Undo." : "Edits show up live. One Undo takes back a whole run."}
+      </p>
+      {(about === "style" ? STYLE_STARTERS : STARTERS).map(([icon, text]) => (
         <button
           key={text}
           type="button"
@@ -480,9 +493,10 @@ function Empty() {
           onClick={
             blocked
               ? undefined
-              : () => {
+              : (e) => {
                   useAgent.setState({ draft: text });
-                  document.querySelector<HTMLTextAreaElement>("aside[aria-label=AI] textarea")?.focus();
+                  // The field of this panel: the editor's stays mounted behind the home screen.
+                  e.currentTarget.closest("aside")?.querySelector("textarea")?.focus();
                 }
           }
           className="flex h-8 items-center gap-2.5 rounded-md px-2 text-left text-[13px] text-fg hover:bg-white/[.08] aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent [&>svg]:text-muted"
@@ -592,6 +606,7 @@ function Elapsed() {
 }
 
 function Composer() {
+  const about = useContext(About);
   const draft = useAgent((s) => s.draft);
   const status = useAgent((s) => s.status);
   const frame = useAgent((s) => s.frame);
@@ -643,7 +658,7 @@ function Composer() {
     if (!useAgent.getState().draft.trim()) return;
     const reason = sendBlocked();
     if (reason) setWhy(reason);
-    else void send();
+    else void send(undefined, about);
   };
 
   return (
@@ -658,7 +673,15 @@ function Composer() {
         </div>
       )}
       <div onClick={() => field.current?.focus()} className="rounded-xl border border-white/[.08] bg-white/[.055] px-2.5 pb-1.5 pt-2 transition-colors duration-[120ms] has-[textarea:focus]:border-accent">
-        {!working && ((selected > 0 && !dropSelection) || !dropPlayhead) && (
+        {!working && about === "style" && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            <span className="flex h-[22px] items-center gap-1.5 rounded-md bg-white/[.08] px-2 text-[12px] text-fg" title="Messages here are about your style, for all your videos">
+              <Scissors size={12} className="text-muted" />
+              Your style
+            </span>
+          </div>
+        )}
+        {!working && about === "project" && ((selected > 0 && !dropSelection) || !dropPlayhead) && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {selected > 0 && !dropSelection && (
               <Chip icon={<Film size={12} />} label="the selected clips" onRemove={() => useAgent.setState({ dropSelection: true })}>
@@ -678,7 +701,7 @@ function Composer() {
           rows={2}
           value={draft}
           aria-label={`Message to ${name}`}
-          placeholder={working ? `${name} is working…` : hasItems ? "Ask for changes…" : `Ask ${name} to edit…`}
+          placeholder={working ? `${name} is working…` : about === "style" ? "What should change in how you edit?" : hasItems ? "Ask for changes…" : `Ask ${name} to edit…`}
           onChange={(e) => useAgent.setState({ draft: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -689,6 +712,7 @@ function Composer() {
           className="block max-h-40 w-full resize-none bg-transparent text-[13px] leading-[19px] text-fg outline-none placeholder:text-muted"
         />
         <div className="mt-1 flex items-center gap-2">
+          {about === "project" && (
           <IconButton
             label={frame ? "Don't send the frame at the playhead" : "Send the frame at the playhead too"}
             active={frame}
@@ -698,6 +722,7 @@ function Composer() {
           >
             <ImagePlus size={15} />
           </IconButton>
+          )}
           <span className="flex-1" />
           {!working && why && (
             <span className="min-w-0 truncate text-[12px] text-fg/85" role="status">
@@ -741,7 +766,20 @@ function Composer() {
 }
 
 /** The AI chat: header, conversation and the field to write in. AiDock places it. */
-export function AiPanel({ panelRef, className = "", style }: { panelRef: React.RefObject<HTMLElement | null>; className?: string; style?: React.CSSProperties }) {
+/** `about: "style"` is the panel beside the Your style page: it stays there, and messages are about the style. */
+export function AiPanel({
+  panelRef,
+  className = "",
+  style,
+  about = "project",
+  onClose,
+}: {
+  panelRef: React.RefObject<HTMLElement | null>;
+  className?: string;
+  style?: React.CSSProperties;
+  about?: AiAbout;
+  onClose?: () => void;
+}) {
   const busy = useAgent((s) => s.status !== "idle");
   const empty = useAgent((s) => s.items.length === 0);
   const { mode } = useDockLayout();
@@ -750,6 +788,7 @@ export function AiPanel({ panelRef, className = "", style }: { panelRef: React.R
   }, []);
   const move = (e: React.PointerEvent) => panelRef.current && startMove(e, panelRef.current);
   return (
+    <About value={about}>
     <aside
       ref={panelRef as React.RefObject<HTMLElement>}
       aria-label="AI"
@@ -759,12 +798,12 @@ export function AiPanel({ panelRef, className = "", style }: { panelRef: React.R
     >
       <header
         // The header's empty space moves the panel too; its buttons keep their clicks.
-        onPointerDown={(e) => e.target === e.currentTarget && move(e)}
+        onPointerDown={(e) => about === "project" && e.target === e.currentTarget && move(e)}
         className="flex h-12 shrink-0 items-center gap-1 border-b border-white/[.07] pl-1.5 pr-2"
       >
-        <PlaceMenu panel={panelRef} />
+        {about === "project" && <PlaceMenu panel={panelRef} />}
         <AgentMenu />
-        <span className="flex-1 self-stretch" onPointerDown={move} />
+        <span className="flex-1 self-stretch" onPointerDown={about === "project" ? move : undefined} />
         <IconButton
           label={busy ? "New chat: wait for the answer, or stop it" : empty ? "New chat: there is nothing to clear yet" : "New chat"}
           disabled={busy || empty}
@@ -773,12 +812,13 @@ export function AiPanel({ panelRef, className = "", style }: { panelRef: React.R
         >
           <SquarePen size={15} />
         </IconButton>
-        <IconButton label="Close AI (Ctrl+J)" onClick={() => useDock.setState({ open: false })} className="h-7 w-7">
+        <IconButton label={about === "style" ? "Close AI" : "Close AI (Ctrl+J)"} onClick={onClose ?? (() => useDock.setState({ open: false }))} className="h-7 w-7">
           <X size={16} />
         </IconButton>
       </header>
       <Conversation />
       <Composer />
     </aside>
+    </About>
   );
 }

@@ -68,6 +68,9 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("export_thumbnail", Never, false, false, true),
     // Only shows choices to the user; the project is not touched.
     rules("suggest_options", Always, false, true, false),
+    // The creator's style, not the project: every change is a version they can restore.
+    rules("get_style", Always, false, true, false),
+    rules("change_style", Never, false, false, false),
 ];
 
 pub(crate) fn find(name: &str) -> Option<&'static Rules> {
@@ -109,7 +112,8 @@ mod tests {
                 "segment_subject",
                 "inspect_thumbnail",
                 "suggest_options",
-                "list_history"
+                "list_history",
+                "get_style"
             ])
         );
         assert_eq!(
@@ -138,7 +142,8 @@ mod tests {
                 "apply_motion",
                 "suggest_options",
                 "list_history",
-                "undo_to"
+                "undo_to",
+                "get_style"
             ])
         );
         assert_eq!(

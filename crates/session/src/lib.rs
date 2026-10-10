@@ -200,6 +200,10 @@ impl ProjectSession {
         Ok(inner.stamp())
     }
 
+    pub fn path(&self) -> PathBuf {
+        self.inner.lock().unwrap().path.clone()
+    }
+
     /// IPC listeners may remove stale endpoints only while this session owns the project lock.
     pub fn locked_path(&self) -> Result<PathBuf> {
         let inner = self.inner.lock().unwrap();

@@ -8,6 +8,7 @@ mod media;
 pub mod model_download;
 mod params;
 mod rules;
+pub mod style;
 mod tools;
 pub mod transcript;
 pub mod zooms;
@@ -22,7 +23,7 @@ use serde_json::Value;
 use bridge::Target;
 
 const GUIDE: &str = include_str!("../../../skills/nuzky-edit/SKILL.md");
-const STYLE_FIRST: &str = "This creator has their own editing style, nuzky://style, measured from their recordings and finished cuts. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
+const STYLE_FIRST: &str = "This creator has their own editing style, nuzky://style: rules learned from their finished cuts and their own instructions. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
 /// The whole way from raw takes to a reel, as the guide describes it, so one prompt starts it.
 const ROUGH_CUT: &str = "Make a rough cut of this whole project for Instagram Reels and TikTok, then export it, following the guide below.\n\n1. get_state. Transcribe whatever is untranscribed and poll job until done.\n2. get_transcript, read every sentence, then analyze(kind: \"retakes\"). Keep the last complete attempt of each restarted sentence and drop the fillers that start sentences; check every group against the text and decide each review pair yourself. Add other slips and false starts you find.\n3. Plan with edit_transcript dry_run, then in one run: edit_transcript with the deletions (long pauses shorten by default), build_captions with the Reel style, inspect_frames with safe_area around cuts and captions, end_run keep.\n4. export_video with preset \"reels\" to a new .mp4 in the user's Videos folder (an absolute path), named after the project, poll until done and report the path, the duration and anything you were unsure about.";
 
@@ -30,7 +31,7 @@ const ROUGH_CUT: &str = "Make a rough cut of this whole project for Instagram Re
 const THUMBNAIL: &str = "Make a 9:16 cover for Reels and TikTok (cover_9x16, 1080x1920) and a YouTube thumbnail (youtube_16x9, 1280x720) for this video, then export both, following the guide below.\n\n1. get_state. analyze(kind: \"thumbnail_frames\") and poll the job; its parts score the framing for both formats. inspect_frames(times_us) the top 4-6 candidates on one contact sheet and choose a frame for each format, the same or two: eyes open, facing the camera, an expression that fits the hook, and for 16:9 room beside the person.\n2. The hook: get_transcript (transcribe first if needed) and write 2 to 5 words in the video's language that make someone want to watch: its main promise or surprise, from what is actually said, never invented. Uppercase reads best on a thumbnail.\n3. segment_subject(time_us) of each chosen frame and poll it: subject_box [x,y,w,h] in canvas pixels says where the person and their head are.\n4. In one run (begin_run), apply_edits with both setThumbnail edits in one batch. Text styles come from the presets below; when the creator's style at the end of the guide names fonts or colours, use those instead. Sizes are thumbnail pixels for the cover; on youtube_16x9 use about two thirds. Text transform x and y are fractions of the thumbnail from its centre, like clips.\n   - cover_9x16: frame {x:0,y:0,scale:1,rotation:0,opacity:1} on a 9:16 video. The hook in Behind head, behind: true, with its middle a little above the top of the head (subject_box y), so the head covers the lower part of the letters; or Yellow box or Outline in front, inside the Reels safe area.\n   - youtube_16x9 from a vertical video: background {picture: true, blur: 1, dim: 0.2, color: \"#000000\"} or a solid colour (picture: false), the frame at scale 1.2-1.6 with the person on the left or right third: frame x = (1/3 or 2/3) - 0.5 - (person centre x / canvas width - 0.5) * frame width / 1280, where the frame is canvas width * min(1280 / canvas width, 720 / canvas height) * scale thumbnail pixels wide; y moves the face up when the person is small. outline {color: \"#ffffff\", width: 10}. The hook big over the other two thirds, Outline or Yellow box, wrapped onto two lines with style.maxWidth. On a 16:9 video use the frame as it is.\n5. inspect_thumbnail(format, safe_zones: true) for both. Keep faces and the hook out of the tints (Reels interface, the 3:4 profile grid, YouTube's duration badge), the hook readable at a glance, nothing important cut by an edge, text behind the person with hidden about 0.05-0.3. MASK_NOT_READY names a job: poll it, then inspect again. Fix it with another setThumbnail in the same run until both look right.\n6. end_run keep. export_thumbnail cover_9x16 to a new .png and youtube_16x9 to a new .jpg in the user's Pictures folder (absolute paths), named after the project; poll both until done and report the paths, the hook and anything you were unsure about.\n\nThumbnail text presets (assets/presets/thumbnails.json):\n";
 const THUMBNAIL_PRESETS: &str = include_str!("../../../assets/presets/thumbnails.json");
 
-const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at nuzky://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults.\n\n";
+const STYLE_NOTE: &str = "\n\n# This creator's style\n\nThe creator's EDIT.md follows, also at nuzky://style. Where it gives a rule or a number, follow it instead of the defaults above: what to cut, pause length, caption limits, framing and zoom, including zoom the user did not ask for. Anything it does not cover keeps the defaults. Under \"Your rules\" the creator wrote their own instructions; they win over everything else.\n\n";
 
 /// The creator's EDIT.md, read anew each time so edits to it apply to the next request.
 fn style() -> Option<String> {
@@ -162,6 +163,14 @@ fn catalog() -> Result<Vec<Tool>> {
             "export_thumbnail",
             "Write the thumbnail of format at its full size to a NEW .png, .jpg or .jpeg file as a job (phases rendering, and while the mask of the person is made waiting_for_other_mask, loading_model, segmenting); poll job until done. JPEG keeps the best quality under 2 MB, YouTube's limit, so use .jpg for youtube_16x9. Relative paths resolve beside the project; OUTPUT_EXISTS when the file is there. Result: path, width, height, bytes and texts with hidden as inspect_thumbnail. Requires --allow-write.",
         )?,
+        tool::<params::GetStyle>(
+            "get_style",
+            "Read the creator's editing style as the app's Your style page shows it: text is EDIT.md exactly as every agent gets it (also nuzky://style), own the creator's own rules in their words, rules the learned rules in it with a one-line summary (by_you when they changed one by hand, so learning leaves it alone), suggestions what learning found that is not in it yet (update when it would change a rule: changes from and to, confidence by videos and moments, the first moments, the text it would add), not_learned the rules learning leaves alone and why, sources the videos learned from, versions the newest changes, and version, which setText needs. The style is about all of the creator's videos, not the open project. Read-only.",
+        )?,
+        tool::<params::ChangeStyle>(
+            "change_style",
+            "Change the creator's editing style, which every agent follows in all their videos, once the creator agreed to that exact change. action.type: setOwn {text} keeps an instruction in the creator's own words as their rule, the way to keep anything they tell you about how to edit; with index it changes their rule there, and empty text removes it. accept {titles} or reject {title} a suggestion from get_style; remove {title} or revert {title} a learned rule; learnAgain {title} lets learning suggest it again; setText {text, baseVersion} replaces the whole EDIT.md, so keep everything you do not mean to change (STYLE_CHANGED when the style changed since get_style; read it again); restore {index} brings back a version. The app shows each change at once as a version starting with AI: that the creator can undo; going back to the default style is theirs to do in the app. Needs --allow-write; no run, and no project changes. Returns the style as get_style does.",
+        )?,
         tool::<params::SuggestOptions>(
             "suggest_options",
             "Only when you run as Nuzky's AI panel (your instructions say so): offer the user 2-6 choices when a decision is theirs to make, e.g. which take to keep, cut tight or loose, which caption style. They show as buttons under your message, and the label picked arrives as the user's next message. Labels are short and distinct, at most 80 characters, in the user's language; detail is one optional line on what each choice does. Call it as the last thing in your turn, end the turn right after, and do not repeat the options in text. Anywhere else, such as a terminal, nobody sees the buttons: ask in plain text instead. Never offer choices for something you can decide from the guide or the user's style.",
@@ -226,7 +235,7 @@ impl ServerHandler for Server {
             "nuzky://guide" => guide(),
             "nuzky://schema" => schema_for!(nuzky_engine::Project).to_value().to_string(),
             "nuzky://style" => style().ok_or_else(|| {
-                ErrorData::invalid_params("No EDIT.md yet: nuzky style learn writes one from finished cuts", None)
+                ErrorData::invalid_params("No EDIT.md yet: Nuzky writes one as it learns from the creator's videos (Your style in the app, or nuzky style learn)", None)
             })?,
             _ => return Err(ErrorData::invalid_params("Unknown Nuzky resource", None)),
         };

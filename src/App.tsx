@@ -28,6 +28,8 @@ import { Launcher } from "./components/home/Launcher";
 import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
+import { listenStyle, loadStyle, useStyle } from "./lib/style";
+import { LearnDialog } from "./components/style/LearnDialog";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
 
@@ -86,7 +88,8 @@ function useShortcuts() {
         useEditor.setState({ launcherOpen: true });
         return;
       }
-      if (isTyping(target) || s.exportOpen) return;
+      // The editor's keys stay with an open dialog of its own.
+      if (isTyping(target) || s.exportOpen || useStyle.getState().learnOpen) return;
       const fps = s.snap?.project.canvas.fps ?? 30;
       const key = e.key.toLowerCase();
       // A focused slider keeps its own arrow, Home and End keys.
@@ -176,6 +179,8 @@ function useBackendEvents() {
       }),
     );
     offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
+    const offStyle = listenStyle();
+    void loadStyle();
     offs.push(listen("transcripts-changed", () => useSpeech.setState((s) => ({ stored: s.stored + 1 }))));
     offs.push(listen<string>("audio-ready", (e) => useEditor.getState().reloadWaveform(e.payload)));
     offs.push(listen<Snapshot>("project-changed", (e) => useEditor.getState().setSnap(e.payload, true)));
@@ -253,6 +258,7 @@ function useBackendEvents() {
     );
     return () => {
       unwatch();
+      offStyle();
       offs.forEach((p) => p.then((off) => off()));
     };
   }, []);
@@ -330,7 +336,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
+    __nuzky: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
   });
 
 async function startEditor() {
@@ -423,6 +429,8 @@ export default function App() {
   const snap = useEditor((s) => s.snap);
   const view = useEditor((s) => s.view);
   const launcherOpen = useEditor((s) => s.launcherOpen);
+  // Learning from videos opens from Your style, the top bar or a toast, anywhere.
+  const learnOpen = useStyle((s) => s.learnOpen);
   const dock = useDockLayout();
   const win = useWindowSize();
   // A column docked at either edge narrows the editor; in the inspector's place the panel is the inspector's width.
@@ -511,6 +519,7 @@ export default function App() {
       {launcherOpen && !home && <Launcher />}
       <ExportDialog />
       <ConnectAgentDialog />
+      {learnOpen && <LearnDialog />}
       <SwitchDialog />
       {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}
       <Toasts bottom={home ? 18 : panes.timeline + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />

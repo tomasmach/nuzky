@@ -3,6 +3,8 @@ import { AlertCircle, Check, Download, FolderOpen, History, Loader2, Redo2, Spar
 import { useAgent } from "../lib/agent";
 import { api, errorText } from "../lib/api";
 import { togglePanel, useDock } from "../lib/dock";
+import { useStyle } from "../lib/style";
+import { when } from "../lib/time";
 import { AI_EDITING, openExport, projectDuration, restoreVersion, stopAiRun, useAiLocked, useEditor, whenIdle } from "../lib/store";
 import type { ProjectVersion } from "../lib/types";
 import { Button, IconButton, Menu, ProgressBar } from "./ui";
@@ -117,8 +119,14 @@ export function JobIndicator() {
   return (
     <button
       type="button"
-      title={j.kind === "export" ? "Show export progress" : j.kind === "transcript" ? "Show transcript" : "Show captions"}
-      onClick={() => (j.kind === "export" ? useEditor.setState({ exportOpen: true }) : useEditor.setState({ view: "editor", panelTab: j.kind === "transcript" ? "transcript" : "captions" }))}
+      title={j.kind === "export" ? "Show export progress" : j.kind === "transcript" ? "Show transcript" : j.kind === "style" ? "Show learning" : "Show captions"}
+      onClick={() =>
+        j.kind === "export"
+          ? useEditor.setState({ exportOpen: true })
+          : j.kind === "style"
+            ? useStyle.setState({ learnOpen: true })
+            : useEditor.setState({ view: "editor", panelTab: j.kind === "transcript" ? "transcript" : "captions" })
+      }
       className="bar flex h-8 items-center rounded-full px-3 text-[12px] font-medium text-fg transition-colors duration-[120ms] hover:bg-white/[.13]"
     >
       <span className="flex items-center gap-1.5" role="status">
@@ -171,13 +179,6 @@ export function AiRunBar() {
 
 /** Versions listed in the menu, so it fits the smallest window. */
 const VERSIONS_SHOWN = 20;
-
-/** The time of day, with the date when it was not today. */
-function when(ms: number) {
-  const at = new Date(ms);
-  const time = at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
-}
 
 /** The kept versions of the project, newest first; choosing one restores it as one undo step. */
 function VersionsButton() {
