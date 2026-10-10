@@ -644,7 +644,7 @@ fn download(sound: &Sound, path: &Path, cancel: &AtomicBool, mut progress: impl 
 /// What the download thread reports.
 enum Step {
     Progress(f32),
-    Done(Result<(PathBuf, Sound)>),
+    Done(Box<Result<(PathBuf, Sound)>>),
 }
 
 /// The sound as a local file: a built-in one in the library, a downloaded one in `cache_dir` until
@@ -662,12 +662,12 @@ pub fn fetch(
     std::thread::Builder::new().name("sound-download".into()).spawn(move || {
         let steps = tx.clone();
         let result = fetch_here(&id, &cache_dir, &worker_stop, |p| drop(steps.send(Step::Progress(p))));
-        tx.send(Step::Done(result)).ok();
+        tx.send(Step::Done(Box::new(result))).ok();
     })?;
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Step::Progress(p)) => progress(p),
-            Ok(Step::Done(result)) => return result,
+            Ok(Step::Done(result)) => return *result,
             Err(RecvTimeoutError::Timeout) if cancelled() => {
                 stop.store(true, Ordering::Relaxed);
                 bail!("CANCELLED: the download stopped");
