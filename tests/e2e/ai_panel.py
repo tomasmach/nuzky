@@ -183,8 +183,10 @@ def ai_panel(r):
     r.check('after a restart it opens where it was, as wide as it was', wait(lambda: (panel(r) or {}).get('left') == 6 and panel(r)['width'] == 384, 10), panel(r))
     inspector = r.s.run("const b = document.querySelector('aside[aria-label=Inspector]').getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]")
     r.s.run(DRAG, inspector[0], inspector[1], True)
-    r.check("dropped on the inspector it takes the inspector's place, running down beside the timeline",
-            wait(lambda: panel(r)['slot'] == 'inspector' and not panel(r)['inspector'] and panel(r)['width'] == 300 and panel(r)['bottom'] == 6, 3), panel(r))
+    # As wide as the inspector, which with the column gone from the left edge takes 28 % of the window again.
+    r.check("dropped on the inspector it takes the inspector's place and width, running down beside the timeline",
+            wait(lambda: panel(r)['slot'] == 'inspector' and not panel(r)['inspector'] and panel(r)['width'] == round(panel(r)['windowWidth'] * 0.28)
+                 and panel(r)['bottom'] == 6, 3), panel(r))
     r.shot('in-inspector-place')
     r.s.run("document.querySelector('aside[aria-label=AI] button[aria-label=\"Move panel\"]').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}))")
     r.check('the grip also opens the places as a menu', wait(lambda: click(r, 'Floating') is not None, 3))

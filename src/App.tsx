@@ -4,7 +4,6 @@ import { AlertCircle } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, plainError } from "./lib/api";
-import { followPointer } from "./lib/drag";
 import { setLimits } from "./lib/limits";
 import { useSpeech } from "./lib/speech";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
@@ -20,9 +19,10 @@ import { Timeline } from "./components/timeline/Timeline";
 import { Toasts } from "./components/Toasts";
 import { DockDragLayer, DockedAiPanel, FloatingAiPanel } from "./components/ai/AiDock";
 import { listenAgentEvents, panelRunEnded, useAgent } from "./lib/agent";
-import { togglePanel, useDock, useDockLayout } from "./lib/dock";
+import { togglePanel, useDock, useDockLayout, useWindowSize } from "./lib/dock";
+import { PANE_MIN, paneLayout, setPane, usePanes } from "./lib/layout";
 import { TopBar } from "./components/TopBar";
-import { Button, DisabledHint } from "./components/ui";
+import { Button, DisabledHint, Splitter } from "./components/ui";
 import { Home } from "./components/home/Home";
 import { Launcher } from "./components/home/Launcher";
 import { SwitchDialog } from "./components/home/SwitchConfirm";
@@ -321,72 +321,6 @@ function RecoveryDialog() {
   );
 }
 
-const TIMELINE_KEY = "nuzky.timelineHeight";
-const TIMELINE_DEFAULT = 300;
-const TIMELINE_MIN = 160;
-/** Space kept for the top bar, a usable preview and the gaps around the timeline. */
-const ABOVE_MIN = 48 + 300 + 12;
-
-const timelineMax = () => Math.max(TIMELINE_MIN, window.innerHeight - ABOVE_MIN);
-const clampTimeline = (h: number) => Math.round(Math.min(timelineMax(), Math.max(TIMELINE_MIN, h)));
-
-/** Drag handle between the preview row and the timeline; the height is remembered. */
-function useTimelineHeight() {
-  const [height, setHeight] = useState(() => clampTimeline(Number(localStorage.getItem(TIMELINE_KEY)) || TIMELINE_DEFAULT));
-  const [max, setMax] = useState(timelineMax);
-  const set = (h: number) => {
-    const v = clampTimeline(h);
-    setHeight(v);
-    localStorage.setItem(TIMELINE_KEY, String(v));
-  };
-  useEffect(() => {
-    const onResize = () => {
-      setMax(timelineMax());
-      setHeight((h) => clampTimeline(h));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return [height, set, max] as const;
-}
-
-function Divider({ height, max, onChange }: { height: number; max: number; onChange: (h: number) => void }) {
-  const [active, setActive] = useState(false);
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const startY = e.clientY;
-    setActive(true);
-    // A cancelled drag keeps the height reached so far.
-    followPointer({ move: (ev) => onChange(height - (ev.clientY - startY)), up: () => setActive(false), cancel: () => setActive(false) });
-  };
-  return (
-    <div
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="Resize timeline"
-      aria-valuenow={height}
-      aria-valuemin={TIMELINE_MIN}
-      aria-valuemax={max}
-      tabIndex={0}
-      title="Drag to resize the timeline. Double-click to reset."
-      onPointerDown={onPointerDown}
-      onDoubleClick={() => onChange(TIMELINE_DEFAULT)}
-      onKeyDown={(e) => {
-        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-          e.preventDefault();
-          e.stopPropagation();
-          onChange(height + (e.key === "ArrowUp" ? 24 : -24));
-        }
-      }}
-      className="group relative z-30 -my-0.5 h-2.5 shrink-0 cursor-row-resize rounded-full"
-    >
-      {/* The 6 px gap between the panes is the handle; a short grip shows on hover and while dragging. */}
-      <div className={`absolute left-1/2 top-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors duration-[120ms] ${active ? "bg-accent" : "group-hover:bg-white/30"}`} />
-    </div>
-  );
-}
-
 // While the video plays, overlays drop their blur (index.css): a blur over moving pictures is redone every frame.
 useEditor.subscribe((s, prev) => {
   if (s.playing !== prev.playing) document.documentElement.toggleAttribute("data-playing", s.playing);
@@ -488,8 +422,11 @@ export default function App() {
   const snap = useEditor((s) => s.snap);
   const view = useEditor((s) => s.view);
   const launcherOpen = useEditor((s) => s.launcherOpen);
-  const [timelineH, setTimelineH, timelineMaxH] = useTimelineHeight();
   const dock = useDockLayout();
+  const win = useWindowSize();
+  // A column docked at either edge narrows the editor; in the inspector's place the panel is the inspector's width.
+  const column = dock.open && (dock.mode === "left" || dock.mode === "right") ? dock.width + 6 : 0;
+  const panes = paneLayout(usePanes(), win.w - column, win.h);
   useShortcuts();
   useBackendEvents();
   useUiContext();
@@ -506,17 +443,55 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           {dock.open && dock.mode === "left" && <DockedAiPanel side="left" width={dock.width} />}
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1 gap-1.5 px-1.5">
-              <LeftPanel />
+            {/* The 6 px gaps between the panes are their resize handles. */}
+            <div className="flex min-h-0 flex-1 px-1.5">
+              <LeftPanel width={panes.library} />
+              <Splitter
+                what="library"
+                axis="x"
+                grow={1}
+                size={panes.library}
+                min={PANE_MIN.library}
+                max={panes.max.library}
+                onResize={(w) => setPane("library", w)}
+                onReset={() => setPane("library", null)}
+                className="relative -mx-0.5"
+              />
               <Preview />
-              {!(dock.open && dock.mode === "inspector") && <Inspector />}
+              {!(dock.open && dock.mode === "inspector") && (
+                <>
+                  <Splitter
+                    what="inspector"
+                    axis="x"
+                    grow={-1}
+                    size={panes.inspector}
+                    min={PANE_MIN.inspector}
+                    max={panes.max.inspector}
+                    onResize={(w) => setPane("inspector", w)}
+                    onReset={() => setPane("inspector", null)}
+                    className="relative -mx-0.5"
+                  />
+                  <Inspector width={panes.inspector} />
+                </>
+              )}
             </div>
-            <Divider height={timelineH} max={timelineMaxH} onChange={setTimelineH} />
+            <Splitter
+              what="timeline"
+              axis="y"
+              grow={-1}
+              size={panes.timeline}
+              min={PANE_MIN.timeline}
+              max={panes.max.timeline}
+              onResize={(h) => setPane("timeline", h)}
+              onReset={() => setPane("timeline", null)}
+              className="relative -my-0.5"
+            />
             <div className="shrink-0 px-1.5 pb-1.5">
-              <Timeline height={timelineH} />
+              <Timeline height={panes.timeline} />
             </div>
           </div>
-          {dock.open && (dock.mode === "right" || dock.mode === "inspector") && <DockedAiPanel side="right" width={dock.width} inspector={dock.mode === "inspector"} />}
+          {dock.open && dock.mode === "right" && <DockedAiPanel side="right" width={dock.width} />}
+          {dock.open && dock.mode === "inspector" && <DockedAiPanel side="right" width={panes.inspector} inspectorMax={panes.max.inspector} />}
         </div>
         {/* Floating above the editor, it would float above the home screen too; hidden there, it keeps what was typed. */}
         {dock.open && dock.mode === "float" && (
@@ -537,7 +512,7 @@ export default function App() {
       <ConnectAgentDialog />
       <SwitchDialog />
       {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}
-      <Toasts bottom={home ? 18 : timelineH + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
+      <Toasts bottom={home ? 18 : panes.timeline + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
       <DisabledHint />
       {snap.recovery && <RecoveryDialog key={snap.sessionEpoch} />}
     </>

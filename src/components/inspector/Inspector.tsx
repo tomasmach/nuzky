@@ -99,7 +99,7 @@ function CutInspector({ clipId }: { clipId: string }) {
   );
 }
 
-export function Inspector() {
+export function Inspector({ width }: { width: number }) {
   const project = useEditor((s) => s.snap?.project);
   const selection = useEditor((s) => s.selection);
   const cut = useEditor((s) => s.cut);
@@ -131,7 +131,7 @@ export function Inspector() {
   }
 
   return (
-    <aside className="pane flex w-[300px] shrink-0 flex-col overflow-hidden" aria-label="Inspector" data-dock-slot="inspector">
+    <aside className="pane flex shrink-0 flex-col overflow-hidden" style={{ width }} aria-label="Inspector" data-dock-slot="inspector">
       {body}
     </aside>
   );

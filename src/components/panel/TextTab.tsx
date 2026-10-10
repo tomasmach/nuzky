@@ -6,7 +6,7 @@ export function TextTab() {
   const edit = useEditor((s) => s.edit);
   const lock = useLockReason();
   return (
-    <div className="grid grid-cols-2 content-start gap-2 overflow-y-auto p-3.5">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] content-start gap-2 overflow-y-auto p-3.5">
       {TEXT_PRESETS.map((p) => (
         <button
           key={p.name}

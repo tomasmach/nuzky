@@ -22,12 +22,12 @@ const TABS: { id: PanelTab; label: string; icon: typeof Film }[] = [
 
 const TAB_IDS = TABS.map((t) => t.id);
 
-export function LeftPanel() {
+export function LeftPanel({ width }: { width: number }) {
   const tab = useEditor((s) => s.panelTab);
   const setTab = (id: PanelTab) => useEditor.setState({ panelTab: id });
   return (
-    <aside className="pane flex w-[360px] shrink-0 flex-col overflow-hidden">
-      {/* Tabs size to their labels and share the leftover width, so no two labels touch at 360 px, also where
+    <aside className="pane flex shrink-0 flex-col overflow-hidden" style={{ width }}>
+      {/* Tabs size to their labels and share the leftover width, so no two labels touch at 360 px, the narrowest, also where
           WebKitGTK sets Inter a little wider than Chromium. */}
       <div className="seg-track mx-1.5 mt-1.5 flex shrink-0 rounded-[13px] p-0.5" role="tablist" aria-label="Library" onKeyDown={tabListKeys(TAB_IDS, tab, setTab)}>
         {TABS.map((t) => (
