@@ -71,7 +71,6 @@ The most common defect is a change that works only on the path you tried.
 - The exception is a pull request that changes only the website in `site/` and no dependencies (`package.json`, `package-lock.json`): the gate does not check the website, so do not run it. `tsc --noEmit` and `next build` in `site/` and clicking through the affected pages are enough.
 - The pre-push hook (`.githooks/pre-push`, turned on by `git config core.hooksPath .githooks`) scans for secrets and blocks video and audio files. The one exception is the CC0 sound effects built into Nuzky: `assets/sounds/*.ogg` files listed in its `manifest.json`, made by `scripts/build-sounds.py` from sources pinned by SHA-256. Do not bypass it with `--no-verify`. Test media are generated and do not belong in git, because they could be someone's private videos.
 - Release: the same version in `src-tauri/tauri.conf.json`, `Cargo.toml` and `package.json`, then the tag `v<version>`. The tag runs the build and tests on Linux, macOS and Windows and prepares a draft release. Only a person publishes it, after checking it on each system as `docs/BUILDING.md` describes.
-- Check bot comments against the code: fix real findings, reject false ones with a reason.
 - Clean up only after yourself. Several sessions share `tmp-test/`.
 
 ## Taste
