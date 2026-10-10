@@ -7,6 +7,8 @@ import { Waveform } from "./Waveform";
 
 /** Width of the trim handles, and of the zone at each end that trims instead of moving. */
 export const EDGE = 8;
+/** Size of the zone at each top corner of a sound clip that drags its fade instead of trimming. */
+const FADE_HANDLE = 16;
 
 export function clipAsset(project: Project, clip: Clip): Asset | undefined {
   const c = clip.content;
@@ -68,6 +70,7 @@ export const ClipView = memo(function ClipView({
   ghost,
   timing,
   visible,
+  fades,
   onPointerDown,
   onContextMenu,
 }: {
@@ -85,6 +88,8 @@ export const ClipView = memo(function ClipView({
   timing?: { startUs: number; durationUs: number };
   /** Visible lane range in px, so long clips only draw the frames and waveform on screen. */
   visible: [number, number];
+  /** While a fade handle is dragged, the fades it would set. */
+  fades?: { inUs: number; outUs: number };
   onPointerDown?: (e: React.PointerEvent, clip: Clip, track: Track) => void;
   onContextMenu?: (e: React.MouseEvent, clip: Clip) => void;
 }) {
@@ -113,6 +118,10 @@ export const ClipView = memo(function ClipView({
   const speed = c.type === "media" ? c.speed : 1;
   const soundStrip = visual && c.type === "media" && asset.kind === "video" && asset.hasAudio && c.volume > 0;
   const local: [number, number] = [visible[0] - left, visible[1] - left];
+  const fade = sound && c.type === "media" ? (fades ?? { inUs: c.fadeInUs, outUs: c.fadeOutUs }) : null;
+  const fadeIn = fade ? (fade.inUs / US) * zoom : 0;
+  const fadeOut = fade ? (fade.outUs / US) * zoom : 0;
+  const fadeHandles = !!fade && !locked && !ghost && width >= 3 * FADE_HANDLE;
 
   return (
     <div
@@ -138,6 +147,15 @@ export const ClipView = memo(function ClipView({
       {strip && c.type === "media" && <FilmstripTiles strip={strip} sourceInUs={c.sourceInUs} speed={speed} zoom={zoom} width={width} height={innerH} visible={local} />}
       {sound && asset && c.type === "media" && (
         <Waveform assetId={asset.id} sourceInUs={c.sourceInUs} durationUs={durationUs} speed={speed} width={width} visible={local} color="#30d158" />
+      )}
+      {(fadeIn > 0 || fadeOut > 0) && (
+        // The fades as ramps over the waveform: the shaded corner above the line is how much quieter the sound plays there.
+        <svg className="pointer-events-none absolute left-0 top-0" width={width} height={innerH}>
+          {fadeIn > 0 && <path d={`M0 0H${fadeIn}L0 ${innerH}Z`} className="fill-black/45" />}
+          {fadeIn > 0 && <path d={`M0 ${innerH}L${fadeIn} 0`} className="stroke-white/70" />}
+          {fadeOut > 0 && <path d={`M${width} 0H${width - fadeOut}L${width} ${innerH}Z`} className="fill-black/45" />}
+          {fadeOut > 0 && <path d={`M${width - fadeOut} 0L${width} ${innerH}`} className="stroke-white/70" />}
+        </svg>
       )}
       {soundStrip && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5 bg-black/55">
@@ -210,10 +228,30 @@ export const ClipView = memo(function ClipView({
         (["left-0", "right-0"] as const).map((side) => (
           <div
             key={side}
-            className={`absolute inset-y-0 ${side} flex cursor-ew-resize items-center justify-center ${selected ? "bg-accent" : "group-hover:bg-white/25"}`}
-            style={{ width: EDGE }}
+            className={`absolute bottom-0 ${side} flex cursor-ew-resize items-center justify-center ${selected ? "bg-accent" : "group-hover:bg-white/25"}`}
+            // On a sound clip the top corners belong to the fade handles.
+            style={{ width: EDGE, top: fadeHandles ? FADE_HANDLE : 0 }}
           >
             {selected && <span className="h-3.5 w-0.5 rounded-full bg-black/55" />}
+          </div>
+        ))}
+
+      {/* Fade handles: a dot at the end of each fade, in the top corners while there is none; drag along the clip. */}
+      {fadeHandles &&
+        (
+          [
+            ["in", fadeIn, "Drag to fade the sound in"],
+            ["out", width - fadeOut, "Drag to fade the sound out"],
+          ] as const
+        ).map(([end, x, title]) => (
+          <div
+            key={end}
+            data-fade={end}
+            title={title}
+            className={`absolute top-0 flex cursor-ew-resize items-center justify-center ${selected || fades ? "" : "opacity-0 group-hover:opacity-100"}`}
+            style={{ left: Math.max(0, Math.min(width - FADE_HANDLE, x - FADE_HANDLE / 2)), width: FADE_HANDLE, height: FADE_HANDLE }}
+          >
+            <span className="h-2.5 w-2.5 rounded-full border border-black/70 bg-fg" />
           </div>
         ))}
     </div>
