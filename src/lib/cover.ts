@@ -37,8 +37,8 @@ interface CoverState {
   failed: string | null;
   /** The last failure was a cover model that could not be loaded: downloading them again repairs it. */
   damaged: boolean;
-  /** The cover's frame when Pick for me started; a frame chosen meanwhile is kept. */
-  pickFrom: { format: ThumbnailFormat; timeUs: number | null } | null;
+  /** The project and the cover's frame when Pick for me started; a frame chosen meanwhile is kept. */
+  pickFrom: { epoch: string | undefined; format: ThumbnailFormat; timeUs: number | null } | null;
   /** Pick for me kept the frame chosen while it ran, for this format. */
   kept: ThumbnailFormat | null;
   /** Counts finished masks, so the canvas looks for the new mask in the cache. */
@@ -135,6 +135,9 @@ function showFrame(format: ThumbnailFormat) {
 /** The last frame time a cover can have: the frame shown when the playhead rests on the end. */
 const lastFrame = (project: Project) => Math.max(0, projectDuration(project) - Math.ceil(US / project.canvas.fps));
 
+/** The frame a cover at the playhead `timeUs` takes, for the draft shown and the cover made from it alike. */
+export const frameAt = (project: Project, timeUs: number) => Math.round(Math.min(timeUs, lastFrame(project)));
+
 /** Frame changes the playhead asked for that are not confirmed yet; their snapshots must not move it back. */
 let choosing = 0;
 
@@ -228,7 +231,7 @@ export function chooseFrame(format: ThumbnailFormat, timeUs: number, coalesce?: 
   return editCover(
     format,
     (current, project) => {
-      const t = Math.round(Math.min(timeUs, lastFrame(project)));
+      const t = frameAt(project, timeUs);
       return current ? (current.timeUs === t ? null : { ...current, timeUs: t }) : newCover(format, project, t);
     },
     coalesce,
@@ -287,7 +290,7 @@ export async function deleteText(format: ThumbnailFormat, index: number) {
 export async function pick(format: ThumbnailFormat) {
   if (useEditor.getState().aiRun) return;
   const timeUs = thumbnailOf(useEditor.getState().snap?.project, format)?.timeUs ?? null;
-  useCover.setState({ failed: null, kept: null, pickFrom: { format, timeUs } });
+  useCover.setState({ failed: null, kept: null, pickFrom: { epoch: currentEpoch(), format, timeUs } });
   try {
     useCover.setState({ pickJob: await api.startCoverPick(format, currentEpoch()) });
   } catch (e) {
@@ -344,7 +347,8 @@ export function onCoverJob(job: JobEvent) {
   if (job.status !== "done" || !job.output) return;
   const found = JSON.parse(job.output) as CoverPick;
   const epoch = currentEpoch();
-  if (!epoch) return;
+  // Picked in a project that is no longer open: its frames belong there.
+  if (!epoch || s.pickFrom?.epoch !== epoch) return;
   useCover.setState({ picks: { epoch, candidates: found.candidates } });
   const best = found.candidates[0];
   const now = thumbnailOf(useEditor.getState().snap?.project, found.format)?.timeUs ?? null;

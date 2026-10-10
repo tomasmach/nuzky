@@ -95,10 +95,16 @@ pub async fn cover_view(
     .map_err(err)?
 }
 
-/// Frees the cover renderer when the cover editor closes.
+/// Frees the cover renderer when the cover editor closes. Off the UI thread: a cover still rendering holds the
+/// renderer, and dropping it joins its decoders.
 #[tauri::command]
-pub fn cover_close(state: tauri::State<'_, AppState>) {
-    *state.covers.lock().unwrap() = Covers::default();
+pub async fn cover_close(app: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let covers = std::mem::take(&mut *app.state::<AppState>().covers.lock().unwrap());
+        drop(covers);
+    })
+    .await
+    .ok();
 }
 
 impl Covers {
@@ -120,7 +126,9 @@ impl Covers {
             self.renderer = Some(Renderer::new().context("Starting the cover renderer")?);
         }
         let renderer = self.renderer.as_mut().unwrap();
-        let shown = picture(project);
+        // Only what the frame is drawn from: the cover's own texts and settings do not change it.
+        let mut shown = picture(project);
+        shown.thumbnails.clear();
         let fresh = !self.frame.as_ref().is_some_and(|f| f.time_us == thumbnail.time_us && f.picture == shown);
         if fresh {
             self.frame = None;
@@ -147,7 +155,9 @@ impl Covers {
             let whole = vec![255; (frame.image.width * frame.image.height) as usize];
             renderer.render_thumbnail(&draft, &frame.image, Some(&whole), width)?
         } else {
-            renderer.render_thumbnail(thumbnail, &frame.image, frame.mask.as_deref(), width)?
+            // The mask only where the export uses it too, so the two never differ.
+            let mask = if thumbnail.needs_mask() { frame.mask.as_deref() } else { None };
+            renderer.render_thumbnail(thumbnail, &frame.image, mask, width)?
         };
         let view = CoverView {
             width: rendered.width,

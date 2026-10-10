@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, Loader2, MonitorPlay, Smartphone } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
-import { COVER_FORMATS, chooseFrame, closeCover, coverFormat, downloadModels, editCover, editText, mask, newCover, setSafeZones, switchFormat, thumbnailOf, useCover } from "../../lib/cover";
+import { COVER_FORMATS, chooseFrame, frameAt, closeCover, coverFormat, downloadModels, editCover, editText, mask, newCover, setSafeZones, switchFormat, thumbnailOf, useCover } from "../../lib/cover";
 import { projectDuration, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { CoverView, LayerBounds, Snapshot, Thumbnail, ThumbnailFormat, Transform } from "../../lib/types";
@@ -21,7 +21,7 @@ export function useShownCover(format: ThumbnailFormat): { cover: Thumbnail; draf
   if (cover) return { cover, draft: false };
   // Recomputed per render: `models` decides whether a YouTube thumbnail of a vertical video starts blurred.
   void models;
-  return { cover: newCover(format, project, Math.min(timeUs, Math.max(0, projectDuration(project) - 1))), draft: true };
+  return { cover: newCover(format, project, frameAt(project, timeUs)), draft: true };
 }
 
 /** What Reels, the profile grid and YouTube cover of a thumbnail, in its own pixels. */
@@ -252,15 +252,6 @@ function StatusChip({ format, view, draft }: { format: ThumbnailFormat; view: Co
   }, [view, missing, models, job, locked]);
 
   const chip = "absolute left-2 top-2 z-10 flex h-7 max-w-[calc(100%-16px)] items-center gap-1.5 rounded-lg bg-black/70 pl-2 text-[12px] text-fg";
-  if (draft)
-    return (
-      <div className={`${chip} pr-1`}>
-        <span className="truncate">Not made yet</span>
-        <Button pill className="h-5 shrink-0 px-2 text-[11px]" onClick={() => void chooseFrame(format, timeUs)}>
-          Use this frame
-        </Button>
-      </div>
-    );
   if (job)
     return (
       <div className={`${chip} pr-1`} role="status">
@@ -271,6 +262,15 @@ function StatusChip({ format, view, draft }: { format: ThumbnailFormat; view: Co
         </span>
         <Button pill className="h-5 shrink-0 px-2 text-[11px]" onClick={() => void api.cancelJob(job.id)}>
           Stop
+        </Button>
+      </div>
+    );
+  if (draft)
+    return (
+      <div className={`${chip} pr-1`}>
+        <span className="truncate">Not made yet</span>
+        <Button pill className="h-5 shrink-0 px-2 text-[11px]" onClick={() => void chooseFrame(format, timeUs)}>
+          Use this frame
         </Button>
       </div>
     );

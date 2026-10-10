@@ -19,8 +19,17 @@ export function CoverTile() {
     thumbnailOf(s.snap?.project, "cover_9x16") ? "cover_9x16" : thumbnailOf(s.snap?.project, "youtube_16x9") ? "youtube_16x9" : null,
   );
   const revision = useEditor((s) => s.snap?.revision ?? 0);
+  // Every project starts at revision 0, so the session tells two projects apart.
+  const epoch = useEditor((s) => s.snap?.sessionEpoch);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [drawn, setDrawn] = useState(false);
+
+  // Another project's cover goes at once, before this project's arrives.
+  useEffect(() => {
+    const el = canvas.current;
+    el?.getContext("2d")?.clearRect(0, 0, el.width, el.height);
+    setDrawn(false);
+  }, [epoch]);
 
   // Drawn by the engine like the export, a moment after the project settles. While the cover editor shows the
   // other format it waits, so the two do not take turns decoding their frames.
@@ -44,7 +53,7 @@ export function CoverTile() {
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [format, revision, open]);
+  }, [format, revision, open, epoch]);
 
   const label = empty ? "Cover: add a clip to the timeline first" : open ? "Close the cover editor" : format ? "Edit the cover" : "Make a cover";
   return (
