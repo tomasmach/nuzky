@@ -238,8 +238,8 @@ fn thumbnail(thumbnail: &Thumbnail) -> Result<()> {
 /// More reel candidates than a long video has moments, so a project file cannot grow without bound.
 const MAX_REEL_CANDIDATES: usize = 200;
 
-/// Candidates never share words or time. A made one names its project, which the app may open, so that is an
-/// absolute path; texts are single lines the app shows as they are.
+/// Candidates not made yet never share words or time; a made one's words may have moved since. A made one names
+/// its project, which the app may open, so that is an absolute path; texts are single lines the app shows as they are.
 fn reel_candidates(project: &Project) -> Result<()> {
     let candidates = &project.reel_candidates;
     ensure!(
@@ -248,9 +248,7 @@ fn reel_candidates(project: &Project) -> Result<()> {
     );
     unique(candidates.iter().map(|c| c.id.as_str()), "reel candidate")?;
     let line = |text: &str, max: usize| text.chars().count() <= max && !text.chars().any(char::is_control);
-    let mut sorted: Vec<&ReelCandidate> = candidates.iter().collect();
-    sorted.sort_by_key(|c| c.start_us);
-    for (i, c) in sorted.iter().enumerate() {
+    for c in candidates {
         ensure!(line(&c.id, 64), "INVALID_PROJECT: a reel candidate's id is one line of up to 64 characters");
         ensure!(
             !c.title.trim().is_empty() && line(&c.title, MAX_REEL_TITLE_CHARS),
@@ -269,14 +267,6 @@ fn reel_candidates(project: &Project) -> Result<()> {
             c.score.is_finite() && (0.0..=1.0).contains(&c.score),
             "INVALID_PROJECT: a reel's score goes from 0 to 1"
         );
-        if let Some(previous) = i.checked_sub(1).map(|p| sorted[p]) {
-            ensure!(
-                previous.to < c.from && previous.end_us <= c.start_us,
-                "INVALID_PROJECT: reel candidates {} and {} overlap",
-                previous.id,
-                c.id
-            );
-        }
         ensure!(
             (c.status == ReelStatus::Made) == c.project_path.is_some(),
             "INVALID_PROJECT: a made reel names its project, and only a made one"
@@ -290,6 +280,16 @@ fn reel_candidates(project: &Project) -> Result<()> {
         if let Some(cover) = &c.thumbnail {
             thumbnail(cover)?;
         }
+    }
+    let mut open: Vec<&ReelCandidate> = candidates.iter().filter(|c| c.status != ReelStatus::Made).collect();
+    open.sort_by_key(|c| c.start_us);
+    for pair in open.windows(2) {
+        ensure!(
+            pair[0].to < pair[1].from && pair[0].end_us <= pair[1].start_us,
+            "INVALID_PROJECT: reel candidates {} and {} overlap",
+            pair[0].id,
+            pair[1].id
+        );
     }
     Ok(())
 }
@@ -788,9 +788,11 @@ mod tests {
             change(&mut changed.reel_candidates);
             validate(&changed)
         };
+        // A made one may overlap, since cuts may have moved its words.
         with(|c| {
             c[0].status = nuzky_engine::model::ReelStatus::Made;
             c[0].project_path = Some("/videos/talk-reel-1.nuzky".into());
+            c[0].from = 30;
         })
         .unwrap();
         type Break = fn(&mut Vec<ReelCandidate>);

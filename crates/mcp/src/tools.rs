@@ -992,7 +992,7 @@ impl Backend {
         let made: Vec<_> =
             state.project.reel_candidates.iter().filter(|c| c.status == ReelStatus::Made).cloned().collect();
         let max = args.max_duration_us.unwrap_or(reels::DEFAULT_MAX_DURATION_US);
-        let proposed = reels::plan(&state.project, &derived, &args.candidates, &made, max)?;
+        let proposed = reels::plan(&state.project, &derived, &args.candidates, max)?;
         let prepared = requests.entry(key).or_insert(PreparedTranscriptEdit {
             arguments,
             edits: vec![EditCmd::SetReelCandidates { candidates: made.into_iter().chain(proposed.clone()).collect() }],

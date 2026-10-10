@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use nuzky_engine::{
     Project,
-    edit::{EditCmd, MAIN_TRACK, new_id},
+    edit::{EditCmd, MAIN_TRACK, TimeRange, new_id},
     model::{AssetKind, ClipContent, MAX_REEL_HOOK_CHARS, ReelCandidate, ReelStatus},
     speech::TimelineWord,
 };
@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::transcript::{self, Derived};
 
-/// Reels, TikTok and Shorts all take a minute.
 pub const DEFAULT_MAX_DURATION_US: i64 = 60_000_000;
 const WIDTH: u32 = 1080;
 const HEIGHT: u32 = 1920;
@@ -68,20 +67,36 @@ fn ends_sentence(words: &[TimelineWord], i: usize) -> bool {
         || words.get(i + 1).is_none_or(|next| next.start_us - words[i].end_us >= transcript::SENTENCE_GAP_US)
 }
 
-/// The cut that keeps only the words `from` to `to`, exactly as edit_transcript keep does.
+/// The cut that keeps only the words `from` to `to` as edit_transcript keep does. That cut leaves clips without
+/// words alone, so the clips before and after the ones playing the first and the last word go too.
 fn cut(project: &Project, derived: &Derived, from: usize, to: usize) -> Result<transcript::Cut> {
     let ranges =
         transcript::edit_ranges(project, derived, None, Some(&[[from, to]]), Some(transcript::DEFAULT_PAUSE_US))?;
-    transcript::plan_cut(project, derived, ranges)
+    let cut = transcript::plan_cut(project, derived, ranges)?;
+    let clip = |word: Option<&TimelineWord>| {
+        let id = &word?.clip_id;
+        cut.preview.tracks.iter().flat_map(|t| &t.clips).find(|c| &c.id == id)
+    };
+    let (Some(first), Some(last)) = (clip(cut.words.first()), clip(cut.words.last())) else { return Ok(cut) };
+    let edges: Vec<_> = [(0, first.start_us), (last.end_us(), cut.preview.duration_us())]
+        .into_iter()
+        .filter(|(start_us, end_us)| end_us > start_us)
+        .map(|(start_us, end_us)| TimeRange { start_us, end_us })
+        .collect();
+    if edges.is_empty() {
+        return Ok(cut);
+    }
+    let reel = Derived { sources: derived.sources.clone(), words: cut.words.clone(), ..Derived::default() };
+    transcript::plan_cut(&cut.preview, &reel, edges)
 }
 
-/// Candidates for `proposals`, each inside the transcript, from the start of a sentence to the end of one,
-/// apart from the others and from `kept`, and at most `max_duration_us` long once made.
+/// Candidates for `proposals`, each inside the transcript, from the start of a sentence to the end of one, apart
+/// from each other, and at most `max_duration_us` long once made. Made reels do not count: their words may have
+/// moved since.
 pub fn plan(
     project: &Project,
     derived: &Derived,
     proposals: &[ReelProposal],
-    kept: &[ReelCandidate],
     max_duration_us: i64,
 ) -> Result<Vec<ReelCandidate>> {
     ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before proposing reels");
@@ -123,7 +138,7 @@ pub fn plan(
             thumbnail: None,
         });
     }
-    let mut all: Vec<&ReelCandidate> = candidates.iter().chain(kept).collect();
+    let mut all: Vec<&ReelCandidate> = candidates.iter().collect();
     all.sort_by_key(|c| c.from);
     for pair in all.windows(2) {
         ensure!(
@@ -166,6 +181,10 @@ pub fn make(
             "SPEECH_CHANGED: the video changed since reel {id} was proposed; propose it again"
         );
         let mut reel = cut(project, derived, candidate.from, candidate.to)?.preview;
+        ensure!(
+            reel.duration_us() == candidate.duration_us,
+            "SPEECH_CHANGED: the video changed since reel {id} was proposed; propose it again"
+        );
         reel.name = candidate.title.clone();
         reel.reel_candidates.clear();
         reel.thumbnails.clear();
@@ -175,13 +194,15 @@ pub fn make(
     }
     let dir = source.parent().context("INVALID_PROJECT: the project has no directory")?;
     let stem = source.file_stem().context("INVALID_PROJECT: the project has no name")?.to_string_lossy();
+    // A made reel's file may have moved away, but its name still belongs to it.
+    let named: HashSet<&str> = project.reel_candidates.iter().filter_map(|c| c.project_path.as_deref()).collect();
     let mut made = Vec::new();
     let mut n = 1;
     for (candidate, reel) in &planned {
         let path = loop {
             let path = dir.join(format!("{stem}-reel-{n}.nuzky"));
             n += 1;
-            if nuzky_session::vacant(&path) {
+            if nuzky_session::vacant(&path) && !named.contains(&*path.to_string_lossy()) {
                 break path;
             }
         };
@@ -220,8 +241,8 @@ pub fn forget(made: &[MadeReel], source: &Project) -> bool {
     true
 }
 
-/// A 9:16 canvas. Cropping scales every main-track picture, except one that moves by keyframes, until it covers
-/// the frame, keeping its own zoom; a wider picture then loses its sides evenly.
+/// A 9:16 canvas. Cropping scales every main-track picture, keyframes too, until it covers the frame, keeping its
+/// own zoom; a wider picture then loses its sides evenly.
 fn frame(reel: &mut Project, framing: Framing) -> Result<()> {
     let blur = if framing == Framing::Blur { BLUR } else { 0.0 };
     reel.apply(EditCmd::SetCanvas { width: WIDTH, height: HEIGHT, background: None, background_blur: Some(blur) })?;
@@ -230,14 +251,66 @@ fn frame(reel: &mut Project, framing: Framing) -> Result<()> {
     }
     let assets = reel.assets.clone();
     let main = reel.tracks.iter_mut().find(|t| t.id == MAIN_TRACK).context("INVALID_PROJECT: no main track")?;
-    for clip in main.clips.iter_mut().filter(|c| c.keyframes.is_empty()) {
+    for clip in &mut main.clips {
         let ClipContent::Media { asset_id, transform, .. } = &mut clip.content else { continue };
         let Some(asset) = assets.iter().find(|a| &a.id == asset_id && a.kind != AssetKind::Audio) else { continue };
         if asset.width == 0 || asset.height == 0 {
             continue;
         }
         let (x, y) = (WIDTH as f32 / asset.width as f32, HEIGHT as f32 / asset.height as f32);
-        transform.scale *= x.max(y) / x.min(y);
+        let fill = x.max(y) / x.min(y);
+        transform.scale *= fill;
+        for key in &mut clip.keyframes {
+            key.transform.scale *= fill;
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nuzky_engine::model::{Asset, Keyframe, Transform};
+
+    /// B-roll before and after the take stays out of a reel, and cropping scales a moving picture too.
+    #[test]
+    fn a_reel_drops_the_clips_around_its_words_and_crops_keyframes() {
+        let (mut project, mut sources) = transcript::tests::fixture();
+        let broll = Asset {
+            id: "broll".into(),
+            name: "broll".into(),
+            path: std::env::temp_dir().join("broll.mov").to_string_lossy().into(),
+            duration_us: 6_000_000,
+            width: 1920,
+            height: 1080,
+            ..project.assets[0].clone()
+        };
+        project.apply(EditCmd::AddAssets { assets: vec![broll] }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "broll".into(), start_us: Some(0), track_id: None }).unwrap();
+        project.apply(EditCmd::AddClip { asset_id: "broll".into(), start_us: None, track_id: None }).unwrap();
+        sources.insert("broll".into(), vec![]);
+        let derived = Derived::new(&project, sources, vec![]);
+        // word3 to word5 of the take, which plays from 6 s to 16 s between the two pieces of B-roll.
+        let reel = cut(&project, &derived, 3, 5).unwrap().preview;
+        let assets: Vec<_> = reel.tracks[0]
+            .clips
+            .iter()
+            .map(|c| match &c.content {
+                ClipContent::Media { asset_id, .. } => asset_id.as_str(),
+                ClipContent::Text { .. } => "",
+            })
+            .collect();
+        assert!(assets.iter().all(|a| *a == "talk"), "{assets:?}");
+        // The words, 80 ms before and 120 ms after them, and two 600 ms pauses down to 300 ms.
+        assert_eq!(reel.duration_us(), 2_400_000 + 80_000 + 120_000 - 2 * 300_000);
+
+        let mut wide = project.clone();
+        wide.tracks[0].clips[0].keyframes =
+            vec![Keyframe { t_us: 0, transform: Transform::default(), ease: Default::default() }];
+        frame(&mut wide, Framing::Crop).unwrap();
+        let fill = (1920.0 / 1080.0) / (1080.0 / 1920.0);
+        let clip = &wide.tracks[0].clips[0];
+        let ClipContent::Media { transform, .. } = &clip.content else { panic!() };
+        assert!((transform.scale - fill).abs() < 1e-4 && (clip.keyframes[0].transform.scale - fill).abs() < 1e-4);
+    }
 }

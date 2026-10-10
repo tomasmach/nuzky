@@ -17,7 +17,6 @@ pub struct ReelsMade {
     reels: Vec<MadeReel>,
 }
 
-/// Writes the reels' projects beside this one and marks them made in it as one user edit.
 fn make(host: &Host, ids: &[String], framing: Framing) -> Result<Vec<MadeReel>> {
     let state = host.session.state()?;
     let derived = transcript::derive(&state.project, &host.transcripts)?;
@@ -62,8 +61,7 @@ mod tests {
         let state = host.session.state().unwrap();
         let derived = transcript::derive(&state.project, &host.transcripts).unwrap();
         let proposal = ReelProposal { from: 2, to: 4, title: "Middle".into(), why: String::new(), score: 0.5 };
-        let candidates =
-            reels::plan(&state.project, &derived, &[proposal], &[], reels::DEFAULT_MAX_DURATION_US).unwrap();
+        let candidates = reels::plan(&state.project, &derived, &[proposal], reels::DEFAULT_MAX_DURATION_US).unwrap();
         let proposed = EditCmd::SetReelCandidates { candidates: candidates.clone() };
         host.session.edit(vec![proposed], None, Expect::default()).unwrap();
         let ids = vec![candidates[0].id.clone()];
