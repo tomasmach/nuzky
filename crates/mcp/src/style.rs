@@ -1,0 +1,1098 @@
+//! The creator's style on this computer. EDIT.md is the style agents follow; beside it, `style/`
+//! holds what Nuzky learned from each video (`evidence/`) and every version of the style
+//! (`versions.jsonl`, whose last line is the style as it is now). Learning only adds evidence. The
+//! style changes when the creator accepts, rejects, removes, reverts, edits or restores, and every
+//! change is a version. Writers hold `style/lock`; the MCP server only reads EDIT.md, which is
+//! always replaced whole.
+
+use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, bail, ensure};
+use nuzky_analysis::Word;
+use nuzky_analysis::style::doc::{self, Doc, OVERVIEW, RARE};
+use nuzky_analysis::style::{self as learning, Alignment, Choice, Learned, Picture, Rule, Source};
+use nuzky_engine::model::{Asset, AssetKind};
+use nuzky_session::transcripts::{Record, TranscriptStore};
+use serde::{Deserialize, Serialize};
+
+use crate::transcript::{Stage, best_model, models, recognise};
+
+/// Versions kept.
+const MAX_VERSIONS: usize = 100;
+/// Videos learned from; older ones are forgotten as new ones come.
+const MAX_EVIDENCE: usize = 12;
+/// A longer versions file is not ours to read.
+const READ_LIMIT: u64 = 64 << 20;
+/// Less of the cut's speech found in the recording means the cut was not made from it.
+const MIN_MATCH: f32 = 0.6;
+const MAX_OWN_RULE: usize = 500;
+
+/// Why learning leaves a rule alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum Frozen {
+    Rejected,
+    Removed,
+    Reverted,
+    /// The creator changed it by hand.
+    Edited,
+}
+
+/// A learned rule in the style: what it said when the creator accepted it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Accepted {
+    summary: String,
+    choices: Vec<Choice>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct Version {
+    index: u64,
+    at_ms: u64,
+    label: String,
+    /// EDIT.md; none is the default style, without the file.
+    text: Option<String>,
+    #[serde(default)]
+    accepted: BTreeMap<String, Accepted>,
+    /// By rule title, or "header", "overview" and "rare" for the text around the rules.
+    #[serde(default)]
+    frozen: BTreeMap<String, Frozen>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum EvidenceKind {
+    /// A recording and the finished video the creator cut from it.
+    Pair,
+    /// A project the creator exported or cut after the AI.
+    Project,
+}
+
+/// Everything learning needs from one video, so the style can be learned again at any time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Evidence {
+    #[serde(default)]
+    pub seq: u64,
+    /// Learning the same video again replaces its evidence: the pair's files, or the project.
+    pub key: String,
+    pub kind: EvidenceKind,
+    /// What the creator calls it.
+    pub title: String,
+    pub at_ms: u64,
+    /// The share of the cut's speech found in the recording, for pairs.
+    pub matched: Option<f32>,
+    pub recording: String,
+    pub cut: String,
+    pub language: String,
+    pub recording_us: i64,
+    pub words: Vec<Word>,
+    pub cut_words: Vec<Word>,
+    pub alignment: Alignment,
+    pub picture: Picture,
+}
+
+impl Evidence {
+    pub fn source(&self) -> Source<'_> {
+        Source {
+            recording: self.recording.clone(),
+            cut: self.cut.clone(),
+            language: self.language.clone(),
+            recording_us: self.recording_us,
+            words: &self.words,
+            cut_words: &self.cut_words,
+            alignment: &self.alignment,
+            picture: &self.picture,
+        }
+    }
+}
+
+/// The style as the app shows it.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct StyleView {
+    /// The version shown; saving the text checks it is still the newest.
+    pub version: u64,
+    /// EDIT.md, none without a style.
+    pub text: Option<String>,
+    /// The creator's own rules.
+    pub own: Vec<String>,
+    /// Learned rules in the style, in file order.
+    pub rules: Vec<ActiveRule>,
+    pub suggestions: Vec<Suggestion>,
+    pub not_learned: Vec<NotLearned>,
+    /// Newest first.
+    pub sources: Vec<LearnedFrom>,
+    /// Newest first.
+    pub versions: Vec<StyleVersion>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveRule {
+    pub title: String,
+    pub summary: String,
+    /// The creator changed it by hand, so learning leaves it alone.
+    pub by_you: bool,
+    /// How well the videos learned from now back it; none when they no longer show it.
+    pub confidence: Option<Confidence>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestion {
+    pub title: String,
+    pub summary: String,
+    /// The style already has this rule and learning would change it.
+    pub update: bool,
+    pub changes: Vec<Change>,
+    pub confidence: Confidence,
+    pub moments: Vec<StyleMoment>,
+    /// The rule as EDIT.md would hold it.
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Change {
+    pub name: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct Confidence {
+    /// High in 3 or more videos, medium in 2, low in 1.
+    pub level: Level,
+    pub videos: usize,
+    /// Videos learned from in all.
+    pub of: usize,
+    pub moments: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "lowercase")]
+pub enum Level {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct StyleMoment {
+    pub video: String,
+    /// In the recording, or in the finished cut where the rule says so.
+    pub time_us: i64,
+    pub line: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NotLearned {
+    pub title: String,
+    pub reason: Frozen,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct LearnedFrom {
+    pub title: String,
+    pub kind: EvidenceKind,
+    pub at_ms: u64,
+    pub matched: Option<f32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct StyleVersion {
+    pub index: u64,
+    pub label: String,
+    pub at_ms: u64,
+}
+
+/// What the creator does to the style.
+#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StyleAction {
+    /// Puts suggested rules into the style.
+    Accept {
+        titles: Vec<String>,
+    },
+    /// Keeps a suggestion out of the style until the creator asks to learn it again.
+    Reject {
+        title: String,
+    },
+    Remove {
+        title: String,
+    },
+    /// Puts back how the style had the rule before its last change.
+    Revert {
+        title: String,
+    },
+    LearnAgain {
+        title: String,
+    },
+    /// Adds the creator's own rule, or with `index` changes it; empty text removes it.
+    #[serde(rename_all = "camelCase")]
+    SetOwn {
+        index: Option<usize>,
+        text: String,
+    },
+    /// The whole EDIT.md as the creator wrote it, over the version they started from.
+    #[serde(rename_all = "camelCase")]
+    SetText {
+        text: String,
+        base_version: u64,
+    },
+    Restore {
+        index: u64,
+    },
+    /// No style: the guide's defaults, and everything learned is forgotten.
+    Reset,
+}
+
+pub struct Store {
+    dir: PathBuf,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::at(learning::style_path().parent().expect("EDIT.md lives in a folder"))
+    }
+}
+
+impl Store {
+    /// The style in `dir`, which holds EDIT.md.
+    pub fn at(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into() }
+    }
+
+    fn edit_md(&self) -> PathBuf {
+        self.dir.join("EDIT.md")
+    }
+
+    fn own_dir(&self) -> PathBuf {
+        self.dir.join("style")
+    }
+
+    fn evidence_dir(&self) -> PathBuf {
+        self.own_dir().join("evidence")
+    }
+
+    fn versions_path(&self) -> PathBuf {
+        self.own_dir().join("versions.jsonl")
+    }
+
+    /// Holds the style's lock, so one writer changes it at a time, across windows and processes.
+    fn lock(&self) -> Result<File> {
+        fs::create_dir_all(self.own_dir()).with_context(|| format!("Cannot create {}", self.own_dir().display()))?;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.own_dir().join("lock"))
+            .context("Opening the style's lock")?;
+        lock.lock().context("Locking the style")?;
+        Ok(lock)
+    }
+
+    pub fn view(&self) -> Result<StyleView> {
+        let _lock = self.lock()?;
+        let versions = self.synced()?;
+        self.show(&versions)
+    }
+
+    /// Keeps what was learned from one video, replacing what was learned from it before.
+    pub fn add_evidence(&self, mut evidence: Evidence) -> Result<StyleView> {
+        let _lock = self.lock()?;
+        let versions = self.synced()?;
+        let all = self.evidence()?;
+        evidence.seq = all
+            .iter()
+            .find(|e| e.key == evidence.key)
+            .map_or_else(|| all.iter().map(|e| e.seq).max().unwrap_or(0) + 1, |e| e.seq);
+        let dir = self.evidence_dir();
+        fs::create_dir_all(&dir).with_context(|| format!("Cannot create {}", dir.display()))?;
+        write_whole(&dir.join(format!("{:06}.json", evidence.seq)), &serde_json::to_vec(&evidence)?)?;
+        let mut seqs: Vec<u64> = all.iter().map(|e| e.seq).chain([evidence.seq]).collect();
+        seqs.sort_unstable();
+        seqs.dedup();
+        for old in seqs.iter().rev().skip(MAX_EVIDENCE) {
+            fs::remove_file(dir.join(format!("{old:06}.json"))).context("Forgetting an old video")?;
+        }
+        self.show(&versions)
+    }
+
+    /// Writes the style `nuzky style learn` learned, keeping the creator's own rules, as a version.
+    pub fn replace(&self, learned: &Learned) -> Result<()> {
+        let _lock = self.lock()?;
+        let versions = self.synced()?;
+        let current = versions.last().cloned().unwrap_or_default();
+        let mut doc = Doc::parse(&learned.document());
+        let old = Doc::parse(current.text.as_deref().unwrap_or(""));
+        if let Some(own) = old.get(doc::OWN) {
+            doc.set(doc::OWN, own.to_owned());
+        }
+        let accepted = learned.rules.iter().map(|r| (r.title.to_owned(), accept(r))).collect();
+        self.commit(&versions, "Learned with nuzky style learn", Some(doc.text()), accepted, BTreeMap::new())
+    }
+
+    pub fn act(&self, action: StyleAction) -> Result<StyleView> {
+        let _lock = self.lock()?;
+        let mut versions = self.synced()?;
+        let current = versions.last().cloned().unwrap_or_default();
+        let mut doc = Doc::parse(current.text.as_deref().unwrap_or(""));
+        let (mut accepted, mut frozen) = (current.accepted.clone(), current.frozen.clone());
+        let evidence = self.evidence()?;
+        let learned = learned_from(&evidence);
+        let suggested = |title: &str| {
+            learned.as_ref().and_then(|l| l.rules.iter().find(|r| r.title == title)).filter(|r| {
+                !current.frozen.contains_key(r.title)
+                    && current.accepted.get(r.title).is_none_or(|a| !Rule::same(&a.choices, &r.choices))
+            })
+        };
+        let label = match action {
+            StyleAction::Accept { titles } => {
+                ensure!(!titles.is_empty(), "INVALID_ARGUMENTS: name the rules to accept");
+                let learned = learned.as_ref().context("NOT_SUGGESTED: nothing was learned yet")?;
+                for title in &titles {
+                    let rule =
+                        suggested(title).with_context(|| format!("NOT_SUGGESTED: {title} is not a suggestion now"))?;
+                    doc.set(doc::rule_heading(rule.title).expect("learned rules have headings"), rule.text.clone());
+                    doc.rebuild_settings(Some((rule.title, &rule.settings)));
+                    accepted.insert(rule.title.to_owned(), accept(rule));
+                }
+                if !frozen.contains_key("header") && doc.preamble_is_ours() {
+                    doc.set_preamble(format!("{}\n", learned.header));
+                }
+                if !frozen.contains_key("overview") {
+                    doc.set(OVERVIEW, learned.overview.clone());
+                }
+                if !frozen.contains_key("rare") {
+                    match &learned.rare {
+                        Some(rare) => doc.set(RARE, rare.clone()),
+                        None => doc.remove(RARE),
+                    }
+                }
+                match &titles[..] {
+                    [one] => format!("Accepted {one}"),
+                    many => format!("Accepted {} rules", many.len()),
+                }
+            }
+            StyleAction::Reject { title } => {
+                let rule =
+                    suggested(&title).with_context(|| format!("NOT_SUGGESTED: {title} is not a suggestion now"))?;
+                frozen.insert(rule.title.to_owned(), Frozen::Rejected);
+                format!("Rejected {title}")
+            }
+            StyleAction::Remove { title } => {
+                let heading = rule_in(&doc, &title)?;
+                doc.remove(heading);
+                doc.rebuild_settings(None);
+                accepted.remove(&title);
+                frozen.insert(title.clone(), Frozen::Removed);
+                format!("Removed {title}")
+            }
+            StyleAction::Revert { title } => {
+                let heading = doc::rule_heading(&title).with_context(|| format!("UNKNOWN_RULE: {title}"))?;
+                let now = doc.get(heading).map(str::to_owned);
+                // Before the first version there was no style.
+                let default = Version::default();
+                let older = versions
+                    .iter()
+                    .rev()
+                    .skip(1)
+                    .chain([&default])
+                    .find(|v| Doc::parse(v.text.as_deref().unwrap_or("")).get(heading).map(str::to_owned) != now)
+                    .with_context(|| format!("NOTHING_TO_REVERT: {title} has not changed"))?;
+                let then = Doc::parse(older.text.as_deref().unwrap_or(""));
+                match then.get(heading) {
+                    Some(text) => doc.set(heading, text.to_owned()),
+                    None => doc.remove(heading),
+                }
+                let rows: Vec<(String, String)> = then
+                    .settings()
+                    .into_iter()
+                    .filter(|(name, _)| learning::SETTINGS.contains(&(name.as_str(), title.as_str())))
+                    .collect();
+                doc.rebuild_settings(Some((&title, &rows)));
+                match older.accepted.get(&title) {
+                    Some(a) => accepted.insert(title.clone(), a.clone()),
+                    None => accepted.remove(&title),
+                };
+                frozen.insert(title.clone(), Frozen::Reverted);
+                format!("Reverted {title}")
+            }
+            StyleAction::LearnAgain { title } => {
+                ensure!(frozen.remove(&title).is_some(), "UNKNOWN_RULE: learning does not leave {title} alone");
+                format!("Learn {title} again")
+            }
+            StyleAction::SetOwn { index, text } => {
+                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                ensure!(text.chars().count() <= MAX_OWN_RULE, "TOO_LONG: keep a rule under {MAX_OWN_RULE} characters");
+                let count = doc.own().len();
+                ensure!(index.is_none_or(|i| i < count), "UNKNOWN_RULE: that rule of yours is gone");
+                ensure!(index.is_some() || !text.is_empty(), "INVALID_ARGUMENTS: write the rule first");
+                doc.set_own(index, (!text.is_empty()).then_some(text.as_str()));
+                match (index, text.is_empty()) {
+                    (None, _) => "Added your rule",
+                    (Some(_), false) => "Changed your rule",
+                    (Some(_), true) => "Removed your rule",
+                }
+                .to_owned()
+            }
+            StyleAction::SetText { text, base_version } => {
+                ensure!(
+                    base_version == current.index,
+                    "STYLE_CHANGED: your style changed meanwhile. Copy your text, open the style again and redo your change."
+                );
+                let new = Doc::parse(&text);
+                hand_edits(&doc, &new, &mut accepted, &mut frozen);
+                doc = new;
+                "Edited by hand".to_owned()
+            }
+            StyleAction::Restore { index } => {
+                let version = versions
+                    .iter()
+                    .find(|v| v.index == index)
+                    .with_context(|| format!("UNKNOWN_VERSION: version {index} is not kept"))?;
+                doc = Doc::parse(version.text.as_deref().unwrap_or(""));
+                (accepted, frozen) = (version.accepted.clone(), version.frozen.clone());
+                format!("Restored: {}", version.label.strip_prefix("Restored: ").unwrap_or(&version.label))
+            }
+            StyleAction::Reset => {
+                doc = Doc::parse("");
+                (accepted, frozen) = (BTreeMap::new(), BTreeMap::new());
+                match fs::remove_dir_all(self.evidence_dir()) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(e).context("Forgetting what was learned");
+                    }
+                    _ => {}
+                }
+                "Back to default".to_owned()
+            }
+        };
+        tidy(&mut doc, &frozen);
+        let text = (!doc.is_empty()).then(|| doc.text());
+        self.commit(&versions, &label, text, accepted, frozen)?;
+        versions = self.read_versions()?;
+        self.show(&versions)
+    }
+
+    /// The versions, after recording a change made to EDIT.md outside Nuzky.
+    fn synced(&self) -> Result<Vec<Version>> {
+        let versions = self.read_versions()?;
+        let file = match fs::read_to_string(self.edit_md()) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e).context("Reading EDIT.md"),
+        };
+        let current = versions.last().cloned().unwrap_or_default();
+        if file == current.text {
+            return Ok(versions);
+        }
+        // A write that stopped between the version and the file: finish it.
+        if versions.len() >= 2 && file == versions[versions.len() - 2].text {
+            write_style(&self.edit_md(), current.text.as_deref())?;
+            return Ok(versions);
+        }
+        let (mut accepted, mut frozen) = (current.accepted, current.frozen);
+        let label = if versions.is_empty() {
+            "Found EDIT.md"
+        } else {
+            let old = Doc::parse(current.text.as_deref().unwrap_or(""));
+            hand_edits(&old, &Doc::parse(file.as_deref().unwrap_or("")), &mut accepted, &mut frozen);
+            "Changed outside Nuzky"
+        };
+        self.append(&versions, label, file, accepted, frozen)?;
+        self.read_versions()
+    }
+
+    fn commit(
+        &self,
+        versions: &[Version],
+        label: &str,
+        text: Option<String>,
+        accepted: BTreeMap<String, Accepted>,
+        frozen: BTreeMap<String, Frozen>,
+    ) -> Result<()> {
+        // The version is the commit point; a file not written yet is finished on the next change.
+        self.append(versions, label, text.clone(), accepted, frozen)?;
+        write_style(&self.edit_md(), text.as_deref())
+    }
+
+    fn append(
+        &self,
+        versions: &[Version],
+        label: &str,
+        text: Option<String>,
+        accepted: BTreeMap<String, Accepted>,
+        frozen: BTreeMap<String, Frozen>,
+    ) -> Result<()> {
+        let version = Version {
+            index: versions.last().map_or(1, |v| v.index + 1),
+            at_ms: now_ms(),
+            label: label.to_owned(),
+            text,
+            accepted,
+            frozen,
+        };
+        let mut line = serde_json::to_string(&version)?;
+        line.push('\n');
+        let path = self.versions_path();
+        if versions.len() >= 2 * MAX_VERSIONS {
+            let mut all = String::new();
+            for v in &versions[versions.len() + 1 - MAX_VERSIONS..] {
+                all.push_str(&serde_json::to_string(v)?);
+                all.push('\n');
+            }
+            all.push_str(&line);
+            return write_whole(&path, all.as_bytes());
+        }
+        let mut file =
+            OpenOptions::new().create(true).append(true).open(&path).context("Opening the style's versions")?;
+        file.write_all(line.as_bytes()).and_then(|()| file.sync_data()).context("Saving a version of the style")
+    }
+
+    fn read_versions(&self) -> Result<Vec<Version>> {
+        let path = self.versions_path();
+        let text = match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Ok(meta) if !meta.is_file() || meta.len() > READ_LIMIT => {
+                log::error!("Not reading the style's versions in {}", path.display());
+                return Ok(Vec::new());
+            }
+            _ => fs::read_to_string(&path).context("Reading the style's versions")?,
+        };
+        Ok(text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect())
+    }
+
+    /// Evidence in the order it was learned.
+    fn evidence(&self) -> Result<Vec<Evidence>> {
+        let dir = self.evidence_dir();
+        let entries = match fs::read_dir(&dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            entries => entries.with_context(|| format!("Reading {}", dir.display()))?,
+        };
+        let mut all: Vec<Evidence> = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            // A file that cannot be read is left out; the video can be learned again.
+            match fs::read(&path).map_err(anyhow::Error::from).and_then(|b| Ok(serde_json::from_slice(&b)?)) {
+                Ok(evidence) => all.push(evidence),
+                Err(error) => log::error!("Leaving out {}: {error:#}", path.display()),
+            }
+        }
+        all.sort_by_key(|e| e.seq);
+        Ok(all)
+    }
+
+    fn show(&self, versions: &[Version]) -> Result<StyleView> {
+        let current = versions.last().cloned().unwrap_or_default();
+        let doc = Doc::parse(current.text.as_deref().unwrap_or(""));
+        let evidence = self.evidence()?;
+        let learned = learned_from(&evidence);
+        let rules_now = |title: &str| learned.as_ref().and_then(|l| l.rules.iter().find(|r| r.title == title));
+        let confidence = |rule: &Rule| {
+            let mut videos: Vec<usize> = rule.moments.iter().map(|m| m.source).collect();
+            videos.sort_unstable();
+            videos.dedup();
+            Confidence {
+                level: match videos.len() {
+                    3.. => Level::High,
+                    2 => Level::Medium,
+                    _ => Level::Low,
+                },
+                videos: videos.len(),
+                of: evidence.len(),
+                moments: rule.moments.len(),
+            }
+        };
+        let rules = doc
+            .rules()
+            .into_iter()
+            .map(|title| ActiveRule {
+                title: title.to_owned(),
+                summary: current.accepted.get(title).map(|a| a.summary.clone()).unwrap_or_default(),
+                by_you: current.frozen.get(title) == Some(&Frozen::Edited),
+                confidence: rules_now(title).map(confidence),
+            })
+            .collect();
+        let suggestions = learned
+            .iter()
+            .flat_map(|l| &l.rules)
+            .filter(|r| !current.frozen.contains_key(r.title))
+            .filter_map(|rule| {
+                let before = current.accepted.get(rule.title);
+                if before.is_some_and(|a| Rule::same(&a.choices, &rule.choices)) {
+                    return None;
+                }
+                Some(Suggestion {
+                    title: rule.title.to_owned(),
+                    summary: rule.summary.clone(),
+                    update: doc.rules().contains(&rule.title),
+                    changes: changes(before.map_or(&[][..], |a| &a.choices), &rule.choices),
+                    confidence: confidence(rule),
+                    moments: rule
+                        .moments
+                        .iter()
+                        .map(|m| StyleMoment {
+                            video: evidence[m.source].recording.clone(),
+                            time_us: m.time_us,
+                            line: m.line.clone(),
+                        })
+                        .collect(),
+                    text: rule.text.clone(),
+                })
+            })
+            .collect();
+        Ok(StyleView {
+            version: current.index,
+            own: doc.own(),
+            rules,
+            suggestions,
+            not_learned: current
+                .frozen
+                .iter()
+                .filter(|(title, _)| doc::rule_heading(title).is_some())
+                .map(|(title, reason)| NotLearned { title: title.clone(), reason: *reason })
+                .collect(),
+            sources: evidence
+                .iter()
+                .rev()
+                .map(|e| LearnedFrom { title: e.title.clone(), kind: e.kind, at_ms: e.at_ms, matched: e.matched })
+                .collect(),
+            versions: versions
+                .iter()
+                .rev()
+                .map(|v| StyleVersion { index: v.index, label: v.label.clone(), at_ms: v.at_ms })
+                .collect(),
+            text: current.text,
+        })
+    }
+}
+
+fn accept(rule: &Rule) -> Accepted {
+    Accepted { summary: rule.summary.clone(), choices: rule.choices.clone() }
+}
+
+fn learned_from(evidence: &[Evidence]) -> Option<Learned> {
+    let sources: Vec<Source> = evidence.iter().map(Evidence::source).collect();
+    (!sources.is_empty()).then(|| learning::learned(&sources))
+}
+
+fn rule_in(doc: &Doc, title: &str) -> Result<&'static str> {
+    doc::rule_heading(title)
+        .filter(|h| doc.get(h).is_some())
+        .with_context(|| format!("UNKNOWN_RULE: your style has no rule {title}"))
+}
+
+/// Learning leaves alone what the creator changed by hand, and forgets rules they deleted.
+fn hand_edits(old: &Doc, new: &Doc, accepted: &mut BTreeMap<String, Accepted>, frozen: &mut BTreeMap<String, Frozen>) {
+    for name in doc::edited(old, new) {
+        let gone = doc::rule_heading(&name).is_some_and(|h| new.get(h).is_none());
+        if gone {
+            accepted.remove(&name);
+        }
+        frozen.insert(name, if gone { Frozen::Removed } else { Frozen::Edited });
+    }
+}
+
+/// Without learned rules the text around them goes too, so a style of the creator's own rules
+/// reads as only that.
+fn tidy(doc: &mut Doc, frozen: &BTreeMap<String, Frozen>) {
+    if !doc.rules().is_empty() {
+        return;
+    }
+    if !frozen.contains_key("overview") {
+        doc.remove(OVERVIEW);
+    }
+    if !frozen.contains_key("rare") {
+        doc.remove(RARE);
+    }
+    if !frozen.contains_key("header") && doc.preamble_is_ours() {
+        doc.set_preamble(if doc.blocks.len() > 1 { doc::PREAMBLE.to_owned() } else { String::new() });
+    }
+}
+
+fn changes(before: &[Choice], after: &[Choice]) -> Vec<Change> {
+    let mut out: Vec<Change> = after
+        .iter()
+        .filter_map(|new| {
+            let old = before.iter().find(|c| c.name == new.name);
+            (!old.is_some_and(|old| old.same(new))).then(|| Change {
+                name: new.name.clone(),
+                from: old.map(|c| c.value.clone()),
+                to: Some(new.value.clone()),
+            })
+        })
+        .collect();
+    out.extend(before.iter().filter(|old| !after.iter().any(|c| c.name == old.name)).map(|old| Change {
+        name: old.name.clone(),
+        from: Some(old.value.clone()),
+        to: None,
+    }));
+    out
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Writes beside the target first, so a reader never sees half a file.
+fn write_whole(path: &Path, bytes: &[u8]) -> Result<()> {
+    let name = path.file_name().context("A style file needs a name")?.to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.{}.part", std::process::id()));
+    fs::write(&tmp, bytes)
+        .and_then(|()| fs::rename(&tmp, path))
+        .inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+        .with_context(|| format!("Cannot write {}", path.display()))
+}
+
+fn write_style(path: &Path, text: Option<&str>) -> Result<()> {
+    match text {
+        Some(text) => write_whole(path, text.as_bytes()),
+        None => match fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).context("Removing EDIT.md"),
+            _ => Ok(()),
+        },
+    }
+}
+
+/// A video file with its words, recognised now if none are stored.
+pub struct Video {
+    pub asset: Asset,
+    pub record: Record,
+}
+
+/// Reads a video and its words the way `nuzky style` always has: stored words when they are in
+/// `language` (any for "auto"), else recognised with the best installed model.
+pub fn video(
+    path: &Path,
+    language: &str,
+    store: &TranscriptStore,
+    cache: &Path,
+    cancel: &AtomicBool,
+    stage: impl FnMut(Stage),
+) -> Result<Video> {
+    let asset = nuzky_engine::media::probe(path, stable_id(path)?)
+        .with_context(|| format!("Cannot read {}", path.display()))?;
+    ensure!(nuzky_engine::audio::has_audio(&asset), "{} has no sound", path.display());
+    // Nuzky hears speech in videos only; a sound file on the timeline is music.
+    ensure!(
+        asset.kind == AssetKind::Video,
+        "{} has no picture: style learns from and scores video recordings",
+        path.display()
+    );
+    // A language asked for explicitly corrects a recognition stored in another one.
+    if let Some(record) = store.get(&asset)?
+        && (language == "auto" || record.language == language)
+    {
+        return Ok(Video { asset, record });
+    }
+    let model = best_model();
+    let record = recognise(store, &asset, cache, model, &models(model)?, language, cancel, stage)?;
+    Ok(Video { asset, record })
+}
+
+/// The same file gets the same id, so its sound is extracted once into the shared cache.
+fn stable_id(path: &Path) -> Result<String> {
+    use std::hash::{Hash, Hasher};
+    let path = fs::canonicalize(path).with_context(|| format!("Cannot find {}", path.display()))?;
+    let metadata = path.metadata()?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    (&path, metadata.len(), metadata.modified()?).hash(&mut hash);
+    Ok(format!("style-{:016x}", hash.finish()))
+}
+
+/// Where the cut came from in the recording, refused when too little of it is there.
+pub fn aligned(recording: &Video, cut: &Asset, cache: &Path, cancelled: &dyn Fn() -> bool) -> Result<Alignment> {
+    let alignment = learning::align(&recording.asset, cut, cache, cancelled)?;
+    ensure!(
+        alignment.matched >= MIN_MATCH,
+        "NO_MATCH: {} does not look cut from {}: only {:.0}% of its speech was found in the recording",
+        cut.path,
+        recording.asset.path,
+        alignment.matched * 100.0
+    );
+    Ok(alignment)
+}
+
+/// What a recording and the finished video cut from it teach.
+pub fn compare(
+    recording: &Video,
+    cut: &Video,
+    store: &TranscriptStore,
+    cache: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Evidence> {
+    let alignment = aligned(recording, &cut.asset, cache, cancelled)?;
+    let picture = learning::picture(&recording.asset, &cut.asset, &alignment, cancelled)?;
+    if cancelled() {
+        bail!("CANCELLED: learning was stopped");
+    }
+    Ok(Evidence {
+        seq: 0,
+        key: format!("pair:{}:{}", store.fingerprint(&recording.asset)?, store.fingerprint(&cut.asset)?),
+        kind: EvidenceKind::Pair,
+        title: format!("{} and {}", recording.asset.name, cut.asset.name),
+        at_ms: now_ms(),
+        matched: Some(alignment.matched),
+        recording: recording.asset.name.clone(),
+        cut: cut.asset.name.clone(),
+        language: recording.record.language.clone(),
+        recording_us: recording.asset.duration_us,
+        words: recording.record.words.clone(),
+        cut_words: cut.record.words.clone(),
+        alignment,
+        picture,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use nuzky_analysis::Range;
+    use nuzky_analysis::style::{Caption, Piece};
+
+    use super::*;
+
+    /// A recording of retakes, fillers and a side remark, cut the way a creator would, with
+    /// pauses of `pause_us` left between the kept sentences.
+    fn evidence(key: &str, pause_us: i64) -> Evidence {
+        let sentences = [
+            ("So today I want to", false),
+            ("So today I want to show you my edit.", true),
+            ("First I record it all", false),
+            ("First I record it all in one take.", true),
+            ("Um", false),
+            ("Then I remove the", false),
+            ("Then I remove the slips and pauses.", true),
+            ("This is a side remark nobody needs.", false),
+            ("Captions go on top.", true),
+            ("That is all for today.", true),
+        ];
+        let (mut words, mut cut_words, mut pieces) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut t, mut c) = (500_000i64, 0i64);
+        for (text, kept) in sentences {
+            let first = words.len();
+            for w in text.split(' ') {
+                words.push(Word { start_us: t, end_us: t + 300_000, text: w.into(), probability: 1.0 });
+                t += 350_000;
+            }
+            let (start, end) = (words[first].start_us - 50_000, words.last().unwrap().end_us + 50_000);
+            if kept {
+                let offset = start - c;
+                cut_words.extend(words[first..].iter().map(|w| Word {
+                    start_us: w.start_us - offset,
+                    end_us: w.end_us - offset,
+                    ..w.clone()
+                }));
+                pieces.push(Piece { start_us: c, end_us: c + end - start, offset_us: offset });
+                c += end - start;
+            }
+            t += 800_000;
+        }
+        let alignment = Alignment {
+            cut_pauses: pieces
+                .windows(2)
+                .map(|p| Range { start_us: p[1].start_us - pause_us / 2, end_us: p[1].start_us + pause_us / 2 })
+                .collect(),
+            recording_pauses: vec![Range { start_us: 0, end_us: 500_000 }],
+            matched: 1.0,
+            cut_duration_us: c,
+            pieces,
+        };
+        let captions =
+            (0..c / 500_000).map(|i| Caption { start_us: i * 500_000, end_us: (i + 1) * 500_000, words: 2 }).collect();
+        Evidence {
+            seq: 0,
+            key: key.into(),
+            kind: EvidenceKind::Pair,
+            title: format!("{key}.mov and reel.mp4"),
+            at_ms: 1,
+            matched: Some(1.0),
+            recording: format!("{key}.mov"),
+            cut: "reel.mp4".into(),
+            language: "en".into(),
+            recording_us: t,
+            words,
+            cut_words,
+            alignment,
+            picture: Picture {
+                skipped: None,
+                captions,
+                caption_band: Some((0.6, 0.66)),
+                framing: Vec::new(),
+                zooms: Vec::new(),
+            },
+        }
+    }
+
+    fn store() -> (Store, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("nuzky-style-{}", nuzky_engine::edit::new_id()));
+        (Store::at(&dir), dir)
+    }
+
+    fn file(dir: &Path) -> Option<String> {
+        fs::read_to_string(dir.join("EDIT.md")).ok()
+    }
+
+    fn titles(view: &StyleView) -> Vec<String> {
+        view.suggestions.iter().map(|s| s.title.clone()).collect()
+    }
+
+    #[test]
+    fn learning_suggests_and_accepting_all_writes_what_the_cli_writes() {
+        let (store, dir) = store();
+        let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
+        assert_eq!(file(&dir), None, "learning alone never writes the style");
+        assert!(view.suggestions.len() >= 4 && view.versions.is_empty(), "{:?}", titles(&view));
+        assert!(view.suggestions.iter().all(|s| !s.update && s.confidence.level == Level::Low && s.confidence.of == 1));
+        let restart = view.suggestions.iter().find(|s| s.title == "Restarted sentences").unwrap();
+        assert!(restart.moments.len() == 3 && restart.moments[0].video == "talk.mov", "{:?}", restart.moments);
+
+        let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let cli = learning::learn(&[evidence("talk", 120_000).source()]);
+        assert_eq!(file(&dir).unwrap(), cli, "accepting every suggestion gives the CLI's EDIT.md byte for byte");
+        assert!(view.suggestions.is_empty() && view.versions[0].label.starts_with("Accepted "), "{:?}", view.versions);
+
+        // The same video learned again with a few more milliseconds of pause is no news; a much
+        // longer pause is, and only for Pauses.
+        let view = store.add_evidence(evidence("talk", 130_000)).unwrap();
+        assert!(view.suggestions.is_empty(), "{:?}", titles(&view));
+        assert_eq!(view.sources.len(), 1, "learning a video again replaces it");
+        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        assert_eq!(titles(&view), ["Pauses"]);
+        let pauses = &view.suggestions[0];
+        assert!(
+            pauses.update
+                && pauses.changes[0].from.as_deref() == Some("120 ms")
+                && pauses.changes[0].to.as_deref() == Some("400 ms"),
+            "{:?}",
+            pauses.changes
+        );
+        assert_eq!(file(&dir).unwrap(), cli, "a suggestion changes nothing until accepted");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejected_and_removed_rules_stay_out_until_learned_again() {
+        let (store, dir) = store();
+        store.add_evidence(evidence("talk", 120_000)).unwrap();
+        let view = store.act(StyleAction::Reject { title: "Pauses".into() }).unwrap();
+        assert!(!titles(&view).contains(&"Pauses".to_owned()));
+        assert_eq!(file(&dir), None, "rejecting writes no style");
+        let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        assert!(!file(&dir).unwrap().contains("## Pauses") && view.suggestions.is_empty());
+        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        assert!(view.suggestions.is_empty(), "a rejected rule is not suggested again: {:?}", titles(&view));
+
+        let view = store.act(StyleAction::Remove { title: "Captions".into() }).unwrap();
+        let text = file(&dir).unwrap();
+        assert!(!text.contains("## Captions") && !text.contains("build_captions"), "{text}");
+        assert!(view.not_learned.iter().any(|n| n.title == "Captions" && n.reason == Frozen::Removed));
+        let view = store.act(StyleAction::LearnAgain { title: "Pauses".into() }).unwrap();
+        assert_eq!(titles(&view), ["Pauses"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn own_rules_and_hand_edits_outlive_learning() {
+        let (store, dir) = store();
+        store.act(StyleAction::SetOwn { index: None, text: "Never cut  the product name.".into() }).unwrap();
+        assert!(file(&dir).unwrap().contains("## Your rules\n\nThe creator's own instructions."), "{:?}", file(&dir));
+        let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
+        let view = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        assert_eq!(view.own, ["Never cut the product name."]);
+        let text = file(&dir).unwrap();
+        assert!(text.find("## Your rules").unwrap() < text.find("## Settings").unwrap(), "{text}");
+
+        // The creator sets a pause by hand: learning leaves that rule alone from then on.
+        let edited = text.replace(
+            "| edit_transcript shorten_pauses_us | 120000 |",
+            "| edit_transcript shorten_pauses_us | 250000 |",
+        );
+        assert_ne!(edited, text);
+        let stale = store.act(StyleAction::SetText { text: edited.clone(), base_version: view.version - 1 });
+        assert!(stale.unwrap_err().to_string().starts_with("STYLE_CHANGED"));
+        let view = store.act(StyleAction::SetText { text: edited.clone(), base_version: view.version }).unwrap();
+        assert!(view.rules.iter().any(|r| r.title == "Pauses" && r.by_you));
+        let view = store.add_evidence(evidence("talk", 400_000)).unwrap();
+        assert!(view.suggestions.is_empty(), "{:?}", titles(&view));
+        assert_eq!(file(&dir).unwrap(), edited);
+
+        // nuzky style learn replaces the learned rules and keeps the creator's own.
+        store.replace(&learning::learned(&[evidence("talk", 120_000).source()])).unwrap();
+        let text = file(&dir).unwrap();
+        assert!(text.contains("- Never cut the product name.") && text.contains("| 120000 |"), "{text}");
+        let view = store.view().unwrap();
+        assert_eq!(view.versions[0].label, "Learned with nuzky style learn");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_change_outside_nuzky_is_a_version_and_any_version_comes_back() {
+        let (store, dir) = store();
+        let view = store.add_evidence(evidence("talk", 120_000)).unwrap();
+        let accepted = store.act(StyleAction::Accept { titles: titles(&view) }).unwrap();
+        let learned = file(&dir).unwrap();
+        let outside = learned.replace("Cut every earlier attempt", "Cut each earlier attempt");
+        assert_ne!(outside, learned);
+        fs::write(dir.join("EDIT.md"), outside).unwrap();
+        let view = store.view().unwrap();
+        assert_eq!(view.versions[0].label, "Changed outside Nuzky");
+        assert!(view.rules.iter().any(|r| r.title == "Restarted sentences" && r.by_you), "{:?}", view.rules);
+
+        let view = store.act(StyleAction::Restore { index: accepted.version }).unwrap();
+        assert_eq!(file(&dir).unwrap(), learned);
+        assert!(view.versions[0].label.starts_with("Restored: Accepted"), "{:?}", view.versions[0]);
+
+        let view = store.act(StyleAction::Revert { title: "Pauses".into() }).unwrap();
+        assert!(!file(&dir).unwrap().contains("## Pauses"), "before it was accepted, the style had no Pauses");
+        assert!(view.not_learned.iter().any(|n| n.title == "Pauses" && n.reason == Frozen::Reverted));
+
+        // A write that stopped after its version is finished by the next change.
+        let after = file(&dir).unwrap();
+        fs::write(dir.join("EDIT.md"), &learned).unwrap();
+        store.view().unwrap();
+        assert_eq!(file(&dir).unwrap(), after);
+
+        let view = store.act(StyleAction::Reset).unwrap();
+        assert_eq!(file(&dir), None);
+        assert!(view.sources.is_empty() && view.suggestions.is_empty() && view.own.is_empty());
+        let view = store.act(StyleAction::Restore { index: view.versions[1].index }).unwrap();
+        assert_eq!(file(&dir).unwrap(), after, "back to default can be undone");
+        assert!(view.versions.len() >= 6);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn evidence_read_back_learns_the_same_style() {
+        let e = evidence("talk", 137_000);
+        let back: Evidence = serde_json::from_slice(&serde_json::to_vec(&e).unwrap()).unwrap();
+        assert_eq!(learning::learn(&[back.source()]), learning::learn(&[e.source()]));
+    }
+}

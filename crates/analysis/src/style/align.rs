@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Result, ensure};
 use nuzky_engine::model::Asset;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{Range, Word, audio::open_pcm};
 
@@ -51,7 +51,7 @@ struct Frame {
 
 /// A continuous piece of the recording in the cut: cut time `start_us..end_us` plays recording
 /// time `start_us + offset_us..end_us + offset_us`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Piece {
     pub start_us: i64,
     pub end_us: i64,
@@ -64,7 +64,7 @@ impl Piece {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Alignment {
     /// In cut order.
     pub pieces: Vec<Piece>,
