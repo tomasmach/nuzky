@@ -301,7 +301,7 @@ export function RangeInput({
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
         className={`range relative w-full ${lock ? "range-locked" : ""}`}
-        style={{ "--fill-from": at(lo), "--fill-to": at(hi) } as CSSProperties}
+        style={{ "--fill-from": twoSided ? at(lo) : "0px", "--fill-to": at(hi) } as CSSProperties}
       />
     </span>
   );
