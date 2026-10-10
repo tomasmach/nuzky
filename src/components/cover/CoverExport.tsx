@@ -6,6 +6,7 @@ import { AlertCircle, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
 import { COVER_FORMATS, coverFormat, openCover, thumbnailOf, useCover } from "../../lib/cover";
 import { currentEpoch, useEditor } from "../../lib/store";
+import { formatTime } from "../../lib/time";
 import type { ThumbnailFormat } from "../../lib/types";
 import { Button, ProgressBar, Segmented } from "../ui";
 
@@ -33,7 +34,7 @@ function saveKind(format: ThumbnailFormat, kind: Kind) {
 }
 
 /** The Cover side of the Export dialog: the format and file type, then a job that writes the image. */
-export function CoverExport({ close }: { close: () => void }) {
+export function CoverExport({ close, onFacts }: { close: () => void; onFacts: (facts: string) => void }) {
   const project = useEditor((s) => s.snap?.project);
   const [format, setFormat] = useState<ThumbnailFormat>(() => useCover.getState().open ?? (thumbnailOf(project, "cover_9x16") || !thumbnailOf(project, "youtube_16x9") ? "cover_9x16" : "youtube_16x9"));
   const [kind, setKind] = useState<Kind>(() => loadKind(format));
@@ -48,6 +49,12 @@ export function CoverExport({ close }: { close: () => void }) {
   const done = job?.status === "done";
   const cover = thumbnailOf(project, format);
   const f = coverFormat(format);
+
+  // The line under the title: what the file will be.
+  const time = cover?.timeUs;
+  useEffect(() => {
+    onFacts(`${kind === "png" ? "PNG" : "JPEG under 2 MB"} · ${f.width}×${f.height}${time === undefined ? "" : ` · Frame ${formatTime(time)}`}`);
+  }, [kind, f.width, f.height, time, onFacts]);
 
   // The question replaces the buttons that were focused, so focus moves to its safe answer.
   useEffect(() => {

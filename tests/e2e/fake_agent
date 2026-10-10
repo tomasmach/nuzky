@@ -155,6 +155,9 @@ elif thumbnail:
     hook = wishes.split(':', 1)[1].strip() if wishes.lower().startswith('hook:') else 'MY HOOK'
     state = call('get_state', {})
     at = min(7_500_000, state['duration_us'] - 100_000)
+    # A frame the user chose stays, as Nuzky asks.
+    if "[Nuzky] The project's cover_9x16 already uses the frame at" in prompt:
+        at = int(prompt.split("[Nuzky] The project's cover_9x16 already uses the frame at", 1)[1].split('(', 1)[1].split(' ', 1)[0])
     look = {'fontFamily': 'Anton', 'fontSize': 260, 'color': '#ffffff', 'bold': False, 'strokeWidth': 0,
             'strokeColor': '#000000', 'background': None}
     text = {'text': hook, 'style': look, 'transform': {'x': 0, 'y': -0.3, 'scale': 1, 'rotation': 0, 'opacity': 1}, 'behind': True}

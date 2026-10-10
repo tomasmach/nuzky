@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AlertTriangle, Copy, Image as ImageIcon, RotateCcw, Trash2, Type } from "lucide-react";
-import { COVER_PRESETS, addText, coverFormat, deleteText, downloadModels, editCover, editText, presetText, thumbnailOf, useCover } from "../../lib/cover";
+import { COVER_PRESETS, addText, coverFormat, deleteText, downloadModels, editCover, editText, presetText, startFrom, thumbnailOf, useCover } from "../../lib/cover";
 import { DEFAULT_TRANSFORM, sameStyle } from "../../lib/presets";
 import { undoAction, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
@@ -44,17 +44,6 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
     const snap = await useEditor.getState().edit({ type: "removeThumbnail", format });
     if (snap) useEditor.getState().toast({ kind: "info", text: `${title} removed`, action: undoAction(snap) });
   };
-  // From the other format, as agents make it: the same frame and texts, sized for this one.
-  const startFrom = (from: Thumbnail) =>
-    editCover(format, () => ({
-      ...cover,
-      timeUs: from.timeUs,
-      outline: from.outline,
-      texts: from.texts.map((t) => {
-        const k = format === "youtube_16x9" ? 2 / 3 : 3 / 2;
-        return { ...t, style: { ...t.style, fontSize: Math.round(t.style.fontSize * k), strokeWidth: t.style.strokeWidth * k, maxWidth: null } };
-      }),
-    }));
   const b = cover.background;
 
   return (
@@ -63,7 +52,7 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
       <div className="min-h-0 flex-1 overflow-y-auto">
         {draft && other && (
           <div className="px-4 pb-1">
-            <Button className="w-full" onClick={() => void startFrom(other)}>
+            <Button className="w-full" onClick={() => void startFrom(format, other)}>
               Start from the {other.format === "cover_9x16" ? "9:16 cover" : "YouTube thumbnail"}
             </Button>
           </div>
@@ -72,9 +61,7 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
           <div className="grid grid-cols-3 gap-2">
             {COVER_PRESETS.map((p) => (
               <PresetTile key={p.name} label={p.name} selected={false} title={`Add a text in the ${p.name} style`} onClick={() => void addText(format, p)}>
-                <span className="absolute inset-0 flex items-center justify-center bg-line">
-                  <TextSwatch style={p.style} label="Aa" size={17} />
-                </span>
+                <PresetLook preset={p} />
               </PresetTile>
             ))}
           </div>
@@ -90,26 +77,13 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
                   >
                     <Type size={14} className="shrink-0 text-muted" />
                     <span className="min-w-0 flex-1 truncate">{t.text.replace(/\s+/g, " ") || "Empty text"}</span>
-                    {t.behind && <span className="shrink-0 text-[11px] text-muted">Behind</span>}
+                    {t.behind && <span className="shrink-0 text-[11px] text-muted">Behind person</span>}
                     {(hidden[i] ?? 0) > COVERED_TOO_MUCH && <AlertTriangle size={14} className="shrink-0 text-warn" aria-label="The person covers too much of it" />}
                   </button>
                 </li>
               ))}
             </ul>
           )}
-        </Section>
-        <Section
-          title="Frame"
-          actions={
-            <IconButton label="Reset the frame" className={QUIET} onClick={() => void frame(DEFAULT_TRANSFORM, "reset")}>
-              <RotateCcw size={14} />
-            </IconButton>
-          }
-        >
-          <Slider label="Scale" value={cover.frame.scale * 100} min={10} max={400} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ scale: v / 100 }, "scale")} />
-          <Slider label="Position X" value={cover.frame.x * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => void frame({ x: v / 100 }, "x")} />
-          <Slider label="Position Y" value={cover.frame.y * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => void frame({ y: v / 100 }, "y")} />
-          <Slider label="Rotation" value={cover.frame.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ rotation: v }, "rot")} />
         </Section>
         <Section title="Person">
           {maskReason && !lock && !models?.unavailable && (
@@ -154,6 +128,19 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
           ) : (
             <ColorInput label="Color" value={b.color} onChange={(color) => void background({ color }, "color")} />
           )}
+        </Section>
+        <Section
+          title="Frame"
+          actions={
+            <IconButton label="Reset the frame" className={QUIET} onClick={() => void frame(DEFAULT_TRANSFORM, "reset")}>
+              <RotateCcw size={14} />
+            </IconButton>
+          }
+        >
+          <Slider label="Scale" value={cover.frame.scale * 100} min={10} max={400} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ scale: v / 100 }, "scale")} />
+          <Slider label="Position X" value={cover.frame.x * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => void frame({ x: v / 100 }, "x")} />
+          <Slider label="Position Y" value={cover.frame.y * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => void frame({ y: v / 100 }, "y")} />
+          <Slider label="Rotation" value={cover.frame.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ rotation: v }, "rot")} />
         </Section>
         {!draft && (
           <div className="px-4 py-3">
@@ -218,9 +205,7 @@ function TextInspector({ format, index }: { format: ThumbnailFormat; index: numb
                       // A preset keeps the text's font and where it wraps, as text presets do.
                       onClick={() => void editText(format, index, (x) => ({ ...x, behind: p.behind && !maskReason ? true : x.behind && p.behind, style: { ...look, fontFamily: x.style.fontFamily, maxWidth: x.style.maxWidth } }))}
                     >
-                      <span className="absolute inset-0 flex items-center justify-center bg-line">
-                        <TextSwatch style={p.style} label="Aa" size={17} />
-                      </span>
+                      <PresetLook preset={p} />
                     </PresetTile>
                   );
                 })}
@@ -284,5 +269,22 @@ function CoverTextField({ format, index, text }: { format: ThumbnailFormat; inde
       onBlur={() => setDraft(null)}
       className="resize-y rounded-lg border border-white/[.08] bg-white/[.055] px-2.5 py-2 text-[13px] leading-[18px] text-fg outline-offset-0 focus:border-accent disabled:opacity-40"
     />
+  );
+}
+
+/** A cover look's tile: its "Aa", and for a look behind the person a head and shoulders over the lower half of it. */
+function PresetLook({ preset }: { preset: (typeof COVER_PRESETS)[number] }) {
+  return (
+    <span className="absolute inset-0 flex items-center justify-center overflow-hidden bg-line">
+      <span className={preset.behind ? "-translate-y-1.5" : undefined}>
+        <TextSwatch style={preset.style} label="Aa" size={preset.behind ? 22 : 17} />
+      </span>
+      {preset.behind && (
+        <svg aria-hidden viewBox="0 0 40 30" className="absolute bottom-0 left-1/2 h-[62%] -translate-x-1/2 text-[#5c5c63]">
+          <circle cx="20" cy="11" r="7.5" fill="currentColor" />
+          <path d="M3 30c0-8 7.5-12 17-12s17 4 17 12z" fill="currentColor" />
+        </svg>
+      )}
+    </span>
   );
 }

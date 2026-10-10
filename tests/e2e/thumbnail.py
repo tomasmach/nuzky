@@ -154,10 +154,20 @@ def thumbnail(r):
     wait(lambda: r.s.run("return !!document.querySelector('[data-testid=cover-stage]')"), 5)
     click(r, 'Start from the 9:16 cover')
     wide = wait(lambda: cover(r, 'youtube_16x9'), 5)
-    r.check('Start from the 9:16 cover makes the YouTube thumbnail with the hook behind the person',
-            wide and wide['timeUs'] == cover(r)['timeUs'] and wide['texts'] and wide['texts'][0]['behind']
+    r.check('Start from the 9:16 cover lays out the YouTube thumbnail: the person on a third, the hook beside them',
+            wide and wide['timeUs'] == cover(r)['timeUs'] and wide['frame']['x'] < -0.1 and wide['frame']['scale'] > 1.2
+            and wide['texts'] and wide['texts'][0]['transform']['x'] > 0.1 and not wide['texts'][0]['behind']
             and wide['texts'][0]['style']['fontSize'] < cover(r)['texts'][0]['style']['fontSize'], wide)
-    wide_shown = wait(lambda: (v := shown(r)) and not v['waiting'] and v['revision'] == v['now'] and v['width'] > 0 and v, 120)
+    time.sleep(1.5)
+    r.shot('youtube-start')
+    # The hook over the person and behind them, from the inspector: the list, Behind person, then Position X.
+    click(r, 'I QUIT SUGAR')
+    tick(r, 'Behind person')
+    click(r, 'Transform')
+    r.s.run(TYPE + "t.blur();", 'input[aria-label="Position X value"]', '-16.7')
+    placed = wait(lambda: (t := cover(r, 'youtube_16x9')['texts'][0])['behind'] and abs(t['transform']['x'] + 0.167) < 0.01 and t, 5)
+    r.check('the hook goes behind the person on the YouTube thumbnail too', placed, cover(r, 'youtube_16x9'))
+    wide_shown = wait(lambda: (v := shown(r)) and not v['waiting'] and v['revision'] == v['now'] and (v['hidden'] or [0])[0] > 0 and v, 120)
     r.check('the YouTube thumbnail on screen is 16:9 with the hook partly behind the person',
             wide_shown and wide_shown['green'] > 0.002 and 0 < (wide_shown['hidden'] or [0])[0] < 0.95, wide_shown)
     r.shot('youtube-behind')
@@ -181,6 +191,8 @@ def thumbnail(r):
     r.shot('make-a-thumbnail-chip')
     r.key('Enter')
     hooked = wait(lambda: all((cover(r, f) or {}).get('texts', [{}])[0].get('text') == 'FAKE HOOK' for f in before), 60)
+    r.check('the agent keeps the frame the user chose', cover(r)['timeUs'] == before['cover_9x16']['timeUs'],
+            {'before': before['cover_9x16']['timeUs'], 'after': cover(r)['timeUs']})
     prompt = next((json.loads(line)['prompt'] for line in (r.work / 'fake/runs.jsonl').read_text().splitlines()), '')
     r.check('the agent gets the thumbnail prompt with the note and makes both covers',
             hooked and prompt.startswith('Make a 9:16 cover') and 'win over the steps: Hook: FAKE HOOK' in prompt,
@@ -199,6 +211,7 @@ def thumbnail(r):
     r.key('e', ctrlKey=True)
     r.check('Ctrl+E in the cover editor opens the export on the cover',
             wait(lambda: r.s.run("return [...document.querySelectorAll('[role=dialog] h2')].some((h) => h.textContent === 'Export cover')"), 5))
+    time.sleep(0.5)  # the dialog fades in over 200 ms
     r.shot('export-cover')
     r.key('Escape')
     epoch = r.state()['epoch']

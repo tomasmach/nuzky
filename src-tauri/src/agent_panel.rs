@@ -99,6 +99,20 @@ fn prompt(text: &str, context: &PromptContext, project: &nuzky_engine::Project) 
             ));
         }
     }
+    if context.thumbnail {
+        // A frame the user chose stays: the prompt would otherwise pick one anew.
+        for cover in &project.thumbnails {
+            let name = match cover.format {
+                nuzky_engine::model::ThumbnailFormat::Cover9x16 => "cover_9x16",
+                nuzky_engine::model::ThumbnailFormat::Youtube16x9 => "youtube_16x9",
+            };
+            lines.push(format!(
+                "[Nuzky] The project's {name} already uses the frame at {} ({} µs): keep that frame unless the user's wishes say otherwise.",
+                timecode(cover.time_us),
+                cover.time_us
+            ));
+        }
+    }
     if lines.is_empty() { text.to_owned() } else { format!("{text}\n\n{}", lines.join("\n")) }
 }
 
@@ -285,5 +299,14 @@ mod tests {
         );
         let text = prompt("Hook: I QUIT SUGAR", &thumbnail, &project);
         assert!(text.contains("wishes, which win over the steps: Hook: I QUIT SUGAR"), "{text}");
+        let mut covered = Project::new("t");
+        covered
+            .thumbnails
+            .push(serde_json::from_value(serde_json::json!({"format": "cover_9x16", "timeUs": 10_620_000})).unwrap());
+        let text = prompt("", &thumbnail, &covered);
+        assert!(
+            text.contains("[Nuzky] The project's cover_9x16 already uses the frame at 00:10.62 (10620000 µs)"),
+            "{text}"
+        );
     }
 }

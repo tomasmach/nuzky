@@ -1,27 +1,22 @@
 import { useRef } from "react";
-import { AlertCircle, Check, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, ScanFace, Sparkles } from "lucide-react";
 import { makeThumbnail } from "../../lib/agent";
 import { api } from "../../lib/api";
-import { candidateReason, chooseFrame, closeCover, downloadModels, pick, thumbnailOf, useCandidates, useCover } from "../../lib/cover";
+import { candidateReason, chooseFrame, downloadModels, pick, thumbnailOf, useCandidates, useCover } from "../../lib/cover";
 import { useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { CoverCandidate, ThumbnailFormat } from "../../lib/types";
-import { AiLock, Button, IconButton, ProgressBar, lockedProps, useLockReason } from "../ui";
+import { AiLock, Button, ProgressBar, lockedProps, useLockReason } from "../ui";
 
 /** The library's place in the cover editor: Pick for me and the frames it found. */
 export function CoverFrames({ format }: { format: ThumbnailFormat }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="cover-frames">
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/[.07] pl-4 pr-2">
-        <h2 className="text-[13px] font-semibold text-fg">Cover</h2>
-        <div className="flex items-center gap-0.5">
-          <AiLock>
-            <MakeWithAi />
-          </AiLock>
-          <IconButton label="Close the cover editor (Esc)" onClick={closeCover}>
-            <X size={16} />
-          </IconButton>
-        </div>
+        <h2 className="text-[13px] font-semibold text-fg">Frames</h2>
+        <AiLock>
+          <MakeWithAi />
+        </AiLock>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3">
         <AiLock>
@@ -51,7 +46,7 @@ function MakeWithAi() {
 }
 
 function Frames({ format }: { format: ThumbnailFormat }) {
-  const candidates = useCandidates(format);
+  const candidates = useCandidates();
   const job = useEditor((s) => {
     const id = useCover.getState().pickJob;
     return id && s.jobs[id]?.status === "running" ? s.jobs[id] : null;
@@ -101,14 +96,15 @@ function Frames({ format }: { format: ThumbnailFormat }) {
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
+          {/* Prominent until it has found frames; then picking again is the rarer step. */}
           <Button
-            variant="primary"
+            variant={candidates.length > 0 ? "secondary" : "primary"}
             className="w-full"
             disabled={!!models?.unavailable}
             disabledReason={models?.unavailable ? "Finding faces doesn't work on this computer. Click the timeline to choose a frame." : undefined}
             onClick={() => void pick(format)}
           >
-            <Sparkles size={15} /> Pick for me
+            <ScanFace size={15} /> {candidates.length > 0 ? "Pick again" : "Pick for me"}
           </Button>
           {models && !models.downloaded && !models.unavailable && <p className="text-[12px] text-muted">Downloads the cover models first ({models.sizeMb} MB, once).</p>}
         </div>
@@ -126,11 +122,18 @@ function Frames({ format }: { format: ThumbnailFormat }) {
           )}
         </div>
       )}
+      {candidates.length === 0 && !job && !failed && (
+        <div className="mt-6 flex flex-col items-center gap-1 px-4 text-center">
+          <ScanFace size={20} className="text-muted" />
+          <p className="mt-1 text-[15px] font-semibold text-fg">No frames yet</p>
+          <p className="text-[13px] text-muted">Pick for me finds frames with open eyes, a sharp face and a good expression. Or click the timeline to choose any frame.</p>
+        </div>
+      )}
       {candidates.length > 0 && (
         <>
           {candidates.every((c) => !c.face) && <p className="text-[12px] text-muted">No face found in this video. These are the sharpest, best-lit frames.</p>}
           {kept === format && <p className="text-[12px] text-muted">Kept the frame you chose. The best one is first.</p>}
-          <div ref={grid} role="listbox" aria-label="Frames for the cover" className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-x-2 gap-y-3" onKeyDown={onKey}>
+          <div ref={grid} role="listbox" aria-label="Frames for the cover" className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-x-2 gap-y-3" onKeyDown={onKey}>
             {candidates.map((c, i) => {
               const reason = candidateReason(c, format);
               const chosen = i === current;
@@ -151,15 +154,14 @@ function Frames({ format }: { format: ThumbnailFormat }) {
                     className={`relative block w-full overflow-hidden rounded-[10px] border bg-bg ${chosen ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]" : "border-white/[.08] group-hover:border-white/30"}`}
                   >
                     <img src={c.still} alt="" className="block w-full" draggable={false} />
-                    <span className="tabular absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[11px] leading-4 text-fg">{Math.round(c.score * 100)}</span>
-                    <span className="tabular absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[11px] leading-4 text-fg">{formatTime(c.timeUs, false)}</span>
+                    <span className="tabular absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[11px] leading-4 text-fg">{formatTime(c.timeUs).slice(0, -1)}</span>
                     {chosen && (
                       <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-accent-strong text-white shadow-[0_1px_2px_rgb(0_0_0/.5)]">
                         <Check size={11} strokeWidth={3} />
                       </span>
                     )}
                   </span>
-                  <span className={`line-clamp-2 text-[11px] leading-[14px] ${chosen ? "text-fg" : "text-muted"}`}>{reason}</span>
+                  <span className={`line-clamp-3 text-[11px] leading-[14px] ${chosen ? "text-fg" : "text-muted"}`}>{reason}</span>
                 </button>
               );
             })}

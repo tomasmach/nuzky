@@ -1,11 +1,12 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { useMemo } from "react";
 import { create } from "zustand";
 import presets from "../../assets/presets/thumbnails.json";
 import { api, errorText, plainError } from "./api";
 import { DEFAULT_TRANSFORM } from "./presets";
 import { aiLocked, currentEpoch, projectDuration, undoAction, useEditor } from "./store";
 import { US } from "./time";
-import type { CoverCandidate, CoverPick, JobEvent, Project, TextStyle, Thumbnail, ThumbnailFormat, ThumbnailText, VisionModels } from "./types";
+import type { CoverCandidate, CoverPick, JobEvent, Project, TextStyle, Thumbnail, ThumbnailFormat, ThumbnailText, Transform, VisionModels } from "./types";
 
 export const COVER_FORMATS: { id: ThumbnailFormat; label: string; short: string; noun: string; width: number; height: number }[] = [
   { id: "cover_9x16", label: "9:16 Cover", short: "9:16", noun: "cover", width: 1080, height: 1920 },
@@ -24,8 +25,8 @@ interface CoverState {
   selected: number | "frame" | null;
   /** The playhead and clip selection from before the cover editor opened, given back when it closes. */
   before: { timeUs: number; selection: string[] } | null;
-  /** What Pick for me found, per format, in the session it was picked in. */
-  picks: Partial<Record<ThumbnailFormat, { epoch: string; candidates: CoverCandidate[] }>>;
+  /** What Pick for me found last, for either format, in the session it was picked in. */
+  picks: { epoch: string; candidates: CoverCandidate[] } | null;
   /** The jobs this editor started: picking frames, masking the person, the model download. */
   pickJob: string | null;
   maskJob: string | null;
@@ -54,7 +55,7 @@ export const useCover = create<CoverState>(() => ({
   open: null,
   selected: null,
   before: null,
-  picks: {},
+  picks: null,
   pickJob: null,
   maskJob: null,
   modelsJob: null,
@@ -181,20 +182,45 @@ export function editCover(format: ThumbnailFormat, build: (current: Thumbnail | 
 const isVertical = (project: Project) => project.canvas.height > project.canvas.width;
 
 /**
- * A new cover from the frame at `timeUs`: the frame fills the thumbnail as it would on the canvas. A YouTube
- * thumbnail of a vertical video gets the frame blurred and dimmed behind the person, as agents make it, when
- * the person can be cut out on this computer.
+ * A YouTube thumbnail of a vertical video is laid out as agents lay it out: the frame larger, on the left third,
+ * its top at the top so the cut of the shoulders falls below the bottom edge, and the hook over the other two
+ * thirds. With the person cut out, the frame blurred and dimmed fills the rest and a white line goes round them.
  */
+const WIDE_FRAME: Transform = { ...DEFAULT_TRANSFORM, scale: 1.4, x: -1 / 6, y: 0.2 };
+const WIDE_TEXT = { x: 1 / 6, y: -0.1, maxWidth: 760 };
+
+/** A new cover from the frame at `timeUs`: the frame fills the thumbnail as it would on the canvas. */
 export function newCover(format: ThumbnailFormat, project: Project, timeUs: number): Thumbnail {
-  const sides = format === "youtube_16x9" && isVertical(project) && !useCover.getState().models?.unavailable;
+  const wide = format === "youtube_16x9" && isVertical(project);
+  const cutOut = wide && !!useCover.getState().models?.downloaded;
   return {
     format,
     timeUs: Math.round(timeUs),
-    frame: DEFAULT_TRANSFORM,
-    background: { picture: true, blur: sides ? 1 : 0, dim: sides ? 0.2 : 0, color: "#000000" },
+    frame: wide ? WIDE_FRAME : DEFAULT_TRANSFORM,
+    background: { picture: true, blur: cutOut ? 1 : 0, dim: cutOut ? 0.2 : 0, color: "#000000" },
     texts: [],
-    outline: null,
+    outline: cutOut ? { color: "#ffffff", width: 10 } : null,
   };
+}
+
+/** The other format's cover made from `from`: the same frame and texts, sized and placed for this format, as one step. */
+export function startFrom(format: ThumbnailFormat, from: Thumbnail) {
+  return editCover(format, (_, project) => {
+    const base = newCover(format, project, from.timeUs);
+    const wide = format === "youtube_16x9" && isVertical(project);
+    const k = format === "youtube_16x9" ? 2 / 3 : 3 / 2;
+    return {
+      ...base,
+      outline: base.outline ?? from.outline,
+      texts: from.texts.map((t) => ({
+        ...t,
+        // Beside the person on a YouTube thumbnail, where nothing covers it; where it was on a cover.
+        behind: wide ? false : t.behind,
+        transform: wide ? { ...t.transform, x: WIDE_TEXT.x, y: WIDE_TEXT.y } : format === "cover_9x16" ? { ...t.transform, x: 0, y: -0.22 } : t.transform,
+        style: { ...t.style, fontSize: Math.round(t.style.fontSize * k), strokeWidth: t.style.strokeWidth * k, maxWidth: wide ? WIDE_TEXT.maxWidth : null },
+      })),
+    };
+  });
 }
 
 /** Sets the cover's frame, making the cover when there is none, as one undo step. */
@@ -209,15 +235,18 @@ export function chooseFrame(format: ThumbnailFormat, timeUs: number, coalesce?: 
   );
 }
 
-/** A text in the look of `preset`, sized for the format, in the upper part where the apps leave it free. */
-export function presetText(format: ThumbnailFormat, preset: (typeof COVER_PRESETS)[number], text = "YOUR HOOK"): ThumbnailText {
+/**
+ * A text in the look of `preset`, sized for the format: on a cover in the upper part where the apps leave it
+ * free, on a YouTube thumbnail of a vertical video beside the person.
+ */
+export function presetText(format: ThumbnailFormat, preset: (typeof COVER_PRESETS)[number], wide = false, text = "YOUR HOOK"): ThumbnailText {
   // The presets are sized for the 1080 px wide cover; a YouTube thumbnail is seen smaller, about two thirds.
   const k = format === "youtube_16x9" ? 2 / 3 : 1;
   return {
     text,
-    style: { ...preset.style, fontSize: Math.round(preset.style.fontSize * k), strokeWidth: preset.style.strokeWidth * k },
-    transform: { ...DEFAULT_TRANSFORM, y: format === "youtube_16x9" ? -0.2 : -0.22 },
-    behind: preset.behind,
+    style: { ...preset.style, fontSize: Math.round(preset.style.fontSize * k), strokeWidth: preset.style.strokeWidth * k, ...(wide ? { maxWidth: WIDE_TEXT.maxWidth } : {}) },
+    transform: { ...DEFAULT_TRANSFORM, ...(wide ? { x: WIDE_TEXT.x, y: WIDE_TEXT.y } : { y: format === "youtube_16x9" ? -0.2 : -0.22 }) },
+    behind: preset.behind && !wide,
   };
 }
 
@@ -226,7 +255,7 @@ export async function addText(format: ThumbnailFormat, preset: (typeof COVER_PRE
   const timeUs = useEditor.getState().timeUs;
   const snap = await editCover(format, (current, project) => {
     const cover = current ?? newCover(format, project, Math.min(timeUs, lastFrame(project)));
-    return { ...cover, texts: [...cover.texts, presetText(format, preset)] };
+    return { ...cover, texts: [...cover.texts, presetText(format, preset, format === "youtube_16x9" && isVertical(project))] };
   });
   const count = thumbnailOf(snap?.project, format)?.texts.length ?? 0;
   if (snap && count > 0) useCover.setState({ selected: count - 1 });
@@ -316,7 +345,7 @@ export function onCoverJob(job: JobEvent) {
   const found = JSON.parse(job.output) as CoverPick;
   const epoch = currentEpoch();
   if (!epoch) return;
-  useCover.setState({ picks: { ...useCover.getState().picks, [found.format]: { epoch, candidates: found.candidates } } });
+  useCover.setState({ picks: { epoch, candidates: found.candidates } });
   const best = found.candidates[0];
   const now = thumbnailOf(useEditor.getState().snap?.project, found.format)?.timeUs ?? null;
   const from = s.pickFrom?.format === found.format ? s.pickFrom.timeUs : now;
@@ -326,10 +355,14 @@ export function onCoverJob(job: JobEvent) {
   if (useCover.getState().open === found.format) useEditor.getState().seek(best.timeUs);
 }
 
-/** Candidates Pick for me found for `format` in the open project. */
-export function useCandidates(format: ThumbnailFormat): CoverCandidate[] {
+/**
+ * The frames Pick for me found in the open project, best first, for either format: a frame good for one is a
+ * frame to consider for the other. Frames far worse than the best (a blink beside open eyes) are left out.
+ */
+export function useCandidates(): CoverCandidate[] {
   const epoch = useEditor((s) => s.snap?.sessionEpoch);
-  return useCover((s) => (s.picks[format]?.epoch === epoch ? s.picks[format]!.candidates : NONE));
+  const picks = useCover((s) => (s.picks && s.picks.epoch === epoch ? s.picks.candidates : NONE));
+  return useMemo(() => picks.filter((c) => c.score >= (picks[0]?.score ?? 0) * 0.4), [picks]);
 }
 const NONE: CoverCandidate[] = [];
 

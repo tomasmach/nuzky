@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, AlertTriangle, Loader2, Smartphone } from "lucide-react";
+import { AlertCircle, AlertTriangle, Loader2, MonitorPlay, Smartphone } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
 import { COVER_FORMATS, chooseFrame, closeCover, coverFormat, downloadModels, editCover, editText, mask, newCover, setSafeZones, switchFormat, thumbnailOf, useCover } from "../../lib/cover";
 import { projectDuration, useEditor } from "../../lib/store";
@@ -51,7 +51,8 @@ function SafeZones({ format }: { format: ThumbnailFormat }) {
       />
       <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-fg/70" style={{ top: pct(grid, height) }} />
       <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-fg/70" style={{ top: pct(height - grid, height) }} />
-      <span className={`${chip} right-1`} style={{ top: `calc(${pct(grid, height)} + 4px)` }}>
+      {/* Under the grid's lower line, in the band Reels covers anyway, clear of where the hook goes. */}
+      <span className={`${chip} left-1`} style={{ top: `calc(${pct(height - grid, height)} + 4px)` }}>
         Profile grid
       </span>
     </>
@@ -204,9 +205,12 @@ export function CoverStage({ format, box }: { format: ThumbnailFormat; box: { w:
             b && (
               <span
                 key={i}
-                // Just outside the text's top right corner, clear of the selection box's handle there.
-                className="pointer-events-none absolute flex h-4 w-4 -translate-y-full items-center justify-center"
-                style={{ left: Math.max(...b.map((p) => p[0])) * k + 6, top: Math.min(...b.map((p) => p[1])) * k - 6 }}
+                // Just outside the text's top right corner, clear of the selection box's handle there, and inside the cover.
+                className="pointer-events-none absolute flex h-4 w-4 items-center justify-center"
+                style={{
+                  left: Math.min(fit.w - 20, Math.max(...b.map((p) => p[0])) * k + 6),
+                  top: Math.max(4, Math.min(...b.map((p) => p[1])) * k - 22),
+                }}
                 title="The person covers too much of this text"
               >
                 <AlertTriangle size={16} className="text-warn drop-shadow-[0_0_1px_rgb(0_0_0)]" fill="rgb(0 0 0 / .55)" />
@@ -327,8 +331,13 @@ export function CoverBar({ format }: { format: ThumbnailFormat }) {
         />
       </div>
       <div className="flex items-center justify-end gap-1">
-        <IconButton round label={safeZones ? "Hide what the apps cover" : "Show what the apps cover"} active={safeZones} onClick={() => setSafeZones(!safeZones)}>
-          <Smartphone size={16} />
+        <IconButton
+          round
+          label={`${safeZones ? "Hide" : "Show"} ${format === "cover_9x16" ? "what Reels and the profile grid cover" : "where YouTube shows the length"}`}
+          active={safeZones}
+          onClick={() => setSafeZones(!safeZones)}
+        >
+          {format === "cover_9x16" ? <Smartphone size={16} /> : <MonitorPlay size={16} />}
         </IconButton>
         <Button pill className="h-8 px-3.5" onClick={closeCover}>
           Done

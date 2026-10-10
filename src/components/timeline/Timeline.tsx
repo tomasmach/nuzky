@@ -154,7 +154,7 @@ export function Timeline({ height }: { height: number }) {
   const locked = useAiLocked();
   // In the cover editor the timeline chooses the cover's frame: clicks and drags move the playhead, which is the frame.
   const cover = useCover((s) => s.open);
-  const candidates = useCandidates(cover ?? "cover_9x16");
+  const candidates = useCandidates();
   const { select, setZoom } = useEditor.getState();
   const scroller = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());

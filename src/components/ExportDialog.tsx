@@ -82,6 +82,8 @@ export function ExportDialog() {
   const [options, setOptions] = useState<ExportRequest | null>(null);
   /** The video, or the cover: in the cover editor the dialog opens on the cover. */
   const [what, setWhat] = useState<"video" | "cover">("video");
+  /** What the Cover side would write, for the line under the title. */
+  const [coverFacts, setCoverFacts] = useState("");
   const [error, setError] = useState<string | null>(null);
   /** The file asked for already exists; Replace exports over it. */
   const [exists, setExists] = useState<string | null>(null);
@@ -209,7 +211,7 @@ export function ExportDialog() {
               {what === "video" ? "Export video" : "Export cover"}
             </h2>
             <p className="tabular text-[12px] text-muted">
-              {what === "video" ? `MP4 · H.264 + AAC · ${formatLabel(project.canvas.width, project.canvas.height)} · ${formatTime(duration)}` : "A still for Reels, TikTok or YouTube"}
+              {what === "video" ? `MP4 · H.264 + AAC · ${formatLabel(project.canvas.width, project.canvas.height)} · ${formatTime(duration)}` : coverFacts}
             </p>
           </div>
           <IconButton label={running ? "Hide (export keeps running)" : "Close"} round className="-mr-2 -mt-1" onClick={close}>
@@ -231,7 +233,7 @@ export function ExportDialog() {
         </div>
 
         {what === "cover" ? (
-          <CoverExport close={close} />
+          <CoverExport close={close} onFacts={setCoverFacts} />
         ) : (
         <>
         <div className="flex flex-col gap-4">
