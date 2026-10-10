@@ -4,6 +4,7 @@ from the inspector each write two smooth keyframes in one undo step, the strengt
 keyframes changed by hand stay the user's, and an agent gets the same with apply_motion, which leaves a clip that
 already moves alone."""
 import json, subprocess, time
+from collections import Counter
 
 from e2e.harness import AI_EDITING, CLI, FIXTURES, Bridge, flow, link_models, preview_crop, preview_rect, wait
 from e2e.home import resize
@@ -56,14 +57,17 @@ def yellow(image):
     """Width and centre of the yellow square in an image, in its pixels."""
     image = image.convert('RGB')
     width, data = image.width, image.tobytes()
-    xs, ys = [], []
+    xs, ys = Counter(), Counter()
     for i in range(image.width * image.height):
         red, green, blue = data[3 * i:3 * i + 3]
         if red > 190 and green > 160 and blue < 90:
-            xs.append(i % width)
-            ys.append(i // width)
-    if len(xs) < 50:
+            xs[i % width] += 1
+            ys[i // width] += 1
+    if sum(xs.values()) < 50:
         return None
+    # A column or row of the square is mostly yellow; a stray yellowish pixel of the video's
+    # compression beside an edge is not.
+    xs, ys = ([k for k, n in c.items() if n > max(c.values()) / 2] for c in (xs, ys))
     return {'width': max(xs) - min(xs) + 1, 'x': (max(xs) + min(xs)) / 2, 'y': (max(ys) + min(ys)) / 2}
 
 
