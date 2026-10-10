@@ -69,7 +69,6 @@ pub(crate) struct Parser {
     kept: bool,
 }
 
-/// What a Codex error means for the user.
 fn code(message: &str) -> ErrorCode {
     if message.contains("401 Unauthorized") || message.contains("sign in again") {
         ErrorCode::NotSignedIn
@@ -134,6 +133,10 @@ impl Parser {
                 self.kept = true;
                 Some(Step::Event(AgentEvent::Text { text: item["text"].as_str().unwrap_or("").to_owned() }))
             }
+            Some("reasoning") => {
+                self.kept |= completed;
+                None
+            }
             Some("mcp_tool_call") if item["server"] == "nuzky" => {
                 self.kept |= completed;
                 let status = match item["status"].as_str() {
@@ -148,7 +151,7 @@ impl Parser {
                     input: (status == ToolStatus::Running).then(|| item["arguments"].clone()),
                 }))
             }
-            Some("agent_message" | "reasoning" | "todo_list" | "error") | None => None,
+            Some("agent_message" | "todo_list" | "error") | None => None,
             // A shell command, a file change, a web search, another agent or another server's tool.
             Some(kind) => {
                 let what = item["server"]
@@ -230,7 +233,12 @@ mod tests {
             r#"{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"nuzky","tool":"slow","arguments":{},"result":null,"error":null,"status":"in_progress"}}"#,
         ]);
         assert_eq!(session.as_deref(), Some("01a1277b-38cc-7d11-bfe8-468498c08779"));
-        assert_eq!(run(&[started, r#"{"type":"turn.started"}"#]).1, None);
+        // Codex keeps its reasoning too.
+        let reasoned = r#"{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"Reading the project first."}}"#;
+        assert!(run(&[started, r#"{"type":"turn.started"}"#, reasoned]).1.is_some());
+        // A config warning comes before the turn and keeps nothing.
+        let warning = r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Codex is ignoring 1 unrecognized configuration setting."}}"#;
+        assert_eq!(run(&[started, warning, r#"{"type":"turn.started"}"#]).1, None);
     }
 
     #[test]
