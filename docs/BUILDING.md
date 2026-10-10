@@ -38,7 +38,7 @@ The setup script extracts RPM headers and, if neither system Vulkan development 
 
 ### Speech recognition on the GPU
 
-On Linux, Whisper runs on the GPU through Vulkan and falls back to the CPU when no GPU context can be created. Building needs `glslc`, the Vulkan headers and the loader library (`libvulkan-dev glslc` on Ubuntu, `vulkan-loader-devel vulkan-headers glslc` on Fedora); without root, the setup script downloads a checksum-pinned LunarG SDK instead. The app uses Vulkan FP32 (`GGML_VK_DISABLE_F16=1`) because FP16 moved word times by up to 330 ms in our tests. macOS (Metal) and Windows still recognise speech on the CPU.
+On Linux, Whisper runs on the GPU through Vulkan and falls back to the CPU when no GPU context can be created. Building needs `glslc`, the Vulkan headers and the loader library (`libvulkan-dev glslc` on Ubuntu, `vulkan-loader-devel vulkan-headers glslc` on Fedora); without root, the setup script downloads a checksum-pinned LunarG SDK instead. The app uses Vulkan FP32 (`GGML_VK_DISABLE_F16=1`) because FP16 moved word times by up to 330 ms in our tests. On macOS, Whisper runs on the GPU through Metal, whose shaders whisper.cpp embeds in the binary. On an M4 Pro a 5:48 Czech recording took 45 s to recognise instead of 135 s on the CPU, with the same 522 words and word times within 35 ms. Windows still recognises speech on the CPU.
 
 Build Ubuntu installers with:
 

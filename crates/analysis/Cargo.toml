@@ -20,6 +20,10 @@ unicode-normalization = "0.1.25"
 rayon = "1"
 libm = "0.2"
 
+# Speech recognition on the GPU through Metal. whisper.cpp embeds its shaders in the binary.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }
+
 [[bin]]
 name = "nuzky-analyze"
 path = "src/main.rs"
