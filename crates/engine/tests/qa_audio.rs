@@ -536,3 +536,43 @@ fn speed_keeps_the_pitch_and_the_length() {
     let (at_440, at_550) = (tone_db(&raised, 440.0, 1.0, 1.0), tone_db(&raised, 550.0, 1.0, 1.0));
     assert!(at_440 < -50.0 && (at_550 + 12.04).abs() < 0.3, "without Keep pitch the tone is not at 550 Hz");
 }
+
+/// Keep pitch plays only the sound the clip keeps. A clip of the silent second between two tones, slowed to 0.1x
+/// or sped up, stays silent: its pieces reach past where speed puts them but not into the cut-away tones, also
+/// through a split right after its start.
+#[test]
+fn keep_pitch_does_not_bring_back_cut_sound() {
+    use nuzky_engine::audio::Mixer;
+    use nuzky_engine::edit::EditCmd;
+    if !available() {
+        return;
+    }
+    let d = dir("keep-pitch-cut");
+    let source = d.join("tones.wav");
+    let tone = "0.25*sin(2*PI*440*t)*(lt(t\\,1)+gte(t\\,2))";
+    ff(&["-f", "lavfi", "-i", &format!("aevalsrc={tone}|{tone}:s=48000:d=3"), "-c:a", "pcm_f32le"], &source);
+    let cache = d.join("cache");
+    for speed in [0.1, 1.25, 2.0] {
+        let asset = probe(&source, "qa-tones".into()).unwrap();
+        ensure_pcm(&cache, &asset, |_| Ok(())).unwrap();
+        let mut p = Project::new("QA");
+        let mut gap = clip("qa-gap", &asset.id, 0, 1_000_000);
+        let ClipContent::Media { source_in_us, .. } = &mut gap.content else { unreachable!() };
+        *source_in_us = 1_000_000;
+        p.tracks[0].clips.push(gap);
+        p.assets.push(asset);
+        let apply =
+            |p: &mut Project, cmd: serde_json::Value| p.apply(serde_json::from_value::<EditCmd>(cmd).unwrap()).unwrap();
+        apply(&mut p, serde_json::json!({"type": "updateClip", "clipId": "qa-gap", "speed": speed}));
+        apply(&mut p, serde_json::json!({"type": "splitClip", "clipId": "qa-gap", "atUs": 50_000}));
+        let length = p.tracks[0].clips.iter().map(|c| c.end_us()).max().unwrap() * 48 / 1000;
+        let mut out = vec![0.0; length as usize * CHANNELS];
+        let mut mixer = Mixer::new(cache.clone());
+        for (index, part) in out.chunks_mut(1024 * CHANNELS).enumerate() {
+            mixer.mix(&p, index as i64 * 1024, part);
+        }
+        let loudest = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        eprintln!("QA keep pitch at a cut, {speed}x: loudest sample {loudest:.6}");
+        assert!(loudest < 0.001, "{speed}x brings back cut-away sound at {loudest}");
+    }
+}

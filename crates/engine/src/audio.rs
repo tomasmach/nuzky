@@ -17,7 +17,7 @@ use crate::speech::is_heard;
 use crate::stretch::Stretch;
 
 /// Short fades at clip edges with nothing to crossfade with, so they do not click.
-const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
+pub(crate) const EDGE_FADE: i64 = (SAMPLE_RATE / 200) as i64; // 5 ms
 /// How far a cut's crossfade reaches on each side of it.
 const CUT_FADE_US: i64 = 10_000;
 /// Sound past a cut joins the crossfade only where it is quiet: below this level (-45 dBFS), or
@@ -238,8 +238,8 @@ impl Mixer {
                 if start.max(earliest) >= end.min(latest) || *volume <= 0.0 {
                     continue;
                 }
-                let incoming = transition_in.or_else(|| previous.and_then(|p| self.cut_window(project, p, clip)));
-                let outgoing = transition_out.or_else(|| next.and_then(|n| self.cut_window(project, clip, n)));
+                let incoming = self.incoming(project, track, index);
+                let outgoing = self.outgoing(project, track, index);
                 let incoming = incoming.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let outgoing = outgoing.map(|(a, b)| (us_to_samples(a), us_to_samples(b)));
                 let begin = incoming.map(|w| w.0).unwrap_or(c0);
@@ -271,10 +271,23 @@ impl Mixer {
                     continue;
                 }
                 let stretch = keeps_pitch(clip).then(|| {
-                    // Pieces split from one clip share its stretch, so their sound plays on seamlessly.
-                    let first =
-                        (0..index).rev().take_while(|&i| continues(&track.clips[i], &track.clips[i + 1])).last();
-                    let first = &track.clips[first.unwrap_or(index)];
+                    // Pieces split from one clip share its stretch, so their sound plays on seamlessly. Its
+                    // pieces read only the part of the file the pieces play, so sound cut away stays away.
+                    let run = |i: &usize| continues(&track.clips[*i], &track.clips[*i + 1]);
+                    let first = (0..index).rev().take_while(run).last().unwrap_or(index);
+                    let last = (index..track.clips.len() - 1).take_while(run).last().map_or(index, |i| i + 1);
+                    let source_at = |clip: &Clip, us: i64| {
+                        let ClipContent::Media { source_in_us, .. } = &clip.content else { unreachable!() };
+                        let source_us = *source_in_us as f64 + (us - clip.start_us) as f64 * *speed as f64;
+                        source_us * SAMPLE_RATE as f64 / 1_000_000.0
+                    };
+                    let heard_from = self.incoming(project, track, first).map(|w| w.0);
+                    let heard_until = self.outgoing(project, track, last).map(|w| w.1);
+                    let (first, last) = (&track.clips[first], &track.clips[last]);
+                    let (heard_from, heard_until) =
+                        (heard_from.unwrap_or(first.start_us), heard_until.unwrap_or(last.end_us()));
+                    let kept =
+                        (source_at(first, heard_from).floor() as i64, source_at(last, heard_until).ceil() as i64);
                     let ClipContent::Media { source_in_us, .. } = &first.content else { unreachable!() };
                     let origin = first.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                     let place = origin.round();
@@ -287,7 +300,7 @@ impl Mixer {
                     let stretch = self.stretches.entry(key).or_insert_with(|| Stretch::new(anchor, *speed as f64));
                     let place = place as i64;
                     stretch.reach(samples, from - place, to - place);
-                    (place, &*stretch)
+                    (place, &*stretch, kept)
                 });
                 for i in from..to {
                     let src = src0 + (i as f64 - origin) * *speed as f64;
@@ -300,7 +313,7 @@ impl Mixer {
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
                         let sample = match stretch {
-                            Some((place, stretch)) => stretch.sample(samples, i - place, ch),
+                            Some((place, stretch, kept)) => stretch.sample(samples, i - place, ch, kept),
                             None => sample_at(samples, src, ch),
                         };
                         out[o + ch] += sample * gain;
@@ -311,6 +324,20 @@ impl Mixer {
         for s in out.iter_mut() {
             *s = s.clamp(-1.0, 1.0);
         }
+    }
+}
+
+impl Mixer {
+    /// Where the sound of `track.clips[index]` starts before the clip: a transition or a cut's crossfade.
+    fn incoming(&mut self, project: &Project, track: &Track, index: usize) -> Option<(i64, i64)> {
+        let (previous, clip) = (track.clips.get(index.checked_sub(1)?)?, &track.clips[index]);
+        transition_into(track, clip).or_else(|| self.cut_window(project, previous, clip))
+    }
+
+    /// Where the sound of `track.clips[index]` plays on after the clip: a transition or a cut's crossfade.
+    fn outgoing(&mut self, project: &Project, track: &Track, index: usize) -> Option<(i64, i64)> {
+        let (clip, next) = (&track.clips[index], track.clips.get(index + 1)?);
+        transition_into(track, next).or_else(|| self.cut_window(project, clip, next))
     }
 }
 
