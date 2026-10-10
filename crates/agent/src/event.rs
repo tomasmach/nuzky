@@ -17,6 +17,11 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         input: Option<Value>,
     },
+    /// Comes just before `Done` or `Error` once the agent has kept the conversation: the next
+    /// message resumes this id. It is for Nuzky, not for the panel to show.
+    Session {
+        id: String,
+    },
     Done {
         stopped: bool,
     },

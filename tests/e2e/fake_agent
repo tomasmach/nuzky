@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""A stand-in for `claude -p` in the AI panel flows, so they never spend anyone's subscription.
+"""A stand-in for `claude -p` and `codex exec` in the AI panel flows, so they never spend anyone's subscription.
 
 It takes the same arguments, refuses to run unless Nuzky passed every flag that keeps the agent to
-Nuzky's tools, and answers in Claude Code's stream-json lines. It is a real MCP client of the bridge
-from --mcp-config, so its edits go through Nuzky like a real agent's. The message picks what it does:
+Nuzky's tools, and answers in Claude Code's stream-json or Codex's JSON lines. It is a real MCP client
+of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real agent's. The message picks what it does:
   "cut"      reads the project and its activity, cuts 1-3 s out, adds two captions and answers
   "options"  offers two takes with suggest_options
   "slow"     opens a run, splits the clip and keeps working until stopped
@@ -14,11 +14,12 @@ from --mcp-config, so its edits go through Nuzky like a real agent's. The messag
   anything else is echoed back.
 Each start is logged to $NUZKY_FAKE_AGENT_LOG/runs.jsonl (argv, pid, session); sessions live there too.
 """
-import json, os, signal, subprocess, sys, threading, queue, time
+import json, os, signal, subprocess, sys, threading, queue, time, tomllib, uuid
 from pathlib import Path
 
+CODEX = Path(sys.argv[0]).name == 'fake_codex'
 if len(sys.argv) > 1 and sys.argv[1] == '--version':
-    print('2.1.292 (Claude Code)')
+    print('codex-cli 0.162.1' if CODEX else '2.1.292 (Claude Code)')
     sys.exit(0)
 
 LOG = Path(os.environ.get('NUZKY_FAKE_AGENT_LOG', '/tmp/fake-agent'))
@@ -38,22 +39,36 @@ def emit(obj):
 REQUIRED = {'-p': None, '--output-format': 'stream-json', '--tools': '', '--strict-mcp-config': None,
             '--permission-mode': 'dontAsk', '--allowedTools': 'mcp__nuzky', '--setting-sources': 'user',
             '--disable-slash-commands': None}
-missing = [f for f, v in REQUIRED.items() if f not in args or (v is not None and opt(f) != v)]
-settings = json.loads(opt('--settings') or '{}')
-if not settings.get('disableAllHooks'):
-    missing.append('--settings disableAllHooks')
-session = opt('--session-id') or opt('--resume')
+if CODEX:
+    settings = dict(a.split('=', 1) for i, a in enumerate(args) if i and args[i - 1] == '-c')
+    required = {'sandbox_mode': '"read-only"', 'approval_policy': '"never"', 'features.shell_tool': 'false',
+                'features.code_mode.direct_only_tool_namespaces': '["mcp__nuzky"]',
+                'mcp_servers.nuzky.default_tools_approval_mode': '"approve"'}
+    missing = [f for f in ('--json', '--ignore-user-config') if f not in args]
+    missing += [f'-c {k}={v}' for k, v in required.items() if settings.get(k) != v]
+    if args[:1] != ['exec'] or args[-1:] != ['-']:
+        missing.append('exec ... -')
+    resume = args[:2] == ['exec', 'resume']
+    session = args[-2] if resume else str(uuid.uuid4())
+else:
+    missing = [f for f, v in REQUIRED.items() if f not in args or (v is not None and opt(f) != v)]
+    settings = json.loads(opt('--settings') or '{}')
+    if not settings.get('disableAllHooks'):
+        missing.append('--settings disableAllHooks')
+    session = opt('--session-id') or opt('--resume')
+    resume = '--resume' in args
 prompt = sys.stdin.read()
 with open(LOG / 'runs.jsonl', 'a') as f:
     f.write(json.dumps({'pid': os.getpid(), 'argv': args, 'cwd': os.getcwd(), 'missing': missing, 'prompt': prompt,
-                        'resume': '--resume' in args, 'session': session}, ensure_ascii=False) + '\n')
+                        'resume': resume, 'session': session}, ensure_ascii=False) + '\n')
 if missing:
     print(f'fake agent: Nuzky left out {missing}', file=sys.stderr)
     sys.exit(2)
 sessions = LOG / 'sessions'
 sessions.mkdir(exist_ok=True)
-if '--resume' in args and not (sessions / session).exists():
-    print(f'No conversation found with session ID: {session}', file=sys.stderr)
+if resume and not (sessions / session).exists():
+    print(f'Error: thread/resume: thread/resume failed: no rollout found for thread id {session} (code -32600)'
+          if CODEX else f'No conversation found with session ID: {session}', file=sys.stderr)
     sys.exit(1)
 (sessions / session).write_text(prompt)
 
@@ -81,15 +96,37 @@ class Mcp:
                 return m
 
 
-mcp = Mcp(json.loads(opt('--mcp-config'))['mcpServers']['nuzky'])
+if CODEX:
+    server = {k.removeprefix('mcp_servers.nuzky.'): tomllib.loads('v = ' + v)['v']
+              for k, v in settings.items() if k in ('mcp_servers.nuzky.command', 'mcp_servers.nuzky.args')}
+    server['env'] = {k.removeprefix('mcp_servers.nuzky.env.'): tomllib.loads('v = ' + v)['v']
+                     for k, v in settings.items() if k.startswith('mcp_servers.nuzky.env.')}
+    mcp = Mcp(server)
+else:
+    mcp = Mcp(json.loads(opt('--mcp-config'))['mcpServers']['nuzky'])
 tools = [f"mcp__nuzky__{t['name']}" for t in mcp.rpc('tools/list', {})['result']['tools']]
 style = settings.get('outputStyle', 'Proactive')
-emit({'type': 'system', 'subtype': 'init', 'session_id': session, 'tools': tools, 'output_style': style,
-      'mcp_servers': [{'name': 'nuzky', 'status': 'connected'}], 'claude_code_version': '2.1.292'})
+if CODEX:
+    emit({'type': 'thread.started', 'thread_id': session})
+    emit({'type': 'turn.started'})
+else:
+    emit({'type': 'system', 'subtype': 'init', 'session_id': session, 'tools': tools, 'output_style': style,
+          'mcp_servers': [{'name': 'nuzky', 'status': 'connected'}], 'claude_code_version': '2.1.292'})
 calls = 0
+items = 0
+
+
+def item_id():
+    global items
+    tid = f'item_{items}'
+    items += 1
+    return tid
 
 
 def say(text):
+    if CODEX:
+        emit({'type': 'item.completed', 'item': {'id': item_id(), 'type': 'agent_message', 'text': text}})
+        return
     emit({'type': 'stream_event', 'parent_tool_use_id': None, 'event': {'type': 'message_start'}})
     for i in range(0, len(text), 12):
         emit({'type': 'stream_event', 'parent_tool_use_id': None,
@@ -99,6 +136,17 @@ def say(text):
 
 
 def call(tool, arguments):
+    if CODEX:
+        item = {'id': item_id(), 'type': 'mcp_tool_call', 'server': 'nuzky', 'tool': tool,
+                'arguments': arguments, 'result': None, 'error': None, 'status': 'in_progress'}
+        emit({'type': 'item.started', 'item': item})
+        result = mcp.rpc('tools/call', {'name': tool, 'arguments': arguments})['result']
+        item.update(result={'content': result.get('content', []), 'structured_content': result.get('structuredContent')},
+                    status='failed' if result.get('isError') else 'completed')
+        emit({'type': 'item.completed', 'item': item})
+        if result.get('isError'):
+            raise RuntimeError(result['content'][0]['text'])
+        return result.get('structuredContent', {})
     global calls
     calls += 1
     tid, name = f'toolu_{calls}', f'mcp__nuzky__{tool}'
@@ -115,12 +163,19 @@ def call(tool, arguments):
 
 
 def finish(error=False, text=''):
-    emit({'type': 'result', 'subtype': 'error_during_execution' if error else 'success', 'is_error': error, 'result': text})
+    if CODEX:
+        emit({'type': 'turn.completed', 'usage': {'input_tokens': 1, 'cached_input_tokens': 0,
+              'cache_write_input_tokens': 0, 'output_tokens': 1, 'reasoning_output_tokens': 0}})
+    else:
+        emit({'type': 'result', 'subtype': 'error_during_execution' if error else 'success', 'is_error': error, 'result': text})
     mcp.p.stdin.close()
     sys.exit(0)
 
 
 def interrupted(*_):
+    if CODEX:
+        mcp.p.stdin.close()
+        sys.exit(0)
     emit({'type': 'user', 'parent_tool_use_id': None, 'message': {'content': [{'type': 'text', 'text': '[Request interrupted by user]'}]}})
     finish(error=True, text='')
 
@@ -131,11 +186,21 @@ message = prompt.split('\n\n[Nuzky]')[0].strip().lower()
 thumbnail = message.startswith('make a 9:16 cover')
 
 if 'signin' in message and not thumbnail:
+    if CODEX:
+        error = 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses'
+        for n in range(1, 6):
+            emit({'type': 'error', 'message': f'Reconnecting... {n}/5 ({error})'})
+            time.sleep(1)
+        emit({'type': 'turn.failed', 'error': {'message': error}})
+        sys.exit(1)
     emit({'type': 'assistant', 'error': 'authentication_failed', 'parent_tool_use_id': None,
           'message': {'content': [{'type': 'text', 'text': 'Not logged in · Please run /login'}]}})
     emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Not logged in · Please run /login'})
     sys.exit(1)
 if 'limit' in message and not thumbnail:
+    if CODEX:
+        emit({'type': 'turn.failed', 'error': {'message': 'You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 9:00 PM.'}})
+        sys.exit(1)
     emit({'type': 'assistant', 'error': 'rate_limit', 'parent_tool_use_id': None,
           'message': {'content': [{'type': 'text', 'text': "You've hit your limit · resets 9pm"}]}})
     emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': "You've hit your limit · resets 9pm"})

@@ -210,19 +210,21 @@ fn send(
     }
     let (handle, chat_id) = (app.clone(), id.clone());
     let started = Turn::start(request, move |event| {
-        handle.emit("agent", PanelEvent { chat: &chat_id, event: &event }).ok();
-        let ended = matches!(event, AgentEvent::Done { .. } | AgentEvent::Error { .. });
-        if !ended {
+        let panel = handle.state::<AgentPanel>();
+        if let AgentEvent::Session { id } = event {
+            if let Some(chat) = panel.chats.lock().unwrap().get_mut(&chat_id) {
+                chat.session = id;
+                chat.resumable = true;
+            }
             return;
         }
-        let panel = handle.state::<AgentPanel>();
-        if let Some(chat) = panel.chats.lock().unwrap().get_mut(&chat_id) {
+        handle.emit("agent", PanelEvent { chat: &chat_id, event: &event }).ok();
+        if let AgentEvent::Error { .. } = event
+            && let Some(chat) = panel.chats.lock().unwrap().get_mut(&chat_id)
+            && !chat.resumable
+        {
             // A turn that never got going leaves no conversation to resume, so the next one starts it afresh.
-            match event {
-                AgentEvent::Done { .. } => chat.resumable = true,
-                _ if !chat.resumable => chat.session = new_id(),
-                _ => {}
-            }
+            chat.session = new_id();
         }
     })
     .map_err(err)?;

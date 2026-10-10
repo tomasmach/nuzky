@@ -1,6 +1,6 @@
-use crate::claude;
 use crate::discover::AgentId;
 use crate::event::{AgentEvent, ErrorCode};
+use crate::{claude, codex};
 use anyhow::{Context, Result, bail};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -19,17 +19,56 @@ pub struct McpServer {
     pub env: Vec<(String, String)>,
 }
 
+/// What Nuzky tells the agent about where it is, on top of the MCP server's own instructions.
+pub(crate) const SYSTEM: &str = "You are the AI panel inside Nuzky, a video editor. The user watches the open project change as you work. \
+Use only the nuzky tools and follow the Nuzky instructions you were given. One request is one run: begin_run once before \
+changing anything and end_run with keep when you are done. Answer briefly in the user's language and say what you changed. \
+When the user has to decide something, call suggest_options as the last thing in your turn. The [Nuzky] lines at the end \
+of a message say what the user had selected when they sent it.";
+
 #[derive(Clone, Debug)]
 pub struct TurnRequest {
     pub agent: AgentId,
     pub exe: PathBuf,
-    /// The conversation: a new one is created under this id, a later turn resumes it.
+    /// The conversation a later turn resumes. Claude also starts a new one under this id; Codex picks
+    /// its own and reports it in `AgentEvent::Session`.
     pub session: String,
     pub resume: bool,
     pub prompt: String,
     /// An empty folder of Nuzky's own, so no project instructions or settings load from it.
     pub cwd: PathBuf,
     pub mcp: McpServer,
+}
+
+/// What a line of the agent's output means for the turn.
+pub(crate) enum Step {
+    Event(AgentEvent),
+    /// Ends the turn with this error; Nuzky stops the agent.
+    Fail(ErrorCode, String),
+    /// The agent's own closing error, which a stopped turn also produces.
+    ResultError(String),
+}
+
+enum Parser {
+    /// Claude keeps the conversation under Nuzky's id once a turn ends without an error.
+    Claude(claude::Parser, String),
+    Codex(codex::Parser),
+}
+
+impl Parser {
+    fn line(&mut self, line: &str) -> Vec<Step> {
+        match self {
+            Parser::Claude(p, _) => p.line(line),
+            Parser::Codex(p) => p.line(line),
+        }
+    }
+
+    fn session(&self, end: &AgentEvent) -> Option<String> {
+        match self {
+            Parser::Claude(_, id) => matches!(end, AgentEvent::Done { .. }).then(|| id.clone()),
+            Parser::Codex(p) => p.session(),
+        }
+    }
 }
 
 /// How long a stopped agent gets to finish before it is killed.
@@ -54,12 +93,6 @@ fn parent_session_var(name: &str) -> bool {
 impl Turn {
     /// Starts the turn; `emit` gets its events from a reader thread, ending with `Done` or `Error`.
     pub fn start(req: TurnRequest, mut emit: impl FnMut(AgentEvent) + Send + 'static) -> Result<Turn> {
-        if req.agent != AgentId::Claude {
-            bail!(
-                "{} in the AI panel is not ready yet. Use Claude Code, or connect Codex in a terminal.",
-                req.agent.name()
-            );
-        }
         if cfg!(windows) {
             bail!("The AI panel is not available on Windows yet. Connect your agent in a terminal instead.");
         }
@@ -70,7 +103,10 @@ impl Turn {
             std::fs::set_permissions(&req.cwd, std::fs::Permissions::from_mode(0o700))
                 .context("Securing the AI panel's folder")?;
         }
-        let mut cmd = claude::command(&req);
+        let mut cmd = match req.agent {
+            AgentId::Claude => claude::command(&req),
+            AgentId::Codex => codex::command(&req),
+        };
         cmd.current_dir(&req.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for (name, _) in std::env::vars_os() {
             if name.to_str().is_some_and(parent_session_var) {
@@ -87,7 +123,7 @@ impl Turn {
         let mut stdin = child.stdin.take().context("Agent input")?;
         let prompt = req.prompt;
         std::thread::spawn(move || {
-            // Closing input tells `claude -p` that the message is complete.
+            // Closing input tells the agent that the message is complete.
             let _ = stdin.write_all(prompt.as_bytes());
         });
         let tail = Arc::new(Mutex::new(VecDeque::<String>::new()));
@@ -104,8 +140,11 @@ impl Turn {
         });
         let stdout = child.stdout.take().context("Agent output")?;
         let (stop_flag, done_flag) = (stopping.clone(), finished.clone());
+        let mut parser = match req.agent {
+            AgentId::Claude => Parser::Claude(claude::Parser::default(), req.session),
+            AgentId::Codex => Parser::Codex(codex::Parser::new(pid)),
+        };
         std::thread::spawn(move || {
-            let mut parser = claude::Parser::default();
             let mut failed: Option<(ErrorCode, String)> = None;
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
@@ -118,14 +157,12 @@ impl Turn {
                 }
                 for step in parser.line(line.trim_end()) {
                     match step {
-                        claude::Step::Event(e) if failed.is_none() => emit(e),
-                        claude::Step::Fail(code, message) if failed.is_none() => {
+                        Step::Event(e) if failed.is_none() => emit(e),
+                        Step::Fail(code, message) if failed.is_none() => {
                             failed = Some((code, message));
                             signal(pid, false);
                         }
-                        claude::Step::ResultError(message)
-                            if failed.is_none() && !stop_flag.load(Ordering::Acquire) =>
-                        {
+                        Step::ResultError(message) if failed.is_none() && !stop_flag.load(Ordering::Acquire) => {
                             failed = Some((ErrorCode::AgentFailed, message));
                         }
                         _ => {}
@@ -148,6 +185,9 @@ impl Turn {
                     message: if tail.trim().is_empty() { format!("The agent exited with {code}.") } else { tail },
                 }
             };
+            if let Some(id) = parser.session(&end) {
+                emit(AgentEvent::Session { id });
+            }
             emit(end);
         });
         Ok(Turn { pid, stopping, finished })
@@ -179,7 +219,7 @@ impl Drop for Turn {
     }
 }
 
-/// SIGINT lets Claude record the interrupted turn so the next one can resume; SIGKILL is the fallback.
+/// SIGINT lets the agent record the interrupted turn so the next one can resume; SIGKILL is the fallback.
 /// The whole process group gets it, so the MCP bridge the agent started goes too.
 fn signal(pid: u32, kill: bool) {
     #[cfg(unix)]

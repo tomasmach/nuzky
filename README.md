@@ -24,7 +24,7 @@ Cut a talking video by deleting words from its transcript, caption it with speec
 - Edit on a magnetic main track with overlay video, audio and text tracks. Move, trim, split and delete with snapping, undo and redo; Nuzky saves after every edit.
 - Style text with an outline, a background box, size, colour, position, rotation and opacity.
 - Export MP4 (H.264 and AAC) from the same renderer as the preview, so the file matches what you saw. The Reels & TikTok preset writes 1080×1920 at 30 fps with the sound levelled to −14 LUFS and true peak at most −1 dBTP.
-- Let any MCP-capable AI agent edit the open project while you watch; each run undoes as one step. Connect agent sets up Claude Code and Codex in one click, and the AI panel chats with your own Claude Code.
+- Let any MCP-capable AI agent edit the open project while you watch; each run undoes as one step. Connect agent sets up Claude Code and Codex in one click, and the AI panel chats with your own Claude Code or Codex.
 - Teach Nuzky a creator's style from raw recordings and their finished cuts, or from timelines they cut in another editor and exported as OpenTimelineIO (.otio), on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
 
 Nuzky itself sends nothing you edit anywhere. It goes online only to download models with a pinned checksum and, at most once a day, to read the latest version number from GitHub; you can turn that check off on the home screen. An AI agent you connect runs under your own account and sends what it reads to its provider.
@@ -75,7 +75,7 @@ crates/analysis local speech recognition, caption grouping, silence and scene an
 crates/vision   local face and subject models: frames worth a cover, where the person is
 crates/session  editing authority, undo runs, autosave, crash recovery and transcripts
 crates/mcp      agent tools, stdio bridge and live-app IPC
-crates/agent    runs the user's own Claude Code for the in-app AI panel
+crates/agent    runs the user's own Claude Code or Codex for the in-app AI panel
 crates/cli      `nuzky` headless CLI and MCP entry point
 src-tauri       desktop shell: preview thread, audio output, background jobs, session events
 src             React + TypeScript UI

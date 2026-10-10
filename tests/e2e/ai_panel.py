@@ -64,6 +64,87 @@ def idle(r):
     return wait(lambda: agent(r)['status'] == 'idle', 20)
 
 
+def setup_codex(r):
+    setup(r)
+    r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(FAKE.with_name('fake_codex')))
+
+
+@flow('ai_panel_codex', 'The AI panel uses Codex: live edits, undo, choices, conversation after Stop, and prompt login and usage hints',
+      before=setup_codex)
+def ai_panel_codex(r):
+    r.s.run('document.body.focus()')
+    r.key('j', ctrlKey=True)
+    wait(lambda: panel(r), 5)
+    agents = wait(lambda: r.s.run('return window.__nuzky.agent.getState().agents'), 10) or []
+    r.check('Claude Code is not installed and Codex is installed with version 0.162.1',
+            [(a['name'], bool(a['path']), a['version']) for a in agents] ==
+            [('Claude Code', False, None), ('Codex', True, '0.162.1')], agents)
+    r.check('the panel uses Codex', r.s.run("return window.__nuzky.agent.getState().agent === 'codex'")
+            and 'Codex' in panel(r)['text'], panel(r)['text'])
+
+    before = r.track()
+    send(r, 'Cut the pause at the start and add captions')
+    r.check('the editor locks while Codex edits', wait(lambda: r.state()['aiRun'], 15))
+    r.check('its steps show live with plain titles', wait(lambda: 'Read the project' in panel(r)['text'], 10), panel(r)['text'])
+    wait(lambda: agent(r)['status'] == 'idle' and 'run' in agent(r)['kinds'], 30)
+    text = panel(r)['text']
+    r.check('a card lists the cut and the captions',
+            'Cut out 1 passage, 2.0 s in total' in text and 'Added 2 captions' in text, text)
+    r.check("Codex's whole answer shows", 'Hotovo.' in text, text)
+    saved = json.loads(r.saved_project().read_text())
+    main = next(t['clips'] for t in saved['tracks'] if t['id'] == 'main')
+    captions = [c for t in saved['tracks'] if t['name'] == 'Captions' for c in t['clips']]
+    r.check('the cut and both captions are in the saved project',
+            main[-1]['startUs'] + main[-1]['durationUs'] == before[-1]['startUs'] + before[-1]['durationUs'] - 2_000_000
+            and [c['content']['text'] for c in captions] == ['Dneska vám', 'ukážu jak'], saved['tracks'])
+    first = runs(r)[0]
+    r.check("Codex ran with Nuzky's tools only, outside home, without resuming",
+            not first['missing'] and not first['cwd'].startswith(r.env['HOME']) and not first['resume'], first)
+    r.shot('codex-run-done')
+    click(r, 'Undo')
+    r.check('Undo on the card takes back the whole run', wait(lambda: r.track() == before
+            and not any(t['name'] == 'Captions' for t in r.state()['tracks']), 10), r.state()['tracks'])
+
+    send(r, 'What options do I have?')
+    r.check('the next message resumes the same Codex thread', wait(lambda: len(runs(r)) == 2, 10)
+            and runs(r)[1]['resume'] and runs(r)[1]['session'] == first['session'], runs(r)[-1])
+    buttons = "return [...document.querySelectorAll('aside[aria-label=AI] [role=group] button')].map((b) => b.textContent)"
+    r.check('the choices show as buttons', wait(lambda: r.s.run(buttons) ==
+            ['The first takeShorter, a slip in the middle', 'The last takeClean, 2 s longer']
+            and agent(r)['status'] == 'idle', 15), r.s.run(buttons))
+
+    send(r, 'slow edit please')
+    r.check('a slow Codex edit locks the editor', wait(lambda: r.state()['aiRun'] and 'Pracuju' in panel(r)['text'], 15))
+    pid = runs(r)[-1]['pid']
+    started = time.monotonic()
+    click(r, 'Stop')
+    gone = wait(lambda: not alive(pid), 5, 0.05)
+    r.check('Stop ends Codex within seconds and unlocks the editor', gone and wait(lambda: not r.state()['aiRun'], 3),
+            {'seconds': round(time.monotonic() - started, 2)})
+    idle(r)
+    send(r, 'hello after Stop')
+    r.check('a stopped Codex turn keeps the same conversation', wait(lambda: len(runs(r)) == 4, 10)
+            and runs(r)[3]['resume'] and runs(r)[3]['session'] == first['session']
+            and wait(lambda: 'Rozumím: hello after stop' in panel(r)['text'], 10), runs(r)[-1])
+    idle(r)
+
+    started = time.monotonic()
+    send(r, 'signin please')
+    hint = wait(lambda: "Codex isn't signed in." in panel(r)['text'] and agent(r)['draft'] == 'signin please', 7, 0.05)
+    text = panel(r)['text']
+    gone = wait(lambda: len(runs(r)) == 5 and not alive(runs(r)[-1]['pid']), 1, 0.05)
+    r.check('not signed in gives the login steps and the message back within 5 s, with Codex already stopped',
+            hint and 'codex login' in text and 'Sign in with ChatGPT' in text and gone and time.monotonic() - started < 5,
+            {'seconds': round(time.monotonic() - started, 2), 'draft': agent(r)['draft'], 'text': text, 'gone': gone})
+    r.shot('codex-not-signed-in')
+    idle(r)
+    r.s.run("window.__nuzky.agent.setState({draft: ''})")
+    send(r, 'limit please')
+    r.check('the Codex usage hint includes its reset time', wait(lambda: 'Codex usage limit reached.' in panel(r)['text']
+            and '9:00 PM' in panel(r)['text'], 10), panel(r)['text'])
+    r.check('no error toast along the way', not r.errors(), r.errors())
+
+
 @flow('ai_panel', "The AI panel runs the user's agent with only Nuzky's tools: it edits live, says exactly what changed, "
       'offers choices, stops at once, keeps a failed message, and docks, floats and resizes where the user put it',
       before=setup)
