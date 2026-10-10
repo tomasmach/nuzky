@@ -147,7 +147,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 23);
+    assert_eq!(tools.len(), 25);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
