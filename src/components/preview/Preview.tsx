@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, SkipBack, SkipForward, Smartphone } from "lucide-react";
 import { api } from "../../lib/api";
+import { useCover } from "../../lib/cover";
 import { projectDuration, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { SafeArea } from "../../lib/types";
+import { CoverBar, CoverStage } from "../cover/CoverStage";
 import { IconButton } from "../ui";
 import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
@@ -107,6 +109,8 @@ export function Preview() {
   const duration = useEditor((s) => (s.snap ? projectDuration(s.snap.project) : 0));
   const playing = useEditor((s) => s.playing);
   const engineError = useEditor((s) => s.engineError);
+  // The cover editor shows the cover here in place of the video.
+  const cover = useCover((s) => s.open);
   const { togglePlay, seek } = useEditor.getState();
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -147,7 +151,8 @@ export function Preview() {
     <section className="@container flex min-w-0 flex-1 flex-col rounded-xl bg-stage shadow-[inset_0_0_0_1px_rgb(255_255_255/.05)]" aria-label="Preview">
       {/* Clips the selection box of a layer scaled or rotated past the frame to the preview area. */}
       <div ref={boxRef} className="relative mx-4 mt-3 min-h-0 flex-1 overflow-hidden">
-        <div className="absolute inset-0 flex items-center justify-center">
+        {cover && box.w > 0 && <CoverStage format={cover} box={box} />}
+        <div className="absolute inset-0 flex items-center justify-center" hidden={!!cover}>
           <div className="relative" style={{ width: fit.w, height: fit.h }}>
             {/* Square corners and no blurred shadow: a rounded clip would cost a mask on every frame, and in
                 WebKitGTK a blurred shadow on this box left the canvas black. */}
@@ -174,7 +179,7 @@ export function Preview() {
         </div>
       </div>
       <div className="flex shrink-0 justify-center px-5 py-2.5 @max-[460px]:px-2">
-        <div className="bar grid h-11 w-full max-w-[620px] grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-full pl-[18px] pr-1.5">
+        {cover ? <CoverBar format={cover} /> : <div className="bar grid h-11 w-full max-w-[620px] grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-full pl-[18px] pr-1.5">
           <Timecode duration={duration} />
           <div className="flex items-center gap-2.5">
             <IconButton round label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
@@ -206,7 +211,7 @@ export function Preview() {
             </IconButton>
             {canvas && <RatioMenu />}
           </div>
-        </div>
+        </div>}
       </div>
     </section>
   );

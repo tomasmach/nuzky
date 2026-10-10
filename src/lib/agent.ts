@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { errorText, plainError } from "./api";
+import { loadModels, useCover } from "./cover";
+import { useDock } from "./dock";
 import { formatTime } from "./time";
 import { useEditor } from "./store";
 import type { Snapshot } from "./types";
@@ -64,6 +66,8 @@ export interface PromptContext {
   frame: boolean;
   /** Sent from the Your style page: about the creator's style, not the open project. */
   style: boolean;
+  /** Make a thumbnail: the agent gets the MCP prompt `thumbnail`, with the text as the user's wishes. */
+  thumbnail: boolean;
 }
 
 /** What the panel is about: the open project, or the creator's style on the Your style page. */
@@ -87,6 +91,8 @@ interface AgentState {
   dropSelection: boolean;
   dropPlayhead: boolean;
   frame: boolean;
+  /** Make a thumbnail is in the field: the message asks for a cover and a YouTube thumbnail, the text is an optional note. */
+  thumbnail: boolean;
 }
 
 const AGENT_KEY = "nuzky.aiAgent";
@@ -110,6 +116,7 @@ export const useAgent = create<AgentState>(() => ({
   dropSelection: false,
   dropPlayhead: false,
   frame: false,
+  thumbnail: false,
 }));
 
 const agentApi = {
@@ -209,15 +216,15 @@ export function newChat() {
 
 /** What the next message would carry, as the chips show it. */
 function promptContext(about: AiAbout): PromptContext {
-  if (about === "style") return { selection: null, playheadUs: null, frame: false, style: true };
+  if (about === "style") return { selection: null, playheadUs: null, frame: false, style: true, thumbnail: false };
   const { selection, timeUs } = useEditor.getState();
-  const { dropSelection, dropPlayhead, frame } = useAgent.getState();
-  return { selection: dropSelection || selection.length === 0 ? null : [...selection], playheadUs: dropPlayhead ? null : Math.round(timeUs), frame, style: false };
+  const { dropSelection, dropPlayhead, frame, thumbnail } = useAgent.getState();
+  return { selection: dropSelection || selection.length === 0 ? null : [...selection], playheadUs: dropPlayhead ? null : Math.round(timeUs), frame, style: false, thumbnail };
 }
 
 function describeContext(c: PromptContext): string | null {
   if (c.style) return "Your style";
-  const parts: string[] = [];
+  const parts: string[] = c.thumbnail ? ["Make a thumbnail"] : [];
   if (c.selection) parts.push(c.selection.length === 1 ? "1 clip" : `${c.selection.length} clips`);
   if (c.playheadUs !== null) parts.push(`Playhead ${formatTime(c.playheadUs, false)}`);
   if (c.frame) parts.push("Frame");
@@ -232,12 +239,24 @@ export function sendBlocked(): string | null {
   if (s.agents && !info?.path) return `${info?.name ?? "The agent"} is not installed`;
   if (s.status !== "idle") return "Wait for the answer, or stop it";
   if (useEditor.getState().aiRun) return "Another agent is editing. Wait for it, or stop it in the top bar";
+  const models = useCover.getState().models;
+  if (s.thumbnail && models?.unavailable) return "Finding faces doesn't work on this computer, so the AI can't make a thumbnail here";
+  if (s.thumbnail && models && !models.downloaded) return `Download the cover models first (${models.sizeMb} MB)`;
   return null;
+}
+
+/** Puts Make a thumbnail in the field of the AI panel, opening it: a note such as the hook is optional. */
+export function makeThumbnail() {
+  void loadModels();
+  useAgent.setState({ thumbnail: true });
+  useDock.setState({ open: true });
+  // The panel may only now be drawn.
+  window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('aside[aria-label="AI"] textarea')?.focus(), 0);
 }
 
 export async function send(text = useAgent.getState().draft.trim(), about: AiAbout = useAgent.getState().about) {
   const s = useAgent.getState();
-  if (!text || sendBlocked()) return;
+  if ((!text && !(s.thumbnail && about === "project")) || sendBlocked()) return;
   const context = promptContext(about);
   const fromDraft = text === s.draft.trim();
   // The chat is named here, before sending, so even an agent that fails at once is heard.
@@ -247,7 +266,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
     chat,
     turn,
     // Earlier problems are over once a new message goes; their Try again would send this one.
-    items: [...s.items.filter((i) => i.kind !== "error"), { kind: "user", text, context: describeContext(context) }],
+    items: [...s.items.filter((i) => i.kind !== "error"), { kind: "user", text: text || "Make a thumbnail", context: text ? describeContext(context) : describeContext({ ...context, thumbnail: false }) }],
     status: "working",
     startedAt: Date.now(),
     about,
@@ -255,6 +274,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
     dropSelection: false,
     dropPlayhead: false,
     frame: false,
+    thumbnail: false,
   });
   try {
     await agentApi.send(s.agent, chat, turn, text, context);

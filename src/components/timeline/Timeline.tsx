@@ -3,6 +3,7 @@ import { Copy, Magnet, Maximize2, PanelLeftClose, PanelRightClose, Scissors, Tra
 import { MAIN_TRACK, allClips, contentEnd, deleteSelection, deleteSide, displayTracks, duplicateSelection, editClip, findClip, mainClips, projectDuration, splitAtPlayhead, splitTargets, useAiLocked, useEditor } from "../../lib/store";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Clip, EditCmd, Project, Track } from "../../lib/types";
+import { candidateReason, useCandidates, useCover } from "../../lib/cover";
 import { setDropResolver } from "../panel/assets";
 import { IconButton, RangeInput } from "../ui";
 import { ClipMenu, type MenuAt } from "./ClipMenu";
@@ -151,6 +152,9 @@ export function Timeline({ height }: { height: number }) {
   // Media dragged from the panel, or files dragged in from the desktop.
   const assetDrag = useEditor((s) => s.assetDrag ?? s.fileDrag);
   const locked = useAiLocked();
+  // In the cover editor the timeline chooses the cover's frame: clicks and drags move the playhead, which is the frame.
+  const cover = useCover((s) => s.open);
+  const candidates = useCandidates();
   const { select, setZoom } = useEditor.getState();
   const scroller = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
@@ -336,6 +340,7 @@ export function Timeline({ height }: { height: number }) {
   // nudge; the Menu key or Shift+F10 opens the clip menu. The keys stop here, so the playhead does
   // not also step.
   const onClipKey = (e: React.KeyboardEvent) => {
+    if (cover) return;
     const id = (e.target as HTMLElement).getAttribute?.("data-clip-id");
     const found = id ? tracks.flatMap((t) => t.clips.map((c) => [t, c] as const)).find(([, c]) => c.id === id) : undefined;
     if (!found || e.metaKey) return;
@@ -381,42 +386,46 @@ export function Timeline({ height }: { height: number }) {
   return (
     <section className="pane flex shrink-0 flex-col overflow-hidden" style={{ height }} aria-label="Timeline">
       <div className="flex h-11 shrink-0 items-center gap-1.5 px-2.5">
-        <div className="bar flex items-center rounded-full">
-          <IconButton round label={locked ? lockedLabel("Split") : canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={locked || !canSplit} onClick={splitAtPlayhead}>
-            <Scissors size={16} />
-          </IconButton>
-          <IconButton
-            round
-            label={locked ? lockedLabel("Delete left") : canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"}
-            disabled={locked || !canSplit}
-            onClick={() => deleteSide("left")}
-          >
-            <PanelLeftClose size={16} />
-          </IconButton>
-          <IconButton
-            round
-            label={locked ? lockedLabel("Delete right") : canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"}
-            disabled={locked || !canSplit}
-            onClick={() => deleteSide("right")}
-          >
-            <PanelRightClose size={16} />
-          </IconButton>
-          <IconButton round label={locked ? lockedLabel("Delete") : deleteLabel} disabled={locked || (selection.length === 0 && !cut)} onClick={deleteSelection}>
-            <Trash2 size={16} />
-          </IconButton>
-          <IconButton
-            round
-            label={locked ? lockedLabel("Duplicate") : selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"}
-            disabled={locked || selection.length === 0}
-            onClick={duplicateSelection}
-          >
-            <Copy size={15} />
-          </IconButton>
-          <span aria-hidden className="mx-1 h-4 w-px bg-white/[.12]" />
-          <IconButton round label={snapping ? "Snapping on" : "Snapping off"} active={snapping} onClick={() => setSnapping(!snapping)}>
-            <Magnet size={16} />
-          </IconButton>
-        </div>
+        {cover ? (
+          <p className="truncate pl-1.5 text-[12px] text-muted">Click or drag on the timeline to choose the cover's frame.</p>
+        ) : (
+          <div className="bar flex items-center rounded-full">
+            <IconButton round label={locked ? lockedLabel("Split") : canSplit ? "Split at playhead (S)" : "Split: move the playhead over a clip"} disabled={locked || !canSplit} onClick={splitAtPlayhead}>
+              <Scissors size={16} />
+            </IconButton>
+            <IconButton
+              round
+              label={locked ? lockedLabel("Delete left") : canSplit ? "Delete left of playhead (Q)" : "Delete left: move the playhead over a clip"}
+              disabled={locked || !canSplit}
+              onClick={() => deleteSide("left")}
+            >
+              <PanelLeftClose size={16} />
+            </IconButton>
+            <IconButton
+              round
+              label={locked ? lockedLabel("Delete right") : canSplit ? "Delete right of playhead (W)" : "Delete right: move the playhead over a clip"}
+              disabled={locked || !canSplit}
+              onClick={() => deleteSide("right")}
+            >
+              <PanelRightClose size={16} />
+            </IconButton>
+            <IconButton round label={locked ? lockedLabel("Delete") : deleteLabel} disabled={locked || (selection.length === 0 && !cut)} onClick={deleteSelection}>
+              <Trash2 size={16} />
+            </IconButton>
+            <IconButton
+              round
+              label={locked ? lockedLabel("Duplicate") : selection.length ? "Duplicate (Ctrl+D)" : "Duplicate: select a clip first"}
+              disabled={locked || selection.length === 0}
+              onClick={duplicateSelection}
+            >
+              <Copy size={15} />
+            </IconButton>
+            <span aria-hidden className="mx-1 h-4 w-px bg-white/[.12]" />
+            <IconButton round label={snapping ? "Snapping on" : "Snapping off"} active={snapping} onClick={() => setSnapping(!snapping)}>
+              <Magnet size={16} />
+            </IconButton>
+          </div>
+        )}
         <div className="flex-1" />
         <IconButton round label="Zoom out (-)" onClick={() => setZoom(zoom / 1.3)}>
           <ZoomOut size={16} />
@@ -483,6 +492,16 @@ export function Timeline({ height }: { height: number }) {
                   <div className="mx-auto h-full w-0 border-l border-dashed border-muted" />
                 </div>
               )}
+              {/* The frames Pick for me found, as dots along the bottom of the ruler. */}
+              {cover &&
+                candidates.map((c) => (
+                  <span
+                    key={c.timeUs}
+                    className="absolute bottom-0.5 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-fg/60 shadow-[0_0_0_1px_rgb(0_0_0/.5)]"
+                    style={{ left: (c.timeUs / US) * zoom }}
+                    title={`${formatTime(c.timeUs)} · ${Math.round(c.score * 100)} · ${candidateReason(c, cover)}`}
+                  />
+                ))}
             </div>
           </div>
 
@@ -551,7 +570,7 @@ export function Timeline({ height }: { height: number }) {
                           visible={visible}
                           selected={selection.includes(clip.id)}
                           locked={locked}
-                          tabbable={clip.id === tabStop}
+                          tabbable={!cover && clip.id === tabStop}
                           timing={isMain ? layout?.timing.get(clip.id) : undefined}
                           fades={fading?.clip.id === clip.id ? fades : undefined}
                           onPointerDown={startClipDrag}
@@ -583,6 +602,9 @@ export function Timeline({ height }: { height: number }) {
               <div className="sticky left-0 z-[47] shrink-0 border-r border-white/[.07] bg-panel" style={{ width: HEADER_W }} />
             </div>
           </div>
+
+          {/* In the cover editor the lanes only choose the frame; clips cannot be selected, moved or trimmed. */}
+          {cover && <div className="absolute bottom-0 right-0 z-[41] cursor-pointer" style={{ left: HEADER_W, top: RULER_H }} onPointerDown={startScrub} data-testid="cover-scrub" />}
 
           {/* Ghost for a drag onto a new track follows the pointer row-less. */}
           {drag?.moved && drag.target === null && ghostTiming && (

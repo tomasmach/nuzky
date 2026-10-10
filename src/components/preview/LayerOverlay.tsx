@@ -90,6 +90,37 @@ interface Gesture {
 }
 
 /**
+ * The layers a selection box works on: the clips of the video at the playhead, or the texts of a cover.
+ * Ids are `LayerBounds.clipId`.
+ */
+export interface LayerSource {
+  /** The picture the layers sit on, in its own pixels. */
+  canvas: { width: number; height: number };
+  /** Where the layers are drawn now, bottom to top. */
+  bounds: LayerBounds[];
+  /** Where they are for a press: the clips ask the engine again, as the playhead may have moved. */
+  current: () => Promise<LayerBounds[]>;
+  /** Where they are once the gesture's last change is confirmed, so the box never jumps back. */
+  settled: (last: Promise<unknown>) => Promise<LayerBounds[]>;
+  onBounds: (bounds: LayerBounds[]) => void;
+  selected: string | null;
+  /** True when `id` is the one layer selected; a press on another layer selects it alone. */
+  isOnlySelected: (id: string) => boolean;
+  select: (id: string | null) => void;
+  /** The layer's transform as the edit will change it, at the playhead for clips. */
+  transform: (id: string) => Transform | null;
+  change: (id: string, patch: Partial<Transform>, key: string) => Promise<unknown>;
+  /** Videos and images crop; text does not. */
+  croppable: (id: string) => boolean;
+  /** Corner radius as a share of half the shorter visible side, so a click beside a circle reaches the layer below. */
+  radius: (id: string) => number;
+  /** While the AI edits, a click still selects but nothing moves. */
+  locked: () => boolean;
+  /** The box hides, e.g. while the video plays. */
+  hidden: boolean;
+}
+
+/**
  * Selection box over the preview frame: click selects the top-most layer under the pointer,
  * dragging moves it, corners scale it, the top handle rotates it (Shift snaps to 15°). On videos and
  * images the bars in the middle of each edge crop that edge.
@@ -103,17 +134,11 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   const revision = useEditor((s) => s.snap!.revision);
   const selection = useEditor((s) => s.selection);
   const playing = useEditor((s) => s.playing);
-  const locked = useAiLocked();
   // The box hides while playing, so the playhead only matters once paused.
   const timeUs = useEditor((s) => (s.playing ? null : s.timeUs));
-  const ref = useRef<HTMLDivElement>(null);
   const [bounds, setBounds] = useState<LayerBounds[]>([]);
-  const [live, setLive] = useState<{ corners: Pt[]; frame?: Pt[]; guideX: boolean; guideY: boolean } | null>(null);
-  // Ends the running gesture's window listeners and frame request; also called on unmount.
-  const stop = useRef<(() => void) | null>(null);
-  const k = width / canvas.width;
-
-  useEffect(() => () => stop.current?.(), []);
+  // Re-rendered with the clip's content, so only the boolean is watched.
+  const media = useEditor((s) => (selection.length === 1 ? findClip(s.snap!.project, selection[0])?.clip.content.type === "media" : false));
 
   useEffect(() => {
     if (timeUs === null) return;
@@ -126,6 +151,49 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       alive = false;
     };
   }, [timeUs, revision]);
+
+  const project = () => useEditor.getState().snap!.project;
+  const source: LayerSource = {
+    canvas,
+    bounds,
+    current: () => api.layerBounds(useEditor.getState().timeUs),
+    settled: (last) => last.then(() => api.layerBounds(useEditor.getState().timeUs)),
+    onBounds: setBounds,
+    selected: selection.length === 1 ? selection[0] : null,
+    isOnlySelected: (id) => {
+      const sel = useEditor.getState().selection;
+      return sel.length === 1 && sel[0] === id;
+    },
+    select: (id) => useEditor.getState().select(id ? [id] : []),
+    transform: (id) => {
+      const found = findClip(project(), id);
+      return found ? transformAtPlayhead(found.clip, useEditor.getState().timeUs) : null;
+    },
+    // The store builds the edit from the latest confirmed clip, so a keyframe written earlier
+    // in this gesture is updated, not duplicated, and other fields are never reverted.
+    change: (id, patch, key) => setClipTransform(id, patch, key),
+    croppable: (id) => id === selection[0] && media,
+    radius: (id) => shapeRadius(project(), id),
+    locked: () => !!useEditor.getState().aiRun,
+    hidden: playing,
+  };
+  return <LayerBox width={width} height={height} bleed={bleed} source={source} />;
+}
+
+/** The selection box and its gestures over any picture of layers; see `LayerOverlay`. */
+export function LayerBox({ width, height, bleed, source }: { width: number; height: number; bleed: { x: number; y: number }; source: LayerSource }) {
+  const { canvas, bounds } = source;
+  const locked = useAiLocked();
+  const ref = useRef<HTMLDivElement>(null);
+  const [live, setLive] = useState<{ corners: Pt[]; frame?: Pt[]; guideX: boolean; guideY: boolean } | null>(null);
+  // Ends the running gesture's window listeners and frame request; also called on unmount.
+  const stop = useRef<(() => void) | null>(null);
+  // The gesture outlives renders; it reads the source as it is now.
+  const src = useRef(source);
+  src.current = source;
+  const k = width / canvas.width;
+
+  useEffect(() => () => stop.current?.(), []);
 
   const toCanvas = (x: number, y: number): Pt => {
     const r = ref.current!.getBoundingClientRect();
@@ -192,9 +260,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
       const { patch, corners, guideX, guideY } = solve(g, toCanvas(latest.x, latest.y), latest.shift);
       // While cropping, a dashed outline shows the whole layer.
       setLive({ corners, frame: g.mode in NO_CROP ? g.frame : undefined, guideX, guideY });
-      // The store builds the edit from the latest confirmed clip, so a keyframe written earlier
-      // in this gesture is updated, not duplicated, and other fields are never reverted.
-      lastEdit = setClipTransform(g.clipId, patch, g.key);
+      lastEdit = src.current.change(g.clipId, patch, g.key);
     };
     const halt = () => {
       cancelAnimationFrame(raf);
@@ -204,9 +270,9 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     const settle = () => {
       if (!lastEdit) return setLive(null);
       // Keep the live box until the engine reports where the layer ended up, so it never jumps back.
-      lastEdit
-        .then(() => api.layerBounds(useEditor.getState().timeUs))
-        .then((b) => ref.current && setBounds(b))
+      src.current
+        .settled(lastEdit)
+        .then((b) => ref.current && src.current.onBounds(b))
         .catch(() => undefined)
         .finally(() => ref.current && setLive(null));
     };
@@ -234,15 +300,14 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
   };
 
   const begin = (mode: Mode, b: LayerBounds, e: { clientX: number; clientY: number }) => {
-    const found = findClip(useEditor.getState().snap!.project, b.clipId);
-    if (!found) return null;
-    const base = transformAtPlayhead(found.clip, useEditor.getState().timeUs);
+    const base = src.current.transform(b.clipId);
+    if (!base) return null;
     return { mode, clipId: b.clipId, corners: b.corners as Pt[], frame: b.frame as Pt[], base, start: toCanvas(e.clientX, e.clientY), key: `preview:${b.clipId}:${Date.now()}` };
   };
 
   // Moves that arrive while the bounds request is in flight are replayed once it resolves.
   const onPointerDown = async (e: React.PointerEvent) => {
-    if (e.button !== 0 || playing) return;
+    if (e.button !== 0 || source.hidden) return;
     const down = { clientX: e.clientX, clientY: e.clientY };
     let latest = { x: e.clientX, y: e.clientY, shift: e.shiftKey };
     let released = false;
@@ -256,7 +321,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     stop.current = detach;
     let list: LayerBounds[] = [];
     try {
-      list = await api.layerBounds(useEditor.getState().timeUs);
+      list = await src.current.current();
     } catch {
       /* no bounds: nothing to select */
     }
@@ -264,34 +329,33 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     if (stop.current !== detach) return;
     detach();
     if (!ref.current) return;
-    setBounds(list);
+    const at = src.current;
+    at.onBounds(list);
     if (list.length === 0) return;
     const p = toCanvas(down.clientX, down.clientY);
-    const project = useEditor.getState().snap!.project;
-    const hit = [...list].reverse().find((b) => inQuad(p, b.corners as Pt[]) && inRounded(p, b.corners as Pt[], shapeRadius(project, b.clipId)));
+    const hit = [...list].reverse().find((b) => inQuad(p, b.corners as Pt[]) && inRounded(p, b.corners as Pt[], at.radius(b.clipId)));
     if (!hit) {
-      useEditor.getState().select([]);
+      at.select(null);
       return;
     }
-    if (!useEditor.getState().selection.includes(hit.clipId) || useEditor.getState().selection.length > 1) useEditor.getState().select([hit.clipId]);
+    if (!at.isOnlySelected(hit.clipId)) at.select(hit.clipId);
     // While the AI edits, a click still selects but nothing moves.
-    if (released || useEditor.getState().aiRun) return;
+    if (released || at.locked()) return;
     const g = begin("move", hit, down);
     if (g) run(g, latest);
   };
 
   const onHandle = (mode: Mode, b: LayerBounds) => (e: React.PointerEvent) => {
-    if (e.button !== 0 || useEditor.getState().aiRun) return;
+    if (e.button !== 0 || src.current.locked()) return;
     e.stopPropagation();
     const g = begin(mode, b, e);
     if (g) run(g, { x: e.clientX, y: e.clientY, shift: e.shiftKey });
   };
 
-  const selected = selection.length === 1 ? bounds.find((b) => b.clipId === selection[0]) : undefined;
+  const selected = source.selected === null ? undefined : bounds.find((b) => b.clipId === source.selected);
   const corners = live?.corners ?? (selected?.corners as Pt[] | undefined);
   const screen = corners?.map(([x, y]) => [x * k, y * k] as Pt);
-  // Videos and images crop; text does not.
-  const croppable = useEditor((s) => !!selected && findClip(s.snap!.project, selected.clipId)?.clip.content.type === "media");
+  const croppable = !!selected && source.croppable(selected.clipId);
   // Visible preview area in overlay coordinates; the preview clips everything outside it.
   const pad = HANDLE / 2 + 1;
   const visible = (p: Pt) => p[0] >= -bleed.x + pad && p[0] <= width + bleed.x - pad && p[1] >= -bleed.y + pad && p[1] <= height + bleed.y - pad;
@@ -323,7 +387,7 @@ export function LayerOverlay({ width, height, bleed }: { width: number; height: 
     <div ref={ref} className="absolute inset-0" style={{ cursor: selected && !locked ? "move" : "default" }} onPointerDown={onPointerDown} data-testid="layer-overlay">
       {live?.guideX && <div className={`${guide} inset-y-0 left-1/2 w-px`} />}
       {live?.guideY && <div className={`${guide} inset-x-0 top-1/2 h-px`} />}
-      {screen && selected && !playing && top && up && (
+      {screen && selected && !source.hidden && top && up && (
         <>
           <svg className="pointer-events-none absolute inset-0 overflow-visible" width={width} height={height}>
             {live?.frame && (

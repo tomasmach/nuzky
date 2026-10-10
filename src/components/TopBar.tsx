@@ -3,6 +3,7 @@ import { AlertCircle, Check, Download, FolderOpen, History, Loader2, Redo2, Spar
 import { useAgent } from "../lib/agent";
 import { api, errorText } from "../lib/api";
 import { togglePanel, useDock } from "../lib/dock";
+import { openCover, useCover } from "../lib/cover";
 import { useStyle } from "../lib/style";
 import { when } from "../lib/time";
 import { AI_EDITING, openExport, projectDuration, restoreVersion, stopAiRun, useAiLocked, useEditor, whenIdle } from "../lib/store";
@@ -116,16 +117,21 @@ export function JobIndicator() {
         </Button>
       </span>
     );
+  // A cover export reopens the Export dialog; picking frames, masks and model downloads open the cover editor.
+  const coverExport = j.id.startsWith("cover-export:");
+  const cover = (j.kind === "cover" && !coverExport) || j.kind === "vision-models";
   return (
     <button
       type="button"
-      title={j.kind === "export" ? "Show export progress" : j.kind === "transcript" ? "Show transcript" : j.kind === "style" ? "Show learning" : "Show captions"}
+      title={j.kind === "export" || coverExport ? "Show export progress" : cover ? "Show the cover" : j.kind === "transcript" ? "Show transcript" : j.kind === "style" ? "Show learning" : "Show captions"}
       onClick={() =>
-        j.kind === "export"
-          ? useEditor.setState({ exportOpen: true })
-          : j.kind === "style"
-            ? useStyle.setState({ learnOpen: true })
-            : useEditor.setState({ view: "editor", panelTab: j.kind === "transcript" ? "transcript" : "captions" })
+        j.kind === "export" || coverExport
+          ? useEditor.setState({ view: "editor", exportOpen: true })
+          : cover
+            ? (useEditor.setState({ view: "editor" }), useCover.getState().open || openCover())
+            : j.kind === "style"
+              ? useStyle.setState({ learnOpen: true })
+              : useEditor.setState({ view: "editor", panelTab: j.kind === "transcript" ? "transcript" : "captions" })
       }
       className="bar flex h-8 items-center rounded-full px-3 text-[12px] font-medium text-fg transition-colors duration-[120ms] hover:bg-white/[.13]"
     >

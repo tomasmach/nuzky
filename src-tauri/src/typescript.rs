@@ -126,6 +126,7 @@ fn generate() -> String {
     types.visit::<crate::jobs::JobEvent>();
     types.visit::<crate::jobs::ExportRequest>();
     types.visit::<crate::jobs::SpeechModel>();
+    types.visit::<crate::jobs::VisionModels>();
     types.visit::<crate::store::ProjectSummary>();
     types.visit::<crate::library::Listing>();
     types.visit::<crate::library::DeletedCollection>();
@@ -140,6 +141,8 @@ fn generate() -> String {
     types.visit::<nuzky_mcp::style::StyleAction>();
     types.visit::<crate::jobs::StylePair>();
     types.visit::<crate::jobs::StylePairResult>();
+    types.visit::<crate::cover::CoverView>();
+    types.visit::<crate::cover::CoverPick>();
     let mut out = HEADER.to_string();
     for declaration in types.by_name.values() {
         out.push('\n');

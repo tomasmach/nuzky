@@ -58,6 +58,9 @@ pub struct PromptContext {
     /// Sent from the Your style page: the message is about the creator's style.
     #[serde(default)]
     style: bool,
+    /// Make a thumbnail in the AI panel: the agent gets the MCP prompt `thumbnail` instead of the label.
+    #[serde(default)]
+    thumbnail: bool,
 }
 
 fn timecode(us: i64) -> String {
@@ -67,6 +70,14 @@ fn timecode(us: i64) -> String {
 
 /// The message as the agent gets it: the user's words, then what they had selected.
 fn prompt(text: &str, context: &PromptContext, project: &nuzky_engine::Project) -> String {
+    let thumbnail;
+    let text = if context.thumbnail {
+        // What the user typed beside Make a thumbnail are their wishes.
+        thumbnail = nuzky_mcp::thumbnail_prompt(if text.trim().is_empty() { "none" } else { text });
+        thumbnail.as_str()
+    } else {
+        text
+    };
     let mut lines = Vec::new();
     if context.style {
         lines.push(
@@ -85,6 +96,20 @@ fn prompt(text: &str, context: &PromptContext, project: &nuzky_engine::Project) 
         if context.frame {
             lines.push(format!(
                 "[Nuzky] The user points at the frame at the playhead: look at it with inspect_frames at {at} µs."
+            ));
+        }
+    }
+    if context.thumbnail {
+        // A frame the user chose stays: the prompt would otherwise pick one anew.
+        for cover in &project.thumbnails {
+            let name = match cover.format {
+                nuzky_engine::model::ThumbnailFormat::Cover9x16 => "cover_9x16",
+                nuzky_engine::model::ThumbnailFormat::Youtube16x9 => "youtube_16x9",
+            };
+            lines.push(format!(
+                "[Nuzky] The project's {name} already uses the frame at {} ({} µs): keep that frame unless the user's wishes say otherwise.",
+                timecode(cover.time_us),
+                cover.time_us
             ));
         }
     }
@@ -239,17 +264,48 @@ mod tests {
     #[test]
     fn the_prompt_carries_what_was_selected_when_sent() {
         let project = Project::new("t");
-        let context = PromptContext { selection: None, playhead_us: Some(7_200_000), frame: true, style: false };
+        let context = PromptContext {
+            selection: None,
+            playhead_us: Some(7_200_000),
+            frame: true,
+            style: false,
+            thumbnail: false,
+        };
         let text = prompt("Zkrať to", &context, &project);
         assert!(text.starts_with("Zkrať to\n\n[Nuzky] Playhead: 00:07.20 (7200000 µs)."), "{text}");
         assert!(text.contains("inspect_frames at 7200000 µs"));
-        let none = PromptContext { selection: Some(Vec::new()), playhead_us: None, frame: true, style: false };
+        let none = PromptContext {
+            selection: Some(Vec::new()),
+            playhead_us: None,
+            frame: true,
+            style: false,
+            thumbnail: false,
+        };
         assert_eq!(prompt("Ahoj", &none, &project), "Ahoj");
-        let style = PromptContext { selection: None, playhead_us: None, frame: false, style: true };
+        let style = PromptContext { selection: None, playhead_us: None, frame: false, style: true, thumbnail: false };
         let text = prompt("Nestříhej mi rozloučení", &style, &project);
         assert!(
             text.starts_with("Nestříhej mi rozloučení\n\n[Nuzky] The user writes from the Your style page")
                 && text.contains("change_style"),
+            "{text}"
+        );
+        let thumbnail =
+            PromptContext { selection: None, playhead_us: Some(0), frame: false, style: false, thumbnail: true };
+        let text = prompt("", &thumbnail, &project);
+        assert!(text.starts_with("Make a 9:16 cover") && text.contains("export_thumbnail"), "{text}");
+        assert!(
+            text.contains("wishes, which win over the steps: none") && text.contains("[Nuzky] Playhead: 00:00.00"),
+            "{text}"
+        );
+        let text = prompt("Hook: I QUIT SUGAR", &thumbnail, &project);
+        assert!(text.contains("wishes, which win over the steps: Hook: I QUIT SUGAR"), "{text}");
+        let mut covered = Project::new("t");
+        covered
+            .thumbnails
+            .push(serde_json::from_value(serde_json::json!({"format": "cover_9x16", "timeUs": 10_620_000})).unwrap());
+        let text = prompt("", &thumbnail, &covered);
+        assert!(
+            text.contains("[Nuzky] The project's cover_9x16 already uses the frame at 00:10.62 (10620000 µs)"),
             "{text}"
         );
     }

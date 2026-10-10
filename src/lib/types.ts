@@ -234,6 +234,61 @@ export type Collection = {
 };
 
 /**
+ * One frame worth a cover, for the filmstrip of the cover editor.
+ */
+export type CoverCandidate = {
+  timeUs: number,
+  score: number,
+  /**
+   * Each 0..1, higher is better: sharpness and exposure, and with a face eyes_open, mouth, facing,
+   * smile, framing_9x16 and framing_16x9.
+   */
+  parts: {
+    [key in string]: number
+  },
+  face: boolean,
+  /**
+   * A JPEG data URL of the frame, about 240 pixels on its long side.
+   */
+  still: string,
+};
+
+/**
+ * What Pick for me found, as the `output` of its job: candidates best first.
+ */
+export type CoverPick = {
+  format: ThumbnailFormat,
+  candidates: Array<CoverCandidate>,
+};
+
+/**
+ * What the cover canvas shows besides its pixels.
+ */
+export type CoverView = {
+  width: number,
+  height: number,
+  timeUs: number,
+  /**
+   * Each text's corners in thumbnail pixels (top-left, top-right, bottom-right, bottom-left); null
+   * for a text that is not drawn.
+   */
+  bounds: Array<[[number, number], [number, number], [number, number], [number, number]] | null>,
+  /**
+   * The share of each text the person covers, 0..1.
+   */
+  hidden: Array<number>,
+  /**
+   * Where the frame is drawn, as for a clip: the corners of its visible part and of the whole frame.
+   */
+  frame: [[[number, number], [number, number], [number, number], [number, number]], [[number, number], [number, number], [number, number], [number, number]]],
+  /**
+   * The cover cuts the person out of the frame and their mask is not made yet, so it is drawn
+   * without: text behind the person in front of them and no outline.
+   */
+  maskMissing: boolean,
+};
+
+/**
  * How much of each edge is cut off, as a fraction of the layer's width (left, right) or height (top,
  * bottom), on the picture as it shows after rotation and mirroring. The rest stays where it was.
  */
@@ -447,7 +502,7 @@ export type FontFamilies = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "proxy" | "export" | "captions" | "transcript" | "style",
+  kind: "audio" | "proxy" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,
@@ -1087,6 +1142,18 @@ export type TransitionKind = "dissolve" | "fadeBlack" | "fadeWhite" | "slideLeft
 export type Transport = {
   playing: boolean,
   tUs: number,
+};
+
+export type VisionModels = {
+  /**
+   * Download size of what is missing.
+   */
+  sizeMb: number,
+  downloaded: boolean,
+  /**
+   * Why covers cannot run on this computer at all, so nothing should be downloaded.
+   */
+  unavailable: string | null,
 };
 
 /**

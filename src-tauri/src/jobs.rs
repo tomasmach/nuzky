@@ -30,7 +30,10 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct JobEvent {
     pub id: String,
-    #[cfg_attr(test, ts(type = r#""audio" | "proxy" | "export" | "captions" | "transcript" | "style""#))]
+    #[cfg_attr(
+        test,
+        ts(type = r#""audio" | "proxy" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover""#)
+    )]
     pub kind: &'static str,
     pub label: String,
     #[cfg_attr(test, ts(type = r#""running" | "done" | "failed" | "cancelled""#))]
@@ -41,14 +44,14 @@ pub struct JobEvent {
     pub output: Option<String>,
 }
 
-struct Reporter {
+pub(crate) struct Reporter {
     app: AppHandle,
     event: JobEvent,
     last: Instant,
 }
 
 impl Reporter {
-    fn new(app: &AppHandle, id: &str, kind: &'static str, label: String) -> Self {
+    pub(crate) fn new(app: &AppHandle, id: &str, kind: &'static str, label: String) -> Self {
         let event = JobEvent {
             id: id.into(),
             kind,
@@ -63,7 +66,7 @@ impl Reporter {
         Self { app: app.clone(), event, last: Instant::now() }
     }
 
-    fn progress(&mut self, p: f32, phase: Option<&str>) {
+    pub(crate) fn progress(&mut self, p: f32, phase: Option<&str>) {
         let phase_changed = phase.map(String::from) != self.event.phase;
         self.event.progress = p.clamp(0.0, 1.0);
         self.event.phase = phase.map(String::from);
@@ -73,7 +76,7 @@ impl Reporter {
         }
     }
 
-    fn finish(mut self, result: anyhow::Result<Option<String>>, cancelled: bool) {
+    pub(crate) fn finish(mut self, result: anyhow::Result<Option<String>>, cancelled: bool) {
         match result {
             Ok(output) => {
                 self.event.status = "done";
@@ -91,7 +94,7 @@ impl Reporter {
 }
 
 /// Exports run one at a time; captions, transcripts and style learning share one recognition slot.
-fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
+pub(crate) fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
     let state = app.state::<AppState>();
     let mut jobs = state.jobs.lock().unwrap();
     let kind = id.split(':').next().unwrap_or(id);
@@ -100,7 +103,7 @@ fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
         match kind {
             "export" => running == "export",
             "captions" | "transcript" | "style" => matches!(running, "captions" | "transcript" | "style"),
-            "vision-models" => running == "vision-models",
+            "vision-models" | "cover-pick" | "cover-mask" | "cover-export" => running == kind,
             // Each one decodes a whole video; the next file waits, so the preview keeps some of the machine.
             "proxy" => running == "proxy",
             _ => false,
@@ -114,7 +117,7 @@ fn register(app: &AppHandle, id: &str) -> Option<Arc<AtomicBool>> {
     Some(flag)
 }
 
-fn unregister(app: &AppHandle, id: &str) {
+pub(crate) fn unregister(app: &AppHandle, id: &str) {
     app.state::<AppState>().jobs.lock().unwrap().remove(id);
 }
 
@@ -314,7 +317,7 @@ impl ExportRequest {
 }
 
 /// Without confirmed replacement, an existing destination fails before any work starts.
-fn check_destination(out: &Path, replace_existing: bool) -> Result<(), String> {
+pub(crate) fn check_destination(out: &Path, replace_existing: bool) -> Result<(), String> {
     if !replace_existing && out.symlink_metadata().is_ok() {
         let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         return Err(format!("DESTINATION_EXISTS: {name} already exists"));
@@ -423,6 +426,7 @@ pub fn speech_models() -> Vec<SpeechModel> {
         .collect()
 }
 
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VisionModels {
@@ -445,27 +449,17 @@ pub async fn vision_models() -> VisionModels {
     }
 }
 
-/// Downloads the missing cover models as one job, each checked against its pinned SHA-256.
+/// Downloads the missing cover models as one job, each checked against its pinned SHA-256; `repair` also
+/// downloads again the installed ones whose contents are damaged.
 #[tauri::command]
-pub fn start_vision_models(app: AppHandle) -> Result<String, String> {
+pub fn start_vision_models(app: AppHandle, repair: Option<bool>) -> Result<String, String> {
     nuzky_vision::runtime::require().map_err(|e| format!("{e:#}"))?;
     let id = format!("vision-models:{}", new_id());
     let cancel = register(&app, &id).ok_or("The cover models are already downloading")?;
     let (worker_app, job_id) = (app.clone(), id.clone());
     let spawn = std::thread::Builder::new().name("vision-models".into()).spawn(move || {
         let mut rep = Reporter::new(&worker_app, &job_id, "vision-models", "Cover models".into());
-        let dir = models_dir();
-        let missing = nuzky_vision::models::missing(nuzky_vision::models::ALL, &dir);
-        let total = missing.iter().map(|m| m.size).sum::<u64>().max(1) as f32;
-        let mut before = 0;
-        let result = missing.iter().try_for_each(|model| {
-            let integrity = Integrity { size: model.size, sha256: model.sha256 };
-            model_download::download(model.url, &model.path(&dir), integrity, &cancel, |part| {
-                rep.progress((before as f32 + part * model.size as f32) / total, Some("Downloading cover models"))
-            })?;
-            before += model.size;
-            anyhow::Ok(())
-        });
+        let result = crate::cover::download_models(nuzky_vision::models::ALL, repair == Some(true), &cancel, &mut rep);
         rep.finish(result.map(|()| None), cancel.load(Ordering::Relaxed));
         unregister(&worker_app, &job_id);
     });
@@ -794,12 +788,12 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
     format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
-fn check_cancelled(cancel: &AtomicBool) -> anyhow::Result<()> {
+pub(crate) fn check_cancelled(cancel: &AtomicBool) -> anyhow::Result<()> {
     anyhow::ensure!(!cancel.load(Ordering::Relaxed), "CANCELLED: job cancelled");
     Ok(())
 }
 
-fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
     p.downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| p.downcast_ref::<String>().cloned())

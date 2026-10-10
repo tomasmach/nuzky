@@ -33,6 +33,11 @@ pub struct RenderedThumbnail {
     pub rgba: Vec<u8>,
     /// For each text, the share of it the person covers, 0..1; always 0 for text in front of them.
     pub hidden: Vec<f32>,
+    /// For each text, its corners in thumbnail pixels (top-left, top-right, bottom-right, bottom-left), so the
+    /// app can select and drag it; none for a text that is not drawn.
+    pub bounds: Vec<Option<[[f32; 2]; 4]>>,
+    /// Where the frame is drawn in thumbnail pixels: its visible part, and the whole frame before its crop.
+    pub frame_bounds: [[[f32; 2]; 4]; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,10 +111,12 @@ impl Renderer {
         let picture = shrink(frame, step);
 
         let mut texts = Vec::with_capacity(thumbnail.texts.len());
+        let mut bounds = Vec::with_capacity(thumbnail.texts.len());
         for text in &thumbnail.texts {
             let t = text.transform;
             if t.opacity <= 0.0 || t.scale <= 0.0 {
                 texts.push(None);
+                bounds.push(None);
                 continue;
             }
             let style = text.style.bounded(&canvas);
@@ -118,6 +125,7 @@ impl Renderer {
             let image = self.text.render(&text.text, &style, raster, wrap * raster);
             let size = (image.image.width as f32 / image.scale, image.image.height as f32 / image.scale);
             let corners = quad(&t, (size.0 * t.scale * k, size.1 * t.scale * k), tw as f32, th as f32, k);
+            bounds.push(Some(corners.map(|[x, y]| [x / k, y / k])));
             texts.push(Some(layer(image.image, corners, t.opacity, Crop::visible(t.crop))));
         }
 
@@ -169,7 +177,9 @@ impl Renderer {
         }
         draws.extend(behind(false).filter_map(|(_, layer)| layer.clone().map(Draw::Layer)));
         let rgba = self.gpu.render(width, height, parse_color(&background.color), &draws)?;
-        Ok(RenderedThumbnail { width, height, rgba, hidden })
+        let unscaled = |q: Quad| q.map(|[x, y]| [x / k, y / k]);
+        let frame_bounds = [unscaled(crate::render::sub_quad(&corners, rect)), unscaled(corners)];
+        Ok(RenderedThumbnail { width, height, rgba, hidden, bounds, frame_bounds })
     }
 }
 

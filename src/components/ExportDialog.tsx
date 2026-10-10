@@ -5,7 +5,9 @@ import { videoDir, join } from "@tauri-apps/api/path";
 import { AlertCircle, AlertTriangle, AudioLines, CheckCircle2, X } from "lucide-react";
 import { api, errorText, plainError } from "../lib/api";
 import { formatLabel } from "../lib/presets";
+import { useCover } from "../lib/cover";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
+import { CoverExport } from "./cover/CoverExport";
 import { US, formatTime } from "../lib/time";
 import type { Canvas, ExportRequest } from "../lib/types";
 import { Button, IconButton, ProgressBar, Segmented, trapTab } from "./ui";
@@ -78,6 +80,10 @@ export function ExportDialog() {
   const jobId = useEditor((s) => s.exportJobId);
   const job = useEditor((s) => (s.exportJobId ? s.jobs[s.exportJobId] : undefined));
   const [options, setOptions] = useState<ExportRequest | null>(null);
+  /** The video, or the cover: in the cover editor the dialog opens on the cover. */
+  const [what, setWhat] = useState<"video" | "cover">("video");
+  /** What the Cover side would write, for the line under the title. */
+  const [coverFacts, setCoverFacts] = useState("");
   const [error, setError] = useState<string | null>(null);
   /** The file asked for already exists; Replace exports over it. */
   const [exists, setExists] = useState<string | null>(null);
@@ -90,6 +96,7 @@ export function ExportDialog() {
   useEffect(() => {
     const canvas = useEditor.getState().snap?.project.canvas;
     if (open && canvas) setOptions(loadOptions(canvas));
+    if (open) setWhat(useCover.getState().open ? "cover" : "video");
   }, [open]);
 
   const close = () => {
@@ -97,6 +104,8 @@ export function ExportDialog() {
     setExists(null);
     // A finished job is shown once; a running one keeps reporting in the top bar.
     if (job && job.status !== "running") useEditor.setState({ exportJobId: null });
+    const cover = useCover.getState().exportJob;
+    if (cover && useEditor.getState().jobs[cover]?.status !== "running") useCover.setState({ exportJob: null });
     useEditor.setState({ exportOpen: false });
   };
 
@@ -115,7 +124,7 @@ export function ExportDialog() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
-      if (!running) close();
+      if (!running || what === "cover") close();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -199,10 +208,10 @@ export function ExportDialog() {
         <div className="mb-5 flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <h2 id="export-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
-              Export video
+              {what === "video" ? "Export video" : "Export cover"}
             </h2>
             <p className="tabular text-[12px] text-muted">
-              MP4 · H.264 + AAC · {formatLabel(project.canvas.width, project.canvas.height)} · {formatTime(duration)}
+              {what === "video" ? `MP4 · H.264 + AAC · ${formatLabel(project.canvas.width, project.canvas.height)} · ${formatTime(duration)}` : coverFacts}
             </p>
           </div>
           <IconButton label={running ? "Hide (export keeps running)" : "Close"} round className="-mr-2 -mt-1" onClick={close}>
@@ -210,6 +219,23 @@ export function ExportDialog() {
           </IconButton>
         </div>
 
+        <div className="mb-4 grid grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3.5">
+          <span className="text-right text-[13px] text-muted">Export</span>
+          <Segmented
+            label="What to export"
+            value={what}
+            onChange={setWhat}
+            options={[
+              { id: "video", label: "Video" },
+              { id: "cover", label: "Cover" },
+            ]}
+          />
+        </div>
+
+        {what === "cover" ? (
+          <CoverExport close={close} onFacts={setCoverFacts} />
+        ) : (
+        <>
         <div className="flex flex-col gap-4">
           <fieldset disabled={settingsLocked} className="min-w-0 disabled:opacity-50">
             <div className="grid grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3">
@@ -331,6 +357,8 @@ export function ExportDialog() {
             )}
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

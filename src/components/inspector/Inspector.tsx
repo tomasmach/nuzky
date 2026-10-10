@@ -2,9 +2,11 @@ import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AudioLines, Blend, Captions, Film, Image as ImageIcon, Type } from "lucide-react";
 import { TRANSITIONS } from "../../lib/presets";
+import { useCover } from "../../lib/cover";
 import { findClip, isCaptionTrack, mainCuts, useEditor } from "../../lib/store";
 import { formatDuration, formatTime } from "../../lib/time";
 import type { Asset, Clip } from "../../lib/types";
+import { CoverInspector } from "../cover/CoverInspector";
 import { TransitionSettings } from "../panel/TransitionsTab";
 import { AiLock, TabBar, TabPanel } from "../ui";
 import { AnimationSection } from "./AnimationSection";
@@ -106,12 +108,14 @@ export function Inspector({ width }: { width: number }) {
   const project = useEditor((s) => s.snap?.project);
   const selection = useEditor((s) => s.selection);
   const cut = useEditor((s) => s.cut);
+  const cover = useCover((s) => s.open);
   // Remembered per clip kind, so picking another clip keeps the tab you were on, like CapCut.
   const [chosen, setChosen] = useState<Chosen>({});
   const found = project && selection.length === 1 ? findClip(project, selection[0]) : null;
 
   let body;
   if (!project) body = null;
+  else if (cover) body = <CoverInspector format={cover} />;
   else if (cut) body = <CutInspector clipId={cut} />;
   else if (selection.length > 1)
     body = (
