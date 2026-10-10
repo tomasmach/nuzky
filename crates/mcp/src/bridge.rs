@@ -40,6 +40,7 @@ impl Target {
 }
 
 /// Why `--current` found nothing to attach to.
+#[cfg(unix)]
 const NOT_OPEN: &str =
     "APP_NOT_RUNNING: no project is open in Nuzky. Open the project in Nuzky, then restart the agent's MCP server";
 
