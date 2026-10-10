@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use nuzky_engine::{
-    Project,
+    Pending, Project, Renderer, Wait,
     edit::EditCmd,
     media::probe,
-    model::{ClipContent, TrackKind},
+    model::{Background, ClipContent, TrackKind},
 };
 use nuzky_vision::{Candidate, segment_subject, thumbnail_frames};
 
@@ -187,4 +187,112 @@ fn missing_models_fail_with_a_code_before_any_work() {
     assert!(format!("{error:#}").starts_with("MODEL_MISSING: face detector"), "{error:#}");
     let error = segment_subject(&project, 0, &empty, &empty, &AtomicBool::new(false), &mut |_| {}).unwrap_err();
     assert!(format!("{error:#}").contains("subject mask (birefnet-lite.onnx)"), "{error:#}");
+    let asset = nuzky_engine::model::Asset {
+        id: "a".into(),
+        name: "a.mp4".into(),
+        path: empty.join("a.mp4").to_string_lossy().into(),
+        kind: nuzky_engine::model::AssetKind::Video,
+        duration_us: 1_000_000,
+        width: 1080,
+        height: 1920,
+        fps: 30.0,
+        has_audio: false,
+        rotation: 0,
+        mirror: false,
+        credit: None,
+    };
+    let chunks = std::collections::BTreeSet::from([0]);
+    let error =
+        nuzky_vision::matte::prepare_file(&asset, &chunks, &empty, &empty, &AtomicBool::new(false), &mut |_| {})
+            .unwrap_err();
+    assert!(format!("{error:#}").contains("person outline (selfie-segmenter.onnx)"), "{error:#}");
+}
+
+/// A clip of `name` from `from` to `to` with `background`, rendered strictly, after finding the person with the
+/// real model.
+fn background_clip(name: &str, from: i64, to: i64, background: Background, cache: &Path) -> (Project, Renderer) {
+    let mut project = timeline(&[(name, from, to)]);
+    let clip = &mut project.tracks[0].clips[0];
+    if let ClipContent::Media { background: b, .. } = &mut clip.content {
+        *b = background;
+    }
+    nuzky_vision::matte::prepare(&project, cache, &models(), &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert!(nuzky_engine::matte::missing(cache, &project).is_empty());
+    let mut renderer = Renderer::new().unwrap();
+    renderer.use_mattes(cache.to_path_buf(), Pending::Fail);
+    (project, renderer)
+}
+
+/// Pure green is what shows behind the person.
+fn is_green(p: &[u8]) -> bool {
+    p[1] > 200 && p[0] < 80 && p[2] < 80
+}
+
+#[test]
+#[ignore = "Requires scripts/fixtures.sh media and models; run with XDG_DATA_HOME=$PWD/tmp-test/xdg/data"]
+fn a_background_goes_behind_the_person_along_their_outline_and_holds_still() {
+    let cache =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tmp-test/matte-cache-{}", std::process::id()));
+    let green = Background::Color { color: "#00ff00".into() };
+    // face-thumb.mp4 from 6 s on is face-open.png held still: the outline drawn by hand on it is the reference.
+    let (project, mut renderer) = background_clip("face-thumb.mp4", 6_000_000, 12_000_000, green.clone(), &cache);
+    let frame = renderer.render(&project, 1_500_000, 1080, 1920, Wait::Exact, false).unwrap();
+    let person = reference(1080, 1920);
+    let (both, either) = frame.as_chunks::<4>().0.iter().zip(&person).fold((0u32, 0u32), |(both, either), (p, &r)| {
+        let m = !is_green(p);
+        (both + (m && r) as u32, either + (m || r) as u32)
+    });
+    let iou = both as f32 / either as f32;
+    assert!(iou > 0.96, "IoU {iou} against the hand-drawn outline");
+    // The same picture frame after frame: the outline does not move by a pixel.
+    let at = |renderer: &mut Renderer, t: i64| -> Vec<bool> {
+        let frame = renderer.render(&project, t, 270, 480, Wait::Exact, false).unwrap();
+        frame.as_chunks::<4>().0.iter().map(|p| is_green(p)).collect()
+    };
+    let first = at(&mut renderer, 300_000);
+    for t in (333_333..5_000_000).step_by(333_333) {
+        let moved = at(&mut renderer, t).iter().zip(&first).filter(|(a, b)| a != b).count();
+        assert!(moved <= 20, "{moved} pixels of the outline moved at {t} us on a still picture");
+    }
+
+    // A phone video of the person talking, stored sideways: the outline follows them without flicker. Flicker is
+    // the outline changing where the picture did not.
+    let (project, mut renderer) = background_clip("talking-head.mov", 0, 8_000_000, green, &cache);
+    let (w, h) = (270usize, 480usize);
+    let source = nuzky_engine::matte::without_backgrounds(&project);
+    let mut plain = Renderer::new().unwrap();
+    let (mut changed, mut band, mut previous) = (0f64, 0u64, None::<(Vec<u8>, Vec<u8>)>);
+    for i in 0..240 {
+        let t = i * 33_333 + 16_000;
+        let alpha: Vec<u8> = renderer
+            .render(&project, t, w as u32, h as u32, Wait::Exact, false)
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| 255 - p[1].saturating_sub(p[0].max(p[2])))
+            .collect();
+        let picture: Vec<u8> = plain
+            .render(&source, t, w as u32, h as u32, Wait::Exact, false)
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| ((p[0] as u32 * 2 + p[1] as u32 * 7 + p[2] as u32) / 10) as u8)
+            .collect();
+        if let Some((last_alpha, last_picture)) = &previous {
+            for k in 0..w * h {
+                let edge = (16..240).contains(&alpha[k]) || (16..240).contains(&last_alpha[k]);
+                if edge && picture[k].abs_diff(last_picture[k]) < 4 {
+                    changed += alpha[k].abs_diff(last_alpha[k]) as f64 / 255.0;
+                    band += 1;
+                }
+            }
+        }
+        previous = Some((alpha, picture));
+    }
+    let flicker = changed / band.max(1) as f64;
+    eprintln!("talking head: edge flicker {flicker:.4} over {band} samples");
+    assert!(band > 10_000 && flicker < 0.05, "edge flicker {flicker:.4} over {band} samples");
+    std::fs::remove_dir_all(cache).unwrap();
 }

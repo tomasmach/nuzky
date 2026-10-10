@@ -219,6 +219,7 @@ fn layer(image: Image, corners: Quad, opacity: f32, rect: [f32; 4]) -> Layer {
         clip: None,
         transfer: Transfer::Sdr,
         mask,
+        matte: None,
     }
 }
 

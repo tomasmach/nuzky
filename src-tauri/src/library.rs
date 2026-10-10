@@ -730,7 +730,10 @@ fn spawn_poster_worker() -> Sender<PosterRequest> {
             // A project that trips the renderer gets no poster; the others still do.
             let png = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<Vec<u8>> {
                 if renderer.is_none() {
-                    renderer = Some(Renderer::new()?);
+                    let mut new = Renderer::new()?;
+                    // A clip whose person is not found yet shows as recorded, as in the preview.
+                    new.use_mattes(store::cache_dir(), nuzky_engine::Pending::Original);
+                    renderer = Some(new);
                 }
                 draw_poster(renderer.as_mut().expect("renderer was just created"), &request.project)
             }));

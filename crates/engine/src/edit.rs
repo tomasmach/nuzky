@@ -5,8 +5,9 @@ use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Ease, Keyframe,
-    Project, Shape, TextStyle, Thumbnail, ThumbnailFormat, Track, TrackKind, Transform, Transition, WordCorrection,
+    Adjust, Animation, Asset, AssetKind, Background, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Ease,
+    Keyframe, Project, Shape, TextStyle, Thumbnail, ThumbnailFormat, Track, TrackKind, Transform, Transition,
+    WordCorrection,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -148,6 +149,10 @@ pub enum EditCmd {
         /// Ducking: how many dB the clip goes down while a video's own sound has speech, up to 40;
         /// 0 turns it off. 12 suits music under speech.
         duck_db: Option<f32>,
+        /// Video and image clips: blur what is behind the person, or put a colour or an image of the
+        /// project there; `{"type": "none"}` shows the picture as recorded. The person's outline is made
+        /// once per file in the background.
+        background: Option<Box<Background>>,
     },
     SetAnimation {
         clip_id: String,
@@ -351,6 +356,7 @@ fn media(asset_id: String, transform: Transform, shape: Option<Shape>) -> ClipCo
         clean_voice: false,
         shape,
         duck_db: 0.0,
+        background: Default::default(),
     }
 }
 
@@ -640,6 +646,14 @@ impl Project {
                 self.assets.retain(|a| a.id != asset_id);
                 for t in &mut self.tracks {
                     t.clips.retain(|c| !matches!(&c.content, ClipContent::Media { asset_id: a, .. } if *a == asset_id));
+                    // An image behind a person goes with the image; the person stays.
+                    for c in &mut t.clips {
+                        if let ClipContent::Media { background, .. } = &mut c.content
+                            && matches!(background, Background::Image { asset_id: a } if *a == asset_id)
+                        {
+                            *background = Background::None;
+                        }
+                    }
                 }
             }
             EditCmd::AddClip { asset_id, start_us, track_id } => {
@@ -717,10 +731,11 @@ impl Project {
                     bail!("This clip has no sound to detach");
                 }
                 let mut sound = Clip::new(new_id(), clip.start_us, clip.duration_us, clip.content.clone());
-                if let ClipContent::Media { transform, adjust, shape, .. } = &mut sound.content {
+                if let ClipContent::Media { transform, adjust, shape, background, .. } = &mut sound.content {
                     *transform = Transform::default();
                     *adjust = Adjust::default();
                     *shape = None;
+                    *background = Background::None;
                 }
                 if let ClipContent::Media { volume, .. } = &mut self.tracks[ti].clips[ci].content {
                     *volume = 0.0;
@@ -869,6 +884,7 @@ impl Project {
                 clean_voice,
                 shape,
                 duck_db,
+                background,
             } => {
                 let (ti, ci) = self.find_clip(&clip_id).ok_or_else(|| anyhow!("Unknown clip"))?;
                 let changes_length = speed.is_some();
@@ -876,6 +892,22 @@ impl Project {
                     shape.is_none() || matches!(self.tracks[ti].clips[ci].content, ClipContent::Media { .. }),
                     "Only video and image clips have a shape"
                 );
+                if let Some(background) = background.as_ref().filter(|b| !b.is_none()) {
+                    let picture = match &self.tracks[ti].clips[ci].content {
+                        ClipContent::Media { asset_id, .. } => {
+                            self.tracks[ti].kind == TrackKind::Video
+                                && self.asset(asset_id).is_some_and(|a| a.kind != AssetKind::Audio)
+                        }
+                        ClipContent::Text { .. } => false,
+                    };
+                    ensure!(picture, "Only video and image clips have a background");
+                    if let Background::Image { asset_id } = &**background {
+                        ensure!(
+                            self.asset(asset_id).is_some_and(|a| a.kind == AssetKind::Image),
+                            "The background must be an image of the project"
+                        );
+                    }
+                }
                 if clean_voice == Some(true) {
                     let sound = match &self.tracks[ti].clips[ci].content {
                         ClipContent::Media { asset_id, .. } => {
@@ -901,6 +933,7 @@ impl Project {
                         clean_voice: cv,
                         shape: sh,
                         duck_db: duck,
+                        background: bg,
                         ..
                     } => {
                         if let Some(x) = transform {
@@ -926,6 +959,9 @@ impl Project {
                         }
                         if let Some(x) = duck_db {
                             *duck = x.clamp(0.0, MAX_DUCK_DB);
+                        }
+                        if let Some(x) = background {
+                            *bg = *x;
                         }
                         if let Some(x) = keep_pitch {
                             *kp = x;
@@ -2014,6 +2050,7 @@ mod tests {
             clean_voice: None,
             shape: None,
             duck_db: None,
+            background: None,
         }
     }
 
@@ -2041,6 +2078,7 @@ mod tests {
             clean_voice: None,
             shape: None,
             duck_db: None,
+            background: None,
         })
         .unwrap();
         assert_eq!(main_layout(&p), vec![(0, 2500)]);
@@ -2082,6 +2120,7 @@ mod tests {
             clean_voice: None,
             shape: None,
             duck_db: None,
+            background: None,
         };
         assert!(e.apply(slower, None).is_err());
         assert_eq!(e.project, before);
@@ -2111,6 +2150,7 @@ mod tests {
             clean_voice: None,
             shape: None,
             duck_db: None,
+            background: None,
         })
         .unwrap();
         p.apply(EditCmd::TrimClip { clip_id: id, start_us: 0, duration_us: 33_334, source_in_us: Some(4_966_666) })
@@ -2286,6 +2326,7 @@ mod tests {
                     clean_voice: None,
                     shape: None,
                     duck_db: None,
+                    background: None,
                 },
                 "split_left" => EditCmd::SplitClip { clip_id, at_us: 5_500_000 },
                 "split_right" => EditCmd::SplitClip { clip_id, at_us: 9_500_000 },
@@ -2353,6 +2394,7 @@ mod tests {
                 clean_voice: None,
                 shape: None,
                 duck_db: None,
+                background: None,
             };
             e.apply(cmd, Some("vol".into())).unwrap();
         }

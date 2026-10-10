@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use nuzky_engine::{
     Project,
     model::{
-        AssetKind, Clip, ClipContent, MAX_BORDER_WIDTH, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO,
+        Asset, AssetKind, Background, Clip, ClipContent, MAX_BORDER_WIDTH, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO,
         MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, TextStyle, TrackKind, Transform, max_stroke_width,
     },
 };
@@ -228,6 +228,39 @@ fn thumbnails(project: &Project) -> Result<()> {
     Ok(())
 }
 
+/// Only a drawn video or image clip has something behind its person; an image to show must be an image.
+fn background_of(
+    project: &Project,
+    clip: &Clip,
+    kind: TrackKind,
+    asset: &Asset,
+    background: &Background,
+) -> Result<()> {
+    if background.is_none() {
+        return Ok(());
+    }
+    ensure!(
+        kind == TrackKind::Video && asset.kind != AssetKind::Audio,
+        "INVALID_PROJECT: only video and image clips have a background, not {}",
+        clip.id
+    );
+    match background {
+        Background::None => {}
+        Background::Blur { strength } => ensure!(
+            strength.is_finite() && *strength > 0.0 && *strength <= 1.0,
+            "INVALID_PROJECT: the background blur of {} needs a strength above 0 and at most 1",
+            clip.id
+        ),
+        Background::Color { color: value } => color(value, "background color")?,
+        Background::Image { asset_id } => ensure!(
+            project.asset(asset_id).is_some_and(|a| a.kind == AssetKind::Image),
+            "INVALID_PROJECT: the background of {} must be an image of the project",
+            clip.id
+        ),
+    }
+    Ok(())
+}
+
 fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> {
     ensure!(clip.start_us >= 0 && clip.duration_us > 0, "INVALID_PROJECT: clip {} timing", clip.id);
     match &clip.content {
@@ -244,6 +277,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             clean_voice,
             shape,
             duck_db,
+            background,
         } => {
             let asset =
                 project.asset(asset_id).ok_or_else(|| anyhow::anyhow!("INVALID_PROJECT: missing asset {asset_id}"))?;
@@ -305,6 +339,7 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                 );
                 color(&shape.border_color, "border color")?;
             }
+            background_of(project, clip, kind, asset, background)?;
         }
         ClipContent::Text { style, transform: t, words, .. } => {
             text_style(style, (project.canvas.width, project.canvas.height))?;

@@ -367,7 +367,7 @@ const BLENDSHAPE_LANDMARKS: [usize; 146] = [
 /// MediaPipe Selfie Segmenter: the frame squeezed to 256², a person probability per pixel.
 pub struct Selfie(Session);
 
-const SELFIE_SIDE: usize = 256;
+pub const SELFIE_SIDE: usize = 256;
 /// Smallest share of the frame that counts as a person rather than noise.
 const SELFIE_MIN_SHARE: f32 = 0.005;
 
@@ -376,15 +376,23 @@ impl Selfie {
         Ok(Self(session(&crate::models::SELFIE.path(dir), 1)?))
     }
 
+    /// The probability of a person in each cell of a `SELFIE_SIDE`² RGBA picture, the whole frame squeezed into it.
+    pub fn probabilities(&mut self, rgba: &[u8], cancel: &AtomicBool) -> Result<Vec<f32>> {
+        let n = SELFIE_SIDE;
+        anyhow::ensure!(rgba.len() == n * n * 4, "The person model takes {n}×{n} pixels");
+        let input: Vec<f32> =
+            rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]].map(|c| c as f32 / 255.0)).collect();
+        let outputs = run(&mut self.0, &[1, n, n, 3], &input, cancel)?;
+        let mask = outputs.into_iter().next().context("Person model gave no output")?.data;
+        anyhow::ensure!(mask.len() == n * n, "Unexpected person mask size {}", mask.len());
+        Ok(mask)
+    }
+
     /// Box around the person in the frame's pixels, or none.
     pub fn person(&mut self, frame: &Frame, cancel: &AtomicBool) -> Result<Option<Rect>> {
         let n = SELFIE_SIDE;
         let small = frame.resized(n as u32, n as u32);
-        let input: Vec<f32> =
-            small.rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]].map(|c| c as f32 / 255.0)).collect();
-        let outputs = run(&mut self.0, &[1, n, n, 3], &input, cancel)?;
-        let mask = &outputs.first().context("Person model gave no output")?.data;
-        anyhow::ensure!(mask.len() == n * n, "Unexpected person mask size {}", mask.len());
+        let mask = self.probabilities(&small.rgba, cancel)?;
         let (mut x0, mut y0, mut x1, mut y1, mut count) = (n, n, 0, 0, 0usize);
         for (i, &p) in mask.iter().enumerate() {
             if p >= 0.5 {

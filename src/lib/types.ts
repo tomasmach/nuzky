@@ -95,6 +95,23 @@ export type Asset = {
 
 export type AssetKind = "video" | "audio" | "image";
 
+/**
+ * What shows behind the person in a video or image clip. Anything but `None` cuts the person out of
+ * every frame with an outline found once per file and fills the rest of the clip's picture.
+ */
+export type Background = {
+  "type": "none"
+} | {
+  "type": "blur",
+  strength: number,
+} | {
+  "type": "color",
+  color: string,
+} | {
+  "type": "image",
+  assetId: string,
+};
+
 export type Boot = {
   limits: Limits,
   snapshot: Snapshot,
@@ -220,6 +237,10 @@ export type ClipContent = {
    * a video's own sound, coming back in the pauses. 0 turns it off.
    */
   duckDb?: number,
+  /**
+   * Blur or replace what is behind the person (video and image clips).
+   */
+  background?: Background,
 } | {
   "type": "text",
   text: string,
@@ -423,6 +444,12 @@ export type EditCmd = {
    * 0 turns it off. 12 suits music under speech.
    */
   duckDb?: number | null,
+  /**
+   * Video and image clips: blur what is behind the person, or put a colour or an image of the
+   * project there; `{"type": "none"}` shows the picture as recorded. The person's outline is made
+   * once per file in the background.
+   */
+  background?: Background | null,
 } | {
   "type": "setAnimation",
   clipId: string,
@@ -536,7 +563,7 @@ export type FontFamilies = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "proxy" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover",
+  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,

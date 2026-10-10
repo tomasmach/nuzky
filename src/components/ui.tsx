@@ -375,17 +375,18 @@ export function Section({ title, children, actions }: { title: string; children:
   );
 }
 
-export function ColorInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+/** `mixed`: several clips with different colours; it shows a dash until one is picked for all of them. */
+export function ColorInput({ label, value, onChange, mixed = false }: { label: string; value: string; onChange: (v: string) => void; mixed?: boolean }) {
   const lock = useLockReason();
   return (
     <label className="flex items-center justify-between gap-2 has-[:disabled]:opacity-40" title={lock ?? undefined}>
       <span className="text-[12px] text-muted">{label}</span>
       <span className="flex items-center gap-2">
-        <span className="tabular text-[12px] text-muted">{value.slice(0, 7).toUpperCase()}</span>
+        <span className="tabular text-[12px] text-muted">{mixed ? "—" : value.slice(0, 7).toUpperCase()}</span>
         {/* WebKitGTK draws the colour well like a switch, so a plain swatch sits over a see-through input. */}
         <span
           className="relative h-5 w-8 rounded-[5px] shadow-[inset_0_0_0_1px_rgb(255_255_255/.18)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent"
-          style={{ background: value.slice(0, 7) }}
+          style={{ background: mixed ? "transparent" : value.slice(0, 7) }}
         >
           <input
             type="color"

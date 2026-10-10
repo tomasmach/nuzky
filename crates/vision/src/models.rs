@@ -79,6 +79,8 @@ pub const BIREFNET: Model = Model {
 
 /// What choosing thumbnail frames reads.
 pub const FRAMES: &[Model] = &[YUNET, FACE_MESH, BLENDSHAPES, SELFIE];
+/// What cutting the person out of every frame for a clip's background reads.
+pub const BACKGROUND: &[Model] = &[SELFIE];
 /// What masking the subject reads.
 pub const MASK: &[Model] = &[YUNET, BIREFNET];
 pub const ALL: &[Model] = &[YUNET, FACE_MESH, BLENDSHAPES, SELFIE, BIREFNET];

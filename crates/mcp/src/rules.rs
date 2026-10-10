@@ -40,7 +40,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     // Searching reads catalogues only; adding downloads the one sound, then edits like import_media.
     rules("search_sounds", Always, false, true, false),
     rules("add_sound", Never, false, false, false),
-    rules("inspect_frames", Always, false, true, false),
+    // Only renders; a missing person outline behind a clip's background is made as a job into the cache.
+    rules("inspect_frames", Always, false, true, true),
     // Only renders and mixes the timeline; preparing missing sound runs as a job.
     rules("activity", Always, false, true, true),
     // Retakes and emphasis only read stored words and sound and answer at once; thumbnail frames
@@ -159,6 +160,7 @@ mod tests {
             set(&[
                 "analyze",
                 "activity",
+                "inspect_frames",
                 "segment_subject",
                 "inspect_thumbnail",
                 "transcribe",

@@ -8,6 +8,7 @@ pub mod effects;
 pub mod export;
 pub mod gpu;
 pub mod loudness;
+pub mod matte;
 pub mod media;
 pub mod model;
 pub mod proxy;
@@ -20,4 +21,4 @@ pub mod voice;
 pub mod worker;
 
 pub use model::Project;
-pub use render::{Renderer, Wait};
+pub use render::{Pending, Renderer, Wait};

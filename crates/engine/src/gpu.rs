@@ -21,14 +21,19 @@ struct Layer {
     mask: vec4<f32>, // half width and height of the visible part, corner radius, border width; no mask at 0 width
     border: vec4<f32>, // premultiplied border colour
     shadow: vec4<f32>, // opacity, blur, offset down
+    matte: vec4<f32>, // fill behind the person: 0 none, 1 footage, 2 colour, 3 picture; picture scale
+    fill: vec4<f32>, // premultiplied fill colour
 };
 @group(0) @binding(0) var<uniform> layer: Layer;
 @group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var matte_tex: texture_2d<f32>; // the person in alpha, over the same uv as tex
+@group(0) @binding(3) var fill_tex: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) local: vec2<f32>,
+    @location(2) layer_uv: vec2<f32>, // where in the whole layer, upright, 0..1
 };
 
 @vertex
@@ -38,6 +43,7 @@ fn vs(@builtin(vertex_index) i: u32) -> VsOut {
     out.pos = vec4<f32>(c.xy, 0.0, 1.0);
     out.uv = c.zw;
     out.local = layer.local[i].xy;
+    out.layer_uv = layer.local[i].zw;
     return out;
 }
 
@@ -128,19 +134,98 @@ fn sample_premultiplied(uv: vec2<f32>) -> vec4<f32> {
     return mix(top, bottom, f.y);
 }
 
+// Bilinear premultiplied colour of a texture holding straight alpha.
+fn sample_straight(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(t));
+    let p = uv * vec2<f32>(size) - 0.5;
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    var texels: array<vec4<f32>, 4>;
+    for (var k = 0; k < 4; k += 1) {
+        let c = textureLoad(t, clamp(i + vec2<i32>(k % 2, k / 2), vec2<i32>(0), size - 1), 0);
+        texels[k] = vec4<f32>(c.rgb * c.a, c.a);
+    }
+    return mix(mix(texels[0], texels[1], f.x), mix(texels[2], texels[3], f.x), f.y);
+}
+
+// Cubic B-spline weights of the four texels around a point `t` past the second one.
+fn bspline(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return vec4<f32>(1.0 - 3.0 * t + 3.0 * t2 - t3, 4.0 - 6.0 * t2 + 3.0 * t3, 1.0 + 3.0 * t + 3.0 * t2 - 3.0 * t3, t3) / 6.0;
+}
+
+// How much of the person covers `uv`. The matte is a coarse grid of probabilities: a cubic B-spline over it
+// gives a smooth outline with no corners at the cells, and the smoothstep makes it a clean edge a few pixels wide.
+fn person(uv: vec2<f32>, smooth_outline: bool) -> f32 {
+    let size = vec2<i32>(textureDimensions(matte_tex));
+    let p = uv * vec2<f32>(size) - 0.5;
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    var a = 0.0;
+    if smooth_outline {
+        let wx = bspline(f.x);
+        let wy = bspline(f.y);
+        for (var y = 0; y < 4; y += 1) {
+            for (var x = 0; x < 4; x += 1) {
+                a += wx[x] * wy[y] * textureLoad(matte_tex, clamp(i + vec2<i32>(x - 1, y - 1), vec2<i32>(0), size - 1), 0).a;
+            }
+        }
+    } else {
+        a = sample_straight(matte_tex, uv).a;
+    }
+    // The model is unsure about hair and a bun behind the head; leaning towards the person keeps them.
+    return smoothstep(0.15, 0.6, a);
+}
+
+// The fill behind the person at a point, premultiplied.
+fn fill_at(uv: vec2<f32>, layer_uv: vec2<f32>) -> vec4<f32> {
+    if layer.matte.x < 1.5 {
+        return sample_straight(fill_tex, uv);
+    } else if layer.matte.x < 2.5 {
+        return layer.fill;
+    }
+    return sample_straight(fill_tex, 0.5 + (layer_uv - 0.5) * layer.matte.yz);
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     if in.pos.x < layer.clip.x || in.pos.y < layer.clip.y || in.pos.x >= layer.clip.z || in.pos.y >= layer.clip.w {
         discard;
     }
+    let matte = layer.matte.x > 0.5;
+    // A colour or picture shows as picked, after the clip's own adjustments.
+    let picked = layer.matte.x > 1.5;
     var c = sample_premultiplied(in.uv);
+    var person_a = 1.0;
+    // What a blur transition takes of a picked fill, added after the adjustments.
+    var picked_fill = vec4<f32>(0.0);
     if layer.effects.y > 0.0 {
         let step = vec2<f32>(layer.effects.y) / vec2<f32>(textureDimensions(tex));
         c = vec4<f32>(0.0);
         for (var y = -2; y <= 2; y += 1) {
             for (var x = -2; x <= 2; x += 1) {
-                c += sample_premultiplied(in.uv + vec2<f32>(f32(x), f32(y)) * step) / 25.0;
+                let offset = vec2<f32>(f32(x), f32(y)) * step;
+                var tap = sample_premultiplied(in.uv + offset);
+                if matte {
+                    // A blur transition blurs the finished picture, so no part of the room shows around the person.
+                    let a = person(in.uv + offset, false);
+                    let fill = fill_at(in.uv + offset, in.layer_uv + offset) * (1.0 - a);
+                    tap *= a;
+                    if picked {
+                        picked_fill += fill / 25.0;
+                    } else {
+                        tap += fill;
+                    }
+                }
+                c += tap / 25.0;
             }
+        }
+    } else if matte {
+        person_a = person(in.uv, true);
+        if layer.matte.x < 1.5 {
+            // The blurred footage is the clip's own picture: tone mapped and adjusted with the person.
+            c = c * person_a + fill_at(in.uv, in.layer_uv) * (1.0 - person_a);
         }
     }
     var rgb = c.rgb;
@@ -184,6 +269,11 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * c.a;
     }
     var color = vec4<f32>(rgb, c.a);
+    if picked && layer.effects.y <= 0.0 {
+        color = color * person_a + fill_at(in.uv, in.layer_uv) * (1.0 - person_a);
+    } else if picked {
+        color += picked_fill;
+    }
     if layer.mask.x > 0.0 {
         // Coverage of the visible part and of it with the border, smoothed over one pixel.
         let d = rounded_box(in.local, layer.mask.xy, layer.mask.z);
@@ -213,6 +303,8 @@ struct LayerUniform {
     mask: [f32; 4],
     border: [f32; 4],
     shadow: [f32; 4],
+    matte: [f32; 4],
+    fill: [f32; 4],
 }
 
 /// Straight-alpha RGBA image shared between frames without copying.
@@ -238,6 +330,25 @@ pub struct Layer {
     pub clip: Option<[f32; 4]>,
     pub transfer: Transfer,
     pub mask: Option<Mask>,
+    pub matte: Option<Box<Matte>>,
+}
+
+/// The person cut out of a layer by a matte, over a fill.
+#[derive(Clone)]
+pub struct Matte {
+    /// The person in alpha, covering the layer image in its orientation.
+    pub alpha: Image,
+    pub fill: Fill,
+}
+
+#[derive(Clone)]
+pub enum Fill {
+    /// The layer's own picture blurred, in the layer image's orientation; graded with the person.
+    Footage(Image),
+    /// Straight RGBA, shown as picked.
+    Color([f32; 4]),
+    /// An upright picture shown as picked; `scale` maps the layer's upright (u, v) about the centre into it.
+    Picture { image: Image, scale: [f32; 2] },
 }
 
 /// The visible part of a layer and how its edge is drawn.
@@ -270,7 +381,7 @@ const SHADOW_OFFSET: f32 = 0.4;
 
 /// Where the image point shown at `(u, v)` of the quad lies in the texture, for an image rotated clockwise by
 /// `rotation` and then mirrored.
-fn texture_uv(u: f32, v: f32, rotation: u32, mirror: bool) -> [f32; 2] {
+pub(crate) fn texture_uv(u: f32, v: f32, rotation: u32, mirror: bool) -> [f32; 2] {
     let u = if mirror { 1.0 - u } else { u };
     match rotation % 360 {
         90 => [v, 1.0 - u],
@@ -311,7 +422,22 @@ pub struct Gpu {
     target: Option<Target>,
     /// Textures from the previous frame, keyed by the image allocation they hold.
     textures: HashMap<usize, (Arc<Vec<u8>>, wgpu::Texture)>,
+    /// Bound where a layer has no matte or fill.
+    blank: wgpu::Texture,
     pub adapter_name: String,
+}
+
+fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
 }
 
 impl Gpu {
@@ -350,16 +476,9 @@ impl Gpu {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture_entry(1),
+                texture_entry(2),
+                texture_entry(3),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -404,6 +523,21 @@ impl Gpu {
             operation: wgpu::BlendOperation::Add,
         };
         let additive = make_pipeline(wgpu::BlendState { color: component, alpha: component });
+        let blank = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("blank"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[0, 0, 0, 0],
+        );
         Ok(Self {
             device,
             queue,
@@ -413,6 +547,7 @@ impl Gpu {
             layout,
             target: None,
             textures: HashMap::new(),
+            blank,
             adapter_name,
         })
     }
@@ -486,7 +621,8 @@ impl Gpu {
         Ok(tex)
     }
 
-    fn bind(&self, layer: &Layer, tex: &wgpu::Texture, w: u32, h: u32, premult: bool) -> wgpu::BindGroup {
+    /// `textures` are the layer's image, its matte and its fill.
+    fn bind(&self, layer: &Layer, textures: [&wgpu::Texture; 3], w: u32, h: u32, premult: bool) -> wgpu::BindGroup {
         let base = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let shift = (layer.uv_rotation / 90) as usize % 4;
         let mut corners = [[0.0; 4]; 4];
@@ -502,6 +638,7 @@ impl Gpu {
                     let source = if layer.mirror { [1, 0, 3, 2][cyclic] } else { cyclic };
                     let uv = base[(source + 4 - shift) % 4];
                     corners[slot] = [p[0], p[1], uv[0], uv[1]];
+                    local[slot] = [0.0, 0.0, base[cyclic][0], base[cyclic][1]];
                 }
                 ([0.0; 4], [0.0; 4], [0.0; 4])
             }
@@ -527,7 +664,7 @@ impl Gpu {
                     let p = clip_space([tl[0] + u * across[0] + v * down[0], tl[1] + u * across[1] + v * down[1]]);
                     let uv = texture_uv(u, v, layer.uv_rotation, layer.mirror);
                     corners[slot] = [p[0], p[1], uv[0], uv[1]];
-                    local[slot] = [(u - centre[0]) * size[0], (v - centre[1]) * size[1], 0.0, 0.0];
+                    local[slot] = [(u - centre[0]) * size[0], (v - centre[1]) * size[1], u, v];
                 }
                 // min and max rather than clamp, which panics on the NaN of a broken project.
                 let half = [((right - left) * size[0] / 2.0).max(1e-3), ((bottom - top) * size[1] / 2.0).max(1e-3)];
@@ -538,6 +675,12 @@ impl Gpu {
                     [mask.shadow, mask.shadow_blur.max(1e-3), mask.shadow_blur * SHADOW_OFFSET, 0.0],
                 )
             }
+        };
+        let (matte, fill) = match layer.matte.as_ref().map(|m| &m.fill) {
+            None => ([0.0; 4], [0.0; 4]),
+            Some(Fill::Footage(_)) => ([1.0, 0.0, 0.0, 0.0], [0.0; 4]),
+            Some(Fill::Color([r, g, b, a])) => ([2.0, 0.0, 0.0, 0.0], [r * a, g * a, b * a, *a]),
+            Some(Fill::Picture { scale, .. }) => ([3.0, scale[0], scale[1], 0.0], [0.0; 4]),
         };
         let a = layer.adjust;
         let uniform = LayerUniform {
@@ -551,25 +694,49 @@ impl Gpu {
             mask,
             border,
             shadow,
+            matte,
+            fill,
         };
         let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("layer"),
             contents: bytemuck::bytes_of(&uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let view = tex.create_view(&Default::default());
-        self.bind_group(&buffer, &view)
+        self.bind_group(&buffer, textures.map(|t| t.create_view(&Default::default())))
     }
 
-    fn bind_group(&self, buffer: &wgpu::Buffer, view: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn bind_group(&self, buffer: &wgpu::Buffer, views: [wgpu::TextureView; 3]) -> wgpu::BindGroup {
+        let [image, matte, fill] = views.each_ref().map(wgpu::BindingResource::TextureView);
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("layer"),
             layout: &self.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: image },
+                wgpu::BindGroupEntry { binding: 2, resource: matte },
+                wgpu::BindGroupEntry { binding: 3, resource: fill },
             ],
         })
+    }
+
+    /// The textures a layer draws from, keeping each one's image for the next frame.
+    fn layer_textures(&mut self, layer: &Layer, used: &mut Vec<usize>) -> Result<[wgpu::Texture; 3]> {
+        let mut images = [Some(&layer.image), None, None];
+        if let Some(matte) = &layer.matte {
+            images[1] = Some(&matte.alpha);
+            images[2] = match &matte.fill {
+                Fill::Footage(image) | Fill::Picture { image, .. } => Some(image),
+                Fill::Color(_) => None,
+            };
+        }
+        let mut textures = [self.blank.clone(), self.blank.clone(), self.blank.clone()];
+        for (texture, image) in textures.iter_mut().zip(images) {
+            if let Some(image) = image {
+                *texture = self.texture_for(image)?;
+                used.push(Arc::as_ptr(&image.data) as usize);
+            }
+        }
+        Ok(textures)
     }
 
     fn draw_pass(
@@ -617,16 +784,14 @@ impl Gpu {
         for draw in layers {
             match draw {
                 Draw::Layer(layer) => {
-                    let tex = self.texture_for(&layer.image)?;
-                    used.push(Arc::as_ptr(&layer.image.data) as usize);
-                    bind_groups.push(self.bind(layer, &tex, w, h, false));
+                    let textures = self.layer_textures(layer, &mut used)?;
+                    bind_groups.push(self.bind(layer, textures.each_ref(), w, h, false));
                 }
                 Draw::Transition(pair) => {
                     let mut groups = Vec::new();
                     for layer in pair {
-                        let tex = self.texture_for(&layer.image)?;
-                        used.push(Arc::as_ptr(&layer.image.data) as usize);
-                        groups.push(self.bind(layer, &tex, w, h, false));
+                        let textures = self.layer_textures(layer, &mut used)?;
+                        groups.push(self.bind(layer, textures.each_ref(), w, h, false));
                     }
                     if self.transitions.get(transition_index).map(|t| (t.texture.width(), t.texture.height()))
                         != Some((w, h))
@@ -648,7 +813,8 @@ impl Gpu {
                             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                             mapped_at_creation: false,
                         });
-                        let bind_group = self.bind_group(&uniform, &view);
+                        let blank = || self.blank.create_view(&Default::default());
+                        let bind_group = self.bind_group(&uniform, [view.clone(), blank(), blank()]);
                         let target = TransitionTarget { texture, view, uniform, bind_group };
                         if transition_index == self.transitions.len() {
                             self.transitions.push(target);
@@ -675,6 +841,8 @@ impl Gpu {
                         mask: [0.0; 4],
                         border: [0.0; 4],
                         shadow: [0.0; 4],
+                        matte: [0.0; 4],
+                        fill: [0.0; 4],
                     };
                     self.queue.write_buffer(&target.uniform, 0, bytemuck::bytes_of(&uniform));
                     bind_groups.push(target.bind_group.clone());
@@ -744,6 +912,7 @@ mod tests {
             clip: None,
             transfer: Transfer::Sdr,
             mask: None,
+            matte: None,
         };
         let draws = [Draw::Transition([layer.clone(), layer])];
         let first = gpu.render(2, 2, [0.0; 4], &draws).unwrap();
@@ -776,6 +945,7 @@ mod tests {
             clip: None,
             transfer: Transfer::Sdr,
             mask: None,
+            matte: None,
         };
         for adjust in [false, true] {
             layer.adjust.contrast = if adjust { 0.2 } else { 0.0 };
@@ -808,6 +978,7 @@ mod tests {
                 clip: None,
                 transfer: Transfer::Sdr,
                 mask: None,
+                matte: None,
             };
             assert_eq!(gpu.render(1, 1, [0.0; 4], &[Draw::Layer(layer)]).unwrap(), [80, 100, 120, 255]);
         };
@@ -848,6 +1019,7 @@ mod tests {
             clip: None,
             transfer: Transfer::Sdr,
             mask: None,
+            matte: None,
         };
         assert_eq!(gpu.render(2, 2, [0.0; 4], &[Draw::Layer(layer.clone())]).unwrap(), pixels);
         let mut half = layer.clone();

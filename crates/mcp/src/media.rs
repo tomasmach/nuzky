@@ -2,8 +2,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use nuzky_engine::{
-    Project, Renderer, Wait,
-    model::{ClipContent, ThumbnailFormat},
+    Pending, Project, Renderer, Wait,
+    model::{Background, ClipContent, ThumbnailFormat},
 };
 
 const DEFAULT_WIDTH: u32 = 320;
@@ -13,15 +13,26 @@ use crate::limits::MAX_SHEET_PIXELS;
 
 pub fn check_media(project: &Project) -> Result<()> {
     for clip in project.tracks.iter().flat_map(|t| &t.clips) {
-        if let ClipContent::Media { asset_id, .. } = &clip.content {
+        if let ClipContent::Media { asset_id, background, .. } = &clip.content {
             let asset = project.asset(asset_id).context("UNKNOWN_ASSET: clip references absent asset")?;
             ensure!(Path::new(&asset.path).is_file(), "MEDIA_MISSING: {}", asset.path);
+            if let Background::Image { asset_id } = background {
+                let image =
+                    project.asset(asset_id).context("UNKNOWN_ASSET: a background references an absent image")?;
+                ensure!(Path::new(&image.path).is_file(), "MEDIA_MISSING: {}", image.path);
+            }
         }
     }
     Ok(())
 }
 
-pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_area: bool) -> Result<Vec<u8>> {
+pub fn contact_sheet(
+    project: &Project,
+    times: &[i64],
+    width: Option<u32>,
+    safe_area: bool,
+    cache_dir: &Path,
+) -> Result<Vec<u8>> {
     ensure!(!times.is_empty() && times.len() <= MAX_FRAMES, "Provide 1..={MAX_FRAMES} frame times");
     ensure!(
         times.iter().all(|t| *t >= 0 && *t < project.duration_us()),
@@ -43,6 +54,7 @@ pub fn contact_sheet(project: &Project, times: &[i64], width: Option<u32>, safe_
         pixel[3] = 255;
     }
     let mut renderer = Renderer::new().context("Starting frame renderer")?;
+    renderer.use_mattes(cache_dir.to_path_buf(), Pending::Fail);
     for (index, &time) in times.iter().enumerate() {
         let mut rgba = renderer
             .render(project, time, width, height, Wait::Exact, false)

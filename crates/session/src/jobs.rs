@@ -170,6 +170,16 @@ impl Jobs {
         Ok(state.json())
     }
 
+    /// A running job of `kind`, to name again instead of starting the same work twice.
+    pub fn running_id(&self, kind: &str) -> Option<String> {
+        let entries = self.entries.lock().unwrap();
+        entries
+            .values()
+            .map(|state| state.lock().unwrap())
+            .find(|s| s.status == "running" && s.kind == kind)
+            .map(|s| s.id.clone())
+    }
+
     /// Kinds of the jobs that are still running.
     pub fn running(&self) -> Vec<&'static str> {
         let entries = self.entries.lock().unwrap();

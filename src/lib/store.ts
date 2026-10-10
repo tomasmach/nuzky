@@ -1,8 +1,9 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Asset, Clip, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
+import type { Asset, Background, Clip, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
 
 export interface Toast {
   id: number;
@@ -806,6 +807,27 @@ export const maxFadeUs = (durationUs: number) => Math.min(10 * US, Math.floor(du
 /** Turns Clean voice on or off for the media clips in `ids`, as one undo step. */
 export function setCleanVoice(ids: string[], on: boolean) {
   return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));
+}
+
+/** Sets what shows behind the person on video and image clips, as one undo step. */
+export function setBackground(ids: string[], background: Background, coalesce?: string) {
+  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, background } : null), coalesce);
+}
+
+/**
+ * Finding the person in these files for their clips' backgrounds: how far the least done running job is (0 while
+ * it starts), or why one failed; null when nothing is left to do.
+ */
+export function useMatteJob(paths: string[]) {
+  return useEditor(
+    useShallow((s) => {
+      const jobs = paths.map((p) => s.jobs[`matte:${p}`]).filter(Boolean);
+      const running = jobs.filter((j) => j.status === "running");
+      if (running.length > 0) return { progress: Math.min(...running.map((j) => j.progress)), failed: null };
+      const failed = jobs.find((j) => j.status === "failed");
+      return failed ? { progress: null, failed: failed.message ?? "" } : null;
+    }),
+  );
 }
 
 /** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */

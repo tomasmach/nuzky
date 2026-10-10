@@ -8,11 +8,12 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 
 use crate::effects::{max_animation_scale, source_time, transform_at, transition_at, transition_window};
-use crate::gpu::{Draw, Gpu, Image, Layer, Mask};
-use crate::media::{Transfer, decode_size};
+use crate::gpu::{Draw, Fill, Gpu, Image, Layer, Mask, Matte};
+use crate::matte::{Mattes, SIDE};
+use crate::media::{RgbaFrame, Transfer, VideoDecoder, decode_size, file_key, orient};
 use crate::model::{
-    Adjust, Asset, AssetKind, Clip, ClipContent, Crop, MAX_BORDER_WIDTH, Project, Track, TrackKind, Transform,
-    TransitionKind, parse_color, spoken_word,
+    Adjust, Asset, AssetKind, Background, Clip, ClipContent, Crop, MAX_BORDER_WIDTH, Project, Track, TrackKind,
+    Transform, TransitionKind, parse_color, spoken_word,
 };
 use crate::text::{TextRenderer, TextStats};
 use crate::worker::VideoWorker;
@@ -23,6 +24,13 @@ const BLOCK_SAMPLES: usize = 4;
 const BACKGROUND_BLUR_PASSES: usize = 3;
 pub(crate) const BACKGROUND_MAX_RADIUS: f32 = 9.0;
 const BACKGROUND_BRIGHTNESS: f32 = 0.85;
+/// Long side of the blurred copy behind a person, and its strongest blur radius there.
+const BEHIND_SIZE: f32 = 256.0;
+const BEHIND_MAX_RADIUS: f32 = 12.0;
+/// Samples per block side for it: on a plate this large the blur hides that most pixels are skipped.
+const BEHIND_SAMPLES: usize = 2;
+/// A background image is decoded once, at most this many pixels on its longer side.
+const PICTURE_MAX_SIDE: u32 = 2048;
 pub(crate) const MAX_TEXT_SCALE: f32 = 8.0;
 const PREFETCH_US: i64 = 1_000_000;
 const IDLE_WORKER: Duration = Duration::from_secs(5);
@@ -51,7 +59,22 @@ pub struct Renderer {
     pub(crate) solids: [Image; 3],
     /// The cache to find preview proxies in; `None` decodes the originals, as export must.
     proxies: Option<PathBuf>,
+    /// The person mattes of clips with a background (`crate::matte`), and what to draw while one is not made.
+    mattes: Option<(Mattes, Pending)>,
+    /// Each frame's copy blurred behind its person, kept while the frame is drawn.
+    behind: HashMap<(usize, usize), (Image, Image)>,
+    /// Background images, upright, by the file as it is now (`media::file_key`), so an image saved again is read again.
+    pictures: HashMap<String, Image>,
     pub late_layers: u64,
+}
+
+/// What a renderer draws for a clip with a background whose person matte is not made yet.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pending {
+    /// Fails with `MATTE_MISSING`, as export, a saved frame and anything an agent inspects must.
+    Fail,
+    /// The clip as recorded, as the preview shows it until the matte is made.
+    Original,
 }
 
 struct Placement {
@@ -267,8 +290,16 @@ impl Renderer {
                 data: Arc::new(c.to_vec()),
             }),
             proxies: None,
+            mattes: None,
+            behind: HashMap::new(),
+            pictures: HashMap::new(),
             late_layers: 0,
         })
+    }
+
+    /// Reads person mattes from `cache_dir`. Without it a clip with a background fails with `MATTE_MISSING`.
+    pub fn use_mattes(&mut self, cache_dir: PathBuf, pending: Pending) {
+        self.mattes = Some((Mattes::new(cache_dir), pending));
     }
 
     /// Decodes each file's preview proxy (`crate::proxy`) from `cache_dir` once it is made. For the preview
@@ -315,6 +346,19 @@ impl Renderer {
         let k = out_w as f32 / canvas.width.max(1) as f32;
         let mut draws = Vec::new();
         let mut blur_used = Vec::new();
+        if !self.pictures.is_empty() {
+            let shown: HashSet<String> = project
+                .tracks
+                .iter()
+                .flat_map(|t| &t.clips)
+                .filter_map(|c| match &c.content {
+                    ClipContent::Media { background: Background::Image { asset_id }, .. } => project.asset(asset_id),
+                    _ => None,
+                })
+                .map(|a| file_key(&a.path))
+                .collect();
+            self.pictures.retain(|key, _| shown.contains(key));
+        }
         for track in &project.tracks {
             let mut visible = visible_clips(track, t_us);
             let Some(first) = visible.next() else { continue };
@@ -361,6 +405,16 @@ impl Renderer {
             self.prefetch(project, t_us, k);
         }
         self.blurred.retain(|key, _| blur_used.contains(key));
+        let behind_used: Vec<usize> = draws
+            .iter()
+            .flat_map(|draw| match draw {
+                Draw::Layer(layer) => std::slice::from_ref(layer),
+                Draw::Transition(pair) => &pair[..],
+            })
+            .filter(|layer| layer.matte.as_ref().is_some_and(|m| matches!(m.fill, Fill::Footage(_))))
+            .map(|layer| Arc::as_ptr(&layer.image.data) as usize)
+            .collect();
+        self.behind.retain(|key, _| behind_used.contains(&key.0));
         self.gpu.render(out_w, out_h, parse_color(&canvas.background), &draws)
     }
 
@@ -426,6 +480,7 @@ impl Renderer {
             clip: layer.clip,
             transfer: layer.transfer,
             mask,
+            matte: None,
         }
     }
 
@@ -488,8 +543,9 @@ impl Renderer {
         let clip = visible.clip;
         let Some(place) = placement(project, visible, t_us, k, &mut self.text) else { return Ok(None) };
         let corners = placement_quad(project, &place, k);
+        let mut matte = None;
         let (image, (rotation, mirror), adjust, transfer) = match &clip.content {
-            ClipContent::Media { asset_id, adjust, .. } => {
+            ClipContent::Media { asset_id, adjust, background, .. } => {
                 let Some(asset) = project.asset(asset_id) else { return Ok(None) };
                 // A stable conversion size avoids flushing the decoder queue on every animation frame.
                 let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
@@ -512,6 +568,9 @@ impl Renderer {
                     self.late_layers += 1;
                 }
                 let Some(frame) = frame else { return Ok(None) };
+                if !background.is_none() {
+                    matte = self.matte_for(project, asset, &frame, background, place.size)?;
+                }
                 let image = Image { width: frame.width, height: frame.height, data: frame.data };
                 (image, (asset.rotation, asset.mirror), *adjust, frame.transfer)
             }
@@ -531,7 +590,86 @@ impl Renderer {
             clip: None,
             transfer,
             mask: layer_mask(project, clip, &place.transform, k),
+            matte,
         }))
+    }
+
+    /// The person of `frame` and what shows behind them, for a layer of upright `size`; `None` draws the frame as
+    /// recorded while its matte is not made, when the renderer may.
+    fn matte_for(
+        &mut self,
+        project: &Project,
+        asset: &Asset,
+        frame: &RgbaFrame,
+        background: &Background,
+        size: (f32, f32),
+    ) -> Result<Option<Box<Matte>>> {
+        let original = matches!(self.mattes, Some((_, Pending::Original)));
+        // What must not draw without the matte looks in the directory again before it fails.
+        let alpha = self.mattes.as_mut().and_then(|(mattes, _)| mattes.alpha(&asset.path, frame.t_us, !original));
+        let Some(alpha) = alpha else {
+            if original {
+                return Ok(None);
+            }
+            bail!(
+                "MATTE_MISSING: the person's outline in {} at {:.2} s is not prepared yet",
+                asset.name,
+                frame.t_us as f64 / 1e6
+            );
+        };
+        let fill = match background {
+            Background::None => return Ok(None),
+            Background::Blur { strength } => {
+                let radius = (1.0 + strength.clamp(0.0, 1.0) * (BEHIND_MAX_RADIUS - 1.0)).round() as usize;
+                let key = (Arc::as_ptr(&frame.data) as usize, radius);
+                let image = Image { width: frame.width, height: frame.height, data: frame.data.clone() };
+                let behind =
+                    self.behind.entry(key).or_insert_with(|| (image.clone(), behind_person(&image, &alpha, radius)));
+                Fill::Footage(behind.1.clone())
+            }
+            Background::Color { color } => Fill::Color(parse_color(color)),
+            Background::Image { asset_id } => {
+                let picture = project.asset(asset_id).and_then(|picture| self.picture(picture));
+                match picture {
+                    // Covers the whole layer, so a crop or a move of the crop does not move the picture.
+                    Some(image) => {
+                        let (layer, picture) = (size.0 / size.1.max(1e-3), image.width as f32 / image.height as f32);
+                        let scale = if picture > layer { [layer / picture, 1.0] } else { [1.0, picture / layer] };
+                        Fill::Picture { image, scale }
+                    }
+                    None if original => Fill::Color(parse_color(&project.canvas.background)),
+                    None => bail!("Cannot decode the background image of {}", asset.name),
+                }
+            }
+        };
+        Ok(Some(Box::new(Matte { alpha: Image { width: SIDE, height: SIDE, data: alpha }, fill })))
+    }
+
+    /// A background image, upright, at most `PICTURE_MAX_SIDE` pixels on its longer side; decoded once.
+    fn picture(&mut self, asset: &Asset) -> Option<Image> {
+        let key = file_key(&asset.path);
+        if let Some(image) = self.pictures.get(&key) {
+            return Some(image.clone());
+        }
+        let decoded = (|| -> Result<Image> {
+            let mut decoder = VideoDecoder::open(Path::new(&asset.path))?;
+            let (t, f) = decoder.next_frame()?.ok_or_else(|| anyhow::anyhow!("no picture"))?;
+            let k = (PICTURE_MAX_SIDE as f32 / f.width().max(f.height()) as f32).min(1.0);
+            let size = ((f.width() as f32 * k).round() as u32, (f.height() as f32 * k).round() as u32);
+            let frame = decoder.convert(&f, t, size.0, size.1)?;
+            let (data, width, height) = orient(&frame.data, frame.width, frame.height, asset);
+            Ok(Image { width, height, data: Arc::new(data) })
+        })();
+        match decoded {
+            Ok(image) => {
+                self.pictures.insert(key, image.clone());
+                Some(image)
+            }
+            Err(error) => {
+                log::warn!("Cannot decode the background image {}: {error:#}", asset.path);
+                None
+            }
+        }
     }
 }
 
@@ -600,65 +738,102 @@ pub(crate) fn solid(image: &Image, w: u32, h: u32) -> Layer {
         clip: None,
         transfer: Transfer::Sdr,
         mask: None,
+        matte: None,
     }
 }
 
 pub(crate) fn small_image(image: &Image, radius: usize) -> Image {
-    let scale = (BACKGROUND_SIZE / image.width.max(image.height) as f32).min(1.0);
+    shrink_blur(image, BACKGROUND_SIZE, radius, BACKGROUND_BRIGHTNESS, None, BLOCK_SAMPLES)
+}
+
+/// The frame blurred with its person left out: each part of the blur averages only what is around the person,
+/// so the room fills in behind them instead of a halo of their colours. `matte` is `SIDE` × `SIDE` RGBA over the
+/// frame with the person in alpha.
+fn behind_person(image: &Image, matte: &[u8], radius: usize) -> Image {
+    shrink_blur(image, BEHIND_SIZE, radius, 1.0, Some(matte), BEHIND_SAMPLES)
+}
+
+/// Shrinks the image to `size` pixels on its longer side, from up to `samples` × `samples` pixels of each block, and
+/// blurs it, weighting every pixel by how little of the person covers it when there is a `matte`.
+fn shrink_blur(
+    image: &Image,
+    size: f32,
+    radius: usize,
+    brightness: f32,
+    matte: Option<&[u8]>,
+    samples: usize,
+) -> Image {
+    let scale = (size / image.width.max(image.height) as f32).min(1.0);
     let w = (image.width as f32 * scale).round().max(1.0) as usize;
     let h = (image.height as f32 * scale).round().max(1.0) as usize;
     let (sw, sh) = (image.width as usize, image.height as usize);
-    let mut pixels = vec![[0.0; 4]; w * h];
+    // The matte cell over each source column and row, and the weight of each matte value: the person still counts
+    // a little, so a part of the blur they cover whole is not left empty.
+    let n = SIDE as usize;
+    let (cols, rows): (Vec<usize>, Vec<usize>) =
+        ((0..sw).map(|x| x * n / sw).collect(), (0..sh).map(|y| y * n / sh).collect());
+    let weights: [f32; 256] = std::array::from_fn(|a| 1.0 - a as f32 / 255.0 * (1.0 - 1.0 / 64.0));
+    let mut pixels = vec![[0.0; 5]; w * h];
     for y in 0..h {
         for x in 0..w {
             let (x0, x1) = (x * sw / w, (x + 1) * sw / w);
             let (y0, y1) = (y * sh / h, (y + 1) * sh / h);
             // A grid of samples per block is enough: the result is blurred heavily anyway, and
             // reading every source pixel would cost milliseconds on each new playback frame.
-            let (step_x, step_y) = (((x1 - x0) / BLOCK_SAMPLES).max(1), ((y1 - y0) / BLOCK_SAMPLES).max(1));
-            let mut sum = [0u64; 4];
+            let (step_x, step_y) = (((x1 - x0) / samples).max(1), ((y1 - y0) / samples).max(1));
+            // Premultiplied colour weighted away from the person, the weight, and the plain alpha.
+            let mut sum = [0.0f32; 5];
             let mut count = 0u64;
             for sy in (y0..y1.max(y0 + 1)).step_by(step_y) {
                 for sx in (x0..x1.max(x0 + 1)).step_by(step_x) {
                     let src = &image.data[(sy * sw + sx) * 4..(sy * sw + sx) * 4 + 4];
-                    let alpha = src[3] as u64;
-                    sum[0] += src[0] as u64 * alpha;
-                    sum[1] += src[1] as u64 * alpha;
-                    sum[2] += src[2] as u64 * alpha;
-                    sum[3] += alpha;
+                    let alpha = src[3] as f32;
+                    let weight = matte.map_or(1.0, |m| weights[m[(rows[sy] * n + cols[sx]) * 4 + 3] as usize]);
+                    for c in 0..3 {
+                        sum[c] += src[c] as f32 * alpha * weight;
+                    }
+                    sum[3] += alpha * weight;
+                    sum[4] += alpha;
                     count += 1;
                 }
             }
             let count = count as f32;
             // Filter premultiplied colours so transparent pixels cannot bleed into the blur.
-            pixels[y * w + x] = std::array::from_fn(|c| sum[c] as f32 / count / if c == 3 { 1.0 } else { 255.0 });
+            pixels[y * w + x] = std::array::from_fn(|c| sum[c] / count / if c >= 3 { 1.0 } else { 255.0 });
         }
     }
-    let mut scratch = vec![[0.0; 4]; w * h];
+    let mut scratch = vec![[0.0; 5]; w * h];
     for _ in 0..BACKGROUND_BLUR_PASSES {
         box_blur(&pixels, &mut scratch, w, h, radius, true);
         box_blur(&scratch, &mut pixels, w, h, radius, false);
     }
     let mut data = Vec::with_capacity(w * h * 4);
     for pixel in pixels {
-        let alpha = pixel[3].clamp(0.0, 255.0);
+        let weight = pixel[3];
         for channel in &pixel[..3] {
-            let value = if alpha > 0.0 { channel * 255.0 / alpha * BACKGROUND_BRIGHTNESS } else { 0.0 };
+            let value = if weight > 0.0 { channel * 255.0 / weight * brightness } else { 0.0 };
             data.push(value.clamp(0.0, 255.0).round() as u8);
         }
-        data.push(alpha.round() as u8);
+        data.push(pixel[4].clamp(0.0, 255.0).round() as u8);
     }
     Image { width: w as u32, height: h as u32, data: Arc::new(data) }
 }
 
-fn box_blur(src: &[[f32; 4]], dst: &mut [[f32; 4]], w: usize, h: usize, radius: usize, horizontal: bool) {
+fn box_blur<const N: usize>(
+    src: &[[f32; N]],
+    dst: &mut [[f32; N]],
+    w: usize,
+    h: usize,
+    radius: usize,
+    horizontal: bool,
+) {
     let (lines, length, stride) = if horizontal { (h, w, 1) } else { (w, h, w) };
     let divisor = (2 * radius + 1) as f32;
     for line in 0..lines {
         let base = if horizontal { line * w } else { line };
         let mut sum = src[base].map(|v| v * (radius + 1) as f32);
         for offset in 1..=radius {
-            for c in 0..4 {
+            for c in 0..N {
                 sum[c] += src[base + offset.min(length - 1) * stride][c];
             }
         }
@@ -666,7 +841,7 @@ fn box_blur(src: &[[f32; 4]], dst: &mut [[f32; 4]], w: usize, h: usize, radius: 
             dst[base + pos * stride] = sum.map(|v| v / divisor);
             let remove = base + pos.saturating_sub(radius) * stride;
             let add = base + (pos + radius + 1).min(length - 1) * stride;
-            for c in 0..4 {
+            for c in 0..N {
                 sum[c] += src[add][c] - src[remove][c];
             }
         }
@@ -846,6 +1021,7 @@ mod tests {
                     clean_voice: false,
                     shape: None,
                     duck_db: 0.0,
+                    background: Default::default(),
                 },
             ));
         }

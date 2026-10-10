@@ -7,6 +7,7 @@ import type { Adjust, Clip, EditCmd, Project, Track, Transform } from "../../lib
 import { FontPicker } from "../FontPicker";
 import { Button, IconButton, Section, Slider } from "../ui";
 import { InspectorHeader, QUIET } from "./Header";
+import { BackgroundSection } from "./BackgroundSection";
 import { CleanVoiceRow, DuckingRow } from "./MediaSections";
 import { FieldRow } from "./TextSection";
 
@@ -183,6 +184,7 @@ export function MultiInspector({ ids }: { ids: string[] }) {
         </div>
         {all("transform") && <TransformRows found={found} coalesce={coalesce} />}
         {all("text") && <FontRow found={found} />}
+        {all("adjust") && <BackgroundSection clips={found.map((f) => f.clip)} />}
         {all("adjust") && <AdjustRows found={found} coalesce={coalesce} />}
         {all("sound") && <VolumeRow found={found} coalesce={coalesce} />}
       </div>

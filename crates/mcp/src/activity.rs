@@ -81,6 +81,8 @@ pub fn activity(
     let every = step / per_step;
     let motion_us = MOTION_US.min(every / 2).max(1);
     let last = project.duration_us() - 1;
+    // Where the picture changes does not depend on what is behind a person, which would need their outline made.
+    let project = &nuzky_engine::matte::without_backgrounds(project);
     let mut looker = Looker::new(project)?;
     let mut previous = match start - every {
         before if before >= 0 => Some(looker.look(project, before, cancelled)?),
@@ -267,6 +269,7 @@ pub struct Changes {
 /// Up to `max` frames of the cursor's range that look unlike the frames kept before them.
 pub fn changes(project: &Project, mut cursor: Cursor, max: usize, cancelled: &dyn Fn() -> bool) -> Result<Changes> {
     ensure!(cursor.end <= project.duration_us(), "INVALID_RANGE: the cursor reaches past the timeline");
+    let project = &nuzky_engine::matte::without_backgrounds(project);
     let mut looker = Looker::new(project)?;
     let (mut times, mut skipped) = (Vec::new(), 0);
     loop {

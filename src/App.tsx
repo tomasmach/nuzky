@@ -178,6 +178,13 @@ function onJob(job: JobEvent) {
   if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${job.message}` });
   if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}` });
   if (job.kind === "proxy" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}. The preview plays the original file, which can stutter.` });
+  if (job.kind === "matte" && job.status === "failed")
+    toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}. The clip shows as recorded; choose None for its background to export it.` });
+  // The cover editor reports its own model downloads.
+  if (job.kind === "vision-models" && job.label === "Person model" && job.status === "failed")
+    toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}` });
+  // A cover shows the background once the person behind whom it goes is found.
+  if (job.kind === "matte" && job.status === "done") useCover.setState((s) => ({ masks: s.masks + 1 }));
   // The dialog shows the result itself; with it closed, a toast reports it.
   if (job.kind === "export" && job.id === exportJobId && !exportOpen) {
     if (job.status === "done") {

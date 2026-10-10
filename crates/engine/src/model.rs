@@ -519,6 +519,9 @@ pub enum ClipContent {
         /// a video's own sound, coming back in the pauses. 0 turns it off.
         #[serde(default, skip_serializing_if = "is_zero")]
         duck_db: f32,
+        /// Blur or replace what is behind the person (video and image clips).
+        #[serde(default, skip_serializing_if = "Background::is_none")]
+        background: Background,
     },
     #[serde(rename_all = "camelCase")]
     Text {
@@ -638,6 +641,31 @@ impl Default for Shape {
 
 /// Widest border, in canvas pixels.
 pub const MAX_BORDER_WIDTH: f32 = 100.0;
+
+/// What shows behind the person in a video or image clip. Anything but `None` cuts the person out of
+/// every frame with an outline found once per file and fills the rest of the clip's picture.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Background {
+    /// The picture as recorded.
+    #[default]
+    None,
+    /// The clip's own picture blurred behind the person, 0 (lightest) to 1 (strongest).
+    Blur { strength: f32 },
+    /// `#rrggbb` behind the person.
+    Color { color: String },
+    /// An image of the project behind the person, covering the clip's picture.
+    #[serde(rename_all = "camelCase")]
+    Image { asset_id: String },
+}
+
+impl Background {
+    pub fn is_none(&self) -> bool {
+        *self == Background::None
+    }
+}
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
