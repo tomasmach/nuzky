@@ -14,6 +14,7 @@ import {
   ExternalLink,
   Film,
   GripVertical,
+  Image as ImageIcon,
   ImagePlus,
   Info,
   Loader2,
@@ -33,6 +34,7 @@ import {
   chooseAgent,
   markUndone,
   loadAgents,
+  makeThumbnail,
   newChat,
   send,
   sendBlocked,
@@ -46,6 +48,8 @@ import {
   type Step,
 } from "../../lib/agent";
 import { DOCK_LABELS, TOO_NARROW, useDock, useDockLayout, type DockMode } from "../../lib/dock";
+import { api } from "../../lib/api";
+import { downloadModels, useCover } from "../../lib/cover";
 import { undoAction, undoStep, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import { Button, IconButton } from "../ui";
@@ -444,6 +448,8 @@ const STARTERS: [ReactNode, string][] = [
   [<Scissors size={14} />, "Cut retakes and long pauses"],
   [<Captions size={14} />, "Add captions"],
   [<Download size={14} />, "Make a reel and export it"],
+  // Puts its chip in the field rather than its text: the agent then gets the MCP prompt `thumbnail`.
+  [<ImageIcon size={14} />, "Make a thumbnail"],
 ];
 const STYLE_STARTERS: [ReactNode, string][] = [
   [<MessageSquareText size={14} />, "What do you cut in my videos, and why?"],
@@ -494,7 +500,8 @@ function Empty() {
             blocked
               ? undefined
               : (e) => {
-                  useAgent.setState({ draft: text });
+                  if (text === "Make a thumbnail") makeThumbnail();
+                  else useAgent.setState({ draft: text });
                   // The field of this panel: the editor's stays mounted behind the home screen.
                   e.currentTarget.closest("aside")?.querySelector("textarea")?.focus();
                 }
@@ -610,6 +617,12 @@ function Composer() {
   const draft = useAgent((s) => s.draft);
   const status = useAgent((s) => s.status);
   const frame = useAgent((s) => s.frame);
+  const thumbnail = useAgent((s) => s.thumbnail && about === "project");
+  const models = useCover((s) => s.models);
+  const modelsJob = useEditor((s) => {
+    const id = useCover.getState().modelsJob;
+    return id && s.jobs[id]?.status === "running" ? s.jobs[id] : null;
+  });
   const dropSelection = useAgent((s) => s.dropSelection);
   const dropPlayhead = useAgent((s) => s.dropPlayhead);
   const agents = useAgent((s) => s.agents);
@@ -655,7 +668,7 @@ function Composer() {
   useEffect(() => setWhy(null), [status]);
   // Fresh from the store: Enter can come before React has drawn the latest text.
   const submit = () => {
-    if (!useAgent.getState().draft.trim()) return;
+    if (!useAgent.getState().draft.trim() && !useAgent.getState().thumbnail) return;
     const reason = sendBlocked();
     if (reason) setWhy(reason);
     else void send(undefined, about);
@@ -681,8 +694,13 @@ function Composer() {
             </span>
           </div>
         )}
-        {!working && about === "project" && ((selected > 0 && !dropSelection) || !dropPlayhead) && (
+        {!working && about === "project" && ((selected > 0 && !dropSelection) || !dropPlayhead || thumbnail) && (
           <div className="mb-2 flex flex-wrap gap-1.5">
+            {thumbnail && (
+              <Chip icon={<ImageIcon size={12} />} label="Make a thumbnail" onRemove={() => useAgent.setState({ thumbnail: false })}>
+                Make a thumbnail
+              </Chip>
+            )}
             {selected > 0 && !dropSelection && (
               <Chip icon={<Film size={12} />} label="the selected clips" onRemove={() => useAgent.setState({ dropSelection: true })}>
                 {selected === 1 ? "1 clip" : `${selected} clips`}
@@ -696,12 +714,32 @@ function Composer() {
             )}
           </div>
         )}
+        {!working && thumbnail && models && !models.downloaded && !models.unavailable && (
+          <div className="mb-2 flex items-center gap-2 text-[12px] text-fg/85" role="status">
+            {modelsJob ? (
+              <>
+                <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
+                <span className="tabular min-w-0 flex-1 truncate">Downloading cover models {Math.round(modelsJob.progress * 100)}%</span>
+                <Button className="h-6 px-2 text-[12px]" onClick={() => void api.cancelJob(modelsJob.id)}>
+                  Stop
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="min-w-0 flex-1">Needs the cover models first ({models.sizeMb} MB, once).</span>
+                <Button className="h-6 px-2 text-[12px]" onClick={() => void downloadModels()}>
+                  Download
+                </Button>
+              </>
+            )}
+          </div>
+        )}
         <textarea
           ref={field}
           rows={2}
           value={draft}
           aria-label={`Message to ${name}`}
-          placeholder={working ? `${name} is working…` : about === "style" ? "What should change in how you edit?" : hasItems ? "Ask for changes…" : `Ask ${name} to edit…`}
+          placeholder={working ? `${name} is working…` : thumbnail ? "Add a note, e.g. the hook (optional)" : about === "style" ? "What should change in how you edit?" : hasItems ? "Ask for changes…" : `Ask ${name} to edit…`}
           onChange={(e) => useAgent.setState({ draft: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -751,8 +789,8 @@ function Composer() {
             <button
               type="button"
               aria-label="Send"
-              title={blocked ?? (draft.trim() ? "Send (Enter)" : "Type a message first")}
-              aria-disabled={!!blocked || !draft.trim() || undefined}
+              title={blocked ?? (draft.trim() || thumbnail ? "Send (Enter)" : "Type a message first")}
+              aria-disabled={!!blocked || (!draft.trim() && !thumbnail) || undefined}
               onClick={submit}
               className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-strong text-white transition-colors duration-[120ms] hover:bg-[#0064c8] aria-disabled:cursor-not-allowed aria-disabled:bg-white/[.08] aria-disabled:text-white/40"
             >

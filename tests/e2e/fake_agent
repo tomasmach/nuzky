@@ -8,6 +8,8 @@ from --mcp-config, so its edits go through Nuzky like a real agent's. The messag
   "options"  offers two takes with suggest_options
   "slow"     opens a run, splits the clip and keeps working until stopped
   "keep: …"  sent from Your style: reads the style and keeps the rest of the message as the creator's rule
+  the `thumbnail` prompt (Make a thumbnail): sets both covers in one run with the hook from "Hook: …" in the wishes,
+             looks at the cover with inspect_thumbnail, waiting for its mask, and exports nothing
   "signin"   is not signed in;  "limit" has hit its usage limit
   anything else is echoed back.
 Each start is logged to $NUZKY_FAKE_AGENT_LOG/runs.jsonl (argv, pid, session); sessions live there too.
@@ -125,13 +127,15 @@ def interrupted(*_):
 
 signal.signal(signal.SIGINT, interrupted)
 message = prompt.split('\n\n[Nuzky]')[0].strip().lower()
+# The thumbnail prompt carries Nuzky's guide, whose words would pick the other answers.
+thumbnail = message.startswith('make a 9:16 cover')
 
-if 'signin' in message:
+if 'signin' in message and not thumbnail:
     emit({'type': 'assistant', 'error': 'authentication_failed', 'parent_tool_use_id': None,
           'message': {'content': [{'type': 'text', 'text': 'Not logged in · Please run /login'}]}})
     emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Not logged in · Please run /login'})
     sys.exit(1)
-if 'limit' in message:
+if 'limit' in message and not thumbnail:
     emit({'type': 'assistant', 'error': 'rate_limit', 'parent_tool_use_id': None,
           'message': {'content': [{'type': 'text', 'text': "You've hit your limit · resets 9pm"}]}})
     emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': "You've hit your limit · resets 9pm"})
@@ -146,6 +150,33 @@ if '[Nuzky] The user writes from the Your style page' in prompt:
         say(f'Hotovo, máš nové pravidlo: {rule}')
     else:
         say(f"Tvůj styl má {len(style['rules'])} naučených a {len(style['own'])} tvých pravidel.")
+elif thumbnail:
+    wishes = prompt.split("The user's wishes, which win over the steps: ", 1)[1].split('\n', 1)[0].strip()
+    hook = wishes.split(':', 1)[1].strip() if wishes.lower().startswith('hook:') else 'MY HOOK'
+    state = call('get_state', {})
+    at = min(7_500_000, state['duration_us'] - 100_000)
+    look = {'fontFamily': 'Anton', 'fontSize': 260, 'color': '#ffffff', 'bold': False, 'strokeWidth': 0,
+            'strokeColor': '#000000', 'background': None}
+    text = {'text': hook, 'style': look, 'transform': {'x': 0, 'y': -0.3, 'scale': 1, 'rotation': 0, 'opacity': 1}, 'behind': True}
+    wide = dict(text, style=dict(look, fontSize=170), transform=dict(text['transform'], x=0.2, y=-0.1))
+    say('Udělám cover a náhledovku pro YouTube.')
+    run = call('begin_run', {'label': 'Make a thumbnail'})['run_id']
+    call('apply_edits', {'run_id': run, 'request_id': 'covers', 'edits': [
+        {'type': 'setThumbnail', 'thumbnail': {'format': 'cover_9x16', 'timeUs': at, 'texts': [text]}},
+        {'type': 'setThumbnail', 'thumbnail': {'format': 'youtube_16x9', 'timeUs': at, 'texts': [wide],
+                                               'background': {'picture': True, 'blur': 1, 'dim': 0.2, 'color': '#000000'}}}]})
+    for _ in range(3):
+        try:
+            call('inspect_thumbnail', {'format': 'cover_9x16', 'safe_zones': True})
+            break
+        except RuntimeError as error:
+            job = str(error).split('job ', 1)[1].split(';', 1)[0] if 'MASK_NOT_READY' in str(error) else None
+            if not job:
+                raise
+            while call('job', {'job_id': job, 'action': 'get'})['status'] == 'running':
+                time.sleep(0.5)
+    call('end_run', {'run_id': run, 'action': 'keep'})
+    say(f'Hotovo: cover i náhledovka pro YouTube mají hook „{hook}“ za hlavou.')
 elif 'cut' in message:
     state = call('get_state', {})
     call('activity', {})

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Boot, Collection, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, ProjectVersion, Said, Snapshot, StyleAction, StylePair, StyleView, TextStyle, TranscriptCut, TranscriptView, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Boot, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, ProjectSummary, ProjectVersion, Said, Snapshot, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -62,6 +62,26 @@ export const api = {
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   speechModels: () => invoke<SpeechModel[]>("speech_models"),
+  /** Whether the face and person models covers need can run here, are installed and what is left to download. */
+  visionModels: () => invoke<VisionModels>("vision_models"),
+  /** Downloads the missing cover models as a `vision-models` job; `repair` downloads damaged ones again too. */
+  startVisionModels: (repair = false) => invoke<string>("start_vision_models", { repair }),
+  /** The cover of `format` `width` pixels wide, drawn as the export draws it, or `draft` in its place; `refreshMask` looks for a mask a job just made. */
+  coverView: async (format: ThumbnailFormat, width: number, refreshMask: boolean, draft: Thumbnail | null) => {
+    const buffer = await invoke<ArrayBuffer>("cover_view", { format, width: Math.round(width), refreshMask, draft });
+    const length = new DataView(buffer).getUint32(0, true);
+    const view = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, length))) as CoverView;
+    return { view, rgba: new Uint8ClampedArray(buffer, 4 + length, view.width * view.height * 4) };
+  },
+  /** Frees the cover renderer once the cover editor closes. */
+  coverClose: () => invoke<void>("cover_close"),
+  /** Pick for me: downloads the models on first use, picks frames for `format` and masks the person in the best, as a `cover` job. */
+  startCoverPick: (format: ThumbnailFormat, epoch: Epoch) => invoke<string>("start_cover_pick", { format, expectedEpoch: epoch }),
+  /** Masks the person in the frame at `timeUs`, downloading the mask model on first use. */
+  startCoverMask: (timeUs: number, epoch: Epoch) => invoke<string>("start_cover_mask", { timeUs: Math.round(timeUs), expectedEpoch: epoch }),
+  /** Without `replaceExisting` an existing file is kept and the export fails with DESTINATION_EXISTS. */
+  startCoverExport: (format: ThumbnailFormat, path: string, replaceExisting: boolean, epoch: Epoch) =>
+    invoke<string>("start_cover_export", { format, path, replaceExisting, expectedEpoch: epoch }),
   /** `maxWords`/`maxChars` null group by phrase, capped at 12 words and 42 characters. */
   startCaptions: (model: string, language: string, style: TextStyle, maxWords: number | null, maxChars: number | null, epoch: Epoch) =>
     invoke<string>("start_captions", { request: { model, language, style, maxWords, maxChars }, expectedEpoch: epoch }),
@@ -128,7 +148,12 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   NOT_INSTALLED: (detail) => sentence(detail.replace(/\.$/, "")) + ". Install it and sign in from a terminal.",
   APP_CLOSED: "Nuzky is closing, so this stopped.",
   JOB_FAILED: "The task stopped unexpectedly. Try again.",
-  MODEL_INVALID: "The speech model did not download completely. Try again to download it anew.",
+  MODEL_INVALID: "The model did not download completely. Try again to download it anew.",
+  MEDIA_MISSING: (detail) => `${detail.split(/[\\/]/).pop()} is missing. Put the file back where it was, then try again.`,
+  VISION_UNAVAILABLE: "Covers can't find faces on this computer. You can still choose the frame and add text yourself.",
+  MODEL_MISSING: "The face and person models are not installed. Pick for me downloads them.",
+  THUMBNAIL_MISSING: "This project has no cover in that format yet.",
+  INVALID_RANGE: "The cover's frame is past the end of the video now. Choose its frame again.",
   STORE_UNREADABLE: "The saved transcripts could not be read. Transcribe the timeline again.",
   NO_MATCH: (detail) => `${sentence(detail.replace(/, so it was not cut from it$/, ""))}. Skipped.`,
   STYLE_CHANGED: "Your style changed in another window meanwhile. Copy your text, open the style again and redo your change.",

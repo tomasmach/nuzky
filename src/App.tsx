@@ -29,6 +29,7 @@ import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { listenStyle, loadStyle, useStyle } from "./lib/style";
+import { closeCover, deleteText, onCoverJob, useCover } from "./lib/cover";
 import { LearnDialog } from "./components/style/LearnDialog";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
@@ -94,6 +95,24 @@ function useShortcuts() {
       const key = e.key.toLowerCase();
       // A focused slider keeps its own arrow, Home and End keys.
       const onRange = target instanceof HTMLInputElement && target.type === "range";
+      // In the cover editor the playhead is the cover's frame and nothing plays; the clip keys rest.
+      const cover = useCover.getState();
+      if (cover.open) {
+        if (key === "escape") {
+          if (cover.selected !== null) useCover.setState({ selected: null });
+          else closeCover();
+          return;
+        }
+        if ((key === "delete" || key === "backspace") && typeof cover.selected === "number") {
+          e.preventDefault();
+          void deleteText(cover.open, cover.selected);
+          return;
+        }
+        if (key === " " || (!mod && (key === "s" || key === "q" || key === "w")) || (mod && key === "d") || key === "delete" || key === "backspace") {
+          e.preventDefault();
+          return;
+        }
+      }
       if (key === " ") {
         if (usesSpace(target)) return;
         e.preventDefault();
@@ -151,6 +170,7 @@ function useShortcuts() {
 function onJob(job: JobEvent) {
   const { toast, exportOpen, exportJobId } = useEditor.getState();
   useEditor.setState({ jobs: { ...useEditor.getState().jobs, [job.id]: job } });
+  if (job.kind === "cover" || job.kind === "vision-models") onCoverJob(job);
   if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
   if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${job.message}` });
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
@@ -336,7 +356,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
+    __nuzky: { importPaths, store: useEditor, cover: useCover, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates },
   });
 
 async function startEditor() {

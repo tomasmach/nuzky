@@ -1,5 +1,7 @@
 import { Blend, Captions, Film, Music, Palette, ScrollText, Type } from "lucide-react";
+import { useCover } from "../../lib/cover";
 import { useEditor, type PanelTab } from "../../lib/store";
+import { CoverFrames } from "../cover/CoverFrames";
 import { AiLock, TabPanel, tabIds, tabListKeys } from "../ui";
 import { AudioTab } from "./AudioTab";
 import { CaptionsTab } from "./CaptionsTab";
@@ -25,6 +27,14 @@ const TAB_IDS = TABS.map((t) => t.id);
 export function LeftPanel({ width }: { width: number }) {
   const tab = useEditor((s) => s.panelTab);
   const setTab = (id: PanelTab) => useEditor.setState({ panelTab: id });
+  // In the cover editor the library's place holds the frames for the cover; the tabs act on the video.
+  const cover = useCover((s) => s.open);
+  if (cover)
+    return (
+      <aside className="pane flex shrink-0 flex-col overflow-hidden" style={{ width }} aria-label="Cover frames">
+        <CoverFrames format={cover} />
+      </aside>
+    );
   return (
     <aside className="pane flex shrink-0 flex-col overflow-hidden" style={{ width }}>
       {/* Tabs size to their labels and share the leftover width, so no two labels touch at 360 px, the narrowest, also where

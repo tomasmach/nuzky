@@ -1,6 +1,7 @@
 import { memo, type ReactNode } from "react";
 import { AudioLines, Captions, Eye, EyeOff, Film, Type, Volume2, VolumeX } from "lucide-react";
-import { isCaptionTrack, useEditor } from "../../lib/store";
+import { MAIN_TRACK, isCaptionTrack, useEditor } from "../../lib/store";
+import { CoverTile } from "../cover/CoverTile";
 import type { Track } from "../../lib/types";
 
 /** Track header toggle. Off states swap the icon and brighten it; accent stays for selection. */
@@ -32,8 +33,17 @@ export const TrackHeader = memo(function TrackHeader({ track, width, locked }: {
   return (
     // 22 px toggles leave the name about 50 px, enough for "Captions" and "Overlay".
     <div className="sticky left-0 z-[47] flex shrink-0 items-center gap-0.5 border-r border-white/[.07] bg-panel pl-2 pr-1" style={{ width }}>
-      <KindIcon size={14} className="mr-1 shrink-0 text-muted" />
-      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">{track.name || track.kind}</span>
+      {/* The main track starts with the Cover tile, where CapCut has it; the toggles keep their columns. */}
+      {track.id === MAIN_TRACK ? (
+        <span className="min-w-0 flex-1">
+          <CoverTile />
+        </span>
+      ) : (
+        <>
+          <KindIcon size={14} className="mr-1 shrink-0 text-muted" />
+          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-fg">{track.name || track.kind}</span>
+        </>
+      )}
       {/* Fixed columns: eye, then speaker; a spacer keeps the column when a toggle does not apply. */}
       {track.kind !== "audio" ? (
         <TrackToggle

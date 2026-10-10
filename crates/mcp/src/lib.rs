@@ -47,6 +47,11 @@ fn guide() -> String {
     }
 }
 
+/// The `thumbnail` prompt as an agent gets it, from MCP or from the app's AI panel.
+pub fn thumbnail_prompt(wishes: &str) -> String {
+    format!("{THUMBNAIL}{THUMBNAIL_PRESETS}\nThe user's wishes, which win over the steps: {wishes}\n\n{}", guide())
+}
+
 #[derive(Clone)]
 struct Server {
     target: Arc<Target>,
@@ -291,14 +296,7 @@ impl ServerHandler for Server {
             .into());
         }
         if request.name == "thumbnail" {
-            return Ok(GetPromptResult::new(vec![PromptMessage::new_text(
-                Role::User,
-                format!(
-                    "{THUMBNAIL}{THUMBNAIL_PRESETS}\nThe user's wishes, which win over the steps: {wishes}\n\n{}",
-                    guide()
-                ),
-            )])
-            .into());
+            return Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, thumbnail_prompt(wishes))]).into());
         }
         if request.name != "edit_selected" {
             return Err(ErrorData::invalid_params("Unknown prompt", None));

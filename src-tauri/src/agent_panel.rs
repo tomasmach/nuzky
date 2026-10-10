@@ -58,6 +58,9 @@ pub struct PromptContext {
     /// Sent from the Your style page: the message is about the creator's style.
     #[serde(default)]
     style: bool,
+    /// Make a thumbnail in the AI panel: the agent gets the MCP prompt `thumbnail` instead of the label.
+    #[serde(default)]
+    thumbnail: bool,
 }
 
 fn timecode(us: i64) -> String {
@@ -67,6 +70,14 @@ fn timecode(us: i64) -> String {
 
 /// The message as the agent gets it: the user's words, then what they had selected.
 fn prompt(text: &str, context: &PromptContext, project: &nuzky_engine::Project) -> String {
+    let thumbnail;
+    let text = if context.thumbnail {
+        // What the user typed beside Make a thumbnail are their wishes.
+        thumbnail = nuzky_mcp::thumbnail_prompt(if text.trim().is_empty() { "none" } else { text });
+        thumbnail.as_str()
+    } else {
+        text
+    };
     let mut lines = Vec::new();
     if context.style {
         lines.push(
@@ -239,18 +250,40 @@ mod tests {
     #[test]
     fn the_prompt_carries_what_was_selected_when_sent() {
         let project = Project::new("t");
-        let context = PromptContext { selection: None, playhead_us: Some(7_200_000), frame: true, style: false };
+        let context = PromptContext {
+            selection: None,
+            playhead_us: Some(7_200_000),
+            frame: true,
+            style: false,
+            thumbnail: false,
+        };
         let text = prompt("Zkrať to", &context, &project);
         assert!(text.starts_with("Zkrať to\n\n[Nuzky] Playhead: 00:07.20 (7200000 µs)."), "{text}");
         assert!(text.contains("inspect_frames at 7200000 µs"));
-        let none = PromptContext { selection: Some(Vec::new()), playhead_us: None, frame: true, style: false };
+        let none = PromptContext {
+            selection: Some(Vec::new()),
+            playhead_us: None,
+            frame: true,
+            style: false,
+            thumbnail: false,
+        };
         assert_eq!(prompt("Ahoj", &none, &project), "Ahoj");
-        let style = PromptContext { selection: None, playhead_us: None, frame: false, style: true };
+        let style = PromptContext { selection: None, playhead_us: None, frame: false, style: true, thumbnail: false };
         let text = prompt("Nestříhej mi rozloučení", &style, &project);
         assert!(
             text.starts_with("Nestříhej mi rozloučení\n\n[Nuzky] The user writes from the Your style page")
                 && text.contains("change_style"),
             "{text}"
         );
+        let thumbnail =
+            PromptContext { selection: None, playhead_us: Some(0), frame: false, style: false, thumbnail: true };
+        let text = prompt("", &thumbnail, &project);
+        assert!(text.starts_with("Make a 9:16 cover") && text.contains("export_thumbnail"), "{text}");
+        assert!(
+            text.contains("wishes, which win over the steps: none") && text.contains("[Nuzky] Playhead: 00:00.00"),
+            "{text}"
+        );
+        let text = prompt("Hook: I QUIT SUGAR", &thumbnail, &project);
+        assert!(text.contains("wishes, which win over the steps: Hook: I QUIT SUGAR"), "{text}");
     }
 }

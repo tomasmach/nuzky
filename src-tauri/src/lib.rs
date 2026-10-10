@@ -1,6 +1,7 @@
 mod agent_panel;
 mod audio_out;
 mod connect;
+mod cover;
 mod engine;
 mod jobs;
 mod library;
@@ -52,6 +53,7 @@ pub struct AppState {
     filmstrips: Mutex<HashMap<String, Filmstrip>>,
     preview_locks: Mutex<HashMap<String, PreviewLock>>,
     bounds_text: Mutex<Option<nuzky_engine::text::TextRenderer>>,
+    covers: Mutex<cover::Covers>,
     fonts: OnceLock<FontFamilies>,
     /// Why the most recent project was not opened at startup.
     startup_notice: Option<String>,
@@ -943,6 +945,7 @@ pub fn run() {
                 filmstrips: Mutex::new(HashMap::new()),
                 preview_locks: Mutex::new(HashMap::new()),
                 bounds_text: Mutex::new(None),
+                covers: Mutex::default(),
                 fonts: OnceLock::new(),
                 startup_notice,
                 library: Arc::default(),
@@ -1002,6 +1005,11 @@ pub fn run() {
             jobs::vision_models,
             jobs::start_vision_models,
             jobs::start_transcript,
+            cover::cover_view,
+            cover::cover_close,
+            cover::start_cover_pick,
+            cover::start_cover_mask,
+            cover::start_cover_export,
             transcripts::transcript_view,
             transcripts::cut_words,
             transcripts::remove_pauses,
@@ -1102,7 +1110,7 @@ impl AppState {
 }
 
 fn quit_question(kinds: &[String]) -> Option<&'static str> {
-    if kinds.iter().any(|kind| kind == "export") {
+    if kinds.iter().any(|kind| kind == "export" || kind == "cover-export") {
         Some("An export is still running. Quitting cancels it and removes the unfinished file.")
     } else if kinds.iter().any(|kind| kind != "audio" && kind != "proxy") {
         Some("Speech recognition or analysis is still running. Quitting cancels it.")
