@@ -10,7 +10,7 @@ use base64::{Engine as _, prelude::BASE64_STANDARD};
 use nuzky_analysis::{SceneParams, SilenceParams};
 use nuzky_engine::{
     Project,
-    edit::{EditCmd, new_id},
+    edit::{EditCmd, TimeRange, new_id},
     export::{ExportOptions, ExportPhase, Quality, check_options, export},
     media::probe,
 };
@@ -245,6 +245,7 @@ impl Backend {
             }
             "build_captions" => self.captions(parse(arguments)?, state),
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
+            "apply_motion" => self.apply_motion(parse(arguments)?, state),
             "export_video" => self.export(parse(arguments)?, state),
             _ => anyhow::bail!("UNKNOWN_TOOL: {name}"),
         }
@@ -832,6 +833,17 @@ impl Backend {
                 "transcript_key": transcript::word_key(&preview, &words)}),
         });
         self.apply_transcript_edit(&args.run_id, &request_id, prepared)
+    }
+
+    fn apply_motion(&self, args: ApplyMotion, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        let range = args.range_us.map(|[start_us, end_us]| TimeRange { start_us, end_us });
+        let edit = EditCmd::ApplyMotion { clip_id: args.clip_id, range, kind: args.kind, strength: args.strength };
+        // The engine plans the motion from the project as it is, so a retry needs no revision.
+        let request_id = args.request_id.unwrap_or_else(new_id);
+        let result = self.host.session.apply_edits(&args.run_id, &request_id, vec![edit], Expect::default())?;
+        Ok(json!({"revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch,
+            "changed": result.changed, "skipped": result.outcome.skipped}))
     }
 
     fn export(&self, args: Export, state: &SessionState) -> Result<Value> {

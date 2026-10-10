@@ -127,6 +127,7 @@ const TITLES: Record<string, string> = {
   edit_transcript: "Cutting by the transcript",
   correct_words: "Correcting words",
   apply_zooms: "Adding zooms",
+  apply_motion: "Adding motion",
   build_captions: "Adding captions",
   inspect_frames: "Checking frames",
   activity: "Scanning picture and sound",

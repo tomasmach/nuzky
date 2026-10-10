@@ -169,8 +169,8 @@ export type Clip = {
   animOut: Animation | null,
   /**
    * Transform keyframes, `t_us` relative to the clip start. When present they replace
-   * the content transform and are interpolated linearly; outside the range the nearest
-   * keyframe holds.
+   * the content transform and are interpolated along each keyframe's `ease`; outside the
+   * range the nearest keyframe holds.
    */
   keyframes: Array<Keyframe>,
   /**
@@ -256,6 +256,8 @@ export type DeletedCollection = {
  * A platform's delivery format, shared by the export dialog, MCP and the CLI.
  */
 export type Delivery = "reels";
+
+export type Ease = "linear" | "smooth";
 
 export type EditCmd = {
   "type": "addAssets",
@@ -376,6 +378,15 @@ export type EditCmd = {
 } | {
   "type": "zoomRanges",
   ranges: Array<ZoomRange>,
+} | {
+  "type": "applyMotion",
+  clipId?: string | null,
+  range?: TimeRange | null,
+  kind: MotionKind,
+  /**
+   * How far it zooms, as a fraction: 0.06 is subtle, 0.15 strong.
+   */
+  strength: number,
 };
 
 export type ExportRequest = {
@@ -433,6 +444,10 @@ export type JobEvent = {
 export type Keyframe = {
   tUs: number,
   transform: Transform,
+  /**
+   * How the values move on to the next keyframe.
+   */
+  ease: Ease,
 };
 
 /**
@@ -498,7 +513,11 @@ export type Limits = {
    */
   captionY: number,
   maxDuckDb: number,
+  minMotionStrength: number,
+  maxMotionStrength: number,
 };
+
+export type MotionKind = "pushIn" | "pullOut" | "kenBurns";
 
 export type Project = {
   version: number,

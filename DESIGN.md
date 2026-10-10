@@ -138,7 +138,7 @@ Focus is a 2 px `accent` outline on every focusable element; never remove it wit
 
 ## Motion
 
-Buttons and toggles 120 ms ease-out. Dialogs 200 ms. No animation on hover or text changes, with one exception: transition and animation preset tiles show a still frame of the effect and play it in a loop while hovered or focused. Each animation tile rests on the moment that sets it apart (Fade half see-through, Pop at its overshoot, slides half way in), because the motion is the content being chosen. `prefers-reduced-motion` disables all of it.
+Buttons and toggles 120 ms ease-out. Dialogs 200 ms. No animation on hover or text changes, with one exception: transition, animation and motion preset tiles show a still frame of the effect and play it in a loop while hovered or focused. Each animation tile rests on the moment that sets it apart (Fade half see-through, Pop at its overshoot, slides half way in), because the motion is the content being chosen. Motion tiles move the clip's thumbnail further than the real move (1.4×), so it reads at tile size, and Ken Burns grows from the right edge, as in the video; a still zoom cannot show its direction, so each carries it as an 11 px icon (zoom in, zoom out, arrow right) in a dark 60 % chip at the bottom right. `prefers-reduced-motion` disables all of it.
 
 ## App icon
 

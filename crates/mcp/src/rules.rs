@@ -60,6 +60,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("job", When(|args| args["action"] == "get" || args["action"] == "cancel"), false, false, false),
     rules("build_captions", Never, true, false, false),
     rules("apply_zooms", Never, true, false, false),
+    // Leaves clips that already move alone, so the same call again changes nothing.
+    rules("apply_motion", Never, false, true, false),
     rules("export_video", Never, false, false, true),
     // Only shows choices to the user; the project is not touched.
     rules("suggest_options", Always, false, true, false),
@@ -128,6 +130,7 @@ mod tests {
                 "activity",
                 "segment_subject",
                 "apply_edits",
+                "apply_motion",
                 "suggest_options",
                 "list_history",
                 "undo_to"

@@ -177,6 +177,10 @@ fn line(version: &Version, with_project: bool) -> String {
 /// What a batch of the user's edits did, named by its first command.
 pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
     let Some(cmd) = cmds.first() else { return "Edit" };
+    // Motion from the inspector first clears the keyframes it replaces.
+    if cmds.iter().any(|c| matches!(c, EditCmd::ApplyMotion { .. })) {
+        return "Motion";
+    }
     match cmd {
         EditCmd::AddAssets { .. } => "Import media",
         EditCmd::RemoveAsset { .. } => "Remove media",
@@ -201,6 +205,7 @@ pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
         EditCmd::RenameProject { .. } => "Rename project",
         EditCmd::CorrectWords { .. } => "Correct words",
         EditCmd::ZoomRanges { .. } => "Zoom",
+        EditCmd::ApplyMotion { .. } => "Motion",
     }
 }
 

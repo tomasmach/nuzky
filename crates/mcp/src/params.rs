@@ -1,5 +1,5 @@
 use nuzky_engine::{
-    edit::{EditCmd, TimeRange},
+    edit::{EditCmd, MotionKind, TimeRange},
     export::{Delivery, Quality},
     model::TextStyle,
 };
@@ -227,6 +227,21 @@ pub struct ApplyZooms {
     pub transcript_key: String,
     /// Punch-ins on INCLUSIVE word ranges, such as analyze(kind: "emphasis").zooms.
     pub zooms: Vec<crate::zooms::WordZoom>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyMotion {
+    pub run_id: String,
+    /// Reuse this id with identical arguments to retry a failed save without applying twice.
+    pub request_id: Option<String>,
+    /// A video or image clip on any track. Leave out to move every main-track clip under range_us.
+    pub clip_id: Option<String>,
+    /// Half-open timeline range the motion runs over, such as one sentence from get_transcript
+    /// word times; with clip_id, the clip's whole length when left out.
+    pub range_us: Option<[i64; 2]>,
+    pub kind: MotionKind,
+    /// How far it zooms, as a fraction: 0.06 subtle, 0.1, 0.15 strong; 0.02 to 0.5.
+    pub strength: f64,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

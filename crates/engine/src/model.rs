@@ -186,8 +186,8 @@ pub struct Clip {
     #[serde(default)]
     pub anim_out: Option<Animation>,
     /// Transform keyframes, `t_us` relative to the clip start. When present they replace
-    /// the content transform and are interpolated linearly; outside the range the nearest
-    /// keyframe holds.
+    /// the content transform and are interpolated along each keyframe's `ease`; outside the
+    /// range the nearest keyframe holds.
     #[serde(default)]
     pub keyframes: Vec<Keyframe>,
     /// Main track only: transition from the previous clip, centred on the cut.
@@ -228,6 +228,31 @@ pub struct Animation {
 pub struct Keyframe {
     pub t_us: i64,
     pub transform: Transform,
+    /// How the values move on to the next keyframe.
+    #[serde(default)]
+    pub ease: Ease,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Ease {
+    /// At an even pace.
+    #[default]
+    Linear,
+    /// Starts and ends gently, like a camera move (smoothstep).
+    Smooth,
+}
+
+impl Ease {
+    /// The share of the way to the next keyframe at `p` of the time between them, both 0..=1.
+    pub fn at(self, p: f32) -> f32 {
+        match self {
+            Ease::Linear => p,
+            Ease::Smooth => p * p * (3.0 - 2.0 * p),
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -479,10 +479,15 @@ fn trim_preserves_valid_keyframes_outside_clip_bounds() {
             EditCmd::SetKeyframes {
                 clip_id: id.clone(),
                 keyframes: vec![
-                    nuzky_engine::model::Keyframe { t_us: 0, transform: Transform::default() },
+                    nuzky_engine::model::Keyframe {
+                        t_us: 0,
+                        transform: Transform::default(),
+                        ease: Default::default(),
+                    },
                     nuzky_engine::model::Keyframe {
                         t_us: 10_000_000,
                         transform: Transform { scale: 2.0, ..Transform::default() },
+                        ease: Default::default(),
                     },
                 ],
             },

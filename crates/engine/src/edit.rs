@@ -5,8 +5,8 @@ use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Keyframe, Project,
-    Shape, TextStyle, Track, TrackKind, Transform, Transition, WordCorrection,
+    Adjust, Animation, Asset, AssetKind, CAPTIONS_TRACK, Canvas, CaptionWord, Clip, ClipContent, Ease, Keyframe,
+    Project, Shape, TextStyle, Track, TrackKind, Transform, Transition, WordCorrection,
 };
 
 pub const MAIN_TRACK: &str = "main";
@@ -49,6 +49,8 @@ pub struct Limits {
     /// Vertical offset of generated captions from the canvas centre, as a fraction of its height.
     pub caption_y: f32,
     pub max_duck_db: f32,
+    pub min_motion_strength: f64,
+    pub max_motion_strength: f64,
 }
 
 pub const LIMITS: Limits = Limits {
@@ -57,6 +59,8 @@ pub const LIMITS: Limits = Limits {
     max_transition_us: MAX_TRANSITION_US,
     caption_y: CAPTION_Y,
     max_duck_db: MAX_DUCK_DB,
+    min_motion_strength: *MOTION_STRENGTHS.start(),
+    max_motion_strength: *MOTION_STRENGTHS.end(),
 };
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -213,6 +217,48 @@ pub enum EditCmd {
     ZoomRanges {
         ranges: Vec<ZoomRange>,
     },
+    /// A slow camera move on video and image clips, written as two keyframes on a smooth curve
+    /// from the clip's own transform, so they stay editable. The zoom centres on the middle of the
+    /// Reels and TikTok safe area on vertical canvases, else on the canvas centre, so what is
+    /// framed there stays put. `clip_id` moves one clip on any track, over the part of it inside
+    /// `range` or its whole length; without it every main-track video and image clip under
+    /// `range` moves, as one continuous motion. Clips with keyframes are left alone and listed in
+    /// the outcome's `skipped`.
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
+    ApplyMotion {
+        clip_id: Option<String>,
+        range: Option<TimeRange>,
+        kind: MotionKind,
+        /// How far it zooms, as a fraction: 0.06 is subtle, 0.15 strong.
+        strength: f64,
+    },
+}
+
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MotionKind {
+    /// Zooms in.
+    PushIn,
+    /// Starts zoomed in and ends on the clip's own framing.
+    PullOut,
+    /// Zooms in while drifting to the right.
+    KenBurns,
+}
+
+/// Motion strengths an `ApplyMotion` may have.
+pub const MOTION_STRENGTHS: std::ops::RangeInclusive<f64> = 0.02..=0.5;
+
+/// The canvas point a motion zooms about, as the transform's fractions of the canvas from its
+/// centre: the middle of the safe area on vertical canvases, else the centre. Ken Burns zooms
+/// about the right edge of that area, so the picture drifts right as it grows.
+fn motion_centre(canvas: &Canvas, kind: MotionKind) -> (f32, f32) {
+    let (w, h) = (canvas.width as f32, canvas.height as f32);
+    let (left, top, right, bottom) =
+        canvas.safe_area().map_or((0.0, 0.0, w, h), |area| (area.left, area.top, area.right, area.bottom));
+    let x = if kind == MotionKind::KenBurns { right } else { (left + right) / 2.0 };
+    (x / w - 0.5, (top + bottom) / 2.0 / h - 0.5)
 }
 
 /// A punch-in over the timeline range `[start_us, end_us)`.
@@ -536,6 +582,9 @@ impl Project {
             }
             EditCmd::CorrectWords { corrections } => self.correct_words(corrections)?,
             EditCmd::ZoomRanges { ranges } => self.zoom_ranges(ranges, &mut out)?,
+            EditCmd::ApplyMotion { clip_id, range, kind, strength } => {
+                self.apply_motion(clip_id, range, kind, strength, &mut out)?
+            }
         }
         self.pack_main(moved.as_ref().map(|(id, s)| (id.as_str(), *s)));
         self.tidy();
@@ -1112,6 +1161,84 @@ impl Project {
                 }
                 zoomed_until = zoomed_until.max(b);
             }
+        }
+        Ok(())
+    }
+
+    /// Two keyframes on each clip the motion reaches, at the ends of the range.
+    fn apply_motion(
+        &mut self,
+        clip_id: Option<String>,
+        range: Option<TimeRange>,
+        kind: MotionKind,
+        strength: f64,
+        out: &mut EditOutcome,
+    ) -> Result<()> {
+        ensure!(
+            strength.is_finite() && MOTION_STRENGTHS.contains(&strength),
+            "Motion strength must be between {} and {}; 0.1 zooms 10 %",
+            MOTION_STRENGTHS.start(),
+            MOTION_STRENGTHS.end()
+        );
+        let picture = |p: &Project, c: &Clip| match &c.content {
+            ClipContent::Media { asset_id, .. } => p.asset(asset_id).is_some_and(|a| a.kind != AssetKind::Audio),
+            ClipContent::Text { .. } => false,
+        };
+        let targets: Vec<(usize, usize)> = match &clip_id {
+            Some(id) => {
+                let (ti, ci) = self.find_clip(id).ok_or_else(|| anyhow!("Unknown clip"))?;
+                ensure!(picture(self, &self.tracks[ti].clips[ci]), "Motion moves video and image clips only");
+                vec![(ti, ci)]
+            }
+            None => {
+                let r = range.ok_or_else(|| anyhow!("Give a clip or a range for the motion"))?;
+                let ti = self.track_index(MAIN_TRACK).ok_or_else(|| anyhow!("No main track"))?;
+                let under = |c: &Clip| c.start_us < r.end_us && c.end_us() > r.start_us && picture(self, c);
+                (0..self.tracks[ti].clips.len())
+                    .filter(|&ci| under(&self.tracks[ti].clips[ci]))
+                    .map(|ci| (ti, ci))
+                    .collect()
+            }
+        };
+        ensure!(!targets.is_empty(), "No video or image clip on the main track under the range");
+        let (start, end) = range.map_or_else(
+            || {
+                let c = &self.tracks[targets[0].0].clips[targets[0].1];
+                (c.start_us, c.end_us())
+            },
+            |r| (r.start_us, r.end_us),
+        );
+        // A clip keeps the range of a motion that reached beyond it, even once the clips before it are gone.
+        ensure!(
+            end > start && (start >= 0 || clip_id.is_some()),
+            "A motion range must start at 0 or later and end after it starts"
+        );
+        let min = min_duration(self);
+        let (fx, fy) = motion_centre(&self.canvas, kind);
+        let zoom = 1.0 + strength as f32;
+        for (ti, ci) in targets {
+            let clip = &mut self.tracks[ti].clips[ci];
+            let (a, b) = (start.max(clip.start_us), end.min(clip.end_us()));
+            if b - a < min {
+                ensure!(clip_id.is_none(), "The motion range lies outside the clip");
+                continue;
+            }
+            if !clip.keyframes.is_empty() {
+                out.skipped.push(clip.id.clone());
+                continue;
+            }
+            let base = match &clip.content {
+                ClipContent::Media { transform, .. } | ClipContent::Text { transform, .. } => *transform,
+            };
+            // Scaled about (fx, fy), so the picture there stays where it is.
+            let (x, y) = (base.x + (zoom - 1.0) * (base.x - fx), base.y + (zoom - 1.0) * (base.y - fy));
+            let zoomed = Transform { x, y, scale: base.scale * zoom, ..base };
+            let (from, to) = if kind == MotionKind::PullOut { (zoomed, base) } else { (base, zoomed) };
+            // At the ends of the whole range, outside the clip where it is only a part, so the clips
+            // under a range follow one curve.
+            let start_us = clip.start_us;
+            let at = |t: i64, transform| Keyframe { t_us: t - start_us, transform, ease: Ease::Smooth };
+            clip.keyframes = vec![at(start, from), at(end, to)];
         }
         Ok(())
     }
@@ -2302,7 +2429,7 @@ mod tests {
         p.apply(EditCmd::AddCaptions { segments: vec![seg], style }).unwrap();
         let clip_id = p.tracks.iter().find(|t| t.is_captions()).unwrap().clips[0].id.clone();
         // A keyframe at 2.5 s on the timeline, inside the part that stays.
-        let keyframes = vec![Keyframe { t_us: 1_500_000, transform: Transform::default() }];
+        let keyframes = vec![Keyframe { t_us: 1_500_000, transform: Transform::default(), ease: Ease::Linear }];
         p.apply(EditCmd::SetKeyframes { clip_id, keyframes }).unwrap();
         // Cutting [1.5, 2.2) leaves 0.5 s before and 0.8 s after: the later part stays.
         p.apply(EditCmd::RippleDeleteRanges {
@@ -2701,8 +2828,12 @@ mod tests {
         }
         let keyed = e.project.tracks[0].clips[0].id.clone();
         let keyframes = vec![
-            Keyframe { t_us: 0, transform: Transform::default() },
-            Keyframe { t_us: 4_000_000, transform: Transform { scale: 1.5, ..Transform::default() } },
+            Keyframe { t_us: 0, transform: Transform::default(), ease: Ease::Linear },
+            Keyframe {
+                t_us: 4_000_000,
+                transform: Transform { scale: 1.5, ..Transform::default() },
+                ease: Ease::Linear,
+            },
         ];
         e.apply(EditCmd::SetKeyframes { clip_id: keyed.clone(), keyframes }, None).unwrap();
         let before = e.project.clone();
@@ -2734,6 +2865,122 @@ mod tests {
             assert_eq!(e.project, before);
         }
         assert!(!e.can_redo() && e.can_undo());
+    }
+
+    fn motion(clip_id: Option<&str>, range: Option<(i64, i64)>, kind: MotionKind, strength: f64) -> EditCmd {
+        let range = range.map(|(start_us, end_us)| TimeRange { start_us, end_us });
+        EditCmd::ApplyMotion { clip_id: clip_id.map(Into::into), range, kind, strength }
+    }
+
+    /// (time, zoom against the clip's own scale, x, y) of each keyframe of main-track clip `i`.
+    fn motion_keys(p: &Project, i: usize) -> Vec<(i64, f32, f32, f32)> {
+        let clip = &p.tracks[0].clips[i];
+        assert!(clip.keyframes.iter().all(|k| k.ease == Ease::Smooth));
+        let ClipContent::Media { transform: base, .. } = &clip.content else { panic!() };
+        clip.keyframes.iter().map(|k| (k.t_us, k.transform.scale / base.scale, k.transform.x, k.transform.y)).collect()
+    }
+
+    fn assert_keys(found: Vec<(i64, f32, f32, f32)>, expected: [(i64, f32, f32, f32); 2]) {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert!(
+            found.len() == 2
+                && found
+                    .iter()
+                    .zip(&expected)
+                    .all(|(f, e)| f.0 == e.0 && close(f.1, e.1) && close(f.2, e.2) && close(f.3, e.3)),
+            "{found:?} != {expected:?}"
+        );
+    }
+
+    #[test]
+    fn motion_zooms_about_the_safe_area_centre_on_a_smooth_curve_and_skips_keyed_clips() {
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }).unwrap();
+        let (first, second) = (p.tracks[0].clips[0].id.clone(), p.tracks[0].clips[1].id.clone());
+        let framed = Transform { x: 0.1, y: -0.05, scale: 1.2, rotation: 5.0, opacity: 0.9, crop: None };
+        p.apply(changes(&first, serde_json::json!({"transform": framed}))).unwrap();
+
+        p.apply(motion(Some(&first), None, MotionKind::PushIn, 0.1)).unwrap();
+        let keys = &p.tracks[0].clips[0].keyframes;
+        assert_eq!(keys.iter().map(|k| k.t_us).collect::<Vec<_>>(), [0, 5_000_000]);
+        assert_eq!(keys[0].transform, framed);
+        let end = keys[1].transform;
+        assert!((end.scale - 1.32).abs() < 1e-6 && end.rotation == 5.0 && end.opacity == 0.9);
+        // The middle of the 1080×1920 safe area (60–900 px across, 250–1420 px down) stays where
+        // it is: the same point of the picture lies there before and after the zoom.
+        let (fx, fy) = (480.0 / 1080.0 - 0.5, 835.0 / 1920.0 - 0.5);
+        let under = |t: Transform| ((fx - t.x) / t.scale, (fy - t.y) / t.scale);
+        let (before, after) = (under(framed), under(end));
+        assert!((before.0 - after.0).abs() < 1e-6 && (before.1 - after.1).abs() < 1e-6, "{before:?} {after:?}");
+
+        // A clip with keyframes keeps them and is named.
+        let keyed = p.tracks[0].clips[0].keyframes.clone();
+        let out = p.apply(motion(Some(&first), None, MotionKind::KenBurns, 0.15)).unwrap();
+        assert_eq!((out.skipped, &p.tracks[0].clips[0].keyframes), (vec![first.clone()], &keyed));
+
+        // Pull out over part of a clip: zoomed in at the start of the range, the clip's own framing at its end.
+        p.apply(motion(Some(&second), Some((6_000_000, 7_000_000)), MotionKind::PullOut, 0.15)).unwrap();
+        assert_keys(motion_keys(&p, 1), [(1_000_000, 1.15, fx * -0.15, fy * -0.15), (2_000_000, 1.0, 0.0, 0.0)]);
+
+        // Without a clip, every main-track clip under the range moves as one motion: both get
+        // keyframes at the ends of the range, so halfway through it, at the cut, the first clip
+        // ends half zoomed in and the second starts there. Ken Burns zooms about the right edge
+        // of the safe area.
+        let mut p = project();
+        p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        p.apply(EditCmd::AddClip { asset_id: "b".into(), start_us: None, track_id: None }).unwrap();
+        let out = p.apply(motion(None, Some((4_000_000, 6_000_000)), MotionKind::KenBurns, 0.1)).unwrap();
+        assert!(out.skipped.is_empty());
+        let right = 900.0 / 1080.0 - 0.5;
+        let zoomed = (1.1, right * -0.1, fy * -0.1);
+        assert_keys(motion_keys(&p, 0), [(4_000_000, 1.0, 0.0, 0.0), (6_000_000, zoomed.0, zoomed.1, zoomed.2)]);
+        assert_keys(motion_keys(&p, 1), [(-1_000_000, 1.0, 0.0, 0.0), (1_000_000, zoomed.0, zoomed.1, zoomed.2)]);
+        let (last, first) = (&p.tracks[0].clips[0], &p.tracks[0].clips[1]);
+        let at = |clip: &Clip, t: i64| crate::effects::transform_at(clip, t).0;
+        let (ending, starting) = (at(last, last.end_us() - 1), at(first, first.start_us));
+        assert!((ending.scale - 1.05).abs() < 1e-4 && (starting.scale - 1.05).abs() < 1e-4, "{ending:?} {starting:?}");
+        assert!((at(last, 4_500_000).scale - 1.015625).abs() < 1e-6, "one smooth curve over the whole range");
+        // Once the clip before is gone, the second clip's range starts before 0 and still rewrites.
+        let id = first.id.clone();
+        p.apply(EditCmd::DeleteClips { clip_ids: vec![last.id.clone()] }).unwrap();
+        p.apply(EditCmd::SetKeyframes { clip_id: id.clone(), keyframes: vec![] }).unwrap();
+        p.apply(motion(Some(&id), Some((-1_000_000, 1_000_000)), MotionKind::PushIn, 0.06)).unwrap();
+        assert_eq!(p.tracks[0].clips[0].keyframes.iter().map(|k| k.t_us).collect::<Vec<_>>(), [-1_000_000, 1_000_000]);
+
+        // Other canvases have no safe area: the canvas centre, and its right edge for Ken Burns.
+        p.apply(EditCmd::SetCanvas { width: 1920, height: 1080, background: None, background_blur: None }).unwrap();
+        p.apply(EditCmd::SetKeyframes { clip_id: id.clone(), keyframes: vec![] }).unwrap();
+        p.apply(motion(Some(&id), None, MotionKind::KenBurns, 0.1)).unwrap();
+        assert_keys(motion_keys(&p, 0), [(0, 1.0, 0.0, 0.0), (3_000_000, 1.1, -0.05, 0.0)]);
+    }
+
+    #[test]
+    fn motion_refuses_text_sound_and_bad_ranges_and_changes_nothing() {
+        let mut e = Editor::new(project());
+        e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+        e.apply(EditCmd::AddClip { asset_id: "m".into(), start_us: Some(0), track_id: None }, None).unwrap();
+        let style: TextStyle = serde_json::from_value(serde_json::json!({"fontSize":64.0,"color":"#ffffff"})).unwrap();
+        e.apply(EditCmd::AddText { start_us: 0, text: "Title".into(), style }, None).unwrap();
+        let id =
+            |e: &Editor, kind: TrackKind| e.project.tracks.iter().find(|t| t.kind == kind).unwrap().clips[0].id.clone();
+        let (video, sound, text) = (id(&e, TrackKind::Video), id(&e, TrackKind::Audio), id(&e, TrackKind::Text));
+        let before = e.project.clone();
+        for bad in [
+            motion(Some(&text), None, MotionKind::PushIn, 0.1),
+            motion(Some(&sound), None, MotionKind::PushIn, 0.1),
+            motion(Some("missing"), None, MotionKind::PushIn, 0.1),
+            motion(Some(&video), Some((6_000_000, 7_000_000)), MotionKind::PushIn, 0.1),
+            motion(Some(&video), Some((2_000_000, 1_000_000)), MotionKind::PushIn, 0.1),
+            motion(None, None, MotionKind::PushIn, 0.1),
+            motion(None, Some((6_000_000, 7_000_000)), MotionKind::PushIn, 0.1),
+            motion(Some(&video), None, MotionKind::PushIn, 0.0),
+            motion(Some(&video), None, MotionKind::PushIn, 10.0),
+            motion(Some(&video), None, MotionKind::PushIn, f64::NAN),
+        ] {
+            assert!(e.apply(bad.clone(), None).is_err(), "{bad:?}");
+            assert_eq!(e.project, before);
+        }
     }
 
     /// Split halves play on from each other, so zooming changes no sample of the mix, fades,

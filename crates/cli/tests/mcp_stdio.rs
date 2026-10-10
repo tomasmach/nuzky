@@ -140,7 +140,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 22);
+    assert_eq!(tools.len(), 23);
     let apply = tools.iter().find(|t| t["name"] == "apply_edits").unwrap();
     assert!(apply["inputSchema"]["$defs"]["EditCmd"].is_object());
     assert!(apply["inputSchema"]["properties"]["expected_speech_layout_key"].is_object());
@@ -866,6 +866,60 @@ fn place_still(c: &mut Client) {
         json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
     );
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+}
+
+/// A push-in on one clip and one over a "sentence" across a cut, with no keyframes to work out:
+/// clips that already move are named, not changed, and one undo takes the run back.
+#[test]
+fn apply_motion_moves_clips_on_a_smooth_curve_and_skips_keyed_ones_over_stdio() {
+    let mut c = Client::new(true);
+    let tools = c.rpc("tools/list", json!({}));
+    let tool = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "apply_motion").unwrap();
+    assert_eq!(tool["inputSchema"]["required"], json!(["run_id", "kind", "strength"]));
+    let image = c.dir.join("still.ppm");
+    std::fs::write(&image, b"P6\n2 2\n255\nabcdefghijkl").unwrap();
+    let run = c.call("begin_run", json!({"label":"motion"}))["run_id"].clone();
+    let asset = c.call("import_media", json!({"run_id":run,"paths":[image]}))["asset_ids"][0].clone();
+    let edits = json!([{"type":"addClip","assetId":asset},{"type":"addClip","assetId":asset}]);
+    c.call("apply_edits", json!({"run_id":run,"request_id":"place","edits":edits}));
+    let clips = |c: &mut Client| c.call("get_state", json!({}))["tracks"][0]["clips"].as_array().unwrap().clone();
+    let (first, second) = {
+        let placed = clips(&mut c);
+        (placed[0]["id"].clone(), placed[1]["id"].clone())
+    };
+
+    let pushed = c.call("apply_motion", json!({"run_id":run,"clip_id":first,"kind":"pushIn","strength":0.1}));
+    assert_eq!((&pushed["changed"], &pushed["skipped"]), (&json!([first]), &json!([])));
+    let keys = clips(&mut c)[0]["keyframes"].clone();
+    assert_eq!(
+        keys.as_array().unwrap().iter().map(|k| (k["tUs"].clone(), k["ease"].clone())).collect::<Vec<_>>(),
+        [(json!(0), json!("smooth")), (json!(3_000_000), json!("smooth"))]
+    );
+    assert_eq!(keys[0]["transform"]["scale"], 1.0);
+    assert!((keys[1]["transform"]["scale"].as_f64().unwrap() - 1.1).abs() < 1e-6, "{keys}");
+
+    let pushed_keys = keys;
+    // A "sentence" from 2.5 s to 3.5 s: the first clip already moves; the second gets the move
+    // from the start of the range, before the clip, so it starts halfway into it at the cut.
+    let sentence = c
+        .call("apply_motion", json!({"run_id":run,"range_us":[2_500_000, 3_500_000],"kind":"kenBurns","strength":0.1}));
+    assert_eq!((&sentence["changed"], &sentence["skipped"]), (&json!([second]), &json!([first])));
+    let keys = clips(&mut c)[1]["keyframes"].clone();
+    assert_eq!((&keys[0]["tUs"], &keys[1]["tUs"]), (&json!(-500_000), &json!(500_000)));
+    assert!((keys[1]["transform"]["scale"].as_f64().unwrap() - 1.1).abs() < 1e-6, "{keys}");
+    assert_eq!(clips(&mut c)[0]["keyframes"], pushed_keys, "the clip that already moved keeps its motion");
+
+    let wrong = c.error("apply_motion", json!({"run_id":run,"clip_id":first,"kind":"pushIn","strength":10}));
+    assert!(wrong.contains("strength"), "{wrong}");
+    let outside = c.error(
+        "apply_motion",
+        json!({"run_id":run,"range_us":[9_000_000, 10_000_000],"kind":"pullOut","strength":0.1}),
+    );
+    assert!(outside.contains("No video or image clip"), "{outside}");
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+    c.call("undo_run", json!({"run_id":run}));
+    assert!(clips(&mut c).is_empty());
+    c.finish();
 }
 
 #[test]
