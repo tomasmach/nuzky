@@ -9,7 +9,7 @@ saved once Reels & TikTok was picked."""
 import difflib, json, subprocess, time
 
 from e2e.corrections import Hands
-from e2e.harness import FIXTURES, MODELS, WINDOWS, flow, link_models, preview_crop, preview_rect, press, wait
+from e2e.harness import FIXTURES, MODELS, flow, link_models, preview_crop, preview_rect, press, wait
 from e2e.layout import resize
 from e2e.reel import (MODEL, RATE, check_captions, check_cut, check_file, check_words, db, heard, pcm, phrases, played,
                       recognise, truth, words)
@@ -25,6 +25,7 @@ CHIP = """const chip = [...document.querySelectorAll(arguments[0])][arguments[1]
             before: all[i - 1]?.textContent ?? null, after: all[i + 1]?.textContent ?? null};"""
 # The fixture's yellow square in the upright 1080x1920 picture: left, top, right, bottom.
 MARKER = (40, 40, 200, 200)
+SETUP = "window.__nuzky.api.speechSetup(arguments[0]).then((s) => JSON.stringify(s))"
 FIND = "[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === arguments[0])"
 CHOOSE = """const select = [...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === arguments[0]));
     Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, arguments[0]);
@@ -211,9 +212,9 @@ def first_reel(r):
     # Captions as a new user makes them: Czech, the default accuracy, Generate.
     tab(r, 'captions')
     r.s.run(CHOOSE, 'cs')
-    if WINDOWS:
-        # Windows recognises on the processor, where Nuzky suggests a quicker model; the checks below are for the one a
-        # GPU gets, which a person picks as Most accurate.
+    if not json.loads(r.s.call(SETUP, 'cs')['value'])['gpu']:
+        # On the processor Nuzky suggests a quicker model; the checks below are for the one a GPU gets, which a person
+        # picks as Most accurate.
         r.s.run("window.__nuzky.speech.setState({model: 'large-v3-turbo-q5_0'})")
     r.s.run(f'{FIND}.click()', 'Generate captions')
     job = wait(lambda: next((j for j in r.state()['jobs'] if j['kind'] == 'captions' and j['status'] != 'running'), None), 600, 1)

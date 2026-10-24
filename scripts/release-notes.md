@@ -16,7 +16,6 @@ The first alpha of Nuzky, a free, open-source video editor for your computer. It
 
 ## Not yet
 
-- On Windows, speech recognition runs on the CPU, so captions take longer than on Linux and macOS, which use the GPU when they can.
 - Intel Macs, Linux on ARM and Windows on ARM aren't supported.
 - Export makes MP4 only. There's no template library and no phone app.
 

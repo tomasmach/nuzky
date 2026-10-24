@@ -570,7 +570,7 @@ pub struct SpeechSetupModel {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechSetup {
-    /// Recognition runs on the GPU: Metal on macOS, Vulkan on Linux.
+    /// Recognition runs on the GPU: Metal on macOS, Vulkan on Linux and Windows.
     pub gpu: bool,
     /// None when the language has no word timing model, so its word times are estimates.
     pub word_timing_mb: Option<u32>,

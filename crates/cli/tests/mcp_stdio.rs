@@ -63,7 +63,16 @@ impl Client {
         style: Option<Option<&str>>,
         env: &[(&str, &std::path::Path)],
     ) -> Self {
-        let binary = env!("CARGO_BIN_EXE_nuzky");
+        Self::spawn_binary(env!("CARGO_BIN_EXE_nuzky").as_ref(), dir, project, write, style, env)
+    }
+    fn spawn_binary(
+        binary: &std::path::Path,
+        dir: PathBuf,
+        project: &std::path::Path,
+        write: bool,
+        style: Option<Option<&str>>,
+        env: &[(&str, &std::path::Path)],
+    ) -> Self {
         let mut command = Command::new(binary);
         command.envs(env.iter().copied());
         command.arg("mcp").arg("--project").arg(project).arg("--cache").arg(dir.join("cache"));
@@ -2504,6 +2513,51 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     c.finish();
     // rmcp would otherwise give a call in flight 5 s after its input ends.
     assert!(closed.elapsed() < Duration::from_secs(2), "wait held stdio shutdown open: {:?}", closed.elapsed());
+}
+
+/// Windows finds the empty vulkan-1.dll beside this copy of the CLI before the graphics driver's and cannot load it,
+/// as on a computer without a Vulkan driver. Nuzky still starts and recognises speech, on the processor.
+#[cfg(windows)]
+#[test]
+#[ignore = "Requires tmp-test/talk.mp4 and the small, Silero and English word timing models from scripts/fixtures.sh"]
+fn recognises_speech_without_a_vulkan_loader() {
+    let root = dunce::canonicalize(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")).unwrap();
+    let fixtures = root.join("tmp-test/xdg/data/nuzky/models");
+    let dir = std::env::temp_dir().join(format!("nuzky-mcp-{}", new_id()));
+    let models = dir.join("data/nuzky/models");
+    std::fs::create_dir_all(&models).unwrap();
+    for file in ["ggml-small.bin", nuzky_analysis::VAD_MODEL, "wav2vec2-base-960h.gguf"] {
+        std::fs::hard_link(fixtures.join(file), models.join(file))
+            .or_else(|_| std::fs::copy(fixtures.join(file), models.join(file)).map(|_| ()))
+            .unwrap();
+    }
+    let binary = dir.join("nuzky.exe");
+    std::fs::copy(env!("CARGO_BIN_EXE_nuzky"), &binary).unwrap();
+    std::fs::write(dir.join("vulkan-1.dll"), b"").unwrap();
+    let project = dir.join("project.nuzky");
+    std::fs::write(&project, serde_json::to_vec(&Project::new("Original")).unwrap()).unwrap();
+    let mut c = Client::spawn_binary(&binary, dir, &project, true, Some(None), &[]);
+    let run = c.call("begin_run", json!({"label":"import"}));
+    let ids =
+        c.call("import_media", json!({"run_id":run["run_id"],"paths":[root.join("tmp-test/talk.mp4")]}))["asset_ids"]
+            .clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run["run_id"],"request_id":"place","edits":[{"type":"addClip","assetId":ids[0]}]}),
+    );
+    c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    let job = c.call("transcribe", json!({"asset_ids":ids,"model":"small","language":"en"}));
+    let done = wait_job(&mut c, &job, Duration::from_secs(600), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let transcript = c.call("get_transcript", json!({}));
+    let words: Vec<String> = transcript["words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["text"].as_str().unwrap().trim().trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+        .collect();
+    assert!(words.contains(&"channel".into()) && words.contains(&"captions".into()), "{words:?}");
+    c.finish();
 }
 
 #[test]

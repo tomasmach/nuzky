@@ -20,8 +20,8 @@ png = "0.18"
 dirs = "6"
 dunce = "1.0.5"
 
-# Speech recognition on the GPU through Vulkan, verified on Linux so far.
-[target.'cfg(target_os = "linux")'.dependencies]
+# Speech recognition on the GPU through Vulkan.
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
 nuzky-analysis = { workspace = true, features = ["gpu"] }
 
 [dev-dependencies]

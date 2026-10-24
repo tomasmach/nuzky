@@ -234,11 +234,8 @@ impl<P: PartialEq + Copy + std::fmt::Debug> PhaseClock<P> {
 }
 
 fn main() -> Result<()> {
-    // Vulkan FP16 moves Whisper word times by up to 330 ms; FP32 is as fast. ggml reads this when
-    // its backend starts, so it is set here, before any other thread exists.
-    if std::env::var_os("GGML_VK_DISABLE_F16").is_none() {
-        unsafe { std::env::set_var("GGML_VK_DISABLE_F16", "1") };
-    }
+    // SAFETY: no other thread exists yet.
+    unsafe { nuzky_analysis::keep_vulkan_fp32() };
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["mcp", ..] => nuzky_mcp::bridge::run_args(&args[1..], cache_dir())?,

@@ -23,6 +23,29 @@ if (!(Test-Path "$env:FFMPEG_DIR/include/libavcodec/avcodec.h")) {
 if (!(Test-Path "$env:FFMPEG_DIR/lib/avcodec.lib")) {
     throw 'The FFmpeg archive must contain MSVC import libraries.'
 }
+# The Vulkan headers, glslc and the loader's import library, which whisper.cpp builds its GPU backend with. With
+# copy_only=1 the SDK installer only copies its files; the loader itself comes with the graphics driver.
+$vulkanVersion = '1.4.363.0'
+$vulkanSha256 = '94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141'
+$env:VULKAN_SDK = Join-Path $deps "vulkan-sdk-$vulkanVersion"
+if (!(Test-Path "$env:VULKAN_SDK/.ready")) {
+    $installer = Join-Path $deps "vulkansdk-windows-X64-$vulkanVersion.exe"
+    if (!(Test-Path $installer)) {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$vulkanVersion/windows/vulkansdk-windows-X64-$vulkanVersion.exe" -OutFile $installer -TimeoutSec 600
+    }
+    if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $vulkanSha256) {
+        throw "Vulkan SDK checksum mismatch: delete $installer and retry."
+    }
+    if (Test-Path $env:VULKAN_SDK) { Remove-Item -Recurse -Force $env:VULKAN_SDK }
+    & $installer --root $env:VULKAN_SDK --accept-licenses --default-answer --confirm-command install copy_only=1 | Out-Null
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path "$env:VULKAN_SDK/Bin/glslc.exe") -or !(Test-Path "$env:VULKAN_SDK/Include/vulkan/vulkan.hpp") -or !(Test-Path "$env:VULKAN_SDK/Lib/vulkan-1.lib")) {
+        throw "The Vulkan SDK installer failed ($LASTEXITCODE)."
+    }
+    New-Item -ItemType File "$env:VULKAN_SDK/.ready" | Out-Null
+    Remove-Item $installer
+}
+$env:CMAKE_PROJECT_INCLUDE = (Join-Path $PSScriptRoot 'whisper-paths.cmake') -replace '\\', '/'
 $env:LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
 if (!(Test-Path "$env:LIBCLANG_PATH/libclang.dll")) {
     throw 'Install LLVM x64 (winget install LLVM.LLVM), then rerun this script.'
@@ -34,6 +57,8 @@ $env:Path = "$env:FFMPEG_DIR\bin;$env:LIBCLANG_PATH;$env:Path"
 if ($env:GITHUB_ENV) {
     "FFMPEG_DIR=$env:FFMPEG_DIR" >> $env:GITHUB_ENV
     "FFMPEG_BTBN_TAG=$tag" >> $env:GITHUB_ENV
+    "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+    "CMAKE_PROJECT_INCLUDE=$env:CMAKE_PROJECT_INCLUDE" >> $env:GITHUB_ENV
     "LIBCLANG_PATH=$env:LIBCLANG_PATH" >> $env:GITHUB_ENV
     "$env:FFMPEG_DIR\bin" >> $env:GITHUB_PATH
     $env:LIBCLANG_PATH >> $env:GITHUB_PATH

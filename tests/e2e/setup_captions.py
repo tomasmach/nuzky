@@ -307,7 +307,7 @@ def run(r):
 
 
 def on_processor(r):
-    """Recognition on the processor, as on Windows: Recommended moves with the language, and the choice with it while it
+    """Recognition on the processor, as on a computer without a graphics card Nuzky can use: Recommended moves with the language, and the choice with it while it
     is the recommended one, so English on Fast becomes Czech on Balanced. A downloaded Balanced stays in English, where
     it is better than Fast, and a model picked over the recommended one stays."""
     r.env['NUZKY_TEST_SPEECH_CPU'] = '1'

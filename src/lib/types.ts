@@ -1310,7 +1310,7 @@ export type SpeechModel = {
  */
 export type SpeechSetup = {
   /**
-   * Recognition runs on the GPU: Metal on macOS, Vulkan on Linux.
+   * Recognition runs on the GPU: Metal on macOS, Vulkan on Linux and Windows.
    */
   gpu: boolean,
   /**

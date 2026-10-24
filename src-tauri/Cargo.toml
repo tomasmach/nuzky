@@ -67,8 +67,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSBitmapImageRep", "NSButton", "NSControl", "NSEvent", "NSGraphicsContext", "NSImage", "NSImageRep", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }
 
-# Speech recognition on the GPU through Vulkan, verified on Linux so far.
-[target.'cfg(target_os = "linux")'.dependencies]
+# Speech recognition on the GPU through Vulkan.
+[target.'cfg(any(target_os = "linux", windows))'.dependencies]
 nuzky-analysis = { workspace = true, features = ["gpu"] }
 
 [target.'cfg(unix)'.dependencies]

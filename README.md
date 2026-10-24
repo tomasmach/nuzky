@@ -31,7 +31,6 @@ Nuzky itself sends nothing you edit anywhere. It goes online only to download mo
 
 ## What the alpha doesn't do yet
 
-- On Windows, speech recognition runs on the CPU, so captions take longer than on Linux and macOS.
 - Intel Macs, Linux on ARM and Windows on ARM aren't supported.
 - Export makes MP4 only. There is no template library and no phone app.
 

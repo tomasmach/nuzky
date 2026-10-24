@@ -17,6 +17,8 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // SAFETY: no other thread exists yet.
+    unsafe { nuzky_analysis::keep_vulkan_fp32() };
     let mut args = std::env::args().skip(1);
     let media = PathBuf::from(args.next().context(USAGE)?);
     let command = match args.next().as_deref() {

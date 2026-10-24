@@ -23,7 +23,9 @@ pub use emphasis::{Energy, Zoom, emphasis, key_words, prepared_word_energy, word
 pub use fillers::{HESITATION_US, filler_words, hesitations};
 pub use retakes::{Attempt, Filler, RetakeGroup, Retakes, Review, retakes};
 pub use scenes::{SceneCut, SceneParams, picture_difference, scene_cuts, scene_cuts_cancellable, scene_cuts_in};
-pub use speech::{AudioSource, Segment, Transcript, Word, transcribe_words, transcribe_words_cancellable, use_gpu};
+pub use speech::{
+    AudioSource, Segment, Transcript, Word, keep_vulkan_fp32, transcribe_words, transcribe_words_cancellable, use_gpu,
+};
 
 use serde::{Deserialize, Serialize};
 
